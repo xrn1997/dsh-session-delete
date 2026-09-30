@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DSH 会话删除插件 · UI 稿</title>
+<style>
+  :root{
+    --bg:#161719; --panel:#1f2124; --panel-2:#26282c; --line:#33363b; --line-soft:#2b2e33;
+    --fg:#e8e9ec; --fg-dim:#9aa0a6; --fg-faint:#6d7278;
+    --accent:#4c8dff; --accent-soft:rgba(76,141,255,.14);
+    --danger:#f2555a; --danger-soft:rgba(242,85,90,.13);
+    --ok:#3fbf7f;
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;padding:32px 24px 64px;background:#101113;color:var(--fg);
+    font:14px/1.55 "Segoe UI","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  }
+  .wrap{max-width:1120px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 6px;font-weight:600}
+  .lede{color:var(--fg-dim);margin:0 0 28px;font-size:13px}
+  .lede b{color:var(--fg);font-weight:600}
+  .screen{margin:0 0 40px}
+  .screen > .cap{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}
+  .cap .n{
+    flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--accent-soft);
+    color:var(--accent);font-size:12px;font-weight:700;display:grid;place-items:center;
+  }
+  .cap .t{font-weight:600;font-size:14px}
+  .cap .d{color:var(--fg-faint);font-size:12px}
+  .app{
+    position:relative;display:grid;grid-template-columns:288px 1fr;height:460px;
+    background:var(--bg);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;
+  }
+  .app.solo{grid-template-columns:1fr;height:auto}
+  /* ── sidebar ─────────────────────────────── */
+  .side{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+  .side-top{display:flex;align-items:center;gap:8px;padding:12px 12px 8px}
+  .newbtn{
+    flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+    height:32px;border-radius:8px;background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;
+  }
+  .iconbtn{
+    flex:0 0 auto;width:32px;height:32px;border-radius:8px;border:1px solid var(--line);
+    background:var(--panel);display:grid;place-items:center;position:relative;
+  }
+  .iconbtn svg{width:15px;height:15px;stroke:var(--fg-dim);fill:none;stroke-width:1.6}
+  .badge{
+    position:absolute;top:-5px;right:-5px;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+    background:var(--accent);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;
+    border:2px solid var(--bg);
+  }
+  .search{margin:0 12px 10px;height:30px;border-radius:8px;background:var(--panel);border:1px solid var(--line-soft);
+    display:flex;align-items:center;gap:7px;padding:0 9px;color:var(--fg-faint);font-size:12.5px}
+  .search svg{width:13px;height:13px;stroke:var(--fg-faint);fill:none;stroke-width:1.8}
+  .list{overflow:hidden;padding:0 6px 12px}
+  .side-foot{margin-top:auto;border-top:1px solid var(--line-soft);padding:8px 12px 10px}
+  .footrow{display:flex;align-items:center;gap:9px;height:30px;padding:0 8px;border-radius:7px;
+    color:var(--fg-dim);font-size:12.5px}
+  .footrow:hover{background:var(--panel);color:var(--fg)}
+  .footrow.here{background:var(--panel-2);color:var(--fg)}
+  .footrow svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6;flex:0 0 auto}
+  .footrow .fc{margin-left:auto;font-size:10.5px;color:var(--fg-dim);background:var(--panel-2);
+    border:1px solid var(--line-soft);border-radius:20px;padding:0 7px;line-height:16px}
+  .footrow.here .fc{background:var(--accent-soft);border-color:transparent;color:var(--accent);font-weight:700}
+  .pgroup{margin-bottom:10px}
+  .pgroup .ph{display:flex;align-items:center;gap:6px;padding:4px 8px;color:var(--fg-faint);font-size:11.5px;font-weight:600}
+  .pgroup .ph .dot{width:5px;height:5px;border-radius:50%;background:var(--fg-faint)}
+  .pgroup .ph .ct{margin-left:auto;font-weight:500;opacity:.75}
+  .row{
+    display:flex;align-items:center;gap:8px;height:30px;padding:0 8px;border-radius:7px;
+    color:var(--fg-dim);font-size:12.5px;white-space:nowrap;overflow:hidden;
+  }
+  .row .ttl{overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+  .row .tm{color:var(--fg-faint);font-size:11px;flex:0 0 auto}
+  .row:hover{background:var(--panel)}
+  .row.active{background:var(--panel-2);color:var(--fg)}
+  .row.active .tm{color:var(--fg-dim)}
+  .row .more{
+    flex:0 0 auto;width:20px;height:20px;border-radius:5px;display:grid;place-items:center;
+    color:var(--fg-faint);font-size:14px;line-height:1;opacity:0;
+  }
+  .row:hover .more,.row.menu-open .more{opacity:1}
+  .row.menu-open{background:var(--panel-2);color:var(--fg)}
+  .row.menu-open .more{background:var(--line)}
+  /* ── main ────────────────────────────────── */
+  .main{padding:0;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+  .main-top{height:46px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 18px}
+  .main-top .name{font-size:13px;font-weight:600;color:var(--fg)}
+  .chip{font-size:11px;color:var(--fg-faint);border:1px solid var(--line);border-radius:20px;padding:1px 8px}
+  .main-body{flex:1;padding:18px;color:var(--fg-faint);font-size:12.5px;display:flex;flex-direction:column;gap:12px}
+  .bubble{border:1px solid var(--line-soft);border-radius:8px;padding:10px 12px;max-width:70%;background:var(--panel)}
+  .bubble.me{margin-left:auto;background:var(--panel-2)}
+  /* ── menu ────────────────────────────────── */
+  .menu{
+    position:absolute;left:150px;top:196px;width:196px;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:10px;padding:5px;box-shadow:0 14px 34px rgba(0,0,0,.55);z-index:5;
+  }
+  .mi{display:flex;align-items:center;gap:9px;height:30px;padding:0 9px;border-radius:7px;font-size:12.5px;color:var(--fg-dim)}
+  .mi svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.6;flex:0 0 auto}
+  .mi:hover{background:var(--line-soft);color:var(--fg)}
+  .mi.danger{color:var(--danger)}
+  .mi.danger:hover{background:var(--danger-soft);color:#ff7c80}
+  .sep{height:1px;background:var(--line-soft);margin:4px 6px}
+  .kbd{margin-left:auto;font-size:10.5px;color:var(--fg-faint);font-family:ui-monospace,Consolas,monospace}
+  .mi.danger .kbd{color:rgba(242,85,90,.65)}
+  /* ── modal ───────────────────────────────── */
+  .scrim{position:absolute;inset:0;background:rgba(8,9,10,.62);display:grid;place-items:center;z-index:8}
+  .modal{width:376px;background:var(--panel-2);border:1px solid var(--line);border-radius:12px;padding:18px 18px 14px;
+    box-shadow:0 22px 60px rgba(0,0,0,.6)}
+  .modal h3{margin:0 0 8px;font-size:14.5px;font-weight:600}
+  .modal p{margin:0 0 6px;color:var(--fg-dim);font-size:12.5px}
+  .modal .sess{margin:10px 0 12px;background:var(--panel);border:1px solid var(--line-soft);border-radius:8px;padding:9px 11px}
+  .modal .sess .st{font-size:12.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal .sess .sm{font-size:11px;color:var(--fg-faint);margin-top:3px}
+  .modal .hint{display:flex;gap:7px;align-items:flex-start;color:var(--fg-faint);font-size:11.5px;margin:0 0 14px}
+  .modal .hint svg{width:13px;height:13px;stroke:var(--ok);fill:none;stroke-width:1.8;flex:0 0 auto;margin-top:2px}
+  .btns{display:flex;justify-content:flex-end;gap:8px}
+  .btn{height:31px;padding:0 14px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--fg-dim);
+    font-size:12.5px;font-family:inherit;cursor:default}
+  .btn:hover{background:var(--line-soft);color:var(--fg)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  .btn.primary:hover{filter:brightness(1.08)}
+  .btn.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:600}
+  /* ── toast ───────────────────────────────── */
+  .toast{
+    position:absolute;left:50%;bottom:18px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;
+    background:var(--panel-2);border:1px solid var(--line);box-shadow:0 14px 34px rgba(0,0,0,.5);z-index:6;
+  }
+  .toast .msg{font-size:12.5px;color:var(--fg-dim)}
+  .toast .msg b{color:var(--fg);font-weight:600}
+  .toast .undo{font-size:12.5px;font-weight:600;color:var(--accent);padding:0 2px}
+  .toast .x{color:var(--fg-faint);font-size:14px;line-height:1}
+  /* ── trash panel ─────────────────────────── */
+  .trash{padding:16px 18px 0;display:flex;flex-direction:column;height:100%}
+  .trash-h{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+  .trash-h .tt{font-size:14.5px;font-weight:600}
+  .trash-h .sub{color:var(--fg-faint);font-size:12px}
+  .trash-h .right{margin-left:auto;display:flex;gap:8px}
+  .trow{display:grid;grid-template-columns:1fr 128px 116px 76px 132px;align-items:center;gap:10px;
+    padding:10px 10px;border-top:1px solid var(--line-soft);font-size:12.5px}
+  .trow.head{border-top:none;color:var(--fg-faint);font-size:11.5px;padding-bottom:6px}
+  .trow .ttl{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .trow .proj,.trow .when,.trow .size{color:var(--fg-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .trow .acts{display:flex;gap:6px;justify-content:flex-end}
+  .act{height:26px;padding:0 10px;border-radius:7px;border:1px solid var(--line);color:var(--fg-dim);font-size:11.5px;
+    display:flex;align-items:center;white-space:nowrap}
+  .act:hover{background:var(--line-soft);color:var(--fg)}
+  .act.gone:hover{background:var(--danger-soft);color:#ff7c80;border-color:rgba(242,85,90,.4)}
+  .trash-f{margin-top:auto;border-top:1px solid var(--line);padding:11px 2px;display:flex;align-items:center;
+    color:var(--fg-faint);font-size:11.5px;gap:10px}
+  .trash-f .right{margin-left:auto;display:flex;gap:8px}
+  /* ── notes ───────────────────────────────── */
+  .notes{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}
+  .note{background:var(--panel);border:1px solid var(--line-soft);border-radius:10px;padding:12px 14px}
+  .note h4{margin:0 0 7px;font-size:12.5px;font-weight:600;color:var(--fg)}
+  .note ul{margin:0;padding-left:16px;color:var(--fg-dim);font-size:12px}
+  .note li{margin:3px 0}
+  .note code{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:#c9d1d9;background:#101113;padding:1px 5px;border-radius:4px}
+  .tagline{display:inline-block;margin-left:6px;font-size:11px;color:var(--fg-faint);border:1px dashed var(--line);border-radius:20px;padding:0 8px}
+  .ann{color:var(--accent);font-size:11.5px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>DSH 会话删除插件 · UI 稿</h1>
+  <p class="lede">
+    五个状态竖排。配色是仿宿主深色主题的<b>占位</b>，落地时对齐官方 <code>dsh-client-ui-primitives</code> 的 token；
+    会话列表内容为示意，非真实数据。交互规则见页脚。
+  </p>
+
+  <!-- ① 入口 -->
+  <div class="screen">
+    <div class="cap"><span class="n">1</span><span class="t">入口：会话条目的「…」菜单</span>
+      <span class="d">不占列表宽度，鼠标悬停或右键才出现；「删除」在最下、红色，与日常操作隔一个分隔线</span></div>
+    <div class="app">
+      <div class="side">
+        <div class="side-top">
+          <div class="newbtn">＋ 新建会话</div>
+        </div>
+        <div class="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+          搜索会话
+        </div>
+        <div class="list">
+          <div class="pgroup">
+            <div class="ph"><span class="dot"></span>dsh-session<span class="ct">2</span></div>
+            <div class="row active"><span class="ttl">会话删除插件 · 设计</span><span class="tm">10:51</span><span class="more">⋯</span></div>
+            <div class="row"><span class="ttl">UI 稿评审</span><span class="tm">昨天</span><span class="more">⋯</span></div>
+          </div>
+          <div class="pgroup">
+            <div class="ph"><span class="dot"></span>IRCamera<span class="ct">3</span></div>
+            <div class="row menu-open"><span class="ttl">/code-review</span><span class="tm">09:42</span><span class="more">⋯</span></div>
+            <div class="row"><span class="ttl">PMS 任务包字段核对</span><span class="tm">周二</span><span class="more">⋯</span></div>
+            <div class="row"><span class="ttl">南瑞授权链路</span><span class="tm">9/28</span><span class="more">⋯</span></div>
+          </div>
+          <div class="pgroup">
+            <div class="ph"><span class="dot"></span>dsh-ebook<span class="ct">1</span></div>
+            <div class="row"><span class="ttl">书源解析回归</span><span class="tm">9/27</span><span class="more">⋯</span></div>
+          </div>
+        </div>
+        <div class="side-foot">
+          <div class="footrow"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg><span>回收站</span><span class="fc">1</span></div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-top"><span class="name">／code-review</span><span class="chip">IRCamera</span></div>
+        <div class="main-body">
+          <div class="bubble me">帮我看下 ADR-0013 里 K* 登记的措辞</div>
+          <div class="bubble">读了三处口径，Registed 那行与 ADR 正文不一致，建议…</div>
+        </div>
+      </div>
+      <div class="menu">
+        <div class="mi"><svg viewBox="0 0 24 24"><path d="M4 20h16M12 4l8 8-8 8-8-8z"/></svg>置顶</div>
+        <div class="mi"><svg viewBox="0 0 24 24"><path d="M4 7h16v13H4zM4 7l2-3h12l2 3"/></svg>归档</div>
+        <div class="mi"><svg viewBox="0 0 24 24"><path d="M4 20h16M4 4h16M9 4v16"/></svg>重命名</div>
+        <div class="sep"></div>
+        <div class="mi danger"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>删除<span class="kbd">Del</span></div>
+      </div>
+    </div>
+    <div class="ann">▸ 只有一行新增；「删除」用红色是因为它离开列表（同时也进回收站，可撤销）。</div>
+  </div>
+
+  <!-- ② 确认 -->
+  <div class="screen">
+    <div class="cap"><span class="n">2</span><span class="t">确认框：让它"轻"</span>
+      <span class="d">标题一句话说清去处；正文只讲你会关心的一件事——可恢复</span></div>
+    <div class="app">
+      <div class="side">
+        <div class="side-top">
+          <div class="newbtn">＋ 新建会话</div>
+        </div>
+        <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>搜索会话</div>
+        <div class="list">
+          <div class="pgroup">
+            <div class="ph"><span class="dot"></span>IRCamera<span class="ct">3</span></div>
+            <div class="row"><span class="ttl">/code-review</span><span class="tm">09:42</span><span class="more">⋯</span></div>
+            <div class="row"><span class="ttl">PMS 任务包字段核对</span><span class="tm">周二</span><span class="more">⋯</span></div>
+            <div class="row"><span class="ttl">南瑞授权链路</span><span class="tm">9/28</span><span class="more">⋯</span></div>
+          </div>
+        </div>
+        <div class="side-foot">
+          <div class="footrow"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg><span>回收站</span></div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-top"><span class="name">／code-review</span><span class="chip">IRCamera</span></div>
+        <div class="main-body"><div class="bubble">…</div></div>
+      </div>
+      <div class="scrim">
+        <div class="modal">
+          <h3>删除这个会话？</h3>
+          <div class="sess">
+            <div class="st">/code-review</div>
+            <div class="sm">IRCamera · 3 天前创建 · 41 轮</div>
+          </div>
+          <div class="hint">
+            <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+            <span>会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。</span>
+          </div>
+          <div class="btns">
+            <button class="btn">取消</button>
+            <button class="btn primary">移入回收站</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ann">▸ 主按钮是蓝色而非红色：这一步本身不造成数据损失，红色的位置留给「彻底删除」。</div>
+  </div>
+
+  <!-- ③ 删除后 -->
+  <div class="screen">
+    <div class="cap"><span class="n">3</span><span class="t">删除之后：列表少一行 + 一条可撤销提示</span>
+      <span class="d">当场撤销覆盖手滑；过期后再想恢复走回收站</span></div>
+    <div class="app">
+      <div class="side">
+        <div class="side-top">
+          <div class="newbtn">＋ 新建会话</div>
+        </div>
+        <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>搜索会话</div>
+        <div class="list">
+          <div class="pgroup">
+            <div class="ph"><span class="dot"></span>IRCamera<span class="ct">2</span></div>
+            <div class="row"><span class="ttl">PMS 任务包字段核对</span><span class="tm">周二</span><span class="more">⋯</span></div>
+            <div class="row"><span class="ttl">南瑞授权链路</span><span class="tm">9/28</span><span class="more">⋯</span></div>
+          </div>
+          <div class="pgroup">
+            <div class="ph"><span class="dot"></span>dsh-session<span class="ct">2</span></div>
+            <div class="row"><span class="ttl">会话删除插件 · 设计</span><span class="tm">10:51</span><span class="more">⋯</span></div>
+          </div>
+        </div>
+        <div class="side-foot">
+          <div class="footrow"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg><span>回收站</span><span class="fc">1</span></div>
+        </div>
+      </div>
+      <div class="main">
+        <div class="main-top"><span class="name">PMS 任务包字段核对</span><span class="chip">IRCamera</span></div>
+        <div class="main-body"><div class="bubble">…</div></div>
+      </div>
+      <div class="toast">
+        <span class="msg"><b>/code-review</b> 已移入回收站</span>
+        <span class="undo">撤销</span>
+        <span class="x">✕</span>
+      </div>
+    </div>
+    <div class="ann">▸ 「撤销」是唯一的高亮动作；提示 6 秒后自动消失，之后入口只剩侧栏顶部那个带计数的回收站图标。</div>
+  </div>
+
+  <!-- ④ 回收站 -->
+  <div class="screen">
+    <div class="cap"><span class="n">4</span><span class="t">回收站：清单 + 两个动作</span>
+      <span class="d">每行「恢复」「彻底删除」；底部是占用合计与清空</span></div>
+    <div class="app solo">
+      <div class="side" style="border-right:none">
+        <div class="trash">
+          <div class="trash-h">
+            <span class="tt">回收站</span>
+            <span class="sub">4 个会话 · 共 62.4 MB</span>
+            <span class="right">
+              <button class="btn">刷新</button>
+            </span>
+          </div>
+          <div class="trow head">
+            <span>会话</span><span>原项目</span><span>删除时间</span><span>大小</span><span style="text-align:right">操作</span>
+          </div>
+          <div class="trow">
+            <span class="ttl">/code-review</span><span class="proj">IRCamera</span><span class="when">今天 13:05</span><span class="size">224 KB</span>
+            <span class="acts"><span class="act">恢复</span><span class="act gone">彻底删除</span></span>
+          </div>
+          <div class="trow">
+            <span class="ttl">书源解析回归</span><span class="proj">dsh-ebook</span><span class="when">昨天 21:30</span><span class="size">1.2 MB</span>
+            <span class="acts"><span class="act">恢复</span><span class="act gone">彻底删除</span></span>
+          </div>
+          <div class="trow">
+            <span class="ttl">南瑞授权链路</span><span class="proj">IRCamera</span><span class="when">9/29 11:07</span><span class="size">58.1 MB</span>
+            <span class="acts"><span class="act">恢复</span><span class="act gone">彻底删除</span></span>
+          </div>
+          <div class="trow">
+            <span class="ttl">legado 规则方言测试</span><span class="proj">dsh-ebook</span><span class="when">9/27 16:44</span><span class="size">2.9 MB</span>
+            <span class="acts"><span class="act">恢复</span><span class="act gone">彻底删除</span></span>
+          </div>
+          <div class="trash-f">
+            <span>回收站位于 <code>~/.dsh/session-trash/</code>，不自动过期；清空后不可恢复。</span>
+            <span class="right"><button class="btn">清空回收站…</button></span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ann">▸ 恢复失败会把原因写在那一行上（例如"原项目目录已被删除"），不弹全局错误、不静默跳过。</div>
+  </div>
+
+  <!-- ⑤ 彻底删除 -->
+  <div class="screen">
+    <div class="cap"><span class="n">5</span><span class="t">彻底删除：只有这一步是真的不可恢复</span>
+      <span class="d">红色按钮 + 明确写出"没有任何副本"</span></div>
+    <div class="app">
+      <div class="side" style="border-right:none;background:#1b1c1e">
+        <div class="trash" aria-hidden="true" style="opacity:.5">
+          <div class="trash-h"><span class="tt">回收站</span><span class="sub">4 个会话 · 共 62.4 MB</span></div>
+          <div class="trow head"><span>会话</span><span>原项目</span><span>删除时间</span><span>大小</span><span style="text-align:right">操作</span></div>
+          <div class="trow"><span class="ttl">/code-review</span><span class="proj">IRCamera</span><span class="when">今天 13:05</span><span class="size">224 KB</span><span class="acts"></span></div>
+        </div>
+      </div>
+      <div class="scrim">
+        <div class="modal">
+          <h3>彻底删除 1 个会话？</h3>
+          <div class="sess">
+            <div class="st">/code-review</div>
+            <div class="sm">IRCamera · 删除于今天 13:05 · 224 KB</div>
+          </div>
+          <p>这会从回收站移除文件，<b style="color:var(--danger)">之后没有任何副本可以恢复</b>。</p>
+          <div class="btns" style="margin-top:14px">
+            <button class="btn">取消</button>
+            <button class="btn danger">彻底删除</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="ann">▸ 不做"输入会话名才能删"那种仪式；但这一步的按钮、文案、位置三处都要跟 ② 明显不同。</div>
+  </div>
+
+  <div class="notes">
+    <div class="note">
+      <h4>交互规则（UI 必须保住的逻辑）</h4>
+      <ul>
+        <li>删除中该行**立即**从列表消失，不等磁盘操作完成；失败则回滚那一行并说明原因。</li>
+        <li>正在运行的会话：菜单里「删除」置灰，hover 提示"会话正在运行，先停止再删除"。</li>
+        <li>恢复后回到原项目下；原本是归档态的，恢复后仍在"已归档"里。</li>
+        <li>恢复默认插到列表末尾（要原位就用账本序号，已单独记为可选项）。</li>
+        <li>回收站入口常驻侧栏底部（邮件客户端"已删除"的位置）；入口本身始终在，只有计数角标在为空时隐藏。</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h4>落地时要对齐 / 待定</h4>
+      <ul>
+        <li>配色、圆角、字号全部换成官方 `dsh-client-ui-primitives` 的 token —— 本稿只定结构与层级。</li>
+        <li>「删除」菜单项挂 <code>sidebar.workspaces.session.menu.item</code>，位置随宿主既有菜单顺序，不自建菜单。</li>
+        <li>回收站入口挂 <code>sidebar.footer.action</code>；完整面板要独立页面时再挂 <code>settings.section</code>。<b>这两个槽位名是从宿主包的字符串里读出来的，不是官方文档列的清单</b>——实现第一步用 <code>ctx.slots.inject</code> 各撞一次确认，撞不上会在插件激活时响亮失败。</li>
+        <li>图标用官方图标集，不用本稿这些手绘 SVG。</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
