@@ -1,0 +1,8 @@
+# 发布冷却闸的放行名单：**整 scope 放行**，不逐版点名。
+# `@deepseek-ai/dsh-*` 的一代（0.2.0-rc.2）在 24h 冷却窗口内就会被拦；逐版名单（pnpm 自己会这么写：
+# `@deepseek-ai/dsh-workspace@0.2.0-rc.2` …）在宿主换代时**静默失效**——它只放行写下的那一个版本。
+minimumReleaseAgeExclude:
+  - '@deepseek-ai/dsh-*'
+# esbuild 的 postinstall 要落地平台二进制（vitest/vite 的传递依赖）；pnpm 10+ 默认拒绝运行构建脚本。
+allowBuilds:
+  esbuild: true
