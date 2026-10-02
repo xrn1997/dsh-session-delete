@@ -1,0 +1,58 @@
+schema_version: 1
+module_path: root
+title: DeepSeek Harness 会话删除插件（根包）
+scope:
+    - README.md
+    - .gitignore
+    - package.json
+    - pnpm-workspace.yaml
+    - pnpm-lock.yaml
+    - tsconfig.json
+    - vitest.config.ts
+    - cordis.patch.yml
+    - screenshots.json
+source_files: []
+depends_on: []
+related_to: []
+kk_module_id: 95bd2ab6-7200-4ad3-976e-86b15bdd124e
+kk_cards:
+    architecture_design:
+        id: a90bc204-7b62-40f3-8829-7e24a97a11bf
+        title: DeepSeek Harness 会话删除插件（根包）
+    coding_conventions:
+        id: 750b55bd-8c17-4248-82b1-dcb7f09efa3d
+        title: DeepSeek Harness 会话删除插件（根包）
+    overview:
+        id: 267f20bf-5e4b-4822-beec-d1aed0e1daaf
+        title: DeepSeek Harness 会话删除插件（根包）
+    tech_stack:
+        id: 986323c2-ade2-4154-8af3-87809643eb0a
+        title: DeepSeek Harness 会话删除插件（根包）
+    unique_setup_and_commands:
+        id: 1ca7d34a-ec50-4699-ba1e-c4b2b7b6d131
+        title: DeepSeek Harness 会话删除插件（根包）
+    build_system:
+        id: d24b6c98-2d60-43c8-9a4a-8dda0aab0e6b
+        title: 基于 pnpm + tsdown + Vitest 的单包插件构建体系
+    configuration_system:
+        id: f245f2fc-e8e7-4a03-bfc8-41cb6dff4691
+        title: DSH 插件配置：宿主注入、patch 文件与运行时环境变量
+    dependency_management:
+        id: eaf50e6b-236f-4154-83f7-668b40dc6976
+        title: pnpm 工作区 + peerDependencies 的 DeepSeek Harness 插件依赖管理
+    error_handling:
+        id: fd109fc9-47c9-408c-a3b0-1f0243fe45d3
+        title: 会话删除插件的错误处理体系：领域码 + 远程失败信封 + 客户端原文上屏
+    frontend_style:
+        id: c21287c1-aac3-48e8-a6eb-ab8d479ff154
+        title: 基于 dsh-client-ui-primitives 明文的 CSS 复制 + sd- 命名空间与主题 token 复用
+    logging_system:
+        id: 6ce4d5bf-ff76-409b-9a47-0857bfd7a11b
+        title: 日志系统：无专用日志框架，仅用 console.warn 与错误对象传递
+kk_repo_cards:
+    - build_system
+    - configuration_system
+    - dependency_management
+    - error_handling
+    - frontend_style
+    - logging_system

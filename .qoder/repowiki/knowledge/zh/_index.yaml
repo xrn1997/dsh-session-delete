@@ -1,0 +1,24 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+commit: 9585876fae4e17b0ec28569fbe87cb1a6a4921a9
+branch: main
+exported_at: "2026-10-02T05:00:13Z"
+modules:
+    root:
+        dir_name: DeepSeek Harness 会话删除插件（根包）
+        title: DeepSeek Harness 会话删除插件（根包）
+        scope:
+            - README.md
+            - .gitignore
+            - package.json
+            - pnpm-workspace.yaml
+            - pnpm-lock.yaml
+            - tsconfig.json
+            - vitest.config.ts
+            - cordis.patch.yml
+            - screenshots.json
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

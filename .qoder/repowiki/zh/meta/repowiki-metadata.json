@@ -1,0 +1,731 @@
+{
+  "wiki_repo": {
+    "id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+    "name": "dsh-session-delete",
+    "progress_status": "completed",
+    "wiki_present_status": "COMPLETED",
+    "recovery_checkpoint": "wiki_generation_completed",
+    "last_commit_id": "9585876fae4e17b0ec28569fbe87cb1a6a4921a9",
+    "last_commit_update": "2026-10-02T05:00:13Z",
+    "gmt_create": "2026-10-02T05:00:13Z",
+    "gmt_modified": "2026-10-02T05:00:13Z",
+    "extend_info": "{\"language\":\"zh\",\"active\":true,\"branch\":\"main\"}"
+  },
+  "wiki_catalogs": [
+    {
+      "id": "34b09d26-c722-47fa-a69a-221088c455a6",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "HTTP API",
+      "description": "http-api",
+      "prompt": "为 DSH 会话删除插件的 HTTP API 编写参考文档。覆盖四个端点：GET /list、POST /delete、POST /restore、POST /purge，每个端点都要说明 URL、请求方法、鉴权前提（宿主 webServer 已挂载）、同源校验（Origin/Referer 检查与桌面壳特殊路径处理）、请求体 JSON Schema、响应体结构、成功状态码、失败状态码与错误码映射（RemoteFailure.code/message）。给出 curl 与 fetch 示例，展示正常响应与典型错误响应。解释路由注册位置（dsh-session-delete-api 前缀）以及客户端如何调用。包含调试建议：如何查看宿主日志、如何模拟桌面壳 Referer、如何处理 403/500 等常见问题。",
+      "progress_status": "completed",
+      "dependent_files": "src/api/dispatch.ts,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "layer_level": 1,
+      "kk_dependent_files": [
+        "src/api/dispatch.ts",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "42ba8ee9-1124-4fcc-adf2-74836f9c8c73",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "快速开始",
+      "description": "getting-started",
+      "prompt": "为 DSH 会话删除插件创建快速开始文档。解释本插件的核心价值——在 DeepSeek Harness 中实现「删除 = 移入回收站」，支持恢复、单条彻底删除与整页清空；运行中的会话自动拒绝删除。给出从零到一的安装步骤（dsh plugin add）、基本使用流程（从会话菜单触发删除 → 确认 → 回收站面板查看），并说明 Node.js / pnpm 环境要求与兼容的 DSH 版本范围。面向初学者用流程图展示完整用户旅程，同时为有经验的开发者补充 peer 依赖、cordis 插件模型等关键背景。包含常见问题：找不到菜单项、DSH 版本不匹配、回收站路径不存在等。",
+      "progress_status": "completed",
+      "dependent_files": "README.md,package.json",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "kk_dependent_files": [
+        "README.md",
+        "package.json"
+      ]
+    },
+    {
+      "id": "a44f45c0-a899-47e3-92d5-aa41eaed6fe4",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "DSH 插件模型与双半结构",
+      "description": "plugin-model",
+      "prompt": "为 DSH 插件模型编写架构文档。解释本仓库作为 cordis 第三方插件的定位：Node 半（lib/index.js）注册 storage domain、解析 home 路径、挂载 webServer 路由；浏览器半（lib/client.js）注入回收站面板与会话菜单项。说明 package.json 中 dsh.bundle.patch、client.inject、compatibility.dshReleases 的作用，以及 cordis patch 机制如何把 Node 半与浏览器半装配到宿主。描述 cordis Context、Slots、Service 注入流程，解释为什么用 peer dependency 而非钉死宿主版本。包含插件加载时序图与依赖关系图，并给出从 `dsh plugin add` 到 UI 可见的完整生命周期示例。",
+      "progress_status": "completed",
+      "dependent_files": "src/index.ts,package.json,cordis.patch.yml",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "layer_level": 1,
+      "kk_dependent_files": [
+        "src/index.ts",
+        "package.json",
+        "cordis.patch.yml"
+      ]
+    },
+    {
+      "id": "dcf0a322-613a-4a36-99ce-e0cca46581d1",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "会话删除",
+      "description": "session-deletion",
+      "prompt": "为「会话删除」功能编写详细文档。从用户视角描述：在会话列表「…」菜单中点击删除 → 弹出确认框 → 调用 POST /delete → 成功后显示 6 秒撤销提示 Toast。再深入到实现层面，解释 deleteSession Verb 的事务流程：isLive() 拦截运行中会话、projectDirOf() 解析会话目录、archive()/detach() 标记不可见、rename(sessionDir → trashDir) 原子移动、manifest.add(entry) 写入回收站清单、evictLive() + announceRemoved() 通知宿主刷新。说明与 HTTP 层 dispatch.ts 的调用关系、RemoteFailure 错误映射、以及确认框与撤销提示通过 shell.overlay 注入的机制。补充常见异常：会话不存在、磁盘权限不足、路径包含非 ASCII 字符、恢复时项目目录冲突等。给出代码片段展示如何扩展自定义错误码或调整撤销时长。",
+      "progress_status": "completed",
+      "dependent_files": "src/client/delete-confirm.tsx,src/client/undo-toast.tsx,src/verbs/delete-session.ts,src/api/dispatch.ts,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "layer_level": 1,
+      "kk_dependent_files": [
+        "src/client/delete-confirm.tsx",
+        "src/client/undo-toast.tsx",
+        "src/verbs/delete-session.ts",
+        "src/api/dispatch.ts",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "1ac55036-9b9c-4081-8d91-c5811efc4fd8",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "回收站面板",
+      "description": "trash-panel",
+      "prompt": "为「回收站面板」组件编写详细文档。描述 UI 布局：头部（条目数、合计占用字节数、刷新按钮）、中央按 projectKey 分组展示的卡片列表、页脚「清空回收站…」。解释 TrashPanelDeps 接口与 callRemote 调用 GET /list 获取数据、四态渲染（loading/error/empty/data）与刷新策略。说明 trash-entry.tsx 侧栏图标与面板卡片的关联，以及 copy.ts 文案命名空间如何绑定到宿主 locale 服务。深入讲解 manifest.ts 中 ManifestPort 适配器的职责——把宿主 storage domain 包装成插件可消费的 getEntries/add/remove/clear 接口。提供组件 Props 示例、状态切换图示与性能优化建议（如大目录下的懒加载）。",
+      "progress_status": "completed",
+      "dependent_files": "src/client/trash-panel.tsx,src/client/trash-entry.tsx,src/api/dispatch.ts,src/trash/manifest.ts,src/client/copy.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "layer_level": 1,
+      "order": 1,
+      "kk_dependent_files": [
+        "src/client/trash-panel.tsx",
+        "src/client/trash-entry.tsx",
+        "src/api/dispatch.ts",
+        "src/trash/manifest.ts",
+        "src/client/copy.ts"
+      ]
+    },
+    {
+      "id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "架构概览",
+      "description": "architecture",
+      "prompt": "为 DSH 会话删除插件编写架构总览文档。描述 Node 半与浏览器半的双出口包结构、cordis 插件上下文注入、storage domain 适配器、Port + Dependency Injection 模式、Verb 事务模式以及 HTTP API 同源栅栏。画出系统边界图：浏览器半通过 shell.overlay 注入 UI，Node 半通过 webServer.register 暴露 REST 路由，动词层调用 FsPort / HostPort / ManifestPort 完成文件与宿主服务操作。解释技术决策（窄接口隔离宿主内部模块、模块级 store 管理跨卸载生命周期状态、projectKey 编码解码兼容 v3/v4 会话 ID）。包含部署拓扑、依赖关系图，并讨论可扩展点（自定义端口实现、错误映射扩展、文案命名空间扩展）。",
+      "progress_status": "completed",
+      "dependent_files": "src/index.ts,src/api/dispatch.ts,src/ports/host-port.ts,src/ports/fs-port.ts,src/trash/manifest.ts,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "order": 1,
+      "kk_dependent_files": [
+        "src/index.ts",
+        "src/api/dispatch.ts",
+        "src/ports/host-port.ts",
+        "src/ports/fs-port.ts",
+        "src/trash/manifest.ts",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "6e96e09d-243b-4fec-bdd9-3c74c6d2f2a5",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "浏览器半 API",
+      "description": "browser-api",
+      "prompt": "为浏览器半导出的公共接口编写参考文档。重点说明 callRemote 函数的签名、参数、返回值 RemoteResult<T> 与 RemoteFailure 类型；SessionDeleteRemote 接口的字段与生命周期；TrashPanelDeps 依赖注入方式；组件导出如 TrashPanel、DeleteConfirm、UndoToast 的 props、事件、插槽与使用示例。结合 src/client/copy.ts 中的文案命名空间与 locale 绑定说明国际化扩展方式。提供 React 组件集成代码片段，说明如何把回收站面板挂载到 shell.overlay，以及如何通过菜单项触发删除确认框。包含常见错误：远程调用失败、locale 未加载、组件卸载后状态丢失，并给出排查步骤。",
+      "progress_status": "completed",
+      "dependent_files": "src/client/copy.ts,src/client/trash-panel.tsx,src/client/delete-confirm.tsx,src/client/undo-toast.tsx,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "layer_level": 1,
+      "order": 1,
+      "kk_dependent_files": [
+        "src/client/copy.ts",
+        "src/client/trash-panel.tsx",
+        "src/client/delete-confirm.tsx",
+        "src/client/undo-toast.tsx",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "8a876f7b-a06d-4145-b970-e285ae644b72",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "Port 模式与依赖注入",
+      "description": "port-pattern",
+      "prompt": "编写 Port + Dependency Injection 模式的架构文档。详细说明 FsPort（exists/rename/removeDir/sizeOfDir）、HostPort（workspaceRegistry/sessions/webServer）与 ManifestPort（get/set/add/remove/evictLive/announceRemoved/announceRestored）三个端口的职责与窄接口设计。解释动词层为何只依赖接口而避免直接 import 宿主内部模块，从而提升可测试性与跨环境复用能力。提供 createFsPort、createHostPort、createStorageManifest 的构造示例，展示如何在 tests 中替换端口实现进行单元测试。讨论该模式对扩展性（自定义文件系统后端、模拟宿主服务）与性能（仅声明所需成员）的影响。",
+      "progress_status": "completed",
+      "dependent_files": "src/ports/host-port.ts,src/ports/fs-port.ts,src/trash/manifest.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "layer_level": 1,
+      "order": 1,
+      "kk_dependent_files": [
+        "src/ports/host-port.ts",
+        "src/ports/fs-port.ts",
+        "src/trash/manifest.ts"
+      ]
+    },
+    {
+      "id": "5c41c172-8dfb-4a30-9695-a403719ead86",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "Verb 事务模式",
+      "description": "verb-pattern",
+      "prompt": "编写 Verb 事务模式的架构文档。解释每个业务动作（删除会话、恢复会话、清空回收站）都是工厂函数返回异步函数，并以 DeleteDeps 形式注入 FsPort / HostPort / ManifestPort。详细描述 deleteSession 的事务步骤：isLive → projectDirOf → archive/detach → rename(sessionDir → trashDir) → manifest.add → evictLive + announceRemoved；restoreSession 的反向步骤；purgeTrash 的批量清理逻辑。说明错误处理策略（toRemoteFailure、AbortError、ENOENT）与回滚时机。给出调用示例，并讨论事务一致性与幂等性约束。",
+      "progress_status": "completed",
+      "dependent_files": "src/verbs/delete-session.ts,src/verbs/restore-session.ts,src/verbs/purge-trash.ts,src/verbs/errors.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "layer_level": 1,
+      "order": 2,
+      "kk_dependent_files": [
+        "src/verbs/delete-session.ts",
+        "src/verbs/restore-session.ts",
+        "src/verbs/purge-trash.ts",
+        "src/verbs/errors.ts"
+      ]
+    },
+    {
+      "id": "6f9c39d9-429f-48e3-bf77-bd5177165768",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "Node 半 API",
+      "description": "node-api",
+      "prompt": "为 Node 半导出的工厂函数与类型定义编写参考文档。详细说明 createStorageManifest 如何把宿主 storage domain 适配成 ManifestPort，createApiHandler 如何接收 DeleteDeps 并返回 HTTP handler，以及 DeleteDeps 中 FsPort、HostPort、ManifestPort 的职责边界。给出在 cordis 插件上下文中组装这些依赖的最小示例，包括 workspaceRegistry、sessions、webServer、storage domain 的窄接口引用。说明端口模式的设计动机、如何替换 FsPort/HostPort 实现以支持测试或自定义存储。包含常见错误：storage domain 键冲突、workspaceId 不匹配、目录不存在，以及调试方法与恢复建议。",
+      "progress_status": "completed",
+      "dependent_files": "src/index.ts,src/ports/host-port.ts,src/ports/fs-port.ts,src/trash/manifest.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "layer_level": 1,
+      "order": 2,
+      "kk_dependent_files": [
+        "src/index.ts",
+        "src/ports/host-port.ts",
+        "src/ports/fs-port.ts",
+        "src/trash/manifest.ts"
+      ]
+    },
+    {
+      "id": "b7d382c5-4fbb-422b-a3c4-4a2a6adbf349",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "恢复会话",
+      "description": "restore-session",
+      "prompt": "为「恢复会话」功能编写详细文档。从用户操作开始：在回收站面板点击某条记录的「恢复」→ 调用 POST /restore → 会话回到原项目目录并重新可见。详细说明 restoreSession Verb 的事务步骤：根据 entryId 查找回收站记录、rename(trashDir → sessionDir)、attach(workspaceId) 重建会话关联、unarchive(wasArchived=false) 取消归档标记、manifest.remove(id) 从清单移除、announceRestored() 通知宿主。强调 wasArchived 字段在恢复时的语义——若原始会话是归档状态则保持归档。对比删除事务，说明恢复为何不需要 evictLive。列出失败场景：目标目录已存在、workspaceId 无效、manifest 读写失败，并给出对应的 RemoteFailure code。提供最小可运行的客户端调用示例。",
+      "progress_status": "completed",
+      "dependent_files": "src/verbs/restore-session.ts,src/api/dispatch.ts,src/trash/manifest.ts,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "layer_level": 1,
+      "order": 2,
+      "kk_dependent_files": [
+        "src/verbs/restore-session.ts",
+        "src/api/dispatch.ts",
+        "src/trash/manifest.ts",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "功能详解",
+      "description": "features",
+      "prompt": "为 DSH 会话删除插件的功能集合编写总览文档。覆盖六大用户可见能力：会话删除入口（菜单项、运行中会话置灰）、撤销提示（6 秒可撤销 Toast）、回收站面板（头部统计、按项目分组卡片、刷新）、单条恢复、单条彻底删除、整页清空。给出端到端流程图，说明各功能如何串联调用 deleteSession / restoreSession / purgeTrash 三个 Verb。面向初学者先讲交互，再深入到事务语义与回滚顺序；为高级用户提供状态机图示与异常分支处理。补充常见场景：误删恢复、大目录回收站性能、权限不足导致 rename 失败等。",
+      "progress_status": "completed",
+      "dependent_files": "src/client/delete-confirm.tsx,src/client/undo-toast.tsx,src/client/trash-panel.tsx,src/client/trash-entry.tsx,src/verbs/delete-session.ts,src/verbs/restore-session.ts,src/verbs/purge-trash.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "order": 2,
+      "kk_dependent_files": [
+        "src/client/delete-confirm.tsx",
+        "src/client/undo-toast.tsx",
+        "src/client/trash-panel.tsx",
+        "src/client/trash-entry.tsx",
+        "src/verbs/delete-session.ts",
+        "src/verbs/restore-session.ts",
+        "src/verbs/purge-trash.ts"
+      ]
+    },
+    {
+      "id": "23e823c4-130e-4a48-a3b1-8015b1014c78",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "永久删除",
+      "description": "permanent-deletion",
+      "prompt": "为「永久删除」功能编写详细文档。区分两种入口：回收站面板中单条记录的「彻底删除…」与页脚的「清空回收站…」，二者最终都调用 purgeTrash Verb。详述事务流程：对每个 entry 执行 removeDir(dir) 递归删除文件、manifest.remove(id) 清理清单、evictLive() 与 announceRemoved() 刷新宿主缓存。说明 entryId 可选参数——为空时清空全部，不为空时仅删一条。强调此操作不可撤销，需在 UI 上要求二次确认。讨论性能与安全性：大目录递归删除耗时、磁盘空间释放延迟、权限不足导致的部分删除；给出幂等性建议与错误聚合策略。补充代码片段展示如何扩展支持 TTL 自动清理或按大小过滤。",
+      "progress_status": "completed",
+      "dependent_files": "src/verbs/purge-trash.ts,src/api/dispatch.ts,src/trash/manifest.ts,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "layer_level": 1,
+      "order": 3,
+      "kk_dependent_files": [
+        "src/verbs/purge-trash.ts",
+        "src/api/dispatch.ts",
+        "src/trash/manifest.ts",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "345530b5-303a-4cdd-a36f-c379806b0464",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "数据模型与存储",
+      "description": "data-model",
+      "prompt": "为回收站数据模型与存储机制创建综合文档。精确定义 TrashEntry 数据结构（id、sessionId、projectDir、workspaceId、wasArchived、deletedAt、title、sizeBytes）及其字段约束、业务含义与生命周期。说明 storage domain 适配器如何将宿主 per-record 存储域适配成 ManifestPort，并介绍内存探针用于测试断言。详述回收站本体目录 ~/.dsh/session-trash/ 的组织规则、文件大小计算、清理策略与数据迁移路径。解释 projectKey 编码/解码算法及 v3/v4 会话 ID 兼容逻辑。提供示例 JSON、数据库快照与数据流图。讨论性能考量（大目录 sizeOfDir 开销）、数据安全（权限与不可逆删除）与故障恢复（清单损坏时的重建思路）。",
+      "progress_status": "completed",
+      "dependent_files": "src/trash/manifest.ts,src/shared/wire.ts,src/ports/fs-port.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "order": 3,
+      "kk_dependent_files": [
+        "src/trash/manifest.ts",
+        "src/shared/wire.ts",
+        "src/ports/fs-port.ts"
+      ]
+    },
+    {
+      "id": "fff22df6-2275-43d5-a478-d69858d45dd6",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "数据流与状态管理",
+      "description": "data-flow",
+      "prompt": "编写数据流与状态管理架构文档。绘制从「用户点击删除」到「Toast 显示撤销按钮」的完整请求链路：浏览器半 callRemote → HTTP API → dispatch → deleteSession → 文件与宿主操作 → 广播 announceRemoved → 面板刷新。解释 shared/wire.ts 中的 RemoteResult<T>、RemoteFailure、路由契约如何统一 Node 半与浏览器半的数据交换。说明确认框与撤销提示使用模块级 store + useSyncExternalStore 的原因——跨越菜单卸载生命周期保持状态。讨论同源栅栏（Origin/Referer 校验、桌面壳特殊路径）对安全性的影响，以及长列表场景下的性能优化建议。",
+      "progress_status": "completed",
+      "dependent_files": "src/api/dispatch.ts,src/client/trash-panel.tsx,src/client/delete-confirm.tsx,src/client/undo-toast.tsx,src/shared/wire.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "layer_level": 1,
+      "order": 3,
+      "kk_dependent_files": [
+        "src/api/dispatch.ts",
+        "src/client/trash-panel.tsx",
+        "src/client/delete-confirm.tsx",
+        "src/client/undo-toast.tsx",
+        "src/shared/wire.ts"
+      ]
+    },
+    {
+      "id": "305a39d5-b2af-4b22-90bb-f7fcd38bb644",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "存储架构与项目目录算法",
+      "description": "storage-architecture",
+      "prompt": "编写存储架构文档。说明回收站本体位于 ~/.dsh/session-trash/，清单通过宿主 storage domain 持久化（per-record）。详细解释 TrashEntry 字段（id、sessionId、projectDir、workspaceId、wasArchived、deletedAt、title、sizeBytes）及其语义，特别是 wasArchived 决定恢复时的可见性。深入讲解 projectKey 编码/解码算法如何兼容 v3/v4 会话 ID，以及 sessionDir → trashDir 的重命名策略。描述 ManifestPort 的内存探针实现与 storage domain 适配器之间的映射关系。讨论数据迁移路径、TTL 自动清理扩展点，以及磁盘空间不足时的降级行为。",
+      "progress_status": "completed",
+      "dependent_files": "src/trash/manifest.ts,src/shared/wire.ts,src/index.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "parent_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "layer_level": 1,
+      "order": 4,
+      "kk_dependent_files": [
+        "src/trash/manifest.ts",
+        "src/shared/wire.ts",
+        "src/index.ts"
+      ]
+    },
+    {
+      "id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "API 参考",
+      "description": "api-reference",
+      "prompt": "为 DSH 会话删除插件的所有公开 API 编写参考文档。分三组：\n1) HTTP API：GET /list、POST /delete、POST /restore、POST /purge 的请求体、响应体、错误码、同源校验（Origin/Referer）、桌面壳特殊路径处理、鉴权前提。\n2) 浏览器半 API：callRemote、SessionDeleteRemote、TrashPanelDeps 等导出接口的类型定义、参数、返回值与使用示例。\n3) Node 半 API：createStorageManifest、createApiHandler、DeleteDeps 等导出的工厂函数与依赖注入方式。\n对每个端点给出 curl / fetch 示例、成功与失败响应样例、错误映射表与调试建议。说明 wire 契约（路由、参数、信封、RemoteFailure、RemoteResult<T>）与版本兼容性策略。",
+      "progress_status": "completed",
+      "dependent_files": "src/api/dispatch.ts,src/shared/wire.ts,src/client/copy.ts,src/index.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "order": 4,
+      "kk_dependent_files": [
+        "src/api/dispatch.ts",
+        "src/shared/wire.ts",
+        "src/client/copy.ts",
+        "src/index.ts"
+      ]
+    },
+    {
+      "id": "2ea32c39-fb21-4905-91db-6e12c1a9e021",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "开发指南",
+      "description": "development",
+      "prompt": "为贡献者编写 DSH 会话删除插件的开发指南。覆盖开发环境搭建（pnpm install、TypeScript 编译目标 ES2022、strict/noUnusedLocals/noUnusedParameters 配置）、本地运行与调试、Vitest 双 project 测试策略（node 跑 tests/*.test.ts，client 跑 tests/client/**/*.test.{ts,tsx} 并使用 jsdom）、mock FsPort / HostPort / ManifestPort 的方法、组件测试（@testing-library/react）与断言约定。给出新增 Verb、新增 HTTP 端点、新增 UI 控件的逐步模板。解释 cordis.patch.yml、screenshots.json 的作用。补充常见问题：JSX 编译失败、浏览器半纯度门报错、DOM 事件在 jsdom 中行为差异、端口 mock 不完整导致测试不稳定。",
+      "progress_status": "completed",
+      "dependent_files": "package.json,tsconfig.json,vitest.config.ts,tests/assembly.test.ts,tests/client/support/setup.ts",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "order": 5,
+      "kk_dependent_files": [
+        "package.json",
+        "tsconfig.json",
+        "vitest.config.ts",
+        "tests/assembly.test.ts",
+        "tests/client/support/setup.ts"
+      ]
+    },
+    {
+      "id": "8749d59f-7d49-4322-b908-de3b2ff83afc",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "name": "构建与发布",
+      "description": "deployment",
+      "prompt": "为 DSH 会话删除插件编写构建与发布文档。说明 tsdown 双产物构建流程（lib/index.js Node 半、lib/client.js 浏览器半）、cordis.patch.yml 打包补丁的作用、browser purity 检查的意义。列出 npm publish 前置条件、版本号与 DSH 兼容性声明（compatibility.dshReleases）、peer 依赖约束。解释如何验证构建产物是否包含预期的导出、locale 资源是否被宿主正确加载。补充发布后回归清单：安装插件、删除一个非运行中会话、进入回收站面板、恢复一条、清空回收站、确认撤销 Toast 消失。",
+      "progress_status": "completed",
+      "dependent_files": "package.json,tsconfig.json,cordis.patch.yml",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z",
+      "order": 6,
+      "kk_dependent_files": [
+        "package.json",
+        "tsconfig.json",
+        "cordis.patch.yml"
+      ]
+    }
+  ],
+  "wiki_items": [
+    {
+      "id": "34b09d26-c722-47fa-a69a-221088c455a6",
+      "catalog_id": "34b09d26-c722-47fa-a69a-221088c455a6",
+      "title": "HTTP API",
+      "description": "http-api",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "42ba8ee9-1124-4fcc-adf2-74836f9c8c73",
+      "catalog_id": "42ba8ee9-1124-4fcc-adf2-74836f9c8c73",
+      "title": "快速开始",
+      "description": "getting-started",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "a44f45c0-a899-47e3-92d5-aa41eaed6fe4",
+      "catalog_id": "a44f45c0-a899-47e3-92d5-aa41eaed6fe4",
+      "title": "DSH 插件模型与双半结构",
+      "description": "plugin-model",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "dcf0a322-613a-4a36-99ce-e0cca46581d1",
+      "catalog_id": "dcf0a322-613a-4a36-99ce-e0cca46581d1",
+      "title": "会话删除",
+      "description": "session-deletion",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "1ac55036-9b9c-4081-8d91-c5811efc4fd8",
+      "catalog_id": "1ac55036-9b9c-4081-8d91-c5811efc4fd8",
+      "title": "回收站面板",
+      "description": "trash-panel",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "catalog_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "title": "架构概览",
+      "description": "architecture",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "6e96e09d-243b-4fec-bdd9-3c74c6d2f2a5",
+      "catalog_id": "6e96e09d-243b-4fec-bdd9-3c74c6d2f2a5",
+      "title": "浏览器半 API",
+      "description": "browser-api",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "8a876f7b-a06d-4145-b970-e285ae644b72",
+      "catalog_id": "8a876f7b-a06d-4145-b970-e285ae644b72",
+      "title": "Port 模式与依赖注入",
+      "description": "port-pattern",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "5c41c172-8dfb-4a30-9695-a403719ead86",
+      "catalog_id": "5c41c172-8dfb-4a30-9695-a403719ead86",
+      "title": "Verb 事务模式",
+      "description": "verb-pattern",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "6f9c39d9-429f-48e3-bf77-bd5177165768",
+      "catalog_id": "6f9c39d9-429f-48e3-bf77-bd5177165768",
+      "title": "Node 半 API",
+      "description": "node-api",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "b7d382c5-4fbb-422b-a3c4-4a2a6adbf349",
+      "catalog_id": "b7d382c5-4fbb-422b-a3c4-4a2a6adbf349",
+      "title": "恢复会话",
+      "description": "restore-session",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "catalog_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "title": "功能详解",
+      "description": "features",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "23e823c4-130e-4a48-a3b1-8015b1014c78",
+      "catalog_id": "23e823c4-130e-4a48-a3b1-8015b1014c78",
+      "title": "永久删除",
+      "description": "permanent-deletion",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "345530b5-303a-4cdd-a36f-c379806b0464",
+      "catalog_id": "345530b5-303a-4cdd-a36f-c379806b0464",
+      "title": "数据模型与存储",
+      "description": "data-model",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "fff22df6-2275-43d5-a478-d69858d45dd6",
+      "catalog_id": "fff22df6-2275-43d5-a478-d69858d45dd6",
+      "title": "数据流与状态管理",
+      "description": "data-flow",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "305a39d5-b2af-4b22-90bb-f7fcd38bb644",
+      "catalog_id": "305a39d5-b2af-4b22-90bb-f7fcd38bb644",
+      "title": "存储架构与项目目录算法",
+      "description": "storage-architecture",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "catalog_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "title": "API 参考",
+      "description": "api-reference",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "2ea32c39-fb21-4905-91db-6e12c1a9e021",
+      "catalog_id": "2ea32c39-fb21-4905-91db-6e12c1a9e021",
+      "title": "开发指南",
+      "description": "development",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": "8749d59f-7d49-4322-b908-de3b2ff83afc",
+      "catalog_id": "8749d59f-7d49-4322-b908-de3b2ff83afc",
+      "title": "构建与发布",
+      "description": "deployment",
+      "extend": "{}",
+      "progress_status": "completed",
+      "repo_id": "e39935cf-3d7d-1e74-e449-d1f6f24b3b89",
+      "reference_count": 0,
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    }
+  ],
+  "knowledge_relations": [
+    {
+      "id": 1,
+      "source_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "target_id": "34b09d26-c722-47fa-a69a-221088c455a6",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 2,
+      "source_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "target_id": "a44f45c0-a899-47e3-92d5-aa41eaed6fe4",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 3,
+      "source_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "target_id": "dcf0a322-613a-4a36-99ce-e0cca46581d1",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 4,
+      "source_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "target_id": "1ac55036-9b9c-4081-8d91-c5811efc4fd8",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 5,
+      "source_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "target_id": "6e96e09d-243b-4fec-bdd9-3c74c6d2f2a5",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 6,
+      "source_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "target_id": "8a876f7b-a06d-4145-b970-e285ae644b72",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 7,
+      "source_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "target_id": "5c41c172-8dfb-4a30-9695-a403719ead86",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 8,
+      "source_id": "deff6756-daa0-4abc-835c-324c351be76d",
+      "target_id": "6f9c39d9-429f-48e3-bf77-bd5177165768",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 9,
+      "source_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "target_id": "b7d382c5-4fbb-422b-a3c4-4a2a6adbf349",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 10,
+      "source_id": "c3102b1b-85d5-404b-b514-2195cceac800",
+      "target_id": "23e823c4-130e-4a48-a3b1-8015b1014c78",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 11,
+      "source_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "target_id": "fff22df6-2275-43d5-a478-d69858d45dd6",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    },
+    {
+      "id": 12,
+      "source_id": "3ce032e0-df23-4d99-a969-3f745189b12a",
+      "target_id": "305a39d5-b2af-4b22-90bb-f7fcd38bb644",
+      "source_type": "WIKI_ITEM",
+      "target_type": "WIKI_ITEM",
+      "relationship_type": "PARENT_CHILD",
+      "gmt_create": "2026-10-02T05:00:13Z",
+      "gmt_modified": "2026-10-02T05:00:13Z"
+    }
+  ]
+}
