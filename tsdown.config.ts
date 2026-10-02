@@ -1,35 +1,61 @@
+import { readFileSync } from 'node:fs'
 import { builtinModules } from 'node:module'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'tsdown'
 
 const PKG_NAME = '@xrn1997/dsh-session-delete'
 
-/** 浏览器半允许表 = 宿主**冻结平台模块表**（隔离数据根上实测，见设计稿 §9）。
- *  取数：外壳 bundle 里 `this.modules = o.create({ boot, staticModules: rM() })` 的 `rM()` 实参原文，
- *  **9 个键**（`react` / `react/jsx-runtime` / `react-dom` / `react-dom/client` / `@deepseek-ai/cordis` /
- *  `@deepseek-ai/dsh-client-store` / `@deepseek-ai/dsh-client-ui-slots` / `@deepseek-ai/dsh-client-ui-primitives` /
- *  `@deepseek-ai/dsh-client-ui-dockkit`）。
+/** 浏览器半允许表 = **本插件真正 require 的宿主冻结平台模块**（宿主外壳里 `staticModules` 的实参，
+ *  隔离数据根上实测过原文，见设计稿 §9）。
  *
- *  **收录判据**：本插件只声明兼容 `0.2.0-rc.2` 一代（peer 闸逐代开口，见 package.json），
- *  所以"各代交集"在这一代上就等于这一代的冻结表本身。**不是**把 asar 里 `"@deepseek-ai/*"` 扫出来的
- *  312 个包名并集——那是并集，抄进来等于给纯度门开 300 个豁免口；也不是
- *  其它插件跨代的 8 键子集（那是另一个插件的兼容面，不是我们的）。
- *  表内我们实际要用的是 React 家族 / `-ui-primitives`（组件与图标）/ `-ui-slots`（槽位注册）；
- *  **`@deepseek-ai/dsh-client-connection` 不在表内**：它是自带 `lib/client.js` 的动态包 row，
- *  只能由 `dsh.client.external` 的精确请求解析到自己的 row——本插件不值 import 它，
- *  客户端半若将来需要，再按 external 精确请求另裁。 */
-export const PLATFORM_MODULES = [
-  'react',
-  'react/jsx-runtime',
-  'react-dom',
-  'react-dom/client',
-  '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-store',
-  '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-ui-primitives',
-  '@deepseek-ai/dsh-client-ui-dockkit',
-]
+ *  **2026-10-02 收窄**：上一版是那张表的全部 9 个键（含 `@deepseek-ai/dsh-client-ui-primitives` 与
+ *  `-ui-slots` / `-store` / `-dockkit` / `@deepseek-ai/cordis`）。现在本插件**不再 require 任何
+ * 宿主客户端包**（控件与图标已按官方处方固化成 `src/client/ui/*`，见那里的头注），所以允许表收到
+ *  只剩 React 家族三个键。
+ *
+ *  **为什么收窄而不是留着**：这张表是**纯度门的白名单**。留着 `-ui-primitives` 就等于给"再 import
+ *  它一次"留着口子，而那条路正是我们这次要拆掉的（它随宿主换代而变、不经类型检查，一个抛错的组件
+ *  会把整个槽位条目打空）。**白名单只列在用的**，多出来的每一条都是纯度门的一次豁免。
+ *
+ *  三个键都是各代宿主的交集：React 的**模块身份**必须与外壳自己那份同一（否则 hooks 在两个 React
+ *  实例间崩），所以它只能由冻结表解答，不能 inline。 */
+export const PLATFORM_MODULES = ['react', 'react/jsx-runtime', 'react-dom']
 
 const isPlatformModule = (spec: string): boolean => PLATFORM_MODULES.includes(spec)
+
+/**
+ * `.css` → 「一段字符串」的构建插件（只有浏览器半挂它）。
+ *
+ * 为什么要它：本插件的控件样式住在 `src/client/ui/ui.css`（可读、可 review 的真 CSS），而浏览器半
+ * 的产物是**单文件 CJS 闭包工厂**，没有 CSS 资产通道——样式必须在运行时以 `<style>` 文本注入
+ * （宿主的模块表会在工厂物化时认领这些 `<style>`，见 `src/client/ui/styles.ts` 头注）。这个插件就是
+ * 把文件内容变成 `export default "<文本>"` 的那一步，`ui/styles.ts` 导入它即可。
+ *
+ * **为什么走"改 id"而不是直接 `load`**：tsdown 自带一道 `tsdown:css-guard`（`transform`，`order:'post'`，
+ * 按 id 正则 `/\.(css|less|…)$/` 命中即抛「请装 @tsdown/css」）。`transform` 永远排在 `load` 之后，
+ * 所以光在 `load` 里返回 JS 文本挡不住它——**必须让这个模块的 id 不再以 `.css` 结尾**。
+ * 于是 `resolveId` 把它改写成 `<绝对路径>?dsh-css-text`，`load` 认这个后缀。
+ * 本仓不引新依赖（`@tsdown/css` 不在依赖里，也不会进），这道 guard 对我们是纯噪音。
+ *
+ * **只对 `.css` 生效**，且 Node 半那条配置不挂它 ⇒ 哪天有人在 `src/index.ts` 里 import 了 `.css`，
+ * 构建期会**响亮失败**（这正是想要的：样式只属于浏览器半）。
+ */
+const CSS_TEXT_SUFFIX = '?dsh-css-text'
+
+const cssTextPlugin = {
+  name: 'dsh-session-delete-css-text',
+  resolveId(id: string, importer: string | undefined): string | null {
+    if (!id.endsWith('.css') || importer === undefined) return null
+    const file = id.startsWith('.') ? resolve(dirname(importer), id) : id
+    return `${file}${CSS_TEXT_SUFFIX}`
+  },
+  load(id: string): string | null {
+    if (!id.endsWith(CSS_TEXT_SUFFIX)) return null
+    const path = id.slice(0, -CSS_TEXT_SUFFIX.length)
+    return `export default ${JSON.stringify(readFileSync(path.startsWith('file:') ? fileURLToPath(path) : path, 'utf8'))}`
+  },
+}
 
 const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((id) => `node:${id}`)])
 
@@ -106,10 +132,13 @@ export default defineConfig([
     inputOptions: {
       resolve: { conditionNames: ['browser', 'import', 'require', 'default'] },
     },
-    plugins: [{
-      name: 'dsh-session-delete-client-purity',
-      resolveId: gateClientImport,
-    }],
+    plugins: [
+      cssTextPlugin,
+      {
+        name: 'dsh-session-delete-client-purity',
+        resolveId: gateClientImport,
+      },
+    ],
     outputOptions: {
       entryFileNames: 'client.js',
       // `dsh.client` 包 `./client` 导出必须用的闭合工厂；id = package.json 的 name（scoped 包写全名）

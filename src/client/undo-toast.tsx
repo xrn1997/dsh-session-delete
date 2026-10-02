@@ -13,9 +13,11 @@
  * （它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
  */
 import { useSyncExternalStore } from 'react'
-import { IconWarningOutlineRegular, Toast } from '@deepseek-ai/dsh-client-ui-primitives'
+import { zhTranslate, type Translate } from './copy.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
+import { IconWarningOutlineRegular } from './ui/icons.js'
+import { Toast } from './ui/Toast.js'
 
 export type UndoToastDeps = Pick<SessionDeleteRemote, 'restore'>
 
@@ -88,7 +90,7 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
  * 常驻的撤销提示宿主。挂 `shell.overlay`（框架级浮层；槽位说明原文 "a toast stack or a status
  * pill all belong here"，见 asar 里 `shell.overlay` 的声明）：没有待撤销的事时什么都不渲染。
  */
-export function UndoToast({ deps }: { deps: UndoToastDeps }) {
+export function UndoToast({ deps, t = zhTranslate }: { deps: UndoToastDeps; t?: Translate }) {
   const current = useUndoNotice()
   if (current === null) return null
 
@@ -108,12 +110,12 @@ export function UndoToast({ deps }: { deps: UndoToastDeps }) {
     <Toast
       key={seq}
       tone="success"
-      text={`${title === '' ? '会话' : title} 已移入回收站`}
+      text={t('undo.moved', { title: title === '' ? t('undo.session') : title })}
       holdMs={UNDO_HOLD_MS}
       actions={
         entryId === ''
           ? undefined
-          : [{ label: '撤销', onClick: () => void undo(deps, current) }]
+          : [{ label: t('undo.undo'), onClick: () => void undo(deps, current) }]
       }
       onDone={clearUndoNotice}
     />

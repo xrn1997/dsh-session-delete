@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session Delete",
+    "description": "Delete sessions: delete moves them to a recoverable trash, with an explicit permanent delete."
+  }
+}

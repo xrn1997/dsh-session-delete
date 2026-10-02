@@ -1,0 +1,462 @@
+/*
+ * 本插件自己的控件样式（**不再 require 宿主的 `@deepseek-ai/dsh-client-ui-primitives`**）。
+ *
+ * 出处：逐条抄自 `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2` 随包发布的明文 CSS
+ * （`lib/Button.module.css`、`Tag.module.css`、`Modal.module.css`、`Tooltip.module.css`、
+ * `Toast.module.css`、`Menu.module.css`）。这是官方给第三方 UI 插件的处方：
+ * 「copy markup, CSS, and behavior from the primitive into the plugin … Rename copied classes under
+ * your plugin's prefix, keep only `--dsw-alias-*` token references」（宿主技能
+ * `cordis-plugin-development/references/practices.md` 原文）。理由是那个包**随宿主换代而变、且不经类型检查**，
+ * 一个抛错的组件会把整个槽位条目打空（控制台 `slot entry crashed in '<slot>'`）。
+ *
+ * 三条改写规则：
+ * 1. **类名全部加本插件前缀 `sd-`**（原来是 CSS module 的哈希名，全局无冲突由前缀承担）。
+ * 2. **配色一律走 token**，一个颜色的字面量都没有——所以宿主换主题、改名 token 时最差是难看，
+ *    不会崩。几何量（圆角/阴影/层级）同样取 token；**只有字号/行高/尺寸是字面量 px**，与官方 CSS 逐字一致。
+ * 3. **`@keyframes` 全部改名**（`sd-` 前缀）：它们是全局命名空间，撞名会互相覆盖。
+ *
+ * 只收本插件真正用到的部分：Button 的 `primary`/`ghost`/`outline` 三档与 `md`/`sm` 两号
+ * （没有 `toolbar` 变体、没有 `lg`）、Tag 的 `danger` 一档、Modal 的全部骨架、Tooltip 的三个方位、
+ * Toast 全部、Menu 行的全部（含 danger 态与 separator）。**没抄进来的就是本插件不用的**，
+ * 不预先铺开——宿主那套里还有几十个变体与控件，抄全了等于把它的表面积整个搬进来。
+ */
+
+/* ────────────────────────── Button ────────────────────────── */
+
+.sd-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: none;
+  border-radius: var(--dsw-radius-md);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  padding: 0 14px;
+}
+
+.sd-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.sd-button-md {
+  height: 36px;
+}
+
+/* 紧凑档：尺寸不随填充/描边换档（官方原文的注释即此意）。 */
+.sd-button-sm {
+  height: 28px;
+  font-size: 12px;
+  line-height: 18px;
+  padding: 0 10px;
+  border-radius: var(--dsw-radius-sm);
+}
+
+.sd-button-primary {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.sd-button-primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.sd-button-ghost:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sd-button-ghost:active:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-active);
+}
+
+.sd-button-outline {
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  background: transparent;
+}
+
+.sd-button-outline:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sd-button-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ────────────────────────── Tag ────────────────────────── */
+
+/* 胶囊几何固定：一个 tag 在哪里都是同一个尺寸，只有色板随 tone 走。 */
+.sd-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  corner-shape: round;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+/* 状态色自带填充：底色由自身颜色 10% 混出，换色板时底与字一起走，不需要第二个 token。 */
+.sd-tag-danger {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* ────────────────────────── Modal ────────────────────────── */
+
+/* 整视口层（figma Mask + Dialog）：蒙层 + 居中卡片。四边留 24px，上下按外壳公布的浮层内缩加宽，
+   高卡片才不会顶到外壳。卡片按这个内边距盒取尺寸：消费方用 `max-height:100%` 收口，不自己算视口。 */
+.sd-modal-root {
+  pointer-events: auto;
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(24px, var(--dsh-frame-overlay-top, 24px)) 24px;
+}
+
+/* 只有绘制避让原生标题栏；根仍然挡住背景点击。 */
+.sd-modal-mask {
+  position: absolute;
+  inset: var(--dsh-frame-chrome-top, 0px) 0 0;
+  backdrop-filter: var(--dsw-mask-blur);
+}
+
+.sd-modal-mask::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--dsw-alias-bg-mask-1);
+  animation: sd-modal-enter var(--ds-transition-duration) var(--ds-ease-in-out);
+}
+
+.sd-modal-dialog {
+  box-sizing: border-box;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: min(380px, 100%);
+  padding: 0 0 24px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--dsw-radius-panel);
+  background: var(--dsw-alias-bg-layer-2);
+  box-shadow: var(--dsw-elevation-prominent);
+  animation: sd-modal-enter var(--ds-transition-duration) var(--ds-ease-in-out);
+}
+
+@keyframes sd-modal-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-modal-mask::after,
+  .sd-modal-dialog { animation: none; }
+}
+
+.sd-modal-dialog:focus {
+  outline: none;
+}
+
+.sd-modal-content {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* 头行：标题左、关闭钮右。 */
+.sd-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 22px 14px 12px 24px;
+}
+
+.sd-modal-title {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-primary);
+}
+
+.sd-modal-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sd-modal-close:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sd-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  margin-top: 20px;
+  padding: 0 24px;
+}
+
+.sd-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 24px;
+}
+
+/* ────────────────────────── Tooltip ────────────────────────── */
+
+.sd-tooltip-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  position: fixed;
+  z-index: 100;
+  /* 定宽收缩只按 `left` 到视口右缘量，靠右的锚点会提前折行；
+     `max-content` 只按文案定宽，再用半个视口收口。 */
+  width: max-content;
+  max-width: 50vw;
+  padding: 3px 7px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-tooltip-bg);
+  color: var(--dsw-static-neutral-bluish-00);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre-line;
+  /* 不可断的长 token（URL、路径）不许顶破 max-width。 */
+  overflow-wrap: break-word;
+  pointer-events: none;
+  animation: sd-tooltip-in 150ms var(--ds-ease-in-out);
+}
+
+.sd-tooltip-bubble[data-portal] { z-index: 1100; }
+.sd-tooltip-label { min-width: 0; }
+
+.sd-tooltip-bubble[data-side='right'] {
+  transform: translateY(-50%);
+}
+
+.sd-tooltip-bubble[data-side='bottom'] {
+  transform: translateX(-50%);
+}
+
+.sd-tooltip-bubble[data-side='top'] {
+  transform: translate(-50%, -100%);
+}
+
+@keyframes sd-tooltip-in {
+  from { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-tooltip-bubble {
+    animation: none;
+  }
+}
+
+/* ────────────────────────── Toast ────────────────────────── */
+
+/* 淡出延迟由组件以 `--dsh-toast-hold` 给出 ⇒ 同一个值同时驱动卸载计时器与这段动画，
+   两者不可能再对不上。淡出**时长**仍需与组件里的 FADE_MS 一致（没有 owner 会改它）。 */
+.sd-toast {
+  position: fixed;
+  top: 40px;
+  left: 50%;
+  /* 高过图片灯箱底层的 1000：预览开着时报错也必须读得到。 */
+  z-index: 1100;
+  /* 通告不截点击。 */
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* 定宽盒设了 `left` 只按右侧空间收缩（-50% 的位移发生在定尺之后）⇒ 靠窗边的横幅会提前折行。
+     `max-content` 只按文案定宽，再由下面的 max-width 收口。 */
+  width: max-content;
+  max-width: min(640px, calc(100vw - 48px));
+  padding: 12px 16px;
+  border-radius: var(--dsw-radius-lg);
+  /* 设计平台的 toast 表面在**两套主题下都是深的**（浅色 bluish-800 / 深色 bluish-750），
+     所以这里的字色与动作色是固定值，不随主题翻转。 */
+  background: var(--dsw-alias-toast-bg);
+  color: var(--dsw-alias-toast-label);
+  font-size: 14px;
+  line-height: 22px;
+  box-shadow: var(--dsw-shadow-lv3);
+  transform: translateX(-50%);
+  animation:
+    sd-toast-in 160ms ease-out,
+    sd-toast-fade 1000ms ease var(--dsh-toast-hold, 3000ms) forwards;
+}
+
+.sd-toast-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--dsw-alias-state-warn-label);
+}
+
+.sd-toast-icon-success {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.sd-toast-text {
+  min-width: 0;
+}
+
+.sd-toast-action {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dsw-static-deepseek-400);
+  font: inherit;
+  cursor: pointer;
+  /* 动作文字与周围文案之间的呼吸位。 */
+  margin-inline: 3px;
+  /* 横幅表面整体是穿透点击的，只有动作文字接指针。 */
+  pointer-events: auto;
+}
+
+.sd-toast-action:hover {
+  opacity: 0.8;
+}
+
+@keyframes sd-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@keyframes sd-toast-fade {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+/* 减动效去掉滑入；延迟淡出（透明度变化、不是位移）仍然在定时卸载前收掉横幅。 */
+@media (prefers-reduced-motion: reduce) {
+  .sd-toast {
+    animation: sd-toast-fade 1000ms ease var(--dsh-toast-hold, 3000ms) forwards;
+  }
+}
+
+/* ────────────────────────── 菜单行 ────────────────────────── */
+
+.sd-menu-item-wrap {
+  position: relative;
+}
+
+/* 菜单格：紧凑文字、图标与选中间距。 */
+.sd-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--dsw-radius-md);
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  text-align: left;
+}
+
+.sd-menu-item:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 方向键移动的是真焦点 ⇒ 键盘所在的那一行拿指针同款填充；填充就是这一行的焦点呈现，
+   浏览器默认的 ring 再叠一层就重了。 */
+.sd-menu-item:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  outline: none;
+}
+
+.sd-menu-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sd-menu-item-icon {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-menu-icon);
+}
+
+.sd-menu-item-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sd-menu-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 破坏性行：error 字/图标 + danger 悬停底。 */
+.sd-menu-item-danger {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.sd-menu-item-danger .sd-menu-item-icon {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.sd-menu-item-danger:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
+.sd-menu-item-danger:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  outline: none;
+}
+
+/* 分隔格：发丝线上下的间距。取 l2 而不是 l1——l1 在这个表面上几乎看不见。 */
+.sd-menu-separator {
+  height: 0.5px;
+  margin: 3px 2px;
+  background: var(--dsw-alias-border-l2);
+}

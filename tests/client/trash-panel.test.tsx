@@ -2,7 +2,7 @@
 // 座位与注册形状归 `index.test.tsx`，这里钉交互与状态机。
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { fileSizeText } from '@deepseek-ai/dsh-client-ui-primitives'
+import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
 import { invalidateTrash } from '../../src/client/trash-store.js'
 
@@ -217,16 +217,17 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构）'
   })
 
   // 头注承诺的层级：整页只有一块实心红。这条用例就是让那句承诺没法再漂回注释里。
-  it('危险动作分两档：行内只有字色（底留给官方 hover 类），实心红只有「清空回收站…」', async () => {
+  // 控件已自造（`src/client/ui/*`），所以判据是**我们自己的类名**，不再是官方组件的 data 标记。
+  it('危险动作分两档：行内只有字色（底留给自己的 hover 类），实心红只有「清空回收站…」', async () => {
     render(<TrashPanel deps={{ list: vi.fn(async () => rows), restore: vi.fn(), purge: vi.fn() } as never} />)
     const rowDanger = await screen.findByRole('button', { name: '彻底删除…' })
-    expect(rowDanger.getAttribute('data-variant')).toBe('ghost')
+    expect(rowDanger.classList.contains('sd-button-ghost')).toBe(true)
     expect(rowDanger.style.color).toBe('var(--dsw-alias-state-error-primary)')
-    // 铺了内联 background 就会把 `.ghost:hover` 打死（内联永远赢过类规则）——点错之前就没反馈了。
+    // 铺了内联 background 就会把 `.sd-button-ghost:hover` 打死（内联永远赢过类规则）——点错之前就没反馈了。
     expect(rowDanger.style.background).toBe('')
 
     const bulk = screen.getByRole('button', { name: '清空回收站…' })
-    expect(bulk.getAttribute('data-variant')).toBe('primary')
+    expect(bulk.classList.contains('sd-button-primary')).toBe(true)
     expect(bulk.style.getPropertyValue('--dsw-alias-button-primary-fill')).toBe(
       'var(--dsw-alias-state-error-primary)',
     )

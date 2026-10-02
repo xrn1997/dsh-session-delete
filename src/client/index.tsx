@@ -62,6 +62,8 @@
  * 杀掉整个进程）。
  * 所以：**`apply` 同步返回、绝不抛**，注册挂在探测的续拍上；探测不过就一个贡献都不注册。
  */
+import { type ClientContextLike } from './context.js'
+import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
 import { DeleteMenuItem } from './delete-menu-item.js'
 import {
@@ -80,6 +82,9 @@ export const name = '@xrn1997/dsh-session-delete/client'
  * 只列**宿主公开面保证存在**的成员：`slots` 是浏览器侧槽位注册表
  * （宿主外壳的冻结平台模块表里的静态键 `@deepseek-ai/dsh-client-ui-slots`），一定在。
  * 取数通道不在这里——理由见文件头注（它不是 inject 能表达的事，写错了代价是进程死）。
+ * **`locale` 也不在这里**：宿主自己的 `ui-sidebar` 是硬注入它的，但那是"宿主知道自己那一代"的前提；
+ * 本插件要跨代活着 ⇒ 走 `ctx.get('locale')` 可选读，缺席时降级到内置 zh 文案（见 `copy.ts` 头注）。
+ * 写进 inject 就等于"这一代没有 locale 就不让整个客户端条目激活"，而那等于宿主进程死。
  */
 export const inject = ['slots']
 
@@ -93,28 +98,6 @@ const PLUGIN_ID = '@xrn1997/dsh-session-delete'
 
 /** 面板 id 与 `main` 的 key 同字：官方按 list id 去 `main` 里寻址同 id 的占用者。 */
 const PANEL_ID = `${PLUGIN_ID}.trash`
-
-/* ── 宿主 ctx 的窄镜像 ───────────────────────────────────── */
-interface SlotRegistration {
-  name: string
-  /** list 座位的占用者 id。 */
-  id?: string
-  /** keyed 座位（`main`）的键；与 `id` 二者按座位取一。 */
-  key?: string
-  order?: number
-  /** 宿主的行名字（`resolveSlotLabel(options.label)`；`sidebar.panellist` 用它画 `.panelTitle`）。 */
-  label?: string
-  inject?: () => unknown
-}
-
-interface SlotsLike {
-  inject(key: string, contribute: () => unknown): unknown
-  register(options: SlotRegistration, component: unknown): unknown
-}
-
-interface ClientContextLike {
-  slots: SlotsLike
-}
 
 /* ── 菜单行的适配：槽位投影 → 组件 props ─────────────────── */
 /** `ui-session` 通过 `ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list } })` 提供的根
@@ -142,9 +125,8 @@ const NEVER_LIVE: UseSessions = () => false
 /** 槽位 hook 缺失时的兜底：什么都不关（同样恒等身份，hook 顺序不随渲染变）。 */
 const NEVER_MENU_OPEN_STATE: UseMenuOpenState = () => [false, () => undefined]
 
-/** 槽位投影 → `DeleteMenuItem` 的 props。`live` 取自会话运行态（root hook）。
- *  这一行不接注入面：它只把请求写进 `delete-confirm.tsx` 的模块级现场（确认框住在 overlay 上）。 */
-function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState }: MenuRowProps) {
+/** 菜单行的宿主：文案与远程面都从槽位载荷来（`live` 由这一行自己从 root hook 读）。 */
+function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState, t }: MenuRowProps & { t: Translate }) {
   const select = typeof useSessions === 'function' ? useSessions : NEVER_LIVE
   const live = select((state) => state?.byId?.[sessionId]?.running === true)
   // 菜单收不收是 owner（本槽位的宿主菜单）的决定，我们只消费它给的这对状态：按下这一行时先发请求、
@@ -156,19 +138,20 @@ function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState }: M
       sessionId={sessionId}
       title={displayTitle}
       live={live}
+      t={t}
       dismissMenu={() => setMenuOpen(false)}
     />
   )
 }
 
-/** 撤销提示的宿主：组件本身只吃 `restore`。 */
-function UndoToastSlot({ deps }: { deps: SessionDeleteRemote }) {
-  return <UndoToast deps={deps} />
+/** 撤销提示的宿主：组件本身只吃 `restore` 与文案。 */
+function UndoToastSlot({ deps, t }: { deps: SessionDeleteRemote; t: Translate }) {
+  return <UndoToast deps={deps} t={t} />
 }
 
 /** 确认框的宿主：组件只吃 `delete`（会话 id 来自模块级现场，不从这里走）。 */
-function DeleteConfirmSlot({ deps }: { deps: SessionDeleteRemote }) {
-  return <DeleteConfirmHost deps={deps} />
+function DeleteConfirmSlot({ deps, t }: { deps: SessionDeleteRemote; t: Translate }) {
+  return <DeleteConfirmHost deps={deps} t={t} />
 }
 
 /** 面板行的占用者：宿主给 `SidebarPanelIconOwnerProps { size, active }`，我们只回一个 glyph。 */
@@ -194,16 +177,21 @@ async function activate(client: ClientContextLike): Promise<void> {
   const raw = createHttpRemote()
   if (!(await probeChannel(raw))) return
   const deps = buildDeps(raw)
+  // 文案：宿主 locale 服务在就注册字典并绑命名空间，不在就降级到内置 zh（见 `copy.ts` 头注）。
+  const t = createTranslate(client)
 
   // ① 菜单行：只发请求，注入面一件都不需要（会话 id / 名字由槽位投影给）。
   client.slots.inject(MENU_SLOT, () =>
-    client.slots.register({ name: MENU_SLOT, id: `${PLUGIN_ID}.delete`, order: 900 }, DeleteRow),
+    client.slots.register(
+      { name: MENU_SLOT, id: `${PLUGIN_ID}.delete`, order: 900, inject: () => ({ t }) },
+      DeleteRow,
+    ),
   )
 
   // ② 撤销提示的常驻宿主（不在菜单里，理由见 §头注）
   client.slots.inject(OVERLAY_SLOT, () =>
     client.slots.register(
-      { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.undo-toast`, inject: () => ({ deps }) },
+      { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.undo-toast`, inject: () => ({ deps, t }) },
       UndoToastSlot,
     ),
   )
@@ -211,23 +199,26 @@ async function activate(client: ClientContextLike): Promise<void> {
   // ②' 确认框的常驻宿主（确认框必须脱离菜单子树的生命周期，见 delete-confirm.tsx）
   client.slots.inject(OVERLAY_SLOT, () =>
     client.slots.register(
-      { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-confirm`, inject: () => ({ deps }) },
+      { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-confirm`, inject: () => ({ deps, t }) },
       DeleteConfirmSlot,
     ),
   )
 
   // ③ 面板行：名字给宿主（它画 `.panelTitle` 与折叠 tooltip），我们只出一个 glyph。
   // order 落在官方两个面板行（plugins 0 / schedules）与第三方「小说」（20）之后。
+  // **名字走 thunk**：宿主 `resolveSlotLabel` 在每次重读时才求值，并在语言变化时重读
+  // （`ctx.locale.subscribe(syncPanels)`）⇒ 切换语言这一行跟着走。**别改成活计数**：它只在
+  // 条目变化或语言变化时重读，拿它当计数必然 stale（设计稿 §7）。
   client.slots.inject(PANEL_SLOT, () =>
     client.slots.register(
-      { name: PANEL_SLOT, id: PANEL_ID, order: 900, label: '回收站' },
+      { name: PANEL_SLOT, id: PANEL_ID, order: 900, label: () => t('trash.title') },
       TrashPanelIconSlot,
     ),
   )
 
   // ③' 中央面板：同字 key；清单本体（自带页面骨架与滚动，中央列那个盒子两样都不给）。
   client.slots.inject(MAIN_SLOT, () =>
-    client.slots.register({ name: MAIN_SLOT, key: PANEL_ID, inject: () => ({ deps }) }, TrashPanel),
+    client.slots.register({ name: MAIN_SLOT, key: PANEL_ID, inject: () => ({ deps, t }) }, TrashPanel),
   )
 }
 

@@ -23,20 +23,16 @@
  * 见 `undo-toast.tsx`），状态源用 React 自带的 `useSyncExternalStore`——不为此引新的状态库。
  */
 import { useState, useSyncExternalStore } from 'react'
-import { Button, Modal, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
+import { zhTranslate, type Translate } from './copy.js'
 import { callRemote, type DeleteConfirmDeps } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
+import { Button } from './ui/Button.js'
+import { Modal } from './ui/Modal.js'
+import { Tag } from './ui/Tag.js'
 import { publishUndoNotice } from './undo-toast.js'
 
-const DIALOG_TITLE = '删除这个会话？'
-const DIALOG_HINT = '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。'
-const CONFIRM_LABEL = '移入回收站'
-const CANCEL_LABEL = '取消'
-const CLOSE_LABEL = '关闭'
-const UNTITLED = '(无标题会话)'
-
 /**
- * 被操作对象那张卡。官方 `Modal` 的 `.body` 不设字号也不给层级 ⇒ 裸摆一行会话标题会和下面那句
+ * 被操作对象那张卡。`Modal`（`ui/Modal.tsx`，照官方抄的）的 `.sd-modal-body` 不设字号也不给层级 ⇒ 裸摆一行会话标题会和下面那句
  * 提示**同字同色**，读不出"这才是要被删的东西"。配方与「彻底删除」框里那张摘要卡同一套（宿主设置面
  * 的卡片 token：`bg-layer-2` + `border-l4` + `radius-lg`），两个对话框因此同形。
  * 浅色下 `bg-layer-2` 与对话框自身同色，分隔全靠那根描边——宿主自己的卡片在浅色下也是这样。
@@ -99,20 +95,28 @@ export function useDeleteRequest(): DeleteRequest | null {
  * 常驻的确认框宿主。挂 `shell.overlay`（框架级浮层；槽位说明原文 "a toast stack or a status
  * pill all belong here"）：没有待确认的删除时什么都不渲染。
  */
-export function DeleteConfirmHost({ deps }: { deps: DeleteConfirmDeps }) {
+export function DeleteConfirmHost({ deps, t = zhTranslate }: { deps: DeleteConfirmDeps; t?: Translate }) {
   const current = useDeleteRequest()
   if (current === null) return null
   // `key` 跟着 seq 走：新的一条请求是一个全新的对话框（官方 `Toast` 的 `key={seq}` 同一口径）。
-  return <ConfirmDialog key={current.seq} request={current} deps={deps} />
+  return <ConfirmDialog key={current.seq} request={current} deps={deps} t={t} />
 }
 
 /**
- * 确认框本体。视图与文案与设计稿 §7 一致（官方 `Modal` + `variant="primary"` 主按钮「移入回收站」；
+ * 确认框本体。视图与文案与设计稿 §7 一致（`Modal` + `variant="primary"` 主按钮「移入回收站」；
  * 那个 primary 在宿主浅色下是近黑、深色下近白，**从来不是蓝**）。
- * 失败面**不吞**：原文以官方 `Tag tone="danger"` 摆进对话框，且**确认失败后不关框**，
+ * 失败面**不吞**：原文以 `Tag tone="danger"` 摆进对话框，且**确认失败后不关框**，
  * 用户可以再点一次（不是一次失败就永久锁死）。
  */
-function ConfirmDialog({ request: current, deps }: { request: DeleteRequest; deps: DeleteConfirmDeps }) {
+function ConfirmDialog({
+  request: current,
+  deps,
+  t,
+}: {
+  request: DeleteRequest
+  deps: DeleteConfirmDeps
+  t: Translate
+}) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
 
@@ -135,15 +139,15 @@ function ConfirmDialog({ request: current, deps }: { request: DeleteRequest; dep
     <Modal
       open
       onClose={clearDeleteRequest}
-      title={DIALOG_TITLE}
-      closeLabel={CLOSE_LABEL}
+      title={t('dialog.title')}
+      closeLabel={t('common.close')}
       footer={
         <>
           <Button variant="outline" onClick={clearDeleteRequest}>
-            {CANCEL_LABEL}
+            {t('common.cancel')}
           </Button>
           <Button variant="primary" disabled={busy} onClick={() => void confirm()}>
-            {CONFIRM_LABEL}
+            {t('dialog.confirm')}
           </Button>
         </>
       }
@@ -160,10 +164,10 @@ function ConfirmDialog({ request: current, deps }: { request: DeleteRequest; dep
             whiteSpace: 'nowrap',
           }}
         >
-          {current.title === '' ? UNTITLED : current.title}
+          {current.title === '' ? t('common.untitled') : current.title}
         </div>
       </div>
-      <p>{DIALOG_HINT}</p>
+      <p>{t('dialog.hint')}</p>
       {failure === null ? null : <Tag tone="danger">{failure}</Tag>}
     </Modal>
   )

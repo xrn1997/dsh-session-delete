@@ -12,7 +12,7 @@
  * 另外两件事说清：
  *
  * 1. **不自建菜单壳**。菜单行由宿主既有菜单容器渲染，我们只贡献一行 `MenuItemButton`
- *    （官方 `dsh-client-ui-primitives`），由 `index.tsx` 注册进槽位
+ *    （`ui/MenuItemButton.tsx`，照官方同名组件抄的），由 `index.tsx` 注册进槽位
  *    `sidebar.workspaces.session.menu.item`（该槽位只投影 `sessionId` / `displayTitle` 两个数据
  *    加 `menuOpenState` / `shortcuts` 两个 hook，见 asar @46391872 的槽位声明原文）。
  *    菜单的**开合归 owner**：槽位把 `useMenuOpenState` 交给这一行（`index.tsx` 的 `DeleteRow` 接住后
@@ -21,14 +21,15 @@
  * 2. **运行中置灰**（设计稿 §7「运行中」）。置灰用**原生 `disabled`**：本平台的菜单行组件
  *    `MenuItemButton` 只把 `disabled` 落在原生按钮属性上（真产物原文 `<button type="button"
  *    role="menuitem" … disabled={disabled}>`），jest-dom 的 `toBeDisabled()` 也只认这个属性；
- *    `aria-disabled` 在这条链上既渲染不出来也不算数。原因文案用官方 `Tooltip` 挂在行上
+ *    `aria-disabled` 在这条链上既渲染不出来也不算数。原因文案用 `ui/Tooltip.tsx`（照官方 Tooltip 抄的，
+ *    行为同款：hover / 键盘 focus 才出）挂在行上
  *    （anchor 用一层 `<span>`：`MenuItemButton` 是普通函数组件、接不住 `Tooltip` 注入的 ref）。
  */
-import { IconTrashOutlineRegular, MenuItemButton, Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import { requestDelete } from './delete-confirm.js'
-
-/** 运行中那句提示的原文（设计稿 §7「运行中」那条逐字）。 */
-export const LIVE_HINT = '会话正在运行，先停止再删除'
+import { zhTranslate, type Translate } from './copy.js'
+import { IconTrashOutlineRegular } from './ui/icons.js'
+import { MenuItemButton } from './ui/MenuItemButton.js'
+import { Tooltip } from './ui/Tooltip.js'
 
 export interface DeleteMenuItemProps {
   /** 宿主菜单槽投影的会话 id，原样透给 `sessiondelete/delete`（浏览器半不自己拼 id）。 */
@@ -43,9 +44,17 @@ export interface DeleteMenuItemProps {
    * 缺省不动，方便单独测这一行。
    */
   dismissMenu?: () => void
+  /** 文案（缺省 = 内置 zh，见 `copy.ts`：这不是"忘了传"，而是"这次没有 locale 服务"）。 */
+  t?: Translate
 }
 
-export function DeleteMenuItem({ sessionId, title, live = false, dismissMenu }: DeleteMenuItemProps) {
+export function DeleteMenuItem({
+  sessionId,
+  title,
+  live = false,
+  dismissMenu,
+  t = zhTranslate,
+}: DeleteMenuItemProps) {
   const select = (): void => {
     // 先把请求写进现场（确认框住在 overlay 上、不随这一行的卸载消失），再让 owner 收菜单——
     // 即使 owner 收菜单的动作把这一行卸了，请求也已经发出去了。
@@ -54,7 +63,7 @@ export function DeleteMenuItem({ sessionId, title, live = false, dismissMenu }: 
   }
 
   return (
-    <Tooltip label={LIVE_HINT} side="right" portal disabled={!live}>
+    <Tooltip label={t('menu.live')} side="right" portal disabled={!live}>
       <span>
         <MenuItemButton
           separatorBefore
@@ -63,7 +72,7 @@ export function DeleteMenuItem({ sessionId, title, live = false, dismissMenu }: 
           icon={<IconTrashOutlineRegular size={14} />}
           onSelect={select}
         >
-          删除
+          {t('menu.delete')}
         </MenuItemButton>
       </span>
     </Tooltip>

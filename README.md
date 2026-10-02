@@ -7,7 +7,7 @@
 
 ## 安装
 
-插件走宿主自己的插件管理（`dsh plugin`）。**宿主对插件有一道安装闸**：拿运行中的宿主版本逐项比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足就拒绝并回滚——所以本插件只声明**真的跑过**的宿主版本（见下"兼容性"）。
+插件走宿主自己的插件管理（`dsh plugin`）。宿主对插件有一道安装闸（拿运行中的宿主版本比对插件的 `@deepseek-ai/dsh*` peer 区间，不满足即拒绝并回滚）——本插件不声明任何 `dsh-*` peer，所以这道闸不限制它装在哪些代上（见下"兼容性"）。
 
 本仓（本地开发，已实测）：
 
@@ -21,6 +21,8 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 ```bash
 dsh plugin --profile <profile> add @xrn1997/dsh-session-delete
 ```
+
+也可以用 `pnpm pack` 打成 tarball 分发（用户 `dsh plugin add ./dsh-session-delete-0.0.1.tgz`）：**这两条路都不需要用户为构建脚本授权**，因为包里带的是预构建产物（`prepack` 在打包时替你跑 `build`）。
 
 装完**重启宿主**（Node 半改动不走 HMR）。
 
@@ -37,7 +39,13 @@ dsh plugin --profile <profile> add @xrn1997/dsh-session-delete
 
 ## 兼容性
 
-只声明当前 desktop 发行版：**DSH Desktop 0.2.0-rc.2**（`package.json` 的 `dsh.compatibility.dshReleases`，状态 `compatible`）。跟版策略未裁定——每跟一个 rc 都要在新宿主上重跑验证门（设计稿 §8）。
+安装闸（`dsh plugin add` 会拿运行中的宿主版本比对插件的 `@deepseek-ai/dsh*` peer 区间）**对本插件没有约束**：本插件不声明任何 `dsh-*` peer——界面用的控件与图标已固化成 `src/client/ui/*`，浏览器半只 require React 家族这三个冻结平台模块。
+
+`dsh.compatibility.dshReleases` 里列的仍只有**真跑过**的那一代：**DSH Desktop 0.2.0-rc.2**（状态 `compatible`）。别的 rc 装得上，但没验过。
+
+## 语言
+
+界面文案（中文 / English）挂在宿主自己的 locale 服务上，跟随设置的界面语言；服务不可用时退回内置中文。
 
 ## 开发
 

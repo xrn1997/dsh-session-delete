@@ -10,14 +10,15 @@
  * ① 「原项目」那一列摆的是宿主的 `projectKey`（`--D-develop-GitHub-…--`），96px 的列宽只够露出驱动器
  *   和半截路径，等于没有信息；② 「删除时间」96px 装不下 `toLocaleString()` ⇒ 折成两行，行高在
  *   40/56px 之间抖；③ 表格没有行分隔，条数一多就读成一面墙。现在项目名做**组头**（一个项目只出现
- *   一次，整条给得下），时间走官方 `relativeTime` 的分桶（与宿主侧栏同一套桶，措辞按该模块的约定
- *   留在本仓），大小并到第二行元信息里，行与行的分隔交给卡片自己的边框。
+ *   一次，整条给得下），时间走 `relativeTime` 的分桶（**函数是从官方 `primitives` 逐字抄进
+ *   `ui/format.ts` 的**，与宿主侧栏同一套桶；措辞按该模块的约定留在 `copy.ts`），大小并到第二行
+ *   元信息里，行与行的分隔交给卡片自己的边框。
  *
  * 卡片的底色/描边照抄宿主设置面自己的卡片配方（asar @28440420 逐字
  * `border:.5px solid var(--dsw-alias-settings-card-stroke);background:var(--dsw-alias-settings-card-fill);
  * border-radius:var(--dsw-radius-xl)`，而 `body` 上这两个别名就解析成 `--dsw-alias-bg-layer-2` 与
  * `--dsw-alias-border-l4`）。这里**直接写这两个底层 token**而不是那两个 settings 别名：别名挂在宿主
- * 应用的 `body` 上、不是 primitives 包面的一部分，底层那两个才是官方组件 CSS 自己在用的。圆角取
+ * 应用的 `body` 上、不是随包发布的组件面的一部分，底层那两个才是官方组件 CSS 自己在用的。圆角取
  * `--dsw-radius-lg`（16px）而不是卡片面的 `xl`（20px）——行高只有 60px 上下，20px 会把卡片吹成胶囊。
  *
  * 三条界面规则没有因为改版让路：
@@ -29,24 +30,28 @@
  *   "已在场的区域里发生了变更"，而这两块是连着内容一起冒出来的）。要稳得常驻一个只给读屏看的播报台，
  *   那件事本机没有 AT 可验，所以留在这里当已知边界，不写成已经做到。
  * - **彻底删除要二次确认**：单条与清空走同一个确认框，正文明写「之后没有任何副本可以恢复」。
- *   **红色没有官方 danger 按钮变体**（`Button.module.css` 只有 primary/ghost/outline/toolbar，宿主主题
- *   的 `--dsw-alias-button-*` 里也没有 danger 家族），所以两档危险各自照抄宿主自己组红色的两条配方：
+ *   **红色没有 danger 按钮变体**（官方那套 `Button` 只有 primary/ghost/outline/toolbar——我们抄来的
+ *   `ui.css` 同样只这三档，宿主主题的 `--dsw-alias-button-*` 里也没有 danger 家族），所以两档危险
+ *   各自照抄宿主自己组红色的两条配方：
  *   - **行内 = 安静的红**：只写 `color:--dsw-alias-state-error-primary`、**不写 background**——宿主设置面
  *     的行内 danger 按钮 @28442232 逐字就是 `color:…-error-primary;background:0 0;border:none`。不写底
- *     还有一层硬理由：作者态内联 `background` 永远赢过类规则，而 `Button.module.css` 的 `.ghost:hover` /
- *     `.ghost:active` 都是普通类、无 `!important` ⇒ 铺了内联底的按钮**在点错之前不给任何视觉回应**。
+ *     还有一层硬理由：作者态内联 `background` 永远赢过类规则，而 `ui.css` 里 `.sd-button-ghost:hover` /
+ *     `.sd-button-ghost:active` 都是普通类、无 `!important` ⇒ 铺了内联底的按钮**在点错之前不给任何视觉回应**。
  *   - **批量与确认框 = 实心红**：`variant="primary"` 并在元素上就地覆盖 `--dsw-alias-button-primary-fill`
  *     与 `--dsw-alias-button-primary-hover` 为 `--dsw-alias-state-error-primary`（宿主插件管理页的 danger
- *     按钮 @21658274 逐字就这么干）。`.primary:hover` 的类规则照常生效，红也是主题自洽的实心红。
+ *     按钮 @21658274 逐字就这么干）。`.sd-button-primary:hover` 的类规则照常生效，红也是主题自洽的实心红。
  *   **层级**：整页只有一块实心红（「清空回收站…」，确认框里那块是它的后续），行内是安静的红——一次
  *   点错只损失一条，清空才是整页级的损失。（`--dsw-alias-interactive-bg-hover-danger` 是**hover 态**的
  *   透明红（浅色 5% / 深色 15% alpha；宿主拿它当底的是 @21305622 那条 error **块** `wq12jW_error`，
- *   不是芯片——官方 `Tag[data-tone='danger']` 的底是 `color-mix(… 10%, transparent)`），当常置底既撑不起
+ *   不是芯片——`Tag[data-tone='danger']` 的底是 `color-mix(… 10%, transparent)`），当常置底既撑不起
  *   "实心"也不是它的用途，所以这里两处都不用它。）
  *
  * 布局只用**结构**内联样式（display/flex/gap/padding/overflow/max-width），**配色与圆角一律走 token**；
  * **字号是字面量 px**、取宿主同类面的读数（它也这么写，如 `fO69Vq_crumb{font-size:12.5px}`）。结构与
- * 层级归设计稿 §7（本仓不另存像素稿），皮肤只由 token 决定。本插件不往 `document.head` 里注任何 CSS。
+ * 层级归设计稿 §7（本仓不另存像素稿），皮肤只由 token 决定。控件样式住在 `src/client/ui/ui.css`
+ * （照官方明文 CSS 抄的），由 `ui/styles.ts` 在浏览器半模块物化时挂成一个 `<style>`——**这是宿主给
+ * 客户端插件的一等公民通道**（模块表会认领工厂物化时注入的 `<style>` 并在卸载/HMR 时摘掉），
+ * 详见那里与设计稿 §10。
  *
  * **浅色主题已在真机看过（2026-10-01，用户截图：3 条 / 2 组）**：浅色下 `--dsw-alias-bg-base` 与
  * `--dsw-alias-bg-layer-2` 是同一个值（都解析成 `bluish-00`；深色才分 `950` / `850`）⇒ 卡片确实只剩
@@ -54,25 +59,26 @@
  * 是同一配方，所以这是宿主的取舍、不是本面板的偏差。**深色下的新版还没看过**（同一批 token，风险低）。
  */
 import { type CSSProperties, useCallback, useEffect, useMemo, useState } from 'react'
+import { unescapeProjectKey } from '../shared/wire.js'
+import { splitOn, zhTranslate, type CopyKey, type Translate } from './copy.js'
+import { callRemote, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
+import { useTrashRevision } from './trash-store.js'
+import { Button } from './ui/Button.js'
+import { fileSizeText, relativeTime, type RelativeTimeUnit } from './ui/format.js'
 import {
-  Button,
   IconFolderOpenOutlineRegular,
   IconRefreshOutlineRegular,
   IconTrashOutlineRegular,
   IconWarningOutlineRegular,
-  Modal,
-  type RelativeTimeUnit,
-  fileSizeText,
-  relativeTime,
-} from '@deepseek-ai/dsh-client-ui-primitives'
-import { unescapeProjectKey } from '../shared/wire.js'
-import { callRemote, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
-import { useTrashRevision } from './trash-store.js'
+} from './ui/icons.js'
+import { Modal } from './ui/Modal.js'
 
 export type TrashPanelDeps = Pick<SessionDeleteRemote, 'list' | 'restore' | 'purge'>
 
 export interface TrashPanelProps {
   deps: TrashPanelDeps
+  /** 文案（缺省 = 内置 zh，见 `copy.ts`：这不是"忘了传"，而是"这次没有 locale 服务"）。 */
+  t?: Translate
 }
 
 /** 待确认的彻底删除：一条记录，或整个回收站（`entryId` 缺省 = 清空）。 */
@@ -93,9 +99,8 @@ const BULK_DANGER = {
   '--dsw-alias-button-primary-hover': 'var(--dsw-alias-state-error-primary)',
 } as CSSProperties
 
-const PAGE_TITLE = '回收站'
 /** 回收站相对宿主**数据根**的位置。**不写 `~/.dsh/`**：数据根可以是 `$DSH_HOME` 指的别处
- *  （隔离宿主就是这么起的），写死会让这条页脚文案在那些环境下说谎。 */
+ *  （隔离宿主就是这么起的），写死会让这条页脚文案在那些环境下说谎。也是页脚那句里的 `{dir}`。 */
 const TRASH_DIR = 'session-trash/'
 
 /** 中央列在宽屏上就是整个对话区的宽度；清单不限宽会拉成一条横向的空。 */
@@ -171,17 +176,16 @@ const ELLIPSIS: CSSProperties = {
 }
 
 /**
- * 官方 `relativeTime` 只交回桶与量（`{unit, n}`），措辞按它自己的约定留在本面。单位词与宿主字典
- * 逐字对齐（zh 表里 `time.minutes="{n}分钟"`、`time.hours="{n}小时"`、`time.days="{n}天"`、
- * `time.months="{n}个月"`、`time.years="{n}年"`，**数字与单位之间不空格**是它的写法），本面把这一截
- * 嵌进「删除于 …前」这句里。`now` 桶不套模板——"删除于 刚刚前"不是话。
+ * `relativeTime`（`ui/format.ts`，逐字抄自官方）只交回桶与量（`{unit, n}`），措辞按它自己的约定留在本面——现在那份措辞住
+ * `copy.ts` 的字典里（单位词与宿主 zh 字典逐字对齐：`time.minutes="{n}分钟"`…
+ * **数字与单位之间不空格**是它的写法）。`now` 桶不套模板——"删除于 刚刚前"不是话。
  */
-const BUCKET_UNIT: Record<Exclude<RelativeTimeUnit, 'now'>, string> = {
-  minutes: '分钟',
-  hours: '小时',
-  days: '天',
-  months: '个月',
-  years: '年',
+const BUCKET_KEY: Record<Exclude<RelativeTimeUnit, 'now'>, CopyKey> = {
+  minutes: 'trash.unit.minutes',
+  hours: 'trash.unit.hours',
+  days: 'trash.unit.days',
+  months: 'trash.unit.months',
+  years: 'trash.unit.years',
 }
 
 function deletedAtText(at: number): string {
@@ -189,9 +193,11 @@ function deletedAtText(at: number): string {
 }
 
 /** 卡片第二行的时间短语；绝对时间另给 `title`。 */
-function deletedAgo(at: number, now: number): string {
+function deletedAgo(at: number, now: number, t: Translate): string {
   const { unit, n } = relativeTime(at, now)
-  return unit === 'now' ? '刚刚删除' : `删除于 ${n}${BUCKET_UNIT[unit]}前`
+  return unit === 'now'
+    ? t('trash.row.deletedNow')
+    : t('trash.row.deletedAgo', { n, unit: t(BUCKET_KEY[unit]) })
 }
 
 /**
@@ -203,9 +209,9 @@ function deletedAgo(at: number, now: number): string {
  * 还原成 `D-develop-中文`。摘掉 `--…--` 裹边、还原这些转义，剩下的原样摆出来，完整串交给组头 `title`。
  * **字母表只有一份**：还原走 `shared/wire.ts` 的 `unescapeProjectKey`（编码那半在 Node 侧）。
  */
-function projectLabel(projectDir: string): string {
+function projectLabel(projectDir: string, t: Translate): string {
   const bare = unescapeProjectKey(projectDir.replace(/^--/, '').replace(/--$/, ''))
-  return bare === '' || bare === '_no-cwd' ? '未记录项目' : bare
+  return bare === '' || bare === '_no-cwd' ? t('trash.project.unknown') : bare
 }
 
 interface ProjectGroup {
@@ -217,7 +223,7 @@ interface ProjectGroup {
 }
 
 /** 按项目分组：组内按删除时间倒序，组间按各组最新一条倒序（刚删掉的那个项目排在最上面）。 */
-function groupByProject(entries: readonly TrashEntryLike[]): ProjectGroup[] {
+function groupByProject(entries: readonly TrashEntryLike[], t: Translate): ProjectGroup[] {
   const byProject = new Map<string, TrashEntryLike[]>()
   for (const entry of [...entries].sort((a, b) => b.deletedAt - a.deletedAt)) {
     const list = byProject.get(entry.projectDir)
@@ -228,14 +234,14 @@ function groupByProject(entries: readonly TrashEntryLike[]): ProjectGroup[] {
     // 进这条循环前整体按 `deletedAt` 倒序排过 ⇒ 每组的第一条就是该组最新的一条，组必非空。
     .map(([projectDir, list]) => ({
       projectDir,
-      label: projectLabel(projectDir),
+      label: projectLabel(projectDir, t),
       latest: list[0].deletedAt,
       entries: list,
     }))
     .sort((a, b) => b.latest - a.latest)
 }
 
-export function TrashPanel({ deps }: TrashPanelProps) {
+export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const [entries, setEntries] = useState<readonly TrashEntryLike[] | null>(null)
   const [listFailure, setListFailure] = useState<string | null>(null)
   const [rowFailure, setRowFailure] = useState<Readonly<Record<string, string>>>({})
@@ -296,19 +302,20 @@ export function TrashPanel({ deps }: TrashPanelProps) {
     await reload()
   }
 
-  const groups = useMemo(() => groupByProject(entries ?? []), [entries])
+  const groups = useMemo(() => groupByProject(entries ?? [], t), [entries, t])
   const totalBytes = (entries ?? []).reduce((sum, entry) => sum + entry.sizeBytes, 0)
   // 分桶在**每次渲染**时按当前时刻算，但本面板**没有计时器**：一条"59分钟"可以挂到下次重读、
   // 交互或失效通告为止（桶最细到分钟，而回收站不是盯着看的界面）。这是取舍，不是"不会停在旧读数"。
   const now = Date.now()
   const hasEntries = entries !== null && entries.length > 0
+  const noteParts = splitOn(t('trash.footer.note', { dir: TRASH_DIR }), TRASH_DIR)
 
   return (
     <div data-dsh-session-delete="trash-panel" style={PAGE}>
       <div style={COLUMN}>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, paddingBottom: 14 }}>
           <div style={{ ...ELLIPSIS, minWidth: 0 }}>
-            <div style={{ fontSize: 16, fontWeight: 600, lineHeight: '24px' }}>{PAGE_TITLE}</div>
+            <div style={{ fontSize: 16, fontWeight: 600, lineHeight: '24px' }}>{t('trash.title')}</div>
             {hasEntries ? (
               <div
                 style={{
@@ -317,7 +324,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                   color: 'var(--dsw-alias-label-tertiary)',
                 }}
               >
-                {`${entries.length} 个会话 · 共 ${fileSizeText(totalBytes)}`}
+                {t('trash.summary', { count: entries.length, size: fileSizeText(totalBytes) })}
               </div>
             ) : null}
           </div>
@@ -328,7 +335,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
               icon={<IconRefreshOutlineRegular size={14} />}
               onClick={() => void reload()}
             >
-              刷新
+              {t('common.refresh')}
             </Button>
           </span>
         </div>
@@ -356,7 +363,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                   minWidth: 0,
                 }}
               >
-                <div style={{ fontSize: 13, lineHeight: '19px' }}>{`${PAGE_TITLE}读不到`}</div>
+                <div style={{ fontSize: 13, lineHeight: '19px' }}>{t('trash.readFailed')}</div>
                 <div
                   style={{
                     fontSize: 12,
@@ -374,7 +381,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                 style={{ flex: 'none' }}
                 onClick={() => void reload()}
               >
-                重试
+                {t('common.retry')}
               </Button>
             </div>
           ) : entries === null ? (
@@ -385,7 +392,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                 color: 'var(--dsw-alias-label-tertiary)',
               }}
             >
-              {`正在读${PAGE_TITLE}…`}
+              {t('trash.loading')}
             </div>
           ) : entries.length === 0 ? (
             <div
@@ -417,7 +424,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                 <IconTrashOutlineRegular size={20} />
               </span>
               <div style={{ fontSize: 13.5, color: 'var(--dsw-alias-label-secondary)' }}>
-                {`${PAGE_TITLE}是空的`}
+                {t('trash.empty.title')}
               </div>
               <div
                 style={{
@@ -427,7 +434,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                   color: 'var(--dsw-alias-label-tertiary)',
                 }}
               >
-                在会话条目的「…」菜单里选「删除」，会话会先进到这里，随时可以恢复。
+                {t('trash.empty.hint')}
               </div>
             </div>
           ) : (
@@ -468,7 +475,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                       color: 'var(--dsw-alias-label-tertiary)',
                     }}
                   >
-                    {`${group.entries.length} 个会话`}
+                    {t('trash.group.count', { count: group.entries.length })}
                   </span>
                 </div>
 
@@ -492,7 +499,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                         style={{ ...ELLIPSIS, fontSize: 14, lineHeight: '20px' }}
                         title={entry.title === '' ? undefined : entry.title}
                       >
-                        {entry.title === '' ? '(无标题会话)' : entry.title}
+                        {entry.title === '' ? t('common.untitled') : entry.title}
                       </div>
                       <div
                         style={{
@@ -503,7 +510,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                         }}
                         title={deletedAtText(entry.deletedAt)}
                       >
-                        {`${deletedAgo(entry.deletedAt, now)} · ${fileSizeText(entry.sizeBytes)}`}
+                        {`${deletedAgo(entry.deletedAt, now, t)} · ${fileSizeText(entry.sizeBytes)}`}
                       </div>
                       {rowFailure[entry.id] === undefined ? null : (
                         <div
@@ -527,7 +534,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                     </div>
                     <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
                       <Button variant="outline" size="sm" onClick={() => void restore(entry)}>
-                        恢复
+                        {t('trash.row.restore')}
                       </Button>
                       <Button
                         variant="ghost"
@@ -536,7 +543,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                         icon={<IconTrashOutlineRegular size={13} />}
                         onClick={() => setPending({ kind: 'entry', entry })}
                       >
-                        彻底删除…
+                        {t('trash.row.purge')}
                       </Button>
                     </div>
                   </div>
@@ -558,7 +565,9 @@ export function TrashPanel({ deps }: TrashPanelProps) {
           >
             {/* 这句里的「清空后不可恢复」是**必须看得见**的告警，所以别处都用 ELLIPSIS、这一处不用：
                 520px 窗（正文列 405）量到这句 `scrollWidth 360 > clientWidth 280` ⇒ 套上省略号它就被截断，
-                窄幅下改成换行，尾巴不再取决于列宽。 */}
+                窄幅下改成换行，尾巴不再取决于列宽。
+                句子整体一个 key（`trash.footer.note`，占位符 `{dir}`），渲染时按 `dir` 的值切一刀、
+                把那一截包成 code——**不拆成前后两段翻译**，免得两种语言各钉一次语序。 */}
             <span
               style={{
                 minWidth: 0,
@@ -567,11 +576,11 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                 color: 'var(--dsw-alias-label-tertiary)',
               }}
             >
-              {`${PAGE_TITLE}本体在宿主数据根下的 `}
+              {noteParts[0]}
               <span style={{ fontFamily: 'var(--ds-font-family-code)', fontSize: 11 }}>
-                {TRASH_DIR}
+                {noteParts[1]}
               </span>
-              {' 里，不自动过期；清空后不可恢复。'}
+              {noteParts[2]}
             </span>
             <span style={{ marginLeft: 'auto', flex: 'none' }}>
               <Button
@@ -581,7 +590,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
                 icon={<IconTrashOutlineRegular size={13} />}
                 onClick={() => setPending({ kind: 'all' })}
               >
-                {`清空${PAGE_TITLE}…`}
+                {t('trash.emptyAll')}
               </Button>
             </span>
           </div>
@@ -592,6 +601,7 @@ export function TrashPanel({ deps }: TrashPanelProps) {
         <TrashPurgeConfirm
           pending={pending}
           busy={busy}
+          t={t}
           onCancel={() => setPending(null)}
           onConfirm={() => void confirmPurge()}
         />
@@ -600,34 +610,35 @@ export function TrashPanel({ deps }: TrashPanelProps) {
   )
 }
 
-const CANCEL_LABEL = '取消'
-const CONFIRM_LABEL = '彻底删除'
-
 function TrashPurgeConfirm({
   pending,
   busy,
+  t,
   onCancel,
   onConfirm,
 }: {
   pending: PendingPurge
   busy: boolean
+  t: Translate
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const title = pending.kind === 'all' ? '清空回收站？' : '彻底删除 1 个会话？'
+  const title = pending.kind === 'all' ? t('trash.confirm.all') : t('trash.confirm.one')
+  const strong = t('trash.confirm.body.strong')
+  const body = splitOn(t('trash.confirm.body', { strong }), strong)
   return (
     <Modal
       open
       onClose={onCancel}
       title={title}
-      closeLabel="关闭"
+      closeLabel={t('common.close')}
       footer={
         <>
           <Button variant="outline" onClick={onCancel}>
-            {CANCEL_LABEL}
+            {t('common.cancel')}
           </Button>
           <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirm}>
-            {CONFIRM_LABEL}
+            {t('trash.confirm.purge')}
           </Button>
         </>
       }
@@ -644,7 +655,7 @@ function TrashPurgeConfirm({
           }}
         >
           <div style={{ ...ELLIPSIS, fontSize: 13.5, lineHeight: '19px' }}>
-            {pending.entry.title === '' ? '(无标题会话)' : pending.entry.title}
+            {pending.entry.title === '' ? t('common.untitled') : pending.entry.title}
           </div>
           <div
             style={{
@@ -654,15 +665,18 @@ function TrashPurgeConfirm({
               color: 'var(--dsw-alias-label-tertiary)',
             }}
           >
-            {`${projectLabel(pending.entry.projectDir)} · 删除于 ${deletedAtText(
-              pending.entry.deletedAt,
-            )} · ${fileSizeText(pending.entry.sizeBytes)}`}
+            {t('trash.confirm.one.meta', {
+              project: projectLabel(pending.entry.projectDir, t),
+              at: deletedAtText(pending.entry.deletedAt),
+              size: fileSizeText(pending.entry.sizeBytes),
+            })}
           </div>
         </div>
       ) : null}
       <p>
-        这会从回收站移除文件，
-        <b style={{ color: 'var(--dsw-alias-state-error-primary)' }}>之后没有任何副本可以恢复</b>。
+        {body[0]}
+        <b style={{ color: 'var(--dsw-alias-state-error-primary)' }}>{body[1]}</b>
+        {body[2]}
       </p>
     </Modal>
   )

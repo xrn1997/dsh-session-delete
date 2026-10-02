@@ -229,8 +229,13 @@ describe('apply 的装配面', () => {
     // 去 main 里找占用者，找不着就抛）。
     expect(registered[4]?.key).toBe(PANEL_ID)
     // 行的名字由**注册元数据**给（宿主 `resolveSlotLabel(options.label)` 解析后画在行上），
-    // 不是我们组件里写的字——所以这条必须钉在注册项上。
-    expect(registered[3]?.label).toBe('回收站')
+    // 不是我们组件里写的字——所以这条必须钉在注册项上。**给的是 thunk**：官方
+    // `resolveSlotLabel` 逐字 `typeof label === 'function' ? label() : label`，其 JSDoc 即
+    // "thunks follow the active locale"，而宿主又挂了 `ctx.locale.subscribe(syncPanels)`
+    // ⇒ 切语言时这一行跟着走（`copy.ts` 头注）。
+    const label = registered[3]?.label
+    expect(typeof label).toBe('function')
+    expect(typeof label === 'function' ? label() : label).toBe('回收站')
     // 菜单行落在官方四行（pin 100 / rename 200 / fork 300 / archive 400）之后；面板行落在
     // 官方两个面板行（plugins 0 / schedules）与第三方「小说」（20）之后。
     expect(registered[0]?.order).toBe(900)
@@ -441,7 +446,7 @@ describe('全局面板行（`sidebar.panellist` 的占用者）', () => {
     const { Component, props } = seat(PANEL_SLOT)
     const { container } = render(<Component {...props} size={18} active />)
 
-    const glyph = container.querySelector('[data-icon="IconTrashOutlineRegular"]')
+    const glyph = container.querySelector('svg')
     expect(glyph).not.toBeNull()
     expect(glyph?.getAttribute('width')).toBe('18')
     expect(glyph?.getAttribute('height')).toBe('18')
@@ -455,7 +460,7 @@ describe('全局面板行（`sidebar.panellist` 的占用者）', () => {
     const { seat } = await bootstrap()
     const { Component, props } = seat(PANEL_SLOT)
     const { container } = render(<Component {...props} />)
-    const glyph = container.querySelector('[data-icon="IconTrashOutlineRegular"]')
+    const glyph = container.querySelector('svg')
     expect(glyph?.getAttribute('width')).toBe('16')
   })
 })

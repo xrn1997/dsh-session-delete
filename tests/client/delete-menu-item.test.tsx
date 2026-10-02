@@ -95,11 +95,15 @@ describe('确认框', () => {
 })
 
 describe('运行中的提示', () => {
-  it('置灰的行把原因摆出来；不在跑的时候没有这句话', () => {
+  it('置灰的行悬停时把原因摆出来；不在跑的时候没有这句话', () => {
+    // 提示是**自造 Tooltip**（`ui/Tooltip.tsx`）：它不在 DOM 里常驻，hover / 键盘 focus 才出
+    // （官方同款行为，见该文件头注）。所以判据是"悬停之后在不在"，不是"渲染后在不在"。
     const { unmount } = render(<DeleteMenuItem sessionId="s" title="t" live />)
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: '删除' }).parentElement as HTMLElement)
     expect(screen.getByText('会话正在运行，先停止再删除')).toBeInTheDocument()
     unmount()
     render(<DeleteMenuItem sessionId="s" title="t" />)
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: '删除' }).parentElement as HTMLElement)
     expect(screen.queryByText('会话正在运行，先停止再删除')).not.toBeInTheDocument()
   })
 })

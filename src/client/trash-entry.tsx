@@ -17,7 +17,7 @@
  * 语言变化**时重读（同上 @44795361），拿它当活计数必然 stale。条数与合计占用改在面板头部给
  * （见 `trash-panel.tsx`）。
  */
-import { IconTrashOutlineRegular } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconTrashOutlineRegular } from './ui/icons.js'
 
 /** 宿主 `SidebarPanelIconOwnerProps`：请求的方形边长；`active` 收了但不用（见头注）。 */
 export interface TrashPanelIconProps {

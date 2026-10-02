@@ -11,10 +11,14 @@
       "default": "./lib/index.js"
     },
     "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
+  "icon": "./icon.svg",
   "files": [
     "lib",
+    "locale",
+    "icon.svg",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -25,16 +29,15 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "npm run build"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
     "react": "^18.3.1"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.4",
-    "@deepseek-ai/dsh-client-ui-primitives": "0.2.0-rc.2",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.10.0",
     "@testing-library/react": "^16.3.3",
@@ -54,7 +57,7 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-ui-primitives"
+        "@deepseek-ai/dsh-client-locale"
       ],
       "platform": "web"
     },
@@ -64,5 +67,25 @@
       }
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xrn1997/dsh-session-delete.git"
+  },
+  "homepage": "https://github.com/xrn1997/dsh-session-delete#readme",
+  "bugs": {
+    "url": "https://github.com/xrn1997/dsh-session-delete/issues"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "session",
+    "trash",
+    "delete"
+  ],
+  "author": "xrn1997",
   "license": "Apache-2.0"
 }
