@@ -23,7 +23,8 @@ import { frameRanges } from './zstd-frames.js'
 export interface SessionRecord {
   type?: string
   time?: number
-  /** `session` 那一行把这两个成员挂在**记录根**上（实测逐字），所以这里镜像出来。 */
+  /** `session` 那一行把这三个成员挂在**记录根**上（实测逐字：`{"type":"session","version":4,"id":…,"createdAt":…,"cwd":"…"}`），所以这里镜像出来。 */
+  id?: string
   createdAt?: number
   cwd?: string
   data?: unknown
@@ -40,8 +41,18 @@ export interface SessionLogStats {
 
 const NEWLINE = 0x0a
 
-export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) => void): SessionLogStats {
+/** 会话日志的文件名后缀（`session.vN.jsonl.zstd`）。详情与回收站对账都按它挑日志，名字只有这一处家。 */
+export const SESSION_LOG_SUFFIX = '.jsonl.zstd'
+
+/**
+ * 逐帧走一遍日志，每条记录交给回调。
+ *
+ * 回调返回 `false` = **提前停机**（后面的帧不再解——`readSessionHeader` 只要第一行）。
+ * 停机后 `stats` 只是停机前那部分，别拿来做全量对账。
+ */
+export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) => void | false): SessionLogStats {
   const stats: SessionLogStats = { frames: 0, records: 0, unparsedLines: 0, truncatedTailBytes: 0 }
+  let stopped = false
   const feed = (line: string): void => {
     if (line === '') return
     let parsed: unknown
@@ -52,12 +63,15 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
       return
     }
     stats.records += 1
-    onRecord(parsed !== null && typeof parsed === 'object' ? (parsed as SessionRecord) : {})
+    if (onRecord(parsed !== null && typeof parsed === 'object' ? (parsed as SessionRecord) : {}) === false) {
+      stopped = true
+    }
   }
 
   /** 上一帧没闭合的那一行。**存字节不存字符**：切在多字节字符中间的帧要拼回完整才解得对。 */
   let carry: Buffer = Buffer.alloc(0)
   for (const { start, end } of frameRanges(raw)) {
+    if (stopped) break
     stats.frames += 1
     let plain: Buffer
     try {
@@ -72,10 +86,29 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
       continue
     }
     carry = merged.subarray(cut + 1)
-    for (const line of merged.subarray(0, cut).toString('utf8').split('\n')) feed(line)
+    for (const line of merged.subarray(0, cut).toString('utf8').split('\n')) {
+      feed(line)
+      if (stopped) break
+    }
   }
 
   stats.truncatedTailBytes = carry.length
-  if (carry.length > 0) feed(carry.toString('utf8'))
+  if (carry.length > 0 && !stopped) feed(carry.toString('utf8'))
   return stats
+}
+
+/**
+ * 日志的 **header**：格式事实是"第一行即 header"（`type: 'session'`，含 `id` 与 `cwd`，v3/v4 均如此，
+ * AGENTS.md 有实测背书）——这里按 `type === 'session'` 找**第一条**这样的记录并就地停机
+ * （不要求它恰是第一个可解析行：坏一行前缀不该让整条日志判不出身份）。
+ * 找不到（空日志 / 全是别种记录）回 `undefined`；帧坏了照抛——那是"读不出来"，与"没有 header"是两件事。
+ */
+export function readSessionHeader(raw: Buffer): SessionRecord | undefined {
+  let header: SessionRecord | undefined
+  walkSessionLog(raw, (record) => {
+    if (record.type !== 'session') return
+    header = record
+    return false
+  })
+  return header
 }

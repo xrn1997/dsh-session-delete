@@ -23,11 +23,16 @@
  *     （`dsh-novel` 的 `api/wire.ts`）只认前两条里的"同源"，本文件多的是桌面壳那一条——**它必须有**：
  *     桌面版的请求被壳摘掉了 `Origin`，漏掉它等于真机上四个入口一个都不出现（而直连 http 的过门
  *     读数看不出来）。
+ *  ⑤ **`list` 是"对账 + 读"，且它与三个写动词按到达序串行**（{@link createApiHandler} 里那条进程内链）：
+ *     对账（`reconcileTrash`）与删除/恢复/彻底删除都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩
+ *     ——删除刚把目录搬进回收站、行还没写上时，对账抢先把这行按目录"重建"出来，再被真实行覆盖成降级
+ *     元数据。串行的代价只是排队（单进程单用户，毫秒级）；`detail` 是纯读、不占这条链。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { readTrashDetail } from '../trash/detail.js'
+import { reconcileTrash } from '../trash/reconcile.js'
 import { deleteSession, type DeleteDeps } from '../verbs/delete-session.js'
 import { purgeTrash } from '../verbs/purge-trash.js'
 import { restoreSession } from '../verbs/restore-session.js'
@@ -156,7 +161,8 @@ function requireMethod(method: string, want: string, route: string): void {
 async function dispatch(method: string, rest: string, req: IncomingMessage, deps: DeleteDeps): Promise<unknown> {
   if (rest === ROUTES.list) {
     requireMethod(method, 'GET', ROUTES.list)
-    return await deps.manifest.list()
+    // 「读清单」=「对账 + 读」：清单以 `session-trash/` 里的目录为准修回一致（口径见 `reconcile.ts`）
+    return await reconcileTrash(deps)
   }
   if (rest === ROUTES.delete) {
     requireMethod(method, 'POST', ROUTES.delete)
@@ -181,6 +187,16 @@ async function dispatch(method: string, rest: string, req: IncomingMessage, deps
 
 /** 宿主 `webServer.register({kind:'prefix', path: SESSION_DELETE_API_PREFIX, handler})` 的那个 handler。 */
 export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  /**
+   * 到达序串行链（文件头 ⑤）：`list`（含对账）与三个写动词一个跑完再放下一个。`tail` 由构造保证
+   * **永不 reject**（每个任务自己的失败留在交回给那次请求的那个 promise 上），所以一次失败不会卡死链。
+   */
+  let tail: Promise<void> = Promise.resolve()
+  const throughChain = <T>(task: () => Promise<T>): Promise<T> => {
+    const started = tail.then(task)
+    tail = started.then(() => undefined, () => undefined)
+    return started
+  }
   return async function handle(req, res): Promise<void> {
     if (!isTrustedRequest(req)) {
       writeFailure(res, new Error('非受信来源'), 403)
@@ -191,7 +207,10 @@ export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: 
       if (!url.pathname.startsWith(SESSION_DELETE_API_PREFIX)) {
         throw new Error(`未知路由：${url.pathname}`)
       }
-      writeOk(res, await dispatch(req.method ?? 'GET', url.pathname.slice(SESSION_DELETE_API_PREFIX.length), req, deps))
+      const rest = url.pathname.slice(SESSION_DELETE_API_PREFIX.length)
+      const task = (): Promise<unknown> => dispatch(req.method ?? 'GET', rest, req, deps)
+      // 详情是纯读（只认清单寻址、不写），不进链——别让一次大正文读把删除按钮堵在身后
+      writeOk(res, await (rest === ROUTES.detail ? task() : throughChain(task)))
     } catch (error) {
       writeFailure(res, error)
     }

@@ -62,6 +62,17 @@ describe('回收站面板', () => {
     expect(screen.queryByRole('button', { name: '清空回收站…' })).not.toBeInTheDocument()
   })
 
+  // jsdom 没有布局，"居中"只能钉那条链本身：单列外壳与清单容器都吃 `flex:1 1 auto`，
+  // 空态块自己的 `flex:1` + `justifyContent:center` 才有高度可居。2026-10-16 真机回归：
+  // 两栏改造在清单容器那节把链断在"内容高"上 ⇒ 空态图标贴到左上角。
+  it('空态的居中链：单列外壳与清单容器都是 flex:1 1 auto', async () => {
+    const { container } = render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) }) as never} />)
+    await screen.findByText('回收站是空的')
+    const listBox = container.querySelector('[data-dsh-session-delete="trash-list"]') as HTMLElement
+    expect((listBox.parentElement as HTMLElement).style.flex).toBe('1 1 auto')
+    expect(listBox.style.flex).toBe('1 1 auto')
+  })
+
   // 动作住在行右侧（2026-10-15 真机反馈后回到 2026-10-01 的形状，设计稿 §7），所以这条直接点行内那颗。
   it('行右侧的「恢复」调 restore 并带上条目 id（动作住在行内，2026-10-15 真机反馈后回归原形）', async () => {
     const deps = makeDeps()
@@ -236,18 +247,14 @@ describe('回收站面板 · 其余行为', () => {
     expect(await screen.findByText('1 个会话 · 共 224KB')).toBeInTheDocument()
   })
 
-  it('「刷新」降级成图标：没有文字，但按 aria-label 点得动，仍重读一遍', async () => {
-    const deps = makeDeps()
-    const { container } = render(<TrashPanel deps={deps as never} />)
+  // 「刷新」图标 2026-10-16 按用户裁定删除（清单每次读都对账，它没有别人替代不了的活）；
+  // 这里钉住"它确实没了"，免得哪天又被顺手加回来。
+  it('那一排只有「全部折叠」「多选」两颗钮（「刷新」已删）', async () => {
+    const { container } = render(<TrashPanel deps={makeDeps() as never} />)
     await screen.findByText('/code-review')
-    expect(screen.queryByRole('button', { name: '刷新' })).toBeNull()
-    const refresh = screen.getByRole('button', { name: '重新读一遍回收站' })
-    expect(refresh.textContent).toBe('')
-    expect(refresh.querySelector('svg')).not.toBeNull()
-    // 它住在清单顶端那一排的最右，不住头部了
-    expect(container.querySelector('[data-dsh-session-delete="trash-toolbar"]')).toContainElement(refresh)
-    fireEvent.click(refresh)
-    await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(2))
+    const toolbar = container.querySelector('[data-dsh-session-delete="trash-toolbar"]') as HTMLElement
+    expect(within(toolbar).getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['全部折叠', '多选'])
+    expect(screen.queryByRole('button', { name: '重新读一遍回收站' })).toBeNull()
   })
 
   // 真机反馈：删完在别处（侧栏菜单），面板是"挂载时取一次数"，不切走再回来就看不见新条目。

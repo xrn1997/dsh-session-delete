@@ -1,10 +1,11 @@
 /**
- * 本插件 UI 层要用的八个图标（**逐条抄自** `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2`
+ * 本插件 UI 层要用的图标（**逐条抄自** `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2`
  * 随包发布的明文产物 `lib/index.js`；出处与改写规则见 `ui.css` 头注）。
  *
- * 只留本插件用到的：垃圾桶（删除动作 / 回收站）、警示（失败面）、刷新、打开的项目文件夹、
+ * 只留本插件用到的：垃圾桶（删除动作 / 回收站）、警示（失败面）、打开的项目文件夹、
  * 关闭叉（对话框）、圆圈对勾（撤销提示的 success 档）、下折与右折 chevron（清单的分组折叠头，
- * 2026-10-15 加：`DisclosureRow` 那套折叠行的两态 glyph）。
+ * 2026-10-15 加：`DisclosureRow` 那套折叠行的两态 glyph）。「刷新」那枚随按钮一起删了
+ * （2026-10-16，见 `trash-panel.tsx` 工具排的注释）——本文件不留无人消费的几何。
  * **几何、`viewBox`、`strokeWidth` 逐字不动**——它们是官方图标集的形状，改了就不再与宿主同屏同形。
  *
  * 两条与官方实现的差异（都是减法，不是改写）：
@@ -19,7 +20,7 @@ export interface IconProps {
   size?: number
 }
 
-/** 六个图标共用的外框（官方每个 artwork 函数里逐字重复的那一段）。 */
+/** 各图标共用的外框（官方每个 artwork 函数里逐字重复的那一段）。 */
 function IconFrame({ size = 16, children }: IconProps & { children: ReactNode }): ReactElement {
   return (
     <svg
@@ -63,18 +64,6 @@ export function IconWarningOutlineRegular({ size }: IconProps): ReactElement {
       />
       <path d="M8 4.29199V9.79199" stroke="currentColor" />
       <path d="M8 10.708V11.708" stroke="currentColor" />
-    </IconFrame>
-  )
-}
-
-export function IconRefreshOutlineRegular({ size }: IconProps): ReactElement {
-  return (
-    <IconFrame size={size}>
-      <path
-        d="M14.5001 8C14.5 9.28552 14.1188 10.5422 13.4045 11.611C12.6903 12.6799 11.6752 13.5129 10.4875 14.0049C9.29982 14.4968 7.99295 14.6255 6.73212 14.3747C5.4713 14.124 4.31314 13.505 3.4041 12.596C2.49514 11.687 1.87614 10.5288 1.62537 9.26798C1.37459 8.00716 1.50331 6.70028 1.99525 5.51261C2.48719 4.32494 3.32025 3.30981 4.3891 2.59557C5.45795 1.88134 6.71458 1.50008 8.0001 1.5C9.9001 1.5 11.7001 2.3 13.0001 3.6L14.5001 5.1"
-        stroke="currentColor"
-      />
-      <path d="M14.4999 1.5V5.1H10.8999" stroke="currentColor" />
     </IconFrame>
   )
 }

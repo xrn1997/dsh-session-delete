@@ -33,6 +33,10 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 /**
  * 五个端点的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
  * 替身暴露出来（`fakes`）是为了让每条用例能只翻自己那一格，而不必重建整副依赖。
+ *
+ * `listDirs` 按种子（`over.seed`）给：`list` 现在**先对账再读**（`reconcileTrash`），
+ * "清单里有行而回收站根下空空"的世界会被对账当场摘空——那是不一致的世界（真实里行与目录成对出现），
+ * 所以这里让二者默认一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
  */
 function makeDeps(over: { seed?: TrashEntry[]; live?: boolean } = {}) {
   const manifest = createMemoryManifest(over.seed ?? [])
@@ -43,6 +47,7 @@ function makeDeps(over: { seed?: TrashEntry[]; live?: boolean } = {}) {
     rename: vi.fn(async (_from: string, _to: string) => {}),
     removeDir: vi.fn(async (_path: string) => {}),
     listFiles: vi.fn(async (_path: string) => ['session.v4.jsonl.zstd']),
+    listDirs: vi.fn(async (_path: string) => (over.seed ?? []).map((e) => e.id)),
     readFile: vi.fn(async (_path: string) =>
       zlib.zstdCompressSync(Buffer.from(`${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n`, 'utf8'))),
   }
@@ -171,6 +176,68 @@ describe('路由层 · 四个动词端点', () => {
     const cleared = await call(allBase, ROUTES.purge, { method: 'POST', body: {} })
     expect(cleared.body).toMatchObject({ ok: true, value: { removed: 2, freedBytes: 448 * 1024 } })
     expect(await all.manifest.list()).toEqual([])
+  })
+})
+
+describe('路由层 · list 是对账 + 读（2026-10-16）', () => {
+  it('目录多出一条 ⇒ 长出行（id 与项目目录从那条日志的 header 重建）', async () => {
+    const ghost = entryIdOf('session-ghost')
+    const { deps, fs } = makeDeps({ seed: [entry('a')] })
+    fs.listDirs.mockResolvedValue([entryIdOf('a'), ghost])
+    fs.readFile.mockImplementation(async (_path: string) =>
+      zlib.zstdCompressSync(Buffer.from(`${JSON.stringify({ type: 'session', version: 4, id: 'session-ghost', createdAt: 1, cwd: 'C:/develop/p' })}\n`, 'utf8')))
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    expect(body.ok).toBe(true)
+    const rows = body.value as TrashEntry[]
+    expect(rows.map((e) => e.id)).toContain(ghost)
+    expect(rows.find((e) => e.id === ghost)).toMatchObject({
+      sessionId: 'session-ghost', projectDir: '--C-develop-p--', workspaceId: '', wasArchived: false, title: '',
+    })
+  })
+
+  it('目录没了的行 ⇒ 当场摘掉（不用重启宿主）', async () => {
+    const { deps, manifest, fs } = makeDeps({ seed: [entry('a')] })
+    fs.listDirs.mockResolvedValue([])
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    expect(body).toMatchObject({ ok: true, value: [] })
+    expect(await manifest.list()).toEqual([])
+  })
+
+  it('零漂移时不读日志（对账的读放大只发生在真漂移上）', async () => {
+    const { deps, fs } = makeDeps({ seed: [entry('a')] })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    expect((body.value as TrashEntry[]).map((e) => e.id)).toEqual([entryIdOf('a')])
+    expect(fs.readFile).not.toHaveBeenCalled()
+  })
+})
+
+// 对账与三个写动词都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩——串行链把它们按到达序排队。
+describe('路由层 · 到达序串行（对账与写动词不交错）', () => {
+  it('前一个请求跑完之前，后一个的副作用不发生', async () => {
+    const { deps, fs, host } = makeDeps()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    fs.listDirs.mockImplementation(async () => {
+      if (first) {
+        first = false
+        await gate
+      }
+      return []
+    })
+    const base = await start(deps)
+    const listPromise = call(base, ROUTES.list)
+    await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
+    const deletePromise = call(base, ROUTES.delete, { method: 'POST', body: { sessionId: 'session-abc' } })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(host.isLive).not.toHaveBeenCalled() // 删除的第一个副作用都还没发生：它被链挡在门外
+    release()
+    await listPromise
+    await deletePromise
+    expect(host.isLive).toHaveBeenCalledWith('session-abc') // 前一个一松开，它就接着跑完
   })
 })
 

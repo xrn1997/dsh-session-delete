@@ -116,8 +116,9 @@ interface SessionListLike {
 }
 
 /** 无 cwd 的会话落在 `<sessions>/_no-cwd/`（asar `dsh-session-persistence-jsonl/lib/index.js`
- *  的 `projectDir(root, cwd)`：`if (cwd === void 0) return join(root, "_no-cwd");`）。 */
-const NO_CWD_PROJECT_DIR = '_no-cwd'
+ *  的 `projectDir(root, cwd)`：`if (cwd === void 0) return join(root, "_no-cwd");`）。
+ *  `projectDirOf` 与回收站对账（`src/trash/reconcile.ts` 重建条目）共用这一个字面量。 */
+export const NO_CWD_PROJECT_DIR = '_no-cwd'
 
 /**
  * 宿主的**项目目录名**算法（`projectKey`）逐字镜像。
@@ -134,8 +135,11 @@ const NO_CWD_PROJECT_DIR = '_no-cwd'
  * 调用链：`locate(meta)` → `logPath(root, meta.cwd, meta.id, …)` → `projectDir(root, cwd)` → `projectKey(cwd)`。
  * 本机实测对得上：`D:/develop/GitHub/dsh-session-delete` → `--D-develop-GitHub-dsh-session-delete--`
  * （`~/.dsh/sessions` 下真有这个目录名；`D:/document/deepseek-harness/default-workspace` 同理）。
+ *
+ * **两个调用方共用这一份**：`projectDirOf`（删除时定位会话目录）与回收站对账的重建路径
+ * （手工放进回收站的目录，从日志 header 的 `cwd` 反推它原本属于哪个项目目录）——算法只有这一处家。
  */
-function projectKey(cwd: string): string {
+export function projectKey(cwd: string): string {
   let readable = ''
   let separatorRun = false
   for (let i = 0; i < cwd.length; i++) {

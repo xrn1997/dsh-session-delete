@@ -1,18 +1,31 @@
 // 会话日志的逐帧读法：帧 → 明文 → 一行一条 JSON 记录（设计稿 2026-10-15 §1.1 / §3）
 import zlib from 'node:zlib'
 import { expect, it } from 'vitest'
-import { walkSessionLog, type SessionRecord } from '../src/log/session-log.js'
+import { readSessionHeader, walkSessionLog, type SessionRecord } from '../src/log/session-log.js'
 
 const frame = (...lines: string[]) =>
   zlib.zstdCompressSync(Buffer.from(lines.filter(Boolean).join('\n') + '\n', 'utf8'))
 
 const collect = (...logs: Buffer[]) => {
   const seen: SessionRecord[] = []
-  const stats = walkSessionLog(Buffer.concat(logs), (r) => seen.push(r))
+  const stats = walkSessionLog(Buffer.concat(logs), (r) => { seen.push(r) })
   return { seen, stats }
 }
 
 const rec = (o: unknown) => JSON.stringify(o)
+
+/** 边界算得出、内容解不开的帧：带 Dictionary_ID（没字典必然失败），帧头按 descriptor 走。
+ *  早停用例用它证明"header 之后的部分根本没被解到"。 */
+const undecodableFrame = (line: string = rec({ type: 'tool/call' })): Buffer => {
+  const payload = Buffer.from(line + '\n', 'utf8')
+  const v = 1 | (0 << 1) | (payload.length << 3) // last=1, type=0 Raw
+  const block = Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
+  return Buffer.concat([
+    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x44, 0x07, payload.length & 255]), // desc=0x44：单段 + DID 1 字节 + FCS 1 字节
+    block,
+    payload,
+  ])
+}
 
 it('跨帧把每条记录交出来，顺序即写入顺序', () => {
   const { seen, stats } = collect(
@@ -52,7 +65,7 @@ it('一条记录切在**帧之间** ⇒ 拼回同一条，既不丢也不计入 
 
 it('空 buffer ⇒ 全零统计，一条回调都不发（不抛）', () => {
   const seen: SessionRecord[] = []
-  expect(walkSessionLog(Buffer.alloc(0), (r) => seen.push(r))).toEqual({
+  expect(walkSessionLog(Buffer.alloc(0), (r) => { seen.push(r) })).toEqual({
     frames: 0,
     records: 0,
     unparsedLines: 0,
@@ -67,17 +80,34 @@ it('非对象的一行（`null`、数组）照样交出去，由策略层判', (
 })
 
 it('某一帧解不开 ⇒ 抛，且说的是第几帧（绝不半解半装）', () => {
-  // 边界算得出、内容解不开：带 Dictionary_ID 的帧（没字典必然失败），帧头按 descriptor 走
-  const payload = Buffer.from(rec({ type: 'tool/call' }) + '\n', 'utf8')
-  const block = (size: number) => {
-    const v = 1 | (0 << 1) | (size << 3) // last=1, type=0 Raw
-    return Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
-  }
-  const needsDictionary = Buffer.concat([
-    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x44, 0x07, payload.length & 255]), // desc=0x44：单段 + DID 1 字节 + FCS 1 字节
-    block(payload.length),
-    payload,
-  ])
-  const raw = Buffer.concat([frame(rec({ type: 'turn/start' })), needsDictionary])
+  const raw = Buffer.concat([frame(rec({ type: 'turn/start' })), undecodableFrame()])
   expect(() => walkSessionLog(raw, () => undefined)).toThrow(/第 2 帧/)
+})
+
+it('回调返回 false ⇒ 就地停机：后面的帧不再解、不再交', () => {
+  const seen: SessionRecord[] = []
+  const stats = walkSessionLog(
+    Buffer.concat([frame(rec({ type: 'session', id: 's' })), frame(rec({ type: 'turn/start' }))]),
+    (r) => { seen.push(r); return false },
+  )
+  expect(seen.map((r) => r.type)).toEqual(['session'])
+  expect(stats.frames).toBe(1)
+})
+
+it('readSessionHeader：第一行即 header（id / cwd / createdAt 都在记录根上）', () => {
+  const raw = Buffer.concat([
+    frame(rec({ type: 'session', version: 4, id: 'session-a', createdAt: 5, cwd: 'C:/x' })),
+    frame(rec({ type: 'turn/start' })),
+  ])
+  expect(readSessionHeader(raw)).toMatchObject({ id: 'session-a', cwd: 'C:/x', createdAt: 5 })
+})
+
+it('readSessionHeader 取到就停机：header 之后的坏帧不会被解到（读 header 不要求整条日志可读）', () => {
+  const raw = Buffer.concat([frame(rec({ type: 'session', id: 's' })), undecodableFrame()])
+  expect(readSessionHeader(raw)).toMatchObject({ id: 's' })
+  expect(() => walkSessionLog(raw, () => undefined)).toThrow(/第 2 帧/) // 全量走照样抛
+})
+
+it('readSessionHeader：没有 session 记录 ⇒ undefined（不拿别的记录冒充）', () => {
+  expect(readSessionHeader(frame(rec({ type: 'turn/start' })))).toBeUndefined()
 })

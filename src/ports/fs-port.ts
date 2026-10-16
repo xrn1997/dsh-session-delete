@@ -11,6 +11,9 @@ export interface FsPort {
   sizeOfDir(p: string): Promise<number>
   /** 目录下的条目名（**不递归**）。回收站详情要用它在那条目录里挑 `*.jsonl.zstd`。 */
   listFiles(p: string): Promise<string[]>
+  /** 目录下的**子目录**名（不递归）。回收站对账用它找出"清单里还没有行"的条目目录——
+   *  与 `listFiles` 分开是为了让"拒收文件"发生在挑选阶段（回收站根里落进来的杂散文件当外人）。 */
+  listDirs(p: string): Promise<string[]>
   /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），不在这里。 */
   readFile(p: string): Promise<Buffer>
 }
@@ -35,6 +38,9 @@ export function createFsPort(): FsPort {
     sizeOfDir: (p) => sizeOfDir(p),
     // readdir 返回的既可能是字符串也可能是 Dirent（取决于 encoding），这里不传 withFileTypes ⇒ 名字串
     async listFiles(p) { return readdir(p) },
+    async listDirs(p) {
+      return (await readdir(p, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name)
+    },
     async readFile(p) { return readFile(p) },
   }
 }

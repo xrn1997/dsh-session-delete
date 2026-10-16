@@ -1,7 +1,7 @@
 /**
  * 回收站清单面板（设计稿 §7 状态 ④⑤ + 2026-10-15 §2 的两栏形态）——**中央面板的本体**（`main` 槽的占用者）。
  *
- * 面板自带页面骨架（标题 / 条数与合计 / 刷新 / 内容区 / 页脚），因为宿主给中央列的那个盒子
+ * 面板自带页面骨架（标题 / 条数与合计 / 工具排 / 内容区 / 页脚），因为宿主给中央列的那个盒子
  * （`AppFrame` 的 `.centerCol`）只有背景与圆角，**没有 padding、也不是滚动容器**——asar 里那条
  * `.BynINW_centerCol{background:var(--dsw-alias-bg-base);border-radius:…;corner-shape:round}` 逐字
  * 如此。回收站可以很长（本机 125 个会话合计 85M），不自己收滚动就会把整列顶长。
@@ -73,7 +73,6 @@ import {
   IconChevronDownOutlineRegular,
   IconChevronRightOutlineRegular,
   IconFolderOpenOutlineRegular,
-  IconRefreshOutlineRegular,
   IconTrashOutlineRegular,
   IconWarningOutlineRegular,
 } from './ui/icons.js'
@@ -168,9 +167,9 @@ const BODY: CSSProperties = {
 }
 
 /**
- * 清单那一栏的**外壳**（宽与 `flex` 不在这里——那是可拖的量，由 `useColumnResize` 每次渲染现给）。
- * 两栏不成立时（窄档，或宽档但清单为空/读不到）同一个配方直接铺满：**不再限宽 760 居中**，
- * 那条关心得只适用于正文（见 `DETAIL_TEXT_MAX_WIDTH`）。
+ * 清单那一栏的**外壳**（宽与 `flex` 不在这里——由调用点在渲染时现给：两栏时是可拖的定宽，
+ * 单列时 `flex:'1 1 auto'` 铺满）。两栏不成立时（窄档，或宽档但清单为空/读不到）同一个配方
+ * 直接铺满：**不再限宽 760 居中**，那条关心得只适用于正文（见 `DETAIL_TEXT_MAX_WIDTH`）。
  *
  * **滚动条不用注入任何 CSS 就已经是宿主的**：宿主在 `body` 上给出一组量（`--dsh-scrollbar-width:5px`
  * 等），再用全局 `::-webkit-scrollbar*` 规则消费它们（asar @45064180 起）⇒ 这里一个 `overflow:auto`
@@ -207,9 +206,10 @@ const DETAIL_COLUMN = {
 const DETAIL_INNER: CSSProperties = { minWidth: 0, maxWidth: DETAIL_TEXT_MAX_WIDTH, width: '100%' }
 
 /**
- * 那一排视图开关（全部折叠 / 全部展开、多选、刷新）。它**住在面板体顶端、不在清单列里**：原先在
- * 滚动容器内，长清单滚到底会把开关滚走（2026-10-15 真机反馈后搬出来的理由，与已经删掉的「整条左栏
- * 收起」无关）。宽度上限由用它的地方现给——两栏时跟着可拖的清单列宽，单列时不设上限。
+ * 那一排视图开关（全部折叠 / 全部展开、多选；「刷新」图标 2026-10-16 已删，见 `toolbar` 那处注释）。
+ * 它**住在面板体顶端、不在清单列里**：原先在滚动容器内，长清单滚到底会把开关滚走（2026-10-15
+ * 真机反馈后搬出来的理由，与已经删掉的「整条左栏收起」无关）。宽度上限由用它的地方现给——两栏时
+ * 跟着可拖的清单列宽，单列时不设上限。
  */
 const TOOLBAR: CSSProperties = {
   display: 'flex',
@@ -603,6 +603,12 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     return { kind: 'loading', entry: selected }
   }, [selected, loadingId, detailFailure])
 
+  /**
+   * 清单容器（roving tabindex 那个唯一的 tab 巢）。`flex:'1 1 auto'` 是**空态居中链**的一节：
+   * 空态块自己有 `flex:1` + `justifyContent:center`，但要有**有高度的**父链才居得起来——本层是
+   * 两栏改造（2026-10-15）新插进来的 div，缺这条 flex 就把链断在"内容高"上、空态图标贴左上角
+   * （2026-10-16 真机反馈）。长清单不受影响：`min-height:auto` 把它钉在内容高，滚动照旧归外层。
+   */
   const list = (
     <div
       ref={listRef}
@@ -613,7 +619,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       aria-multiselectable={selectMode ? true : undefined}
       tabIndex={-1}
       onKeyDown={onListKeyDown}
-      style={{ display: 'flex', flexDirection: 'column', gap: 16, minWidth: 0 }}
+      style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: '1 1 auto', minWidth: 0 }}
     >
       {listFailure !== null ? (
         <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 12, padding: '14px' }}>
@@ -845,6 +851,10 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   /**
    * 那一排**常驻面板体顶端**，不住清单列里：它原先在滚动容器内，长清单滚到底会把开关滚走。
    * 宽度上限跟着清单列走，所以它在视觉上仍然"属于清单"。
+   *
+   * 这里曾有一颗「刷新」图标（2026-10-15 第三批收进那一排、第四批降级成图标，**2026-10-16
+   * 按用户裁定删除**）：清单现在是"每次读都对账"（见 `reconcile.ts`），开面板、切走再切回、
+   * 重启——任何一次读都会先同步，那颗按钮不再承担别人替代不了的活。
    */
   const toolbar = (
     <div
@@ -866,19 +876,6 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       >
         {selectMode ? t('trash.toolbar.selectExit') : t('trash.toolbar.select')}
       </Button>
-      <span style={{ marginLeft: 'auto', flex: 'none' }}>
-        <Tooltip label={t('trash.toolbar.refresh')} side="bottom" portal>
-          <span>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<IconRefreshOutlineRegular size={14} />}
-              aria-label={t('trash.toolbar.refresh')}
-              onClick={() => void reload()}
-            />
-          </span>
-        </Tooltip>
-      </span>
     </div>
   )
 
@@ -920,7 +917,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         ) : drilled && selected !== null ? (
           detailPane
         ) : (
-          listPane(LIST_COLUMN)
+          // 单列时铺满 BODY：不给 flex，这一栏会按内容宽缩在行的左边（空态时约 390px）
+          listPane({ ...LIST_COLUMN, flex: '1 1 auto' })
         )}
       </div>
 

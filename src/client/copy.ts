@@ -77,8 +77,6 @@ const ZH = {
   'trash.toolbar.collapseAll': '全部折叠',
   'trash.toolbar.expandAll': '全部展开',
   'trash.divider.label': '调整左右分栏宽度',
-  // 「刷新」只剩 aria-label + 悬停说明，屏幕上一个字都不占。
-  'trash.toolbar.refresh': '重新读一遍回收站',
   'trash.select.group': '勾选「{project}」这 {count} 条会话',
 
   // 多选与批量彻底删除（2026-10-15 真机反馈后开的一条口子：只批量删，不批量恢复，见 §2/§10）。
@@ -178,8 +176,6 @@ const EN: Record<CopyKey, string> = {
   'trash.toolbar.collapseAll': 'Collapse all',
   'trash.toolbar.expandAll': 'Expand all',
   'trash.divider.label': 'Adjust the width of the list column',
-
-  'trash.toolbar.refresh': 'Re-read the trash',
   'trash.select.group': 'Select all {count} sessions under “{project}”',
 
   'trash.toolbar.select': 'Select',

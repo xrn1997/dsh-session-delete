@@ -24,7 +24,8 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 五个端点的段名（相对前缀；`GET list` 读清单，其余四个 `POST` 按 id 取数或写）。 */
+/** 五个端点的段名（相对前缀；`GET list` **对账并读**清单——`session-trash/` 里的目录是准，其余四个
+ *  `POST` 按 id 取数或写）。 */
 export const ROUTES = {
   list: '/list',
   delete: '/delete',

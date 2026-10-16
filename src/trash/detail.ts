@@ -19,15 +19,13 @@
 import { trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
 import type { FsPort } from '../ports/fs-port.js'
-import { walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { SESSION_LOG_SUFFIX, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 import { verbError } from '../verbs/errors.js'
 
 /** 每条文字的上限（字符）。超出即截断并置 `truncated`。 */
 export const PER_MESSAGE_CHAR_CAP = 3_000
 /** 一次回信的正文总量上限（字符）。 */
 export const TOTAL_CHAR_CAP = 500_000
-
-const LOG_SUFFIX = '.jsonl.zstd'
 
 export interface TrashDetailMessage {
   role: 'user' | 'assistant'
@@ -92,7 +90,7 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
     const dir = trashDirOf(record.id, deps.home)
     if (!(await deps.fs.exists(dir))) throw verbError('io', `回收站目录不在：${dir}`)
     const names = (await deps.fs.listFiles(dir)).sort()
-    const logName = names.find((n) => n.endsWith(LOG_SUFFIX))
+    const logName = names.find((n) => n.endsWith(SESSION_LOG_SUFFIX))
     if (logName === undefined) {
       throw verbError('io', `回收站目录里没有会话日志：${dir}（里面有：${names.join(', ') || '空目录'}）`)
     }
