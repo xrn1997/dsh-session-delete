@@ -67,6 +67,16 @@
 - **焦点不能走宿主的 focus 变量**：这一代主题里 `--dsw-focus-ring-color` 逐字是 `transparent`。所以键盘焦点描边复用 `…ghost-active-border` 那一档。**2026-10-16 落地**：`ui.css` 末尾 `[data-dsh-session-delete="trash-row"]:focus-visible` 那一条（`outline: 0.5px solid` + `outline-offset: 1px`，与行本身的 0.5px 描边同量），它与 `.sd-resizing` 一起是文件头点名的两处自造。
 - 对照量（同次读取）：`bg-base` 浅 `#fff` / 深 `#151517`；卡片 `bg-layer-2` 浅 `#fff`、深 `#2c2c2e`；`border-l4` `#00000029 ‖ #fff3`。选中底色在未选中卡片之上明确跨档。
 
+### 1.4 同一目录**可以并存多代日志**（2026-10-16 实测；纠正 §1.1 之后各处「一个目录一份日志」的隐含前提）
+
+- **形态**：扫 `~/.dsh/sessions` 549 个目录 + `~/.dsh/session-trash`，**7 个目录各含两份** `*.jsonl.zstd`（1 个还在原处、6 个已在我们回收站里），全是 `session.v3.jsonl.zstd` + `session.v4.jsonl.zstd`。成因是宿主换代：`@deepseek-ai/dsh-session-format@0.2.0-rc.2` 的 `SESSION_FORMAT_VERSION = 4`，而老代**留在原地当历史语料**（其 `listGenerations()` / `historicalCorpusRevision()` 就是为此存在）。
+- **读法上的关键事实：新代是老代迁移后的超集，不是增量**。对质（同目录两代逐帧解完）：`firstTs` 逐字相同（1790145141187）、开头那条提问逐字相同（`seq 9`「/improve-codebase-architec…」），而 v3 = 2254 条 / 40 条提问 / 末尾 9-23，v4 = 2497 条 / 47 条提问 / 末尾 9-30。另一条小会话两代都是 6 条、时间戳完全一致（纯迁移副本）。
+- **⇒ 判据只有两条，且都不是口味**：① **取版本号最大的一代**；② **绝不把几代拼起来**——拼接会把老代那 2254 条重复计一遍，页面上会出现「计数比正文多出一截」那种对不上账的话。读到旧代的症状是**静默少一段**：上面那条会少 7 条提问、243 条记录，页面上看不出任何异常。
+- **词法照宿主逐字**（`CANONICAL_LOG_FILENAME` = `/^session(?:\.v([1-9][0-9]*))?\.jsonl$/u`，我们只在剥掉它之后补 `.zstd`）：裸名 `session.jsonl.zstd` 是**第 0 代**（`sessionFormatLogFilename(0)` 就是不带 `vN` 的那支），所以「裸名 + v4」读 v4；`.v0`、前导零（`v03`）、大写、`.tmp` 一律**非规范名、不当会话日志**（宿主注释点名的正是这几类）。版本号按**数值**比，不按字符串（`v10` 胜 `v9`）。
+- **旧写法错在哪**：`src/trash/detail.ts` 是 `listFiles(dir).sort()` 再取**第一个**后缀命中，`src/trash/reconcile.ts` 是直接取 `listFiles` 第一个命中。前者被 `.sort()` 钉死成**字母序最小 = 最旧那代**（`session.v3…` < `session.v4…`），后者跟着 readdir 序走（NTFS 按名字排序，实测同样是 v3 在前）⇒ 那 7 个目录里 6 个的详情与对账一直在读旧代。
+- **落点**：判定收进 `src/log/session-log.ts` 的 `pickSessionLog(names)`（一处家；`SESSION_LOG_SUFFIX` 随之下线，现在唯一的词法就是那条正则），两个调用方各自只留一行调用。用例：`tests/session-log.test.ts` 五例（最大代 / 裸名算 0 / 数值比 / 非规范名 / 明文不算）+ `tests/trash-detail.test.ts`、`tests/reconcile.test.ts` 各一例按真实两代形态断言读到的是 v4。**明文 `session.jsonl`（宿主 `compression` 关掉那档）仍然不在读法内**——本插件的解码逐帧走 zstd，明文要另一条解码路，没证据就不开。
+- **真机读数（一次性探针，跑完即删）**：这 7 个目录改后全部选中 `session.v4.jsonl.zstd`，逐帧解完 `unparsedLines = 0`、帧数 2–135，无一处抛。
+
 ---
 
 ## 2. 界面（落地后取代 §7 的状态④，并新增状态⑥）
@@ -302,3 +312,53 @@ interface TrashDetail {
 ### 9.1 「刷新」按钮删了（同日稍晚，用户裁定）
 
 用户一句「要不把刷新按钮删了吧，没用」——与 §9 的机制同一根线：清单已是"每次读都对账"（开面板、切走再切回、重启、别处动过后的自动重读、客户端启动探测全走 `list`），那颗按钮**不再承担别人替代不了的活**，而他两次实验里它恰好都没表现（一次读的是内存快照、一次命中"根不在"的静默口径）。**没删同步，只删了按钮**：手动动完目录，"立刻看到"的动作 = 切走面板再切回（或重开面板），每次读都会先对账。摘掉：按钮与三处注释、`trash.toolbar.refresh` 键（zh+en）、`IconRefreshOutlineRegular` 几何（只剩它在用）、那条降级成图标的用例（换成反向钉"那一排只有两颗钮"）。读数住现状稿台账。
+
+## 10. 清单行上的「含 N 个子会话」（2026-10-16 第八批：五格阶梯的第一格，级联仍未做）
+
+**为什么这一栏非有不可（本机一次性探针，跑完即删）**：header 上的 `origin` **只有 `subagent` 一个取值**（缺席 = 普通会话；`dsh-api-session-controller/lib/typert.host.js:2157`，代次 `0.2.0-rc.2`）。宿主的 `list()` **不筛**孩子，摘要里带着 `parentSessionId` / `origin`，但**客户端整排藏掉**——`dsh-client-ui-workspace/lib/client.js:358` 逐字 `if (session.origin === "subagent") return false;`，工作区成员与「未分组」那一桶（:430 / :436）过的是同一个过滤器 ⇒ 孩子既不显形，也**永远不会**变成幽灵行。于是"删了父还剩多少"这件事在界面上一个字都看不见。
+
+本机存量：**549 个可读会话目录里 541 个是 `subagent`**；回收站 127 条全是父会话，其中 **41 条的孩子还在盘上，共 320 个目录 / 74.6 MB**（最大一条就占 98 个目录 / 22.2 MB）；另有 **36 个活着的父合法持有 221 个目录 / 57.8 MB**——那批不该动，画在图里也是要说清这件事。宿主帮了一半：`ArchivedSessionGate` 顺 `header.parentSession` 拦，父一归档孩子就跑不动（`dsh-api-session-controller/lib/types/archived-session-gate.js:35-51`），**但字节照样占着**。
+
+**这一格只做"说出来"**：删除语义一个字没动。
+
+**取数走官方面，不自扫盘**：`ctx.sessionQuery.filterSessions([{ kind:'parent', values }])`，宿主判据逐字是 `filter.values.includes(record.header.parentSession ?? null)`（`dsh-session-query/lib/index.js` 的 `sessionPredicate`；`filterSessions` 的 JSDoc 原文 "matching cloned records in deterministic newest-first order"，且它**不是**按连接鉴权裁剪的那一支）。`sessionQuery` 按**可选服务**读（`ctx.get`，不进 `inject`——同 `sessionProjectionCache` 的处理）。归堆必须**两边都剥 `session-` 前缀**：本机实测父自己的 header id 带前缀（`session-ac07f2bb-…`）、它的孩子写的 `parentSession` 也带，而 v3 那一代的 id 不带 ⇒ 同一个父有两种写法；于是问的时候把一个 id 的两种形状都塞进 `values`，回来按剥前缀后的形状加总，键按**调用方给的那个写法**交回去。
+
+**两道口径，都不是口味**：① **计数不落清册**，只加在 `GET /list` 这一次回信上——清册该记"文件里真有的事实"，而"还剩几个孩子"是随盘上随时变的数，写进去就等于让 §9 那条对账下次拿一个目录里查无此物的数来说谎。② **报不出就不说**：服务没挂、或这一条确实没孩子 ⇒ 界面上半句都不出现，不许拿「含 0 个」冒充「不知道」。取数失败**照抛**（响亮失败那条），不端一份"少了这栏的清单"当没事发生。
+
+**落点**：`src/ports/host-port.ts` 的 `subagentCounts`（端口第十三员）→ `src/api/dispatch.ts` 的 `list` 分支（对账之后、回信之前）→ `src/client/remote.ts` 的 `subagentCount?` → `src/client/trash-panel.tsx` 那一行的第三段（`copy.ts` 的 `trash.row.subagents`，zh / en 同时加）。没有新控件、没有新层级。
+
+**剩下四格的账（同日读完对面与宿主源码之后拍的位置）**
+
+- **级联（第二格）已落地，见 §11**（同日第九批）：它把 `TrashEntry` 从「一条 = 一个目录」变成「一条 = 一组目录」——对账认目录名、详情按目录取日志、`sizeBytes` 现场量目录，四处都按单目录建模，所以单独一轮。
+- **投影缓存孤儿行：决定不碰**（维持现状稿那条，并补一条更硬的：宿主 `session/disposed` 是**写**一行 ⇒ 摘活体那一步反而刷新它）。唯一的删除路是 `ctx.storageDomain.get('session_projcache').table('sessions').delete(id)`，而 `storageDomain.get` 自己的 JSDoc 写着 "Diagnostic surface"、插件又不能 `open` ⇒ 拿诊断面当契约的事不做。本机存量 **184 行 / 24 MB**，记进那条决定的"代价"。
+- **spill：不做，而且对面那格是空的**。真结构是两层：`mkdtempSync(join(tmpdir(),'dsh-spill-'))` 的随机 6 位当根，`session-<sha256(sessionId) 前 12 位 hex>` 才是子目录（`dsh-spill-local/lib/index.js:35 / :70`）⇒ 直接按 `tmpdir()/dsh-spill-<sha12>` 找**永不存在**（本机 9 个根、3.6 MB，名字全是随机大小写字母）；而宿主 activation 自带一次启动清扫、按文件 mtime 过 30 天（`cleanupPeriodDays` 默认 30，:464 / :484）——**它有回收者**。
+- **栅栏（第五格）待换**：官方 `connection.requestRejection` 的目录描述逐字 "Apply Connection's Host/Origin checks and browser authentication to **another Web route**"，而 `isTrustedApiRequest` 在 `origin === undefined` 时 `return true`（`dsh-client-connection/lib/index.js:212-213`）⇒ 桌面壳那条摘掉头的光请求本来就被宿主放行，我们那段 `Referer: dsh-app://app/` 特判是抄本。**但**它踩在一条静态证不了的推断上（壳转发后 `Host` 是否还在，undici 从目标 URL 重加）⇒ 先过真机门再动；且 `connection.fetch.register` 只吃 `/api/` 精确路径，所以前缀路由照留。
+
+**真机门（交用户，桌面版 `0.2.0-rc.2`；①–④ 全过这格才算落）**：① 回收站里挑一条**有孩子**的（本机那 41 条之一，例如 `20261009T054058Z-session-7f2c5c74…` 留了 2 个），行的第二段读出「删除于 … · 大小 · 含 N 个子会话」，N 与按 `~/.dsh/sessions` 下 `parentSession` 数出来的条数一致；② 挑一条**没孩子**的，那半句一个字都不出现（不许出现「含 0 个」）；③ 面板照常打开、组头计数与页脚合计不变（这一栏不许把对账带歪）；④ 控制台零 error/warn。**注**：`subagentCounts` 的真实绑定在单测里只钉了**接线形状**（哪个服务、哪个方法、什么入参、两种前缀归堆），宿主上到底有没有 `sessionQuery` 这个服务，要这一趟才算数。
+
+用例账：本格新增 **7 条**（`assembly` 三 + `api` 二 + `trash-panel` 二），全量 **323 通过**；`tsc --noEmit` 干净；`npm run build` 过纯度门。
+
+## 11. 级联：删父会话即把它在盘上的孩子一起带走（2026-10-16 第九批，第二格）
+
+§10 那一格只是把 320 个目录 / 74.6 MB 说出来。这一格把它们**跟着父一起进回收站**：删除、恢复、彻底删除都按组走，且仍可恢复。
+
+**孩子的身份与目录从哪来（全官方面）**：`HostPort.subagentMembers(sessionId)`（端口第十四员）走 `ctx.sessionQuery.filterSessions([{kind:'parent', values}])`——宿主判据逐字 `values.includes(record.header.parentSession ?? null)`，交回的是**带 header 的记录克隆**；孩子的 `sessionId` 取 `header.id`，项目目录由 `header.cwd` 走**同一个** `projectKey`（与 `projectDirOf` 同一根算法，不另起一套）。`header.id` 缺席的孩子**跳过**——不拿目录名冒充身份，冒充了就会把一个来路不明的目录搬进回收站。问的时候把一个 id 的两种写法（`x` 与 `session-x`）都塞进 `values`，因为本机实测同一个父有两种写法（v3 代不带前缀、v4 带）。`sessionQuery` 是**可选服务**（`ctx.get` 读，不进 `inject`）；它没挂就回空组 ⇒ 删除照旧只管父，不因此失败。
+
+**三段顺序，都是承重的**（`src/verbs/delete-session.ts`）：
+1. **先点组、先验活体，一个字节都不写**。父与每个孩子逐个查 `isLive`，任一个在跑就**整组拒绝**（`sessiondelete/live`）——不替用户终止正在跑的活，也绝不允许"父已进回收站、孩子因为在跑搬不动"那种半套。
+2. **逐个搬**，每个成员内部沿用原来那五触点与就地回滚（归档 → 摘账本 → 搬目录 → 写清册 → 摘内存 + 通告）。孩子先归档再摘账本那条理由一模一样：`listSessions()` 是"持久化 ∪ 活体"的并集，只搬文件会让孩子掉进「未分组」。
+3. **组级回滚**：某个成员搬不动时，把**已经搬进去的**按相反顺序退回原处（行回到清册、目录搬回 `sessions/`、账本挂回、可见性还原、通告"回来了"），失败照抛。
+
+**清册只多一件事实**：`TrashEntry.parentEntryId?`（`src/trash/entry.ts`）。孩子那一行记父那一行的 `id`。**目录布局一点没动**——每个孩子仍是 `session-trash/<它自己的条目 id>` 这样一格，与存量那 127 条同形，所以 §9 的对账不需要新概念。文件侧没有 `parentEntryId` 的副本，所以清册被清后由目录重建出来的行**不带分组**、各占一行；那是"分组信息随清册一起没了"的如实结果，不假装知道（与 `workspaceId`/`wasArchived`/`title` 同一类降级，§9 第③条）。
+
+**清单的装配**（`src/api/dispatch.ts` 的 `assembleTrashRows`）：只列父行，孩子折进去，并分三个只读数交出去——`subagentCount` / `subagentBytes`（组内一起进来的，来源是清册）与 `strandedSubagents`（**盘上还留着没被带走的**，来源是 §10 那条 `subagentCounts`）。三道防线：
+- **两个数不许互相冒充**：界面上分别说「含 N 个子会话」和「盘上还剩 M 个子会话」。级联落地前删的那些存量只会亮后者——说成"含"就是假话，用户会以为恢复能把它捞回来。
+- **隐形防护**：折进父行的前提是**父行在**。父行不见了（手工摘的、清册半损的），孩子自己站出来占一行——否则那一条既看不见也清不掉，正是本仓一直在躲的"点不到的行"。
+- **合计要算得上孩子**：`sizeBytes` 仍是那一条会话自己的（详情里对得上），头部合计另加 `subagentBytes`。只加父那一格就会少报。
+- 三个字段**都不落清册**（清册该记文件里真有的事实，而"还剩几个"随盘上随时变）。
+
+**恢复与彻底删除按组走**：`restoreSession(父 id)` 先**预检整组**（每个成员的回收站目录与原项目目录都得在）再逐个搬回，所以"父回来了、孩子因为项目目录没了回不去"这种半组留在外面的世界不会发生；中途失败把已完成兄弟一起退回。`purgeTrash(父 id)` 的目标集是"父 + 指向它的孩子"，`removed` 报的是整组条数。按孩子 id 单独走那两个动词（清单不列孩子，只有手工/降级路径会走到）就只动它自己。
+
+**真机门（交用户，桌面版 `0.2.0-rc.2`；①–⑥ 全过这格才算落）**：① 挑一条**盘上有孩子**的会话删除 → 回收站只多**一行**，那行说「含 N 个子会话」，N 与 `~/.dsh/sessions` 下按 `parentSession` 数出来的一致；② `~/.dsh/session-trash/` 下真的多出 N+1 个目录（父与每个孩子各一格），`~/.dsh/sessions` 里那 N 个孩子的目录同时消失；③ 恢复那一行 → N+1 个目录一起回到 `sessions/` 原来的项目目录下，回收站那行消失；④ 对一条**有孩子**的用「彻底删除…」→ 整组目录与行都不剩，页脚合计相应减少；⑤ 级联落地**之前**删的那些老行仍亮「盘上还剩 M 个子会话」，且不说成"含"；⑥ 控制台零 error/warn。**注**：`subagentMembers` 的真实绑定单测只钉了接线形状，宿主上 `sessionQuery` 到底交回什么形状（尤其 `header.id` 是否就是目录名那一段）要这一趟才算数。
+
+用例账：本格新增 **19 条**（`assembly` 四：`subagentMembers`；`delete-session` 四：整组搬入 / 孩子目录缺席跳过 / 孩子在跑整组拒 / 组级回滚；`restore-session` 三：整组回 / 预检拦半组 / 孩子单回；`purge-trash` 二：整组清 / 孩子单清；`api` 净三：只列父行、"还剩"不出现、隐形防护（原「计数不落清册」那条改写进这批）；`trash-panel` 三：「还剩」不冒充「含」、两句并存、合计含孩子字节），全量 **342 通过**；`tsc --noEmit` 干净；`npm run build` 过纯度门。

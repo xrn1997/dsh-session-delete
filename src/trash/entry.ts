@@ -17,6 +17,12 @@ export interface TrashEntry {
   title: string
   /** 删除时用 `fs.sizeOfDir` 量到的会话目录字节数。 */
   sizeBytes: number
+  /** **组语义**：这一条是跟着父一起进回收站的子会话 ⇒ 记父那一行的 `id`。
+   *  缺席 = 这一行是父（或它自己就是被单独删掉的）。清单据此把孩子折进父行、不单独列。
+   *  老代留底 / 清册被清后由目录重建出来的行**没有这个字段**（文件侧没有它的副本，与
+   *  `workspaceId`/`wasArchived`/`title` 同一类降级），那一趟它们会各占一行——那是"分组信息随清册一起没了"
+   *  的如实结果，不假装知道（设计稿 2026-10-15 §10）。 */
+  parentEntryId?: string
 }
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0')

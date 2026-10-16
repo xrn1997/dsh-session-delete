@@ -27,7 +27,7 @@ import { parseEntryId, trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
 import type { FsPort } from '../ports/fs-port.js'
 import { NO_CWD_PROJECT_DIR, projectKey } from '../ports/host-port.js'
-import { readSessionHeader, SESSION_LOG_SUFFIX } from '../log/session-log.js'
+import { pickSessionLog, readSessionHeader } from '../log/session-log.js'
 
 export interface ReconcileDeps {
   fs: FsPort
@@ -57,7 +57,7 @@ async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry |
 
   let logName: string | undefined
   try {
-    logName = (await deps.fs.listFiles(dir)).find((name) => name.endsWith(SESSION_LOG_SUFFIX))
+    logName = pickSessionLog(await deps.fs.listFiles(dir))
   } catch {
     return undefined
   }

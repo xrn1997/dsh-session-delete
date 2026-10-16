@@ -38,7 +38,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
  * "清单里有行而回收站根下空空"的世界会被对账当场摘空——那是不一致的世界（真实里行与目录成对出现），
  * 所以这里让二者默认一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
  */
-function makeDeps(over: { seed?: TrashEntry[]; live?: boolean } = {}) {
+function makeDeps(over: { seed?: TrashEntry[]; live?: boolean; subagents?: Record<string, number> } = {}) {
   const manifest = createMemoryManifest(over.seed ?? [])
   const fs = {
     exists: vi.fn(async (_path: string) => true),
@@ -64,6 +64,8 @@ function makeDeps(over: { seed?: TrashEntry[]; live?: boolean } = {}) {
     detach: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
     attach: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
     archive: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
+    subagentCounts: vi.fn(async (_parentIds: readonly string[]) => over.subagents ?? {}),
+    subagentMembers: vi.fn(async (_sessionId: string) => [] as { sessionId: string; projectDir: string }[]),
   }
   return { deps: { fs, host, manifest, home: HOME, now: () => NOW } as unknown as DeleteDeps, fs, host, manifest }
 }
@@ -140,6 +142,69 @@ describe('路由层 · 四个动词端点', () => {
     expect(status).toBe(200)
     expect(body.ok).toBe(true)
     expect((body.value as TrashEntry[]).map((e) => e.id)).toEqual([entryIdOf('b'), entryIdOf('a')])
+  })
+
+  // 清单**只列父行**：孩子折进父那一行（宿主的客户端本来就藏孩子，回收站里也不单独列——单独列会冒出
+  // 一堆点不到的行）。折进去的同时要报出个数与字节，页脚合计才算得上它们。
+  // 另一个数 `strandedSubagents` 来自宿主：这条父会话**在盘上还留着几个没被带走的孩子**——
+  // 级联落地之前删掉的那些存量才非零。两个数分开给，不许用一个冒充另一个。
+  // 三者都**不落清册**：落进去就是"一个会变的数住在一份该如实的记录里"（`reconcile.ts` 五条口径第③条）。
+  it('GET /list 只列父行，孩子折进父行并报出个数与字节', async () => {
+    const parent = entry('session-parent')
+    const kids = [
+      entry('session-kidA', { parentEntryId: parent.id, sizeBytes: 700 }),
+      entry('session-kidB', { parentEntryId: parent.id, sizeBytes: 300 }),
+    ]
+    const { deps, host } = makeDeps({ seed: [parent, ...kids], subagents: { 'session-parent': 2 } })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number; strandedSubagents?: number }>
+    expect(rows.map(r => r.sessionId)).toEqual(['session-parent'])
+    expect(rows[0]).toMatchObject({ subagentCount: 2, subagentBytes: 1000, strandedSubagents: 2 })
+    expect(host.subagentCounts).toHaveBeenCalledTimes(1)
+    expect([...(host.subagentCounts.mock.calls[0] as [readonly string[]])[0]]).toEqual(['session-parent'])
+  })
+
+  it('盘上没有剩 ⇒ 不出现 strandedSubagents（界面上那半句也不该有）', async () => {
+    const parent = entry('session-parent')
+    const kid = entry('session-kidA', { parentEntryId: parent.id, sizeBytes: 700 })
+    const { deps } = makeDeps({ seed: [parent, kid], subagents: {} })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    const rows = body.value as Array<TrashEntry & { subagentCount?: number; strandedSubagents?: number }>
+    expect(rows[0]).toMatchObject({ subagentCount: 1 })
+    expect(rows[0]!.strandedSubagents).toBeUndefined()
+  })
+
+  it('普通行（没孩子）三个字段都不出现，行形状与从前一致', async () => {
+    const { deps } = makeDeps({ seed: [entry('a')] })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    const rows = body.value as TrashEntry[]
+    expect(JSON.parse(JSON.stringify(rows[0]))).toEqual(JSON.parse(JSON.stringify(entry('a'))))
+  })
+
+  // 孩子折进父行是"父行在"的前提下才成立。父行不见了（手工摘的、清册半损的、对账把它当外人摘掉的），
+  // 孩子**必须自己站出来占一行**——否则那一条既看不见也清不掉，正是我们一直在躲的"点不到的行"。
+  it('父行不在 ⇒ 孩子自己占一行，不许隐形', async () => {
+    const orphan = entry('session-kidA', { parentEntryId: '20260930T130500Z-session-nope' })
+    const { deps } = makeDeps({ seed: [orphan] })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    const rows = body.value as TrashEntry[]
+    expect(rows.map(r => r.sessionId)).toEqual(['session-kidA'])
+  })
+
+  it('子会话那三个字段不落清册（读一次之后，清册里那几行一个字段都没多）', async () => {
+    const parent = entry('session-parent')
+    const kid = entry('session-kidA', { parentEntryId: parent.id })
+    const seed = [parent, kid]
+    const { deps, manifest } = makeDeps({ seed, subagents: { 'session-parent': 5 } })
+    const base = await start(deps)
+    await call(base, ROUTES.list)
+    const stored = await manifest.list()
+    expect(stored).toEqual(seed)
+    expect(JSON.stringify(stored)).not.toContain('subagentCount')
   })
 
   it('POST /delete 拿 body 里的 sessionId 走删除动词，回移入回收站的那一条', async () => {

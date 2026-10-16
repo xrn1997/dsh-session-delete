@@ -30,6 +30,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
+import type { TrashEntry } from '../trash/entry.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { readTrashDetail } from '../trash/detail.js'
 import { reconcileTrash } from '../trash/reconcile.js'
@@ -157,12 +158,51 @@ function requireMethod(method: string, want: string, route: string): void {
   if (method !== want) throw new Error(`方法不允许：${method}（${SESSION_DELETE_API_PREFIX}${route} 需 ${want}）`)
 }
 
+/** 清单交回浏览器的那一行：清册那一行 + 组视图的三个只读数。 */
+export interface TrashRow extends TrashEntry {
+  /** 跟着这条父会话一起进回收站的孩子数（来源：清册里 `parentEntryId` 指向它的行）。 */
+  readonly subagentCount?: number
+  /** 那些孩子的字节合计（页脚的合计要算得上它们，不能只加父自己那一格）。 */
+  readonly subagentBytes?: number
+  /** **盘上还留着、没被带走**的孩子数（来源：宿主 `sessionQuery`）。级联落地前删掉的那些存量才非零；
+   *  与 `subagentCount` 是两件事，界面上必须各说各的（不许用一个冒充另一个）。 */
+  readonly strandedSubagents?: number
+}
+
+/**
+ * 把清册的全部行装配成「一行 = 一组」：孩子折进父那一行、不单独列（宿主的客户端本来就藏孩子，
+ * 我们若单列就会冒出一堆点不到的行）。三个只读数只加在这次回信上，**不落清册**——清册该记的是
+ * 文件里真有的事实，而"还剩几个孩子"是随盘上随时变的一个数。取数失败照抛（响亮失败，不端一份
+ * 少了这栏的清单当没事发生）。
+ */
+async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]): Promise<TrashRow[]> {
+  const parentIds = new Set(rows.filter(row => row.parentEntryId === undefined).map(row => row.id))
+  // 折进父行的前提**是父行在**。父行不见了（手工摘的、清册半损的、对账按外人摘掉的），孩子必须自己
+  // 站出来占一行——否则那一条既看不见也清不掉，正是本仓一直在躲的"点不到的行"。
+  const visible = rows.filter(row => row.parentEntryId === undefined || !parentIds.has(row.parentEntryId))
+  const stranded = await deps.host.subagentCounts(visible.map(row => row.sessionId))
+  return visible.map((row) => {
+    const kids = rows.filter(k => k.parentEntryId === row.id)
+    const left = stranded[row.sessionId]
+    if (kids.length === 0 && left === undefined) return row
+    return {
+      ...row,
+      ...(kids.length === 0 ? {} : {
+        subagentCount: kids.length,
+        subagentBytes: kids.reduce((total, kid) => total + kid.sizeBytes, 0),
+      }),
+      ...(left === undefined ? {} : { strandedSubagents: left }),
+    }
+  })
+}
+
 /** 路由表：段名 → 一个把「方法 + 请求体」变成返回值的处理器。动词在每次调用时才取。 */
 async function dispatch(method: string, rest: string, req: IncomingMessage, deps: DeleteDeps): Promise<unknown> {
   if (rest === ROUTES.list) {
     requireMethod(method, 'GET', ROUTES.list)
     // 「读清单」=「对账 + 读」：清单以 `session-trash/` 里的目录为准修回一致（口径见 `reconcile.ts`）
-    return await reconcileTrash(deps)
+    const rows = await reconcileTrash(deps)
+    return assembleTrashRows(deps, rows)
   }
   if (rest === ROUTES.delete) {
     requireMethod(method, 'POST', ROUTES.delete)

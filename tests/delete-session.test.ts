@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
-import { sessionDirOf, trashDirOf } from '../src/trash/entry.js'
+import { makeEntryId, sessionDirOf, trashDirOf } from '../src/trash/entry.js'
 
 const HOME = '/h'
 function deps(over: Record<string, unknown> = {}) {
   const calls: string[] = []
+  const { host: hostOver, ...rootOver } = over
   const fs = {
     exists: vi.fn(async () => true),
     rename: vi.fn(async (a: string, b: string) => { calls.push('rename'); void a; void b }),
@@ -26,8 +27,12 @@ function deps(over: Record<string, unknown> = {}) {
     detach: vi.fn(async () => { calls.push('detach') }),
     attach: vi.fn(async () => { calls.push('attach') }),
     archive: vi.fn(async () => { calls.push('archive') }),
+    // 级联：默认"这孩子没有"，带孩子的用例自己翻
+    subagentMembers: vi.fn(async () => [] as { sessionId: string; projectDir: string }[]),
+    ...hostOver as object,
   }
-  return { calls, deps: { fs, host, manifest: createMemoryManifest(), home: HOME, now: () => Date.UTC(2026, 8, 30, 13, 5, 0), ...over } as never }
+  const manifest = createMemoryManifest()
+  return { calls, fs, host, manifest, deps: { fs, host, manifest, home: HOME, now: () => Date.UTC(2026, 8, 30, 13, 5, 0), ...rootOver } as never }
 }
 
 // 回滚断言要能看见反向调用，所以把错误连 cause 一起取出来
@@ -204,5 +209,67 @@ describe('删除动词', () => {
     const { deps: d } = deps()
     ;(d as never as { fs: { exists: ReturnType<typeof vi.fn> } }).fs.exists = vi.fn(async () => false)
     await expect(deleteSession(d)('session-abc')).rejects.toMatchObject({ code: 'sessiondelete/not-found' })
+  })
+})
+
+// 级联（设计稿 2026-10-15 §10 的第二格）：宿主的客户端把 `origin:"subagent"` 整排藏了 ⇒ 用户点掉的是一条父会话，
+// 而它留在盘上的孩子既看不见也占着字节（本机实测 41 条父留了 320 个目录 / 74.6 MB）。
+// 这一格把它们**一起搬进回收站**：孩子各自成目录、各自一行，`parentEntryId` 指向父那一行；恢复与彻底删除都按整组走。
+describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => {
+  const kidA = { sessionId: 'session-kidA', projectDir: '--p--' }
+  const kidB = { sessionId: 'session-kidB', projectDir: '--p--' }
+
+  it('父搬进去之后，每个孩子各自成目录、各自一行，清册记 parentEntryId 指向父那一行', async () => {
+    const d = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    const parent = await deleteSession(d.deps)('session-parent')
+    const rows = await d.manifest.list()
+    expect(rows.map(r => r.sessionId).sort()).toEqual(['session-kidA', 'session-kidB', 'session-parent'])
+    expect(rows.find(r => r.sessionId === 'session-parent')?.id).toBe(parent.id)
+    expect(rows.filter(r => r.sessionId !== 'session-parent').map(r => r.parentEntryId)).toEqual([parent.id, parent.id])
+    expect(parent.parentEntryId).toBeUndefined() // 父那一行自己不记 parent
+    // 三个目录都真的搬了，且每个孩子落在**自己**的回收站目录里（不是塞进父的目录）
+    expect(d.fs.rename).toHaveBeenCalledTimes(3)
+    // 每个孩子落在**自己**的回收站目录里（不是塞进父那一格）；同一刻删除 ⇒ id 只差在目录名那一段
+    const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
+    const movedTo = d.fs.rename.mock.calls.map(c => String(c[1])).sort()
+    expect(movedTo).toEqual([
+      trashDirOf(makeEntryId(NOW, 'session-kidA'), HOME),
+      trashDirOf(makeEntryId(NOW, 'session-kidB'), HOME),
+      trashDirOf(parent.id, HOME),
+    ].sort())
+  })
+
+  it('宿主报了孩子但盘上没有那个目录 ⇒ 跳过它，其余照搬，不让整次删除失败', async () => {
+    const d = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    d.fs.exists = vi.fn(async (p: string) => !p.includes('session-kidB'))
+    const parent = await deleteSession(d.deps)('session-parent')
+    const rows = await d.manifest.list()
+    expect(rows.map(r => r.sessionId).sort()).toEqual(['session-kidA', 'session-parent'])
+    expect(rows.find(r => r.sessionId === 'session-kidA')?.parentEntryId).toBe(parent.id)
+  })
+
+  it('孩子在跑 ⇒ 整组拒绝，一个字节都不动（不替用户终止正在跑的活）', async () => {
+    const d = deps({
+      host: {
+        subagentMembers: vi.fn(async () => [kidA, kidB]),
+        isLive: vi.fn(async (id: string) => id === 'session-kidB'),
+      },
+    })
+    await expect(deleteSession(d.deps)('session-parent')).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    expect(d.fs.rename).not.toHaveBeenCalled()
+    expect(d.host.archive).not.toHaveBeenCalled()
+    expect(await d.manifest.list()).toEqual([])
+  })
+
+  it('第二个孩子搬不动 ⇒ 已经搬进去的（父与第一个孩子）一起滚回原处', async () => {
+    const d = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    d.fs.rename = vi.fn(async (_from: string, to: string) => {
+      if (to.includes('session-kidB')) throw new Error('EBUSY')
+    })
+    await expect(deleteSession(d.deps)('session-parent')).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    // 反向 rename：搬进去的两个都搬回去（父与 kidA），且失败的那个不留下半行清册
+    const rolled = d.fs.rename.mock.calls.filter((c) => String(c[0]).includes('session-trash') && String(c[1]).includes('/sessions/'))
+    expect(rolled.length).toBe(2)
+    expect(await d.manifest.list()).toEqual([])
   })
 })

@@ -1,7 +1,7 @@
 // 会话日志的逐帧读法：帧 → 明文 → 一行一条 JSON 记录（设计稿 2026-10-15 §1.1 / §3）
 import zlib from 'node:zlib'
-import { expect, it } from 'vitest'
-import { readSessionHeader, walkSessionLog, type SessionRecord } from '../src/log/session-log.js'
+import { describe, expect, it } from 'vitest'
+import { pickSessionLog, readSessionHeader, walkSessionLog, type SessionRecord } from '../src/log/session-log.js'
 
 const frame = (...lines: string[]) =>
   zlib.zstdCompressSync(Buffer.from(lines.filter(Boolean).join('\n') + '\n', 'utf8'))
@@ -110,4 +110,39 @@ it('readSessionHeader 取到就停机：header 之后的坏帧不会被解到（
 
 it('readSessionHeader：没有 session 记录 ⇒ undefined（不拿别的记录冒充）', () => {
   expect(readSessionHeader(frame(rec({ type: 'turn/start' })))).toBeUndefined()
+})
+
+// 同一个目录里可以并存**多代**日志：宿主升过代（本机 `SESSION_FORMAT_VERSION` 从 0 → 3 → 4），
+// 老代留在原地当历史语料。真机读数（2026-10-16，本机 7 个两代目录）：v4 的 `firstTs` 与开头那条
+// 提问与 v3 **完全相同**、记录更多、末尾晚了 6.6 天 ⇒ v4 是 v3 迁移后的**超集**。
+// 所以判据是"取版本号最大的一代"，**不是把两代拼起来**（拼接会把 v3 的记录重复计一遍），
+// 也不是字母序第一个（那样读到的是最旧那代）。代次词法照宿主的
+// `/^session(?:\.v([1-9][0-9]*))?\.jsonl$/u`（裸名 = 第 0 代；`.v0`、前导零、大写、临时名一律非规范）。
+describe('pickSessionLog：同一目录多代并存时选哪一代', () => {
+  it('取版本号最大的一代，且与输入顺序无关', () => {
+    const names = ['session.v3.jsonl.zstd', 'session.v4.jsonl.zstd']
+    expect(pickSessionLog(names)).toBe('session.v4.jsonl.zstd')
+    expect(pickSessionLog([...names].reverse())).toBe('session.v4.jsonl.zstd')
+  })
+
+  it('裸名算第 0 代：老代留底的会话（裸名 + v4）读 v4', () => {
+    expect(pickSessionLog(['session.jsonl.zstd', 'session.v4.jsonl.zstd'])).toBe('session.v4.jsonl.zstd')
+    expect(pickSessionLog(['session.jsonl.zstd'])).toBe('session.jsonl.zstd')
+  })
+
+  it('版本号按数值比，不按字符串（v10 胜过 v9）', () => {
+    expect(pickSessionLog(['session.v9.jsonl.zstd', 'session.v10.jsonl.zstd'])).toBe('session.v10.jsonl.zstd')
+  })
+
+  it('非规范名一律不当会话日志：`.v0`、前导零、大写、临时文件、外人的文件', () => {
+    for (const junk of ['session.v0.jsonl.zstd', 'session.v03.jsonl.zstd', 'SESSION.V4.JSONL.ZSTD', 'session.v4.jsonl.zstd.tmp', 'notes.jsonl.zstd', 'session.vX.jsonl.zstd']) {
+      expect(pickSessionLog([junk]), junk).toBeUndefined()
+    }
+    // 混在里面的规范名照样选出来
+    expect(pickSessionLog(['session.v0.jsonl.zstd', 'a.tmp', 'session.v4.jsonl.zstd'])).toBe('session.v4.jsonl.zstd')
+  })
+
+  it('只有非 zstd 明文日志时返回 undefined（本插件的读法逐帧解 zstd，读不了明文）', () => {
+    expect(pickSessionLog(['session.jsonl', 'session.v4.jsonl'])).toBeUndefined()
+  })
 })

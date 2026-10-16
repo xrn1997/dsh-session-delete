@@ -41,8 +41,34 @@ export interface SessionLogStats {
 
 const NEWLINE = 0x0a
 
-/** 会话日志的文件名后缀（`session.vN.jsonl.zstd`）。详情与回收站对账都按它挑日志，名字只有这一处家。 */
-export const SESSION_LOG_SUFFIX = '.jsonl.zstd'
+/**
+ * 宿主给每一代日志的词法（逐字取自 `@deepseek-ai/dsh-session-format@0.2.0-rc.2` 的
+ * `CANONICAL_LOG_FILENAME`，剥掉压缩后缀那段由我们自己在正则里补上 `.zstd`）：
+ * 裸名 `session.jsonl` 是**第 0 代**，往后是 `session.vN`；`.v0`、前导零、大写、临时名都不是规范名。
+ */
+const CANONICAL_ZSTD_LOG = /^session(?:\.v([1-9][0-9]*))?\.jsonl\.zstd$/u
+
+/**
+ * 同一个会话目录里**可以并存多代日志**（宿主换代时把老代留在原地当历史语料，本机实测 7 个目录如此），
+ * 而新代是老代的**迁移后超集**（实测：`firstTs` 与开头那条提问完全相同、记录更多、末尾更晚）
+ * ⇒ 要读的是版本号最大的那一代，读旧代 = 读到一份截了尾巴的快照；把几代拼起来 = 重复计数。
+ *
+ * 明文（无 `.zstd`）不在此列：本插件的读法逐帧解 zstd，明文得走另一条解码路。
+ */
+export function pickSessionLog(names: readonly string[]): string | undefined {
+  let best: string | undefined
+  let bestVersion = -1
+  for (const name of names) {
+    const match = CANONICAL_ZSTD_LOG.exec(name)
+    if (match === null) continue
+    const version = match[1] === undefined ? 0 : Number(match[1])
+    if (version > bestVersion) {
+      bestVersion = version
+      best = name
+    }
+  }
+  return best
+}
 
 /**
  * 逐帧走一遍日志，每条记录交给回调。

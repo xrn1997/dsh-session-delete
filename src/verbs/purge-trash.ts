@@ -5,7 +5,11 @@ import { verbError } from './errors.js'
 export function purgeTrash(deps: DeleteDeps) {
   return async function purgeTrash(entryId?: string): Promise<{ removed: number; freedBytes: number }> {
     const all = await deps.manifest.list()
-    const targets: TrashEntry[] = entryId ? all.filter(e => e.id === entryId) : all
+    // 点的是父那一行 ⇒ **整组**一起清（孩子是跟着父进来的，不该在父被彻底删除后单独留在回收站里）；
+    // 点的是孩子那一行（清单不单独列它，只有手工/降级路径会走到）⇒ 只清它自己。
+    const targets: TrashEntry[] = entryId
+      ? all.filter(e => e.id === entryId || e.parentEntryId === entryId)
+      : all
     if (entryId && targets.length === 0) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
 
     let freedBytes = 0

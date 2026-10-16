@@ -37,6 +37,8 @@ function makeEnv(over: {
   sessions?: unknown
   /** `ctx.get('sessionController')` 的替身（通告"加回"时取摘要的那一处）。 */
   sessionController?: unknown
+  /** `ctx.get('sessionQuery')` 的替身（数子会话用官方 `filterSessions`，kind 只有 `parent` 这一支）。 */
+  sessionQuery?: { filterSessions: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string } }>> }
   /** `ctx.emit` 的替身（通告走的就是它）。 */
   emit?: (name: string, ...args: unknown[]) => void
 } = {}) {
@@ -74,6 +76,7 @@ function makeEnv(over: {
       if (name === 'sessionProjectionCache') return over.projectionCache
       if (name === 'sessions') return over.sessions
       if (name === 'sessionController') return over.sessionController
+      if (name === 'sessionQuery') return over.sessionQuery
       return undefined
     },
     emit: (name: string, ...args: unknown[]) => {
@@ -85,17 +88,18 @@ function makeEnv(over: {
 }
 
 describe('宿主服务层端口的接线', () => {
-  it('十二个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
+  it('十四个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
     const { ctx } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }], headers: { s1: { cwd: 'C:/p' } } })
     const host = createHostPort(ctx)
     const results = [
       host.workspaceOf('s1'), host.projectDirOf('s1'), host.titleOf('s1'),
       host.isLive('s1'), host.isArchived('s1'), host.unarchive('s1'),
       host.detach('s1', 'ws-1'), host.attach('s1', 'ws-1'), host.archive('s1', 'ws-1'),
-      // 后面这三个是收尾用的（摘活体 + 两条如实通告），契约都是"不抛"
+      // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 清单的两个只读/取数面），契约都是"不抛"
       host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored('s1'),
+      host.subagentCounts(['s1']), host.subagentMembers('s1'),
     ]
-    expect(results.length).toBe(12)
+    expect(results.length).toBe(14)
     for (const r of results) expect(r).toBeInstanceOf(Promise)
     await expect(Promise.all(results)).resolves.toBeDefined()
   })
@@ -134,6 +138,97 @@ describe('宿主服务层端口的接线', () => {
   it('projectDirOf 对未知会话返回 undefined（裸抛的 miss 不算故障）', async () => {
     const { ctx } = makeEnv({ headers: { s1: { cwd: 'C:/p' } } })
     expect(await createHostPort(ctx).projectDirOf('ghost')).toBeUndefined()
+  })
+
+  // 数子会话（回收站清单上那个「含 N 个子会话」的只读计数）。走官方 `sessionQuery.filterSessions`
+  // 的 `kind:'parent'` 一支（宿主判据逐字是 `filter.values.includes(record.header.parentSession ?? null)`），
+  // 不自扫 `~/.dsh/sessions`。归堆必须**按去掉 `session-` 前缀后的 id** 算：本机实测父会话自己的 header id
+  // 带前缀（`session-ac07f2bb-…`）、它的子会话写的 `parentSession` 也带前缀，而 v3 代的老 id 不带 ⇒ 两种写法是同一个父。
+  describe('subagentCounts（清单的只读子会话计数）', () => {
+    it('调官方 filterSessions 的 kind:"parent"，两种前缀写法归到同一个父', async () => {
+      const seen: Array<Array<{ kind: string; values: string[] }>> = []
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async (filters) => {
+            seen.push(filters)
+            return [
+              { header: { parentSession: 'session-a' } },
+              { header: { parentSession: 'session-a' } },
+              { header: { parentSession: 'a' } },
+              { header: { parentSession: 'session-z' } }, // 没问它的父：不许混进结果
+            ]
+          },
+        },
+      })
+      const counts = await createHostPort(ctx).subagentCounts(['session-a', 'b'])
+      // 只钉"问了什么"，不钉顺序：宿主那一支的判据是 `values.includes(...)`，顺序对它无意义
+      expect(seen[0]).toEqual([{ kind: 'parent', values: ['session-a', 'a', 'session-b', 'b'].sort() }])
+      expect(counts).toEqual({ 'session-a': 3 })
+    })
+
+    it('sessionQuery 没挂（可选服务缺席）⇒ 空计数，不抛', async () => {
+      const { ctx } = makeEnv({}) // get('sessionQuery') 回 undefined
+      await expect(createHostPort(ctx).subagentCounts(['session-a'])).resolves.toEqual({})
+    })
+
+    it('入参为空 ⇒ 一次宿主调用都不发（别为一张空清单去扫全库）', async () => {
+      let called = 0
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async () => { called++; return [] },
+        },
+      })
+      await expect(createHostPort(ctx).subagentCounts([])).resolves.toEqual({})
+      expect(called).toBe(0)
+    })
+  })
+
+  // 删除要带走孩子，先得知道**孩子是谁、目录在哪**。身份与 cwd 都取宿主自己的记录（官方 `filterSessions`
+  // 的 `kind:'parent'` 那一支交回的是带 `header` 的记录克隆），项目目录用我们**已在端口里逐字镜像**的
+  // `projectKey` 从 cwd 反推（与 `projectDirOf` 同一根算法，不另起一套）。
+  describe('subagentMembers（删除时把盘上的孩子点出来）', () => {
+    it('交回每个孩子的 sessionId 与项目目录（cwd 走同一个 projectKey 算法）', async () => {
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async () => [
+            { header: { id: 'session-child1', cwd: 'C:/develop/p' } },
+            { header: { id: 'session-child2', cwd: 'C:\\develop\\p' } },
+          ],
+        },
+      })
+      expect(await createHostPort(ctx).subagentMembers('session-parent')).toEqual([
+        { sessionId: 'session-child1', projectDir: '--C-develop-p--' },
+        { sessionId: 'session-child2', projectDir: '--C-develop-p--' },
+      ])
+    })
+
+    it('问的是这个父：values 带上它两种写法；parent 自己不混进来（宿主按 header.parentSession 判）', async () => {
+      const seen: unknown[] = []
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async (filters) => { seen.push(filters); return [] },
+        },
+      })
+      await createHostPort(ctx).subagentMembers('bare-parent')
+      expect(seen[0]).toEqual([{ kind: 'parent', values: ['bare-parent', 'session-bare-parent'].sort() }])
+    })
+
+    it('header 缺 id ⇒ 这个孩子点不出来，跳过它（不拿目录名冒充身份）；缺 cwd 走 _no-cwd', async () => {
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async () => [
+            { header: { cwd: 'C:/x' } },
+            { header: { id: 'session-kid', createdAt: 1 } },
+          ],
+        },
+      })
+      expect(await createHostPort(ctx).subagentMembers('p')).toEqual([{ sessionId: 'session-kid', projectDir: '_no-cwd' }])
+    })
+
+    it('sessionQuery 没挂 ⇒ 空组（删除照旧只管父，不因此失败）', async () => {
+      const { ctx } = makeEnv({})
+      await expect(createHostPort(ctx).subagentMembers('p')).resolves.toEqual([])
+    })
   })
 
   // 同一段 try/catch 的另一半：认不出来的错误必须**照抛**，真存储故障不许被伪装成「无此会话」

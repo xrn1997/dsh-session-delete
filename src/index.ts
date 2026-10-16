@@ -86,7 +86,9 @@ function defineDomain<T extends DomainSpecLike>(spec: T): T {
   return spec
 }
 
-/** `TrashEntry` 的字段面（`src/trash/entry.ts` 的接口逐项）。 */
+/** `TrashEntry` 里**每条记录都必须有**的那几格（`src/trash/entry.ts` 接口的非可选字段）。
+ *  **可选字段不在这里**：`parentEntryId`（级联那批加的）缺席是合法的——老行没有它，缺了就是"没有父"；
+ *  校验器只管这几格的类型，其余键**原样带走**（`parse` 交回的就是 `raw` 本身）⇒ 新字段照旧存得住。 */
 const TRASH_ENTRY_FIELDS = {
   id: 'string', sessionId: 'string', projectDir: 'string', workspaceId: 'string',
   wasArchived: 'boolean', deletedAt: 'number', title: 'string', sizeBytes: 'number',

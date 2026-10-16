@@ -29,6 +29,12 @@ export interface HostPort {
   /** 归档是 registry **全局**的，与工作区账目无关 ⇒ `workspaceId` 只是调用点对称用的可选入参
    *  （未分组的会话没有工作区可传）。 */
   archive(sessionId: string, workspaceId?: string): Promise<void>
+  /** 数一组父会话在盘上的**子会话**条数（回收站清单上那个只读计数——宿主客户端把
+   *  `origin:"subagent"` 的行藏掉了 ⇒ 不说就没人知道删了父还剩多少）。键按**传进来的那个写法**回；
+   *  没有孩子的父不出现在结果里（缺省即 0）；`sessionQuery` 没挂回 `{}`，不抛。 */
+  subagentCounts(parentIds: readonly string[]): Promise<Record<string, number>>
+  /** 列出这个父会话**在盘上的子会话**（删除时一起带走）。来历与缺席行为见实现处：服务没挂回 `[]`。 */
+  subagentMembers(sessionId: string): Promise<readonly { readonly sessionId: string; readonly projectDir: string }[]>
 }
 
 /* ------------------------------------------------------------------ *
@@ -105,6 +111,25 @@ interface HostCtxLike {
    *  ——asar `@deepseek-ai/cordis/lib/index.js` 的 `dispatch`：`const filter = thisArg?.[Context.filter]`，
    *  而 `thisArg` 只在首参是对象/函数时才取走 ⇒ 全量派发到转发器（见 {@link HostPort.announceRemoved}）。 */
   emit(name: string, ...args: readonly unknown[]): void
+}
+
+/** `ctx.get('sessionQuery')` 的最小面。**可选服务**，按 `ctx.get` 读、不进 inject（同 `sessionProjectionCache`
+ *  的处理：inject 一个可能没挂的服务 = 整个插件 pending）。`filterSessions(filters, signal?)` 回匹配的记录
+ *  克隆（宿主 JSDoc："matching cloned records in deterministic newest-first order"）；`kind:'parent'` 那一支的
+ *  判据逐字是 `filter.values.includes(record.header.parentSession ?? null)`
+ *  （`dsh-session-query/lib/index.js` 的 `sessionPredicate`，代次 0.2.0-rc.2）。 */
+interface SessionQueryLike {
+  filterSessions(
+    filters: readonly { readonly kind: string; readonly values: readonly string[] }[],
+  ): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string } }[]>
+}
+
+/** 官方的「这些父的孩子」那一支：`kind:'parent'` 的判据逐字是 `values.includes(record.header.parentSession ?? null)`。 */
+async function filterChildrenOf(
+  sessionQuery: SessionQueryLike,
+  values: readonly string[],
+): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string } }[]> {
+  return sessionQuery.filterSessions([{ kind: 'parent', values: [...values].sort() }])
 }
 
 /** `ctx.sessionController`（会话列表服务）的最小面：`list()` 回会话摘要。
@@ -185,8 +210,19 @@ function isUnknownSession(error: unknown): boolean {
   return error instanceof Error && error.message.includes(NO_SUCH_SESSION)
 }
 
+/** 会话 id 去掉 `session-` 前缀后的形状（同一个父在两代里写法不同，见 {@link HostPort.subagentCounts}）。 */
+function bareSessionId(id: string): string {
+  return id.startsWith('session-') ? id.slice('session-'.length) : id
+}
+
+/** 一个 id 的全部可能写法，原写法在前：`session-x` → `[session-x, x]`；`x` → `[x, session-x]`。 */
+function sessionIdShapes(id: string): string[] {
+  const bare = bareSessionId(id)
+  return [...new Set([id, bare, `session-${bare}`])]
+}
+
 /**
- * 宿主服务层的**真实绑定**：十二个方法各自把动词层的问题翻成宿主官方服务的调用。
+ * 宿主服务层的**真实绑定**：十四个方法各自把动词层的问题翻成宿主官方服务的调用。
  *
  * 每个方法的依据（服务 / 方法 / 入参）与原文切片见各自的实现处注释。
  * 出错一律**原样抛**（不在这里裹动词码）：动词层把原始错误挂在 `cause` 上，
@@ -365,6 +401,62 @@ export function createHostPort(ctx: unknown): HostPort {
      *  不带 `stopActivity` ⇒ 有活动即抛 `WorkspaceActiveSessionError`（→ `sessiondelete/live`，设计稿 §6）。 */
     async archive(sessionId) {
       await registry.archiveSession(sessionId)
+    },
+
+    /**
+     * 官方 `sessionQuery.filterSessions([{kind:'parent', values}])`，不自扫 `~/.dsh/sessions`。
+     *
+     * 归堆必须**两边都去前缀**再比：本机实测父会话自己的 header id 带 `session-` 前缀
+     * （`session-ac07f2bb-…`）、它的子会话写的 `parentSession` 也带，但 v3 那一代的 id 不带 ⇒
+     * 同一个父有两种写法。所以问的时候把一个 id 的两种形状都塞进 `values`，回来按去前缀后的形状加总，
+     * 最后按**调用方给的那个写法**把键交回去（调用方拿 `entry.sessionId` 直接查得到）。
+     */
+    async subagentCounts(parentIds) {
+      const wanted: string[] = []
+      for (const id of parentIds) if (id.length > 0 && !wanted.includes(id)) wanted.push(id)
+      if (wanted.length === 0) return {} // 空清单不去扫全库
+
+      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
+      if (typeof sessionQuery?.filterSessions !== 'function') return {}
+
+      const values: string[] = []
+      for (const id of wanted) for (const shape of sessionIdShapes(id)) if (!values.includes(shape)) values.push(shape)
+
+      const records = await filterChildrenOf(sessionQuery, values)
+      const byParent = new Map<string, number>()
+      for (const record of records) {
+        const parent = record.header?.parentSession
+        if (typeof parent !== 'string' || parent.length === 0) continue
+        const key = bareSessionId(parent)
+        byParent.set(key, (byParent.get(key) ?? 0) + 1)
+      }
+
+      const counts: Record<string, number> = {}
+      for (const id of wanted) {
+        const n = byParent.get(bareSessionId(id))
+        if (n !== undefined && n > 0) counts[id] = n
+      }
+      return counts
+    },
+
+    /**
+     * 删除要一起带走孩子，先得把他们**点出来**：身份取宿主自己记录里的 `header.id`，项目目录由
+     * `header.cwd` 走同一个 `projectKey`（与 {@link HostPort.projectDirOf} 同一根算法，不另起一套）。
+     * `header.id` 缺席的孩子直接跳过——不拿目录名冒充身份（冒充了会把一个来路不明的目录搬进回收站）。
+     * 服务没挂回 `[]` ⇒ 删除照旧只管父，不因此失败（父的删除本来就已经是完整的一件事）。
+     */
+    async subagentMembers(sessionId) {
+      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
+      if (typeof sessionQuery?.filterSessions !== 'function') return []
+
+      const members: { sessionId: string; projectDir: string }[] = []
+      for (const record of await filterChildrenOf(sessionQuery, sessionIdShapes(sessionId))) {
+        const id = record.header?.id
+        if (typeof id !== 'string' || id.length === 0) continue
+        const cwd = record.header?.cwd
+        members.push({ sessionId: id, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd) })
+      }
+      return members
     },
   }
 }

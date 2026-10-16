@@ -22,11 +22,13 @@ const headerLog = (header: Record<string, unknown>): Buffer =>
   zlib.zstdCompressSync(Buffer.from(`${JSON.stringify(header)}\n`, 'utf8'))
 
 /** 一副最小世界。`logs` 的键是目录名：`Buffer` = 那条日志、`null` = 目录里没有日志、
- *  `'unreadable'` = 读的时候抛。 */
+ *  `'unreadable'` = 读的时候抛。`files` / `logsByFile` 用来造**同一目录里并存多代日志**的真机形态。 */
 function world(opts: {
   seed?: TrashEntry[]
   dirs?: string[]
   logs?: Record<string, Buffer | null | 'unreadable'>
+  files?: Record<string, string[]>
+  logsByFile?: Record<string, Record<string, Buffer>>
   rootExists?: boolean
   sizeThrows?: boolean
 } = {}) {
@@ -41,10 +43,14 @@ function world(opts: {
     listDirs: vi.fn(async (p: string) => (p === ROOT ? [...(opts.dirs ?? [])] : [])),
     listFiles: vi.fn(async (p: string) => {
       const name = p.slice(ROOT.length + 1)
+      if (opts.files?.[name] !== undefined) return [...opts.files[name]]
       return opts.logs?.[name] === null ? [] : ['session.v4.jsonl.zstd']
     }),
     readFile: vi.fn(async (p: string) => {
-      const name = p.slice(ROOT.length + 1).split('/')[0] as string
+      const [name, fileName] = p.slice(ROOT.length + 1).split('/') as [string, string | undefined]
+      if (fileName !== undefined && fileName in (opts.logsByFile?.[name] ?? {})) {
+        return opts.logsByFile![name]![fileName]!
+      }
       const log = opts.logs?.[name]
       if (log === 'unreadable') throw new Error('boom')
       return log ?? headerLog({ type: 'session', version: 4, id: 'session-x', cwd: 'C:/p' })
@@ -91,6 +97,24 @@ describe('回收站对账', () => {
     const { deps } = world({ dirs: [extra], logs: { [extra]: headerLog({ type: 'session', version: 4 }) } })
     const [entry] = await reconcileTrash(deps)
     expect(entry).toMatchObject({ sessionId: 'session-fallback', projectDir: '_no-cwd' })
+  })
+
+  it('同一目录两代并存 ⇒ 读最新那代（老代是换代留底，身份与 cwd 可能都不同）', async () => {
+    const extra = idOf('session-multi')
+    const { deps, fs } = world({
+      dirs: [extra],
+      files: { [extra]: ['session.v3.jsonl.zstd', 'session.v4.jsonl.zstd'] },
+      logsByFile: {
+        [extra]: {
+          'session.v3.jsonl.zstd': headerLog({ type: 'session', version: 3, id: 'session-multi', createdAt: 5, cwd: 'C:/develop/p' }),
+          'session.v4.jsonl.zstd': headerLog({ type: 'session', version: 4, id: 'session-multi', createdAt: 5, cwd: 'C:/develop/q' }),
+        },
+      },
+    })
+    const [entry] = await reconcileTrash(deps)
+    // 两代的 cwd 不同 ⇒ 反推出的项目目录不同，读错代就在项目目录上说错话
+    expect(entry).toMatchObject({ sessionId: 'session-multi', projectDir: '--C-develop-q--' })
+    expect(fs.readFile).toHaveBeenCalledWith(`${ROOT}/${extra}/session.v4.jsonl.zstd`)
   })
 
   it('目录没了的行被摘掉，且摘的就是那一条', async () => {

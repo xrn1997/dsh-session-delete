@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
-import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 
 const HOME = '/h'
 const entry: TrashEntry = {
@@ -145,5 +145,60 @@ describe('恢复动词', () => {
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
     expect(await (d as never as { manifest: { list(): Promise<unknown[]> } }).manifest.list()).toHaveLength(1)
+  })
+})
+
+// 级联的另一半：删是按组搬进来的，恢复也必须按组搬回去。清单只列父行（孩子折在里面），
+// 若恢复只回父，回收站里就留下一堆点不到的孩子行——既看不见也清不掉。
+describe('恢复动词 · 整组（父回则孩子一起回）', () => {
+  const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
+  const parent: TrashEntry = {
+    id: makeEntryId(NOW, 'session-parent'), sessionId: 'session-parent', projectDir: '--p--',
+    workspaceId: 'ws-1', wasArchived: true, deletedAt: NOW, title: '父', sizeBytes: 10,
+  }
+  const kidA: TrashEntry = { ...parent, id: makeEntryId(NOW, 'session-kidA'), sessionId: 'session-kidA', title: '甲', parentEntryId: parent.id }
+  const kidB: TrashEntry = { ...parent, id: makeEntryId(NOW, 'session-kidB'), sessionId: 'session-kidB', title: '乙', parentEntryId: parent.id }
+
+  function world(exists: (p: string) => boolean = () => true, seed: TrashEntry[] = [parent, kidA, kidB]) {
+    const fs = {
+      exists: vi.fn(async (p: string) => exists(p)),
+      rename: vi.fn(async (_from: string, _to: string) => {}),
+      removeDir: vi.fn(async () => {}),
+      sizeOfDir: vi.fn(async () => 0),
+    }
+    const host = {
+      announceRestored: vi.fn(async () => {}), announceRemoved: vi.fn(async () => {}),
+      attach: vi.fn(async () => {}), detach: vi.fn(async () => {}),
+      unarchive: vi.fn(async () => {}), archive: vi.fn(async () => {}),
+    }
+    const manifest = createMemoryManifest(seed)
+    return { fs, host, manifest, d: { fs, host, manifest, home: HOME, now: () => 0 } as never }
+  }
+
+  it('恢复父 ⇒ 三个目录都搬回 sessions/、三行都摘掉、通告三次', async () => {
+    const { d, fs, host, manifest } = world()
+    await restoreSession(d)(parent.id)
+    expect(fs.rename).toHaveBeenCalledTimes(3)
+    const fromTrash = fs.rename.mock.calls.filter((c) => String(c[0]).includes('session-trash'))
+    expect(fromTrash).toHaveLength(3)
+    expect(await manifest.list()).toEqual([])
+    expect(host.announceRestored).toHaveBeenCalledTimes(3)
+  })
+
+  it('组里任一成员的原项目目录不在 ⇒ 整组拒绝、一个目录都不搬（不许半组在外面）', async () => {
+    // kidB 的家被删过（项目目录不在）：预检必须在看任何一次 rename 之前就把整组拦下
+    const stranded: TrashEntry = { ...kidB, projectDir: '--gone--' }
+    const { d, fs, manifest } = world((p) => !p.includes('--gone--'), [parent, kidA, stranded])
+    await expect(restoreSession(d)(parent.id)).rejects.toMatchObject({ code: 'sessiondelete/project-missing' })
+    expect(fs.rename).not.toHaveBeenCalled()
+    expect(await manifest.list()).toHaveLength(3)
+  })
+
+  it('按孩子的 id 单独恢复 ⇒ 只回它自己，父那一行照常留着', async () => {
+    const { d, fs, manifest } = world()
+    await restoreSession(d)(kidA.id)
+    expect(fs.rename).toHaveBeenCalledTimes(1)
+    const left = await manifest.list()
+    expect(left.map(r => r.sessionId).sort()).toEqual(['session-kidB', 'session-parent'])
   })
 })

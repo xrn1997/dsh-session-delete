@@ -140,6 +140,37 @@ it('日志解不开 ⇒ io 带"第 N 帧"那句原文，绝不回半条正文', 
   })
 })
 
+it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴的快照，字母序会先撞上它）', async () => {
+  // 真机形态（2026-10-16 本机 7 个目录）：换代时老代留在原地，新代是老代迁移后的超集。
+  // v3 只到 9/23，v4 一直写到 9/30 ⇒ 读到 v3 就等于把后面那几天的对话整段看不见。
+  const v3 = body(
+    userLine(13, '先看改动'),
+    asstLine(14, [{ type: 'text', text: '改动分四层' }]),
+  )
+  const v4 = body(
+    userLine(13, '先看改动'),
+    asstLine(14, [{ type: 'text', text: '改动分四层' }]),
+    userLine(15, '再来一轮'),
+    asstLine(16, [{ type: 'text', text: '第二轮' }]),
+  )
+  const readFile = vi.fn(async (path: string) => (path.endsWith('session.v3.jsonl.zstd') ? v3 : v4))
+  const deps = {
+    fs: {
+      exists: vi.fn(async () => true),
+      listFiles: vi.fn(async () => ['session.v3.jsonl.zstd', 'session.v4.jsonl.zstd']),
+      readFile,
+    },
+    manifest: createMemoryManifest([entry()]),
+    home: '/h',
+  } as never
+
+  const detail = await readTrashDetail(deps)(id)
+
+  expect(readFile).toHaveBeenCalledWith(`/h/session-trash/${id}/session.v4.jsonl.zstd`)
+  expect(detail.messages.map((m) => m.text)).toEqual(['先看改动', '改动分四层', '再来一轮', '第二轮'])
+  expect(detail.lastActivity).toBe(16)
+})
+
 it('生产的两个闸就是设计稿里那两位数字（改它必须是有意的，别让它悄悄漂）', () => {
   expect(PER_MESSAGE_CHAR_CAP).toBe(3000)
   expect(TOTAL_CHAR_CAP).toBe(500_000)

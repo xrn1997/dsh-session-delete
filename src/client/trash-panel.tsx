@@ -571,7 +571,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     await reload()
   }
 
-  const totalBytes = (entries ?? []).reduce((sum, entry) => sum + entry.sizeBytes, 0)
+  // 头部合计要把组里孩子的字节算上：孩子不单独列行，只加父那一格就会少报（少报的就是那 74.6 MB 那一类）
+  const totalBytes = (entries ?? []).reduce((sum, entry) => sum + entry.sizeBytes + (entry.subagentBytes ?? 0), 0)
   // 分桶在**每次渲染**时按当前时刻算，但本面板**没有计时器**：一条"59分钟"可以挂到下次重读、
   // 交互或失效通告为止（桶最细到分钟，而回收站不是盯着看的界面）。这是取舍，不是"不会停在旧读数"。
   const now = Date.now()
@@ -743,6 +744,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
               const isSelected = entry.id === selectedId
               const isChecked = checked.has(entry.id)
               const title = entry.title === '' ? t('common.untitled') : entry.title
+              const kids = entry.subagentCount ?? 0
+              const stranded = entry.strandedSubagents ?? 0
               return (
                 <div
                   key={entry.id}
@@ -780,7 +783,13 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}
                       title={absoluteText(entry.deletedAt)}
                     >
-                      {`${deletedAgo(entry.deletedAt, now, t)} · ${fileSizeText(entry.sizeBytes)}`}
+                      {[
+                        deletedAgo(entry.deletedAt, now, t),
+                        fileSizeText(entry.sizeBytes),
+                        // 两个数各说各的：进了回收站的说"含"，还在盘上的说"还剩"——混成一个就是假话
+                        kids > 0 ? t('trash.row.subagents', { n: kids }) : '',
+                        stranded > 0 ? t('trash.row.strandedSubagents', { n: stranded }) : '',
+                      ].filter(Boolean).join(' · ')}
                     </div>
                     {/* 恢复/彻底删除 的失败原文留在这条记录上（2026-10-15 真机反馈：动作回到行内，
                         失败也就跟着回行内——"动作与它的原因在同一行"这条从 §7 沿下来，没换地方）。 */}

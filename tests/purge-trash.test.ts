@@ -77,4 +77,28 @@ describe('彻底删除', () => {
     const r = await purgeTrash(d)('a')
     expect(r.removed).toBe(1)
   })
+
+  // 级联：彻底删除点的是**父那一行**（清单只列父行），所以整组都得走——留下孩子的行与目录，
+  // 就等于让用户"彻底删除"之后又看见一堆点不到的行。
+  it('彻底删除父 ⇒ 整组一起清（孩子的目录与行都跟着走）', async () => {
+    const parent = { ...e('p'), title: '父' }
+    const kidA = { ...e('kA'), parentEntryId: 'p' }
+    const kidB = { ...e('kB'), parentEntryId: 'p' }
+    const other = e('z')
+    const { d, fs } = deps([parent, kidA, kidB, other])
+    const r = await purgeTrash(d)('p')
+    expect(r.removed).toBe(3)
+    expect(fs.removeDir).toHaveBeenCalledTimes(3)
+    const left = await (d as never as { manifest: { list(): Promise<TrashEntry[]> } }).manifest.list()
+    expect(left.map(x => x.id)).toEqual(['z'])
+  })
+
+  it('按孩子的 id 单独彻底删除 ⇒ 只清它自己，父那一行留着', async () => {
+    const parent = e('p')
+    const kid = { ...e('k'), parentEntryId: 'p' }
+    const { d, fs } = deps([parent, kid])
+    const r = await purgeTrash(d)('k')
+    expect(r.removed).toBe(1)
+    expect(fs.removeDir).toHaveBeenCalledTimes(1)
+  })
 })

@@ -405,6 +405,45 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     expect(screen.queryByText(/删除于 刚刚/)).not.toBeInTheDocument()
   })
 
+  // 宿主客户端把 `origin:"subagent"` 的行整排藏掉（连「未分组」那一桶也过同一个过滤器）⇒ 删了父会话之后
+  // 还剩多少孩子，用户从界面上**一个字都看不见**。这一栏就是把那个数说出来；没有计数时（宿主服务没挂、
+  // 或这一条确实没孩子）半句都不许出现——不许拿「含 0 个」冒充「不知道」。
+  it('行上如实显示「含 N 个子会话」', async () => {
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 3 }]) }) as never} />)
+    expect(await screen.findByText(/含 3 个子会话/)).toBeInTheDocument()
+  })
+
+  it('没有计数 ⇒ 这半句一个字都不出现', async () => {
+    const { container } = render(<TrashPanel deps={makeDeps()} />)
+    const row = () => container.querySelector('[data-dsh-session-delete="trash-row"]')
+    // 先证明这一行确实渲染了（否则"没有"是因为整行都没有），再证明那半句不在
+    await waitFor(() => expect(row()?.textContent).toContain('224KB'))
+    expect(row()?.textContent).not.toContain('子会话')
+  })
+
+  // 两个数不能互相冒充：`subagentCount` 是**跟着父一起进回收站**的孩子，
+  // `strandedSubagents` 是**还留在盘上没被带走**的（级联落地之前删掉的那些存量）。
+  // 后者说"含"就成了假话——用户会以为回收站里有它们、恢复能捞回来。
+  it('盘上还剩的孩子说「还剩」，不许说成「含」', async () => {
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], strandedSubagents: 4 }]) }) as never} />)
+    expect(await screen.findByText(/盘上还剩 4 个子会话/)).toBeInTheDocument()
+    expect(screen.queryByText(/含 4 个子会话/)).not.toBeInTheDocument()
+  })
+
+  it('两组都有 ⇒ 先说带进来的，再说还剩的（两个数各自站开）', async () => {
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 2, strandedSubagents: 4 }]) }) as never} />)
+    const line = await screen.findByText(/含 2 个子会话/)
+    expect(line.textContent).toContain('含 2 个子会话')
+    expect(line.textContent).toContain('还剩 4 个')
+  })
+
+  it('头部合计要把组里孩子的字节算上（孩子不单独列行，只加父那一格就会少报）', async () => {
+    render(<TrashPanel deps={makeDeps({
+      list: vi.fn(async () => [{ ...rows[0], sizeBytes: 1024, subagentCount: 2, subagentBytes: 512 }]),
+    }) as never} />)
+    expect(await screen.findByText(/1.5KB/)).toBeInTheDocument()
+  })
+
   it('组头摘掉 `--…--` 裹边并还原 `~XXXX` 转义；没有目录时不编一个名字出来', async () => {
     const odd = [
       { ...rows[0], id: 'a', projectDir: '--D-develop-~4E2D~6587--', title: '中文目录' },
