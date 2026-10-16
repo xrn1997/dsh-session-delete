@@ -1,6 +1,6 @@
 {
   "name": "@xrn1997/dsh-session-delete",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "在 DeepSeek Harness 里删除会话：删除=移入回收站（可恢复），另设显式彻底删除",
   "type": "module",
   "main": "lib/index.js",
