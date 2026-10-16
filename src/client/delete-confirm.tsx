@@ -22,7 +22,7 @@
  * 现场是**模块级**的（本仓既有的客户端模式：视图内路由与跨卸载的现场都住在模块级 store，
  * 见 `undo-toast.tsx`），状态源用 React 自带的 `useSyncExternalStore`——不为此引新的状态库。
  */
-import { useState, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
 import { callRemote, type DeleteConfirmDeps } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
@@ -119,6 +119,23 @@ function ConfirmDialog({
 }) {
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
+  /**
+   * 这条会话在盘上带着多少个后代。删除是按组走的（10-15 稿 §11），而宿主的客户端本来就把孩子那几行
+   * 整排藏了 ⇒ 不说就没人知道点下去侧栏会少一片（issue #3）。那一刻它还没进回收站，清单里没有它，
+   * 所以只能现问一次。
+   */
+  const [subagents, setSubagents] = useState(0)
+
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const outcome = await callRemote(() => deps.subagentCount(current.sessionId))
+      // 读不到就**不说那半句**（0 也是"没说"）：它是加法，一次取数失败不许锁死删除按钮，
+      // 也不许把"读不出"写成"它没有子会话"那种假话。
+      if (alive) setSubagents(outcome.ok ? outcome.value : 0)
+    })()
+    return () => { alive = false }
+  }, [deps, current.sessionId])
 
   const confirm = async (): Promise<void> => {
     setBusy(true)
@@ -167,6 +184,7 @@ function ConfirmDialog({
           {current.title === '' ? t('common.untitled') : current.title}
         </div>
       </div>
+      {subagents === 0 ? null : <p>{t('dialog.subagents', { n: subagents })}</p>}
       <p>{t('dialog.hint')}</p>
       {failure === null ? null : <Tag tone="danger">{failure}</Tag>}
     </Modal>

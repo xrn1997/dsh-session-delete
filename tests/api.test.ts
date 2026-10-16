@@ -4,7 +4,7 @@
 // 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 五个端点各自的方法 + 路径（四个动词 + 单条详情）；② 信封就是浏览器半消费的那个形状
+//  ① 六个端点各自的方法 + 路径（四个动词 + 两条纯读：单条详情、删除前那次计数）；② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
 //  ⑤ 取数通道的**同源栅栏**：跨源请求拒掉，且拒之前一个副作用都不发生。
@@ -31,7 +31,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 })
 
 /**
- * 五个端点的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
+ * 六个端点的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
  * 替身暴露出来（`fakes`）是为了让每条用例能只翻自己那一格，而不必重建整副依赖。
  *
  * `listDirs` 按种子（`over.seed`）给：`list` 现在**先对账再读**（`reconcileTrash`），
@@ -134,7 +134,7 @@ function rawCall(
   })
 }
 
-describe('路由层 · 四个动词端点', () => {
+describe('路由层 · 六个端点的契约', () => {
   it('GET /list 回信封 {ok:true,value}，值就是清单（最近删除在前）', async () => {
     const { deps } = makeDeps({ seed: [entry('a', { deletedAt: 100 }), entry('b', { deletedAt: 200 })] })
     const base = await start(deps)
@@ -195,6 +195,20 @@ describe('路由层 · 四个动词端点', () => {
     expect(rows.map(r => r.sessionId)).toEqual(['session-kidA'])
   })
 
+  // 「露出来」与「折进去」必须是**同一条**判据算出来的两半（issue #4）。两条判据不同源时的世界：
+  // 一条孩子行既自己占一行、又被折进另一条的 `subagentBytes` ⇒ 页脚合计把它的字节数两遍。
+  it('父行自己也是孩子 ⇒ 孩子不许既折进它、又自己占一行', async () => {
+    const mid = entry('session-mid', { parentEntryId: '20260930T130500Z-session-nope', sizeBytes: 100, deletedAt: 200 })
+    const leaf = entry('session-leaf', { parentEntryId: mid.id, sizeBytes: 200, deletedAt: 100 })
+    const { deps } = makeDeps({ seed: [mid, leaf] })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number }>
+    // 两条都得看得见（谁都不许隐形），且谁都没把对方折进自己那一格
+    expect(rows.map(r => r.sessionId)).toEqual(['session-mid', 'session-leaf'])
+    expect(rows.map(r => [r.subagentCount, r.subagentBytes])).toEqual([[undefined, undefined], [undefined, undefined]])
+  })
+
   it('子会话那三个字段不落清册（读一次之后，清册里那几行一个字段都没多）', async () => {
     const parent = entry('session-parent')
     const kid = entry('session-kidA', { parentEntryId: parent.id })
@@ -205,6 +219,26 @@ describe('路由层 · 四个动词端点', () => {
     const stored = await manifest.list()
     expect(stored).toEqual(seed)
     expect(JSON.stringify(stored)).not.toContain('subagentCount')
+  })
+
+  // 删除确认框要说「含 N 个子会话，将一起移入回收站」（issue #3）⇒ 那个数必须在**删除之前**问得到。
+  // 它不能挂在 `/list` 上：那一刻这条会话还在盘上，回收站清单里没有它。
+  it('POST /subagent-count 交回这条会话在盘上的后代数（确认框删除前取一次数）', async () => {
+    const { deps, host } = makeDeps({ subagents: { 'session-parent': 3 } })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.subagentCount, { method: 'POST', body: { sessionId: 'session-parent' } })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: 3 })
+    expect(host.subagentCounts).toHaveBeenCalledWith(['session-parent'])
+  })
+
+  // 没挂 `sessionQuery`（或这条确实没后代）⇒ 0。0 不是"不知道"，界面上那一栏在 n===0 时整句不出现，
+  // 所以这个数不会被读成"有一个数说没有孩子"。
+  it('subagent-count 拿不到数 ⇒ 0（界面上那一栏在 n===0 时整句不出现，所以 0 不会被读成"有一个数说没孩子"）', async () => {
+    const { deps } = makeDeps({ subagents: {} })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.subagentCount, { method: 'POST', body: { sessionId: 'session-none' } })
+    expect(body).toEqual({ ok: true, value: 0 })
   })
 
   it('POST /delete 拿 body 里的 sessionId 走删除动词，回移入回收站的那一条', async () => {
@@ -303,6 +337,29 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
     await listPromise
     await deletePromise
     expect(host.isLive).toHaveBeenCalledWith('session-abc') // 前一个一松开，它就接着跑完
+  })
+
+  // 纯读不排队（`detail` 早就在这一条上）：确认框那一句「含 N 个子会话」挂的是一次 `subagent-count`，
+  // 它不该被前面一次对账堵在身后——否则"打开菜单点删除"要等一次磁盘扫描才有回音。
+  it('链被对账占住时，/subagent-count 照样立刻回', async () => {
+    const { deps, fs } = makeDeps({ subagents: { 'session-parent': 2 } })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    fs.listDirs.mockImplementation(async () => {
+      if (first) {
+        first = false
+        await gate
+      }
+      return []
+    })
+    const base = await start(deps)
+    const listPromise = call(base, ROUTES.list)
+    await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
+    const count = await call(base, ROUTES.subagentCount, { method: 'POST', body: { sessionId: 'session-parent' } })
+    expect(count.body).toEqual({ ok: true, value: 2 }) // 没有等在对账后面
+    release()
+    await listPromise
   })
 })
 
@@ -511,5 +568,36 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     const shell = await rawCall(base, ROUTES.detail, 'POST', { ...json, referer: 'dsh-app://app/' }, payload)
     expect(shell.status).toBe(200)
     expect(JSON.parse(shell.text)).toMatchObject({ ok: true })
+  })
+})
+
+// 新段名**不自带豁免**：方法自检、字段点名、同源栅栏三样都得当场钉一次——一条能读盘上会话结构的路由
+// 与那四个写口吃的是同一道栅栏（AGENTS.md：栅栏必须认得桌面壳那条摘掉头的光路）。
+describe('POST /subagent-count 的自检与栅栏（第六个端点，2026-10-16）', () => {
+  const json = { 'content-type': 'application/json' }
+  const payload = JSON.stringify({ [PARAMS.sessionId]: 'session-parent' })
+
+  it('GET 被拒说的是"需 POST"，body 缺/空/非串都落 io 并点名字段', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    const wrongMethod = await failureOf(base, ROUTES.subagentCount, { method: 'GET' })
+    expect(wrongMethod.message).toMatch(/需 POST/)
+    for (const bad of [{}, { [PARAMS.sessionId]: '' }, { [PARAMS.sessionId]: 42 }]) {
+      const failure = await failureOf(base, ROUTES.subagentCount, { method: 'POST', body: bad })
+      expect(failure.code).toBe('sessiondelete/io')
+      expect(failure.message).toMatch(PARAMS.sessionId)
+    }
+  })
+
+  it('跨源 Origin 拒 403 且一次宿主调用都不发；桌面壳的 Referer 照常放行', async () => {
+    const { deps, host } = makeDeps({ subagents: { 'session-parent': 1 } })
+    const base = await start(deps)
+    const hostHeader = { ...json, host: new URL(base).host }
+    const evil = await rawCall(base, ROUTES.subagentCount, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
+    expect(evil.status).toBe(403)
+    expect(host.subagentCounts).not.toHaveBeenCalled()
+    const shell = await rawCall(base, ROUTES.subagentCount, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
+    expect(shell.status).toBe(200)
+    expect(JSON.parse(shell.text)).toMatchObject({ ok: true, value: 1 })
   })
 })

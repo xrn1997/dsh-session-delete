@@ -26,7 +26,7 @@
  *  ⑤ **`list` 是"对账 + 读"，且它与三个写动词按到达序串行**（{@link createApiHandler} 里那条进程内链）：
  *     对账（`reconcileTrash`）与删除/恢复/彻底删除都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩
  *     ——删除刚把目录搬进回收站、行还没写上时，对账抢先把这行按目录"重建"出来，再被真实行覆盖成降级
- *     元数据。串行的代价只是排队（单进程单用户，毫秒级）；`detail` 是纯读、不占这条链。
+ *     元数据。串行的代价只是排队（单进程单用户，毫秒级）；两条纯读（`detail` 与 `subagent-count`）不占这条链。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
@@ -171,23 +171,37 @@ export interface TrashRow extends TrashEntry {
 
 /**
  * 把清册的全部行装配成「一行 = 一组」：孩子折进父那一行、不单独列（宿主的客户端本来就藏孩子，
- * 我们若单列就会冒出一堆点不到的行）。三个只读数只加在这次回信上，**不落清册**——清册该记的是
+ * 我们若单列就会冒出一堆点不到的行）；父行不在时孩子自己站出来占一行，否则它既看不见也清不掉。
+ * 三个只读数只加在这次回信上，**不落清册**——清册该记的是
  * 文件里真有的事实，而"还剩几个孩子"是随盘上随时变的一个数。取数失败照抛（响亮失败，不端一份
  * 少了这栏的清单当没事发生）。
  */
 async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]): Promise<TrashRow[]> {
-  const parentIds = new Set(rows.filter(row => row.parentEntryId === undefined).map(row => row.id))
-  // 折进父行的前提**是父行在**。父行不见了（手工摘的、清册半损的、对账按外人摘掉的），孩子必须自己
-  // 站出来占一行——否则那一条既看不见也清不掉，正是本仓一直在躲的"点不到的行"。
-  const visible = rows.filter(row => row.parentEntryId === undefined || !parentIds.has(row.parentEntryId))
+  // 「折进谁」与「谁露面」由**同一条判据**算出：**接得住孩子的只有根行**（自己不记 `parentEntryId`
+  // 的那一行）。折进一条同样有父的行 = 把它挂在一个已经藏起来的组上，那一行既自己占一格、又被算进
+  // 别人那一格的字节里，页脚合计就会数两遍。
+  const byId = new Map(rows.map(row => [row.id, row]))
+  const foldedInto = new Map<string, string>()
+  const kidsByParent = new Map<string, TrashEntry[]>()
+  for (const row of rows) {
+    if (row.parentEntryId === undefined) continue
+    const parent = byId.get(row.parentEntryId)
+    if (parent === undefined || parent.parentEntryId !== undefined) continue
+    foldedInto.set(row.id, parent.id)
+    const siblings = kidsByParent.get(parent.id)
+    if (siblings === undefined) kidsByParent.set(parent.id, [row])
+    else siblings.push(row)
+  }
+
+  const visible = rows.filter(row => !foldedInto.has(row.id))
   const stranded = await deps.host.subagentCounts(visible.map(row => row.sessionId))
   return visible.map((row) => {
-    const kids = rows.filter(k => k.parentEntryId === row.id)
+    const kids = kidsByParent.get(row.id)
     const left = stranded[row.sessionId]
-    if (kids.length === 0 && left === undefined) return row
+    if (kids === undefined && left === undefined) return row
     return {
       ...row,
-      ...(kids.length === 0 ? {} : {
+      ...(kids === undefined ? {} : {
         subagentCount: kids.length,
         subagentBytes: kids.reduce((total, kid) => total + kid.sizeBytes, 0),
       }),
@@ -215,6 +229,14 @@ async function dispatch(method: string, rest: string, req: IncomingMessage, deps
   if (rest === ROUTES.purge) {
     requireMethod(method, 'POST', ROUTES.purge)
     return await purgeTrash(deps)(optionalString(await readJsonBody(req), PARAMS.entryId))
+  }
+  if (rest === ROUTES.subagentCount) {
+    requireMethod(method, 'POST', ROUTES.subagentCount)
+    // 删除确认框那句「含 N 个子会话」：问的是**还在盘上**的那条会话，此刻它不在回收站里 ⇒
+    // 这个数只能现问宿主（走 `subagentCounts` 的传递闭包），拿不到就是 0。
+    const sessionId = requireString(await readJsonBody(req), PARAMS.sessionId)
+    const counts = await deps.host.subagentCounts([sessionId])
+    return counts[sessionId] ?? 0
   }
   if (rest === ROUTES.detail) {
     requireMethod(method, 'POST', ROUTES.detail)
@@ -249,8 +271,9 @@ export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: 
       }
       const rest = url.pathname.slice(SESSION_DELETE_API_PREFIX.length)
       const task = (): Promise<unknown> => dispatch(req.method ?? 'GET', rest, req, deps)
-      // 详情是纯读（只认清单寻址、不写），不进链——别让一次大正文读把删除按钮堵在身后
-      writeOk(res, await (rest === ROUTES.detail ? task() : throughChain(task)))
+      // 两条纯读不进链（详情、删除前的那次计数）：别让一次大正文读或一个只读数把删除按钮堵在身后
+      const pureRead = rest === ROUTES.detail || rest === ROUTES.subagentCount
+      writeOk(res, await (pureRead ? task() : throughChain(task)))
     } catch (error) {
       writeFailure(res, error)
     }

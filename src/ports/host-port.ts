@@ -29,11 +29,11 @@ export interface HostPort {
   /** 归档是 registry **全局**的，与工作区账目无关 ⇒ `workspaceId` 只是调用点对称用的可选入参
    *  （未分组的会话没有工作区可传）。 */
   archive(sessionId: string, workspaceId?: string): Promise<void>
-  /** 数一组父会话在盘上的**子会话**条数（回收站清单上那个只读计数——宿主客户端把
+  /** 数一组父会话在盘上的**后代**条数（孩子与孙代都算——回收站清单上那个只读计数，宿主客户端把
    *  `origin:"subagent"` 的行藏掉了 ⇒ 不说就没人知道删了父还剩多少）。键按**传进来的那个写法**回；
-   *  没有孩子的父不出现在结果里（缺省即 0）；`sessionQuery` 没挂回 `{}`，不抛。 */
+   *  没有后代的不表现在结果里（缺省即 0）；`sessionQuery` 没挂回 `{}`，不抛。 */
   subagentCounts(parentIds: readonly string[]): Promise<Record<string, number>>
-  /** 列出这个父会话**在盘上的子会话**（删除时一起带走）。来历与缺席行为见实现处：服务没挂回 `[]`。 */
+  /** 列出这个父会话**在盘上的全部后代**（删除时一起带走）。来历与缺席行为见实现处：服务没挂回 `[]`。 */
   subagentMembers(sessionId: string): Promise<readonly { readonly sessionId: string; readonly projectDir: string }[]>
 }
 
@@ -130,6 +130,81 @@ async function filterChildrenOf(
   values: readonly string[],
 ): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string } }[]> {
   return sessionQuery.filterSessions([{ kind: 'parent', values: [...values].sort() }])
+}
+
+/** 闭包里的一条后代：`id` 是宿主交回的原写法（身份只认它），`bare` 是它去前缀后的形状（归堆与去重用）。 */
+interface Descendant {
+  readonly id: string
+  readonly bare: string
+  readonly projectDir: string
+}
+
+/**
+ * 从若干根出发**逐层往下**把盘上的后代问出来，交回 `父（bare）→ 孩子` 的索引。
+ *
+ * 为什么一次问一层而不是官方的 `traceSession`：那条在父已经进回收站时认不出目标
+ * （`SESSION_QUERY_SESSION_NOT_FOUND`），而我们要的那批正是"父已经不在宿主列表里之后还剩在盘上的"。
+ * `kind:'parent'` 是唯一能按 `header.parentSession` 反着问的一支。
+ *
+ * 停下来的条件与代价：**层数**决定宿主调用次数，行数不参与（一层一次，问空即停）。同一条记录只收一次
+ * （`seen` 连着根一起记），所以数据里真出现环时结果是"少数一条"，不是把清单读挂死。
+ * 交回的 id 没有 `header.id` 的记录**整条跳过**——身份冒充不起（同 {@link HostPort.subagentMembers} 那条），
+ * 而且没有身份就没法往下问，硬数进去只会让它将来被重复计。
+ */
+async function descendantsByParent(
+  sessionQuery: SessionQueryLike,
+  roots: readonly string[],
+): Promise<Map<string, Descendant[]>> {
+  const children = new Map<string, Descendant[]>()
+  const seen = new Set(roots.map(bareSessionId))
+  let frontier = [...seen]
+  while (frontier.length > 0) {
+    const values: string[] = []
+    for (const bare of frontier) {
+      for (const shape of sessionIdShapes(bare)) if (!values.includes(shape)) values.push(shape)
+    }
+    const next: string[] = []
+    for (const record of await filterChildrenOf(sessionQuery, values)) {
+      const id = record.header?.id
+      const parent = record.header?.parentSession
+      if (typeof id !== 'string' || id.length === 0) continue
+      if (typeof parent !== 'string' || parent.length === 0) continue
+      const bare = bareSessionId(id)
+      if (seen.has(bare)) continue
+      seen.add(bare)
+      const cwd = record.header?.cwd
+      const descendant: Descendant = {
+        id, bare, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
+      }
+      const parentBare = bareSessionId(parent)
+      const siblings = children.get(parentBare)
+      if (siblings === undefined) children.set(parentBare, [descendant])
+      else siblings.push(descendant)
+      next.push(bare)
+    }
+    frontier = next
+  }
+  return children
+}
+
+/** 某个根在 `descendantsByParent` 那棵树里的全部后代（深度不设上限，同一条只收一次）。 */
+function subtreeOf(children: ReadonlyMap<string, Descendant[]>, rootBare: string): Descendant[] {
+  const out: Descendant[] = []
+  const seen = new Set([rootBare])
+  let frontier = [rootBare]
+  while (frontier.length > 0) {
+    const next: string[] = []
+    for (const bare of frontier) {
+      for (const kid of children.get(bare) ?? []) {
+        if (seen.has(kid.bare)) continue
+        seen.add(kid.bare)
+        out.push(kid)
+        next.push(kid.bare)
+      }
+    }
+    frontier = next
+  }
+  return out
 }
 
 /** `ctx.sessionController`（会话列表服务）的最小面：`list()` 回会话摘要。
@@ -406,9 +481,13 @@ export function createHostPort(ctx: unknown): HostPort {
     /**
      * 官方 `sessionQuery.filterSessions([{kind:'parent', values}])`，不自扫 `~/.dsh/sessions`。
      *
+     * 数的是**传递闭包**（孩子与孙代都算），不是"直接孩子"（issue #1）：宿主客户端对所有
+     * `origin:"subagent"` 一律藏行 ⇒ 深度 ≥2 上"删了父还剩多少看不见"原样存在，只数一层就是把那件事
+     * 说成没有。问法见 {@link descendantsByParent}。
+     *
      * 归堆必须**两边都去前缀**再比：本机实测父会话自己的 header id 带 `session-` 前缀
      * （`session-ac07f2bb-…`）、它的子会话写的 `parentSession` 也带，但 v3 那一代的 id 不带 ⇒
-     * 同一个父有两种写法。所以问的时候把一个 id 的两种形状都塞进 `values`，回来按去前缀后的形状加总，
+     * 同一个父有两种写法。所以问的时候把一个 id 的两种形状都塞进 `values`，回来按去前缀后的形状归堆，
      * 最后按**调用方给的那个写法**把键交回去（调用方拿 `entry.sessionId` 直接查得到）。
      */
     async subagentCounts(parentIds) {
@@ -419,44 +498,30 @@ export function createHostPort(ctx: unknown): HostPort {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
       if (typeof sessionQuery?.filterSessions !== 'function') return {}
 
-      const values: string[] = []
-      for (const id of wanted) for (const shape of sessionIdShapes(id)) if (!values.includes(shape)) values.push(shape)
-
-      const records = await filterChildrenOf(sessionQuery, values)
-      const byParent = new Map<string, number>()
-      for (const record of records) {
-        const parent = record.header?.parentSession
-        if (typeof parent !== 'string' || parent.length === 0) continue
-        const key = bareSessionId(parent)
-        byParent.set(key, (byParent.get(key) ?? 0) + 1)
-      }
-
+      const children = await descendantsByParent(sessionQuery, wanted)
       const counts: Record<string, number> = {}
       for (const id of wanted) {
-        const n = byParent.get(bareSessionId(id))
-        if (n !== undefined && n > 0) counts[id] = n
+        const n = subtreeOf(children, bareSessionId(id)).length
+        if (n > 0) counts[id] = n
       }
       return counts
     },
 
     /**
-     * 删除要一起带走孩子，先得把他们**点出来**：身份取宿主自己记录里的 `header.id`，项目目录由
+     * 删除要一起带走**整个组**，先得把他们点出来：身份取宿主自己记录里的 `header.id`，项目目录由
      * `header.cwd` 走同一个 `projectKey`（与 {@link HostPort.projectDirOf} 同一根算法，不另起一套）。
-     * `header.id` 缺席的孩子直接跳过——不拿目录名冒充身份（冒充了会把一个来路不明的目录搬进回收站）。
+     * 交回的是**全部后代**——孙代跟着父一起进回收站（issue #1），顺序是逐层往下问出来的（近的先）。
+     * `header.id` 缺席的后代直接跳过——不拿目录名冒充身份（冒充了会把一个来路不明的目录搬进回收站）。
      * 服务没挂回 `[]` ⇒ 删除照旧只管父，不因此失败（父的删除本来就已经是完整的一件事）。
      */
     async subagentMembers(sessionId) {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
       if (typeof sessionQuery?.filterSessions !== 'function') return []
 
-      const members: { sessionId: string; projectDir: string }[] = []
-      for (const record of await filterChildrenOf(sessionQuery, sessionIdShapes(sessionId))) {
-        const id = record.header?.id
-        if (typeof id !== 'string' || id.length === 0) continue
-        const cwd = record.header?.cwd
-        members.push({ sessionId: id, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd) })
-      }
-      return members
+      const children = await descendantsByParent(sessionQuery, [sessionId])
+      return subtreeOf(children, bareSessionId(sessionId)).map(d => ({
+        sessionId: d.id, projectDir: d.projectDir,
+      }))
     },
   }
 }

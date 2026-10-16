@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、五个端点段、请求字段名**——
+ * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、六个端点段、请求字段名**——
  * Node 半（`src/api/dispatch.ts` 注册并分发）与浏览器半（`src/client/remote.ts` 同源 fetch）
  * 之间唯一的那份真相。两侧都 import 它，不各写一份字面量。
  *
@@ -24,7 +24,7 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 五个端点的段名（相对前缀；`GET list` **对账并读**清单——`session-trash/` 里的目录是准，其余四个
+/** 六个端点的段名（相对前缀；`GET list` **对账并读**清单——`session-trash/` 里的目录是准，其余五个
  *  `POST` 按 id 取数或写）。 */
 export const ROUTES = {
   list: '/list',
@@ -33,6 +33,9 @@ export const ROUTES = {
   purge: '/purge',
   /** 单条详情（读回收站目录里那条会话自己的日志）。用 POST 表达一个读：见设计稿 2026-10-15 §3。 */
   detail: '/detail',
+  /** 一条**还没进回收站**的会话在盘上有几个后代——删除确认框那一句「含 N 个子会话」要的数。
+   *  它长在 `sessionQuery` 上、与清单无关，所以不能挂在 `list` 上（那一刻这条会话还不在回收站里）。 */
+  subagentCount: '/subagent-count',
 } as const
 
 /** 请求体字段名：浏览器半发、Node 半读，同名同义（`purge` 的 `entryId` 缺席 = 清空）。 */

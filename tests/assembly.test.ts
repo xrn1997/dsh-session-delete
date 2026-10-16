@@ -151,11 +151,13 @@ describe('宿主服务层端口的接线', () => {
         sessionQuery: {
           filterSessions: async (filters) => {
             seen.push(filters)
+            // 每条都带 `header.id`——那是宿主记录本来就有的一件（闭包靠它去重与往下问，
+            // 缺 id 的记录整条跳过，见 subagentMembers 那条用例）
             return [
-              { header: { parentSession: 'session-a' } },
-              { header: { parentSession: 'session-a' } },
-              { header: { parentSession: 'a' } },
-              { header: { parentSession: 'session-z' } }, // 没问它的父：不许混进结果
+              { header: { id: 'session-k1', parentSession: 'session-a' } },
+              { header: { id: 'session-k2', parentSession: 'session-a' } },
+              { header: { id: 'k3', parentSession: 'a' } },
+              { header: { id: 'session-kz', parentSession: 'session-z' } }, // 没问它的父：不许混进结果
             ]
           },
         },
@@ -183,16 +185,16 @@ describe('宿主服务层端口的接线', () => {
     })
   })
 
-  // 删除要带走孩子，先得知道**孩子是谁、目录在哪**。身份与 cwd 都取宿主自己的记录（官方 `filterSessions`
-  // 的 `kind:'parent'` 那一支交回的是带 `header` 的记录克隆），项目目录用我们**已在端口里逐字镜像**的
-  // `projectKey` 从 cwd 反推（与 `projectDirOf` 同一根算法，不另起一套）。
+  // 删除要带走整个组，先得知道**后代是谁、目录在哪**。身份与 cwd 都取宿主自己的记录（官方 `filterSessions`
+  // 的 `kind:'parent'` 那一支交回的是带 `header` 的记录克隆，而那一支只会交出**带 `parentSession`** 的记录），
+  // 项目目录用我们**已在端口里逐字镜像**的 `projectKey` 从 cwd 反推（与 `projectDirOf` 同一根算法，不另起一套）。
   describe('subagentMembers（删除时把盘上的孩子点出来）', () => {
     it('交回每个孩子的 sessionId 与项目目录（cwd 走同一个 projectKey 算法）', async () => {
       const { ctx } = makeEnv({
         sessionQuery: {
           filterSessions: async () => [
-            { header: { id: 'session-child1', cwd: 'C:/develop/p' } },
-            { header: { id: 'session-child2', cwd: 'C:\\develop\\p' } },
+            { header: { id: 'session-child1', parentSession: 'session-parent', cwd: 'C:/develop/p' } },
+            { header: { id: 'session-child2', parentSession: 'session-parent', cwd: 'C:\\develop\\p' } },
           ],
         },
       })
@@ -217,8 +219,8 @@ describe('宿主服务层端口的接线', () => {
       const { ctx } = makeEnv({
         sessionQuery: {
           filterSessions: async () => [
-            { header: { cwd: 'C:/x' } },
-            { header: { id: 'session-kid', createdAt: 1 } },
+            { header: { parentSession: 'p', cwd: 'C:/x' } },
+            { header: { id: 'session-kid', parentSession: 'p', createdAt: 1 } },
           ],
         },
       })
@@ -228,6 +230,80 @@ describe('宿主服务层端口的接线', () => {
     it('sessionQuery 没挂 ⇒ 空组（删除照旧只管父，不因此失败）', async () => {
       const { ctx } = makeEnv({})
       await expect(createHostPort(ctx).subagentMembers('p')).resolves.toEqual([])
+    })
+  })
+
+  // 级联的那个「组」是**全部后代**，不是"直接孩子"（issue #1）：宿主客户端对所有 `origin:"subagent"`
+  // 一律藏行 ⇒ 深度 ≥2 上"删了父还剩多少本来看不见"原样存在。往下问只有一条路：`kind:'parent'`
+  // 一次问一层——官方的 `traceSession` 在父已经进回收站时认不出目标（`SESSION_QUERY_SESSION_NOT_FOUND`）。
+  describe('subagentCounts / subagentMembers 走传递闭包', () => {
+    /** 按 `values` 作答的替身：宿主那一支的判据逐字是 `values.includes(record.header.parentSession ?? null)`。 */
+    function closing(
+      records: Array<{ id: string; parentSession?: string; cwd?: string }>,
+      asked: string[][],
+    ) {
+      return {
+        filterSessions: async (filters: Array<{ kind: string; values: string[] }>) => {
+          const values = new Set(filters[0]?.values ?? [])
+          asked.push([...values])
+          return records
+            .filter(r => typeof r.parentSession === 'string' && values.has(r.parentSession))
+            .map(r => ({ header: r }))
+        },
+      }
+    }
+
+    it('孩子与孙代都算进同一个数，且真的往下问到问空为止', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({ sessionQuery: closing([
+        { id: 'session-kid', parentSession: 'session-root', cwd: 'C:/p' },
+        { id: 'session-grandkid', parentSession: 'session-kid', cwd: 'C:/p' },
+        { id: 'session-greatkid', parentSession: 'session-grandkid', cwd: 'C:/p' },
+      ], asked) })
+      expect(await createHostPort(ctx).subagentCounts(['session-root'])).toEqual({ 'session-root': 3 })
+      expect(asked.length).toBe(4) // 根 / kid / grandkid / greatkid 各问一层，第五层没有记录就停
+      expect(asked[1]).toEqual(expect.arrayContaining(['kid', 'session-kid']))
+    })
+
+    it('subagentMembers 交回全部后代 ⇒ 删父时孙代也一起搬进回收站', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({ sessionQuery: closing([
+        { id: 'session-kid', parentSession: 'session-root', cwd: 'C:/p' },
+        { id: 'session-grandkid', parentSession: 'session-kid', cwd: 'C:/p' },
+        { id: 'session-greatkid', parentSession: 'session-grandkid', cwd: 'C:/p' },
+      ], asked) })
+      expect(await createHostPort(ctx).subagentMembers('session-root')).toEqual([
+        { sessionId: 'session-kid', projectDir: '--C-p--' },
+        { sessionId: 'session-grandkid', projectDir: '--C-p--' },
+        { sessionId: 'session-greatkid', projectDir: '--C-p--' },
+      ])
+    })
+
+    // 行数与宿主调用次数**脱钩**：一层一次，而不是每行各扫一遍库（清单可以有几百行）。
+    it('多个父合在一起问 ⇒ 层数决定调用次数，与行数无关', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({ sessionQuery: closing([
+        { id: 'session-kid1', parentSession: 'session-p1' },
+        { id: 'session-kid2', parentSession: 'session-p2' },
+        { id: 'session-grand', parentSession: 'session-kid1' },
+      ], asked) })
+      expect(await createHostPort(ctx).subagentCounts(['session-p1', 'session-p2'])).toEqual({
+        'session-p1': 2, 'session-p2': 1,
+      })
+      expect(asked.length).toBe(3) // 最深那支三层 ⇒ 三次，两行也一样
+    })
+
+    // 环本来不该出现（`parentSession` 是一条有向边），出现时（手工改过日志 / 宿主 bug）代价必须是
+    // "少数一条"，而不是把清单读挂死。
+    it('记录里有环 ⇒ 每个后代只数一次，且不会无限往下问', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({ sessionQuery: closing([
+        { id: 'session-a', parentSession: 'session-root' },
+        { id: 'session-root', parentSession: 'session-a' },
+        { id: 'session-b', parentSession: 'session-a' },
+      ], asked) })
+      expect(await createHostPort(ctx).subagentCounts(['session-root'])).toEqual({ 'session-root': 2 })
+      expect(asked.length).toBe(3)
     })
   })
 

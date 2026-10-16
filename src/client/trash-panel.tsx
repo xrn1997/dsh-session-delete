@@ -288,6 +288,14 @@ function groupByProject(entries: readonly TrashEntryLike[], t: Translate): Proje
     .sort((a, b) => b.latest - a.latest)
 }
 
+/**
+ * 「这一次彻底删除会释放多少」：那一格连着**折进来的孩子**一起算——彻底删除按组走（10-15 稿 §11），
+ * 点下去页脚合计掉的就是整组。页脚合计与单条确认卡片共用这一个算式，同一屏不许有两套口径（issue #2）。
+ */
+function releaseBytesOf(entry: TrashEntryLike): number {
+  return entry.sizeBytes + (entry.subagentBytes ?? 0)
+}
+
 export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const [entries, setEntries] = useState<readonly TrashEntryLike[] | null>(null)
   const [listFailure, setListFailure] = useState<string | null>(null)
@@ -572,7 +580,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   }
 
   // 头部合计要把组里孩子的字节算上：孩子不单独列行，只加父那一格就会少报（少报的就是那 74.6 MB 那一类）
-  const totalBytes = (entries ?? []).reduce((sum, entry) => sum + entry.sizeBytes + (entry.subagentBytes ?? 0), 0)
+  const totalBytes = (entries ?? []).reduce((sum, entry) => sum + releaseBytesOf(entry), 0)
   // 分桶在**每次渲染**时按当前时刻算，但本面板**没有计时器**：一条"59分钟"可以挂到下次重读、
   // 交互或失效通告为止（桶最细到分钟，而回收站不是盯着看的界面）。这是取舍，不是"不会停在旧读数"。
   const now = Date.now()
@@ -1054,7 +1062,8 @@ function TrashPurgeConfirm({
             {t('trash.confirm.one.meta', {
               project: projectLabel(pending.entry.projectDir, t),
               at: absoluteText(pending.entry.deletedAt),
-              size: fileSizeText(pending.entry.sizeBytes),
+              // 「我即将失去多少」= 整组，与页脚同一个算式（确认框点下去摘掉的是父加孩子那一组目录）
+              size: fileSizeText(releaseBytesOf(pending.entry)),
             })}
           </div>
         </div>

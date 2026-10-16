@@ -84,7 +84,7 @@ const DETAIL: TrashDetailLike = {
   omittedByPayloadCap: 0,
 }
 
-/** 一个**与实现同形**的 `RemoteResult` 面：五个方法各回一个信封。 */
+/** 一个**与实现同形**的 `RawSessionDeleteRemote`：六个方法各回一个信封。 */
 function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
@@ -92,13 +92,14 @@ function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionD
     restore: async () => ({ ok: true, value: ROW }),
     purge: async () => ({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } }),
     detail: async () => ({ ok: true, value: DETAIL }),
+    subagentCount: async () => ({ ok: true, value: 0 }),
     ...overrides,
   }
 }
 
 /**
  * 取数通道的三种状态。
- * - `up`：五个端点按井号回信封（**探测过**）；
+ * - `up`：六个端点按井号回信封（**探测过**）；
  * - `throwing`：`fetch` 直接 reject（路由不在、宿主没起来）——探测不过；
  * - `not-json`：回的是 SPA 的 index.html（前缀路由没注册时落到兜底处理器）——探测也不过。
  */
@@ -114,6 +115,9 @@ function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { c
     [SESSION_DELETE_API_PREFIX + ROUTES.delete]: async (body) => raw.delete(body['sessionId'] as string),
     [SESSION_DELETE_API_PREFIX + ROUTES.restore]: async (body) => raw.restore(body['entryId'] as string),
     [SESSION_DELETE_API_PREFIX + ROUTES.purge]: async (body) => raw.purge(body['entryId'] as string | undefined),
+    // 两条纯读也要有座位：确认框在打开的那一刻会问一次计数（少注册一条就是"假 fetch 不认这路径"）
+    [SESSION_DELETE_API_PREFIX + ROUTES.detail]: async (body) => raw.detail(body['entryId'] as string),
+    [SESSION_DELETE_API_PREFIX + ROUTES.subagentCount]: async (body) => raw.subagentCount(body['sessionId'] as string),
   }
   globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
     const path = String(input)
@@ -278,7 +282,9 @@ describe('apply 的装配面', () => {
     await waitFor(() => expect(restore).toHaveBeenCalledWith('a'))
 
     const posted = fetchCalls.filter((c) => c.method === 'POST')
+    // 计数排在删除**之前**：那半句「含 N 个子会话」要在点下去之前就摆出来，而那一刻这条会话还不在回收站里
     expect(posted).toEqual([
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.subagentCount}`, method: 'POST', body: { sessionId: 'session-a' } },
       { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.delete}`, method: 'POST', body: { sessionId: 'session-a' } },
       { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.restore}`, method: 'POST', body: { entryId: 'a' } },
     ])

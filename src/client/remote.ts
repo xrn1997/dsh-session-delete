@@ -3,7 +3,8 @@
  * 加上信封判别与注入面那一处「展开成裸值」的适配。
  *
  * 通道形状（裁决）：真相/账本/判据全在宿主那边，Node 半用宿主**自己的 web server** 开一条
- * 插件专属前缀路由把四个动词加一条详情搬出来（`src/api/dispatch.ts`），浏览器半同源调用。**不是重造后端**：
+ * 插件专属前缀路由把四个动词加两条纯读（单条详情、删除前的那次计数）搬出来（`src/api/dispatch.ts`），
+ * 浏览器半同源调用。**不是重造后端**：
  * 路由层只做搬运与信封。为什么不用官方的 `remote.<namespace>`：那条路要**生成的 Typert 远程描述符**
  * 加一次 `$mount`，而盒内装配清单写死在 `dsh-api-remotes` 里、全宿主没有动态发现，第三方只能自挂自，
  * 对一个薄插件不划算。
@@ -25,8 +26,9 @@
  *    所以到了组件面前只剩「裸值 / throw」两支，调用方只写 `if (!outcome.ok)`，正常流里没有 try/catch；
  *    非本信封形状的异常（网络层、TypeError…）也不丢原文（见 `failureOf`）。
  *
- * 面（`list`/`delete`/`restore`/`purge`/`detail`）与 Node 半路由的五个段名一一对应（段名本身的家是
- * `src/shared/wire.ts`）；`list/delete/restore` 回 `TrashEntry`，`purge` 回 `PurgeResult`。
+ * 面（`list`/`delete`/`restore`/`purge`/`detail`/`subagentCount`）与 Node 半路由的六个段名一一对应
+ * （段名本身的家是 `src/shared/wire.ts`）；`list/delete/restore` 回 `TrashEntry`，`purge` 回 `PurgeResult`，
+ * `subagentCount` 回一个数。
  */
 import {
   PARAMS,
@@ -156,6 +158,8 @@ export interface RawSessionDeleteRemote {
   restore(entryId: string): Promise<RemoteResult<TrashEntryLike>>
   purge(entryId?: string): Promise<RemoteResult<PurgeResultLike>>
   detail(entryId: string): Promise<RemoteResult<TrashDetailLike>>
+  /** 这条会话在盘上有几个后代（删除确认框那一句「含 N 个子会话」）。取不到 ⇒ 0。 */
+  subagentCount(sessionId: string): Promise<RemoteResult<number>>
 }
 
 /* ── 通道实现：同源 fetch 我们自己的前缀路由 ─────────────── */
@@ -203,6 +207,8 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
       ),
     detail: (entryId) =>
       requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({ [PARAMS.entryId]: entryId })),
+    subagentCount: (sessionId) =>
+      requestEnvelope<number>(prefix + ROUTES.subagentCount, post({ [PARAMS.sessionId]: sessionId })),
   }
 }
 
@@ -229,6 +235,7 @@ export interface SessionDeleteRemote {
   restore(entryId: string): Promise<TrashEntryLike>
   purge(entryId?: string): Promise<PurgeResultLike>
   detail(entryId: string): Promise<TrashDetailLike>
+  subagentCount(sessionId: string): Promise<number>
 }
 
 /**
@@ -246,8 +253,10 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
     restore: (entryId) => raw.restore(entryId).then((result) => unwrapRemoteResult(result)),
     purge: (entryId) => raw.purge(entryId).then((result) => unwrapRemoteResult(result)),
     detail: (entryId) => raw.detail(entryId).then((result) => unwrapRemoteResult(result)),
+    subagentCount: (sessionId) =>
+      raw.subagentCount(sessionId).then((result) => unwrapRemoteResult(result)),
   }
 }
 
-/** 「删除」确认框的宿主只需要「删除」这一件（撤销提示要的 `restore` 在 `undo-toast.tsx` 自己的 deps 里）。 */
-export type DeleteConfirmDeps = Pick<SessionDeleteRemote, 'delete'>
+/** 「删除」确认框的宿主需要的两件：提交删除的那条动词，与删除前那一次计数（那句「含 N 个子会话」）。 */
+export type DeleteConfirmDeps = Pick<SessionDeleteRemote, 'delete' | 'subagentCount'>

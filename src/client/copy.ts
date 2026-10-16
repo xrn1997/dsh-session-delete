@@ -127,6 +127,7 @@ const ZH = {
   'menu.live': '会话正在运行，先停止再删除',
 
   'dialog.title': '删除这个会话？',
+  'dialog.subagents': '含 {n} 个子会话，将一起移入回收站。',
   'dialog.hint': '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。',
   'dialog.confirm': '移入回收站',
 
@@ -225,6 +226,7 @@ const EN: Record<CopyKey, string> = {
   'menu.live': 'This session is running. Stop it first.',
 
   'dialog.title': 'Delete this session?',
+  'dialog.subagents': 'It also moves {n} subagent sessions to the trash.',
   'dialog.hint':
     'The session moves to the trash and can be restored at any time. Permanent deletion is a separate action in the trash.',
   'dialog.confirm': 'Move to trash',

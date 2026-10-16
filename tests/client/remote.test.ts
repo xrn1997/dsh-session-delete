@@ -104,3 +104,34 @@ describe('createHttpRemote · detail 那一趟（第五个端点）', () => {
     vi.unstubAllGlobals()
   })
 })
+
+// 第六个端点：删除确认框那一句「含 N 个子会话」要的数（issue #3）。那一刻会话还在盘上，
+// 这个数挂不到 `list` 上，只能现问一次；它是纯读，所以探测照样不该带上它。
+describe('createHttpRemote · 删除前的那次计数', () => {
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+
+  it('POST 到 /subagent-count，请求体是 { sessionId }（字段名与 Node 半同源）', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope(3)
+    })
+    await expect(createHttpRemote().subagentCount('session-parent')).resolves.toEqual({ ok: true, value: 3 })
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.subagentCount}`)
+    expect(calls[0]!.init?.method).toBe('POST')
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.sessionId]: 'session-parent' })
+    vi.unstubAllGlobals()
+  })
+
+  it('注入面把信封里的数展成裸值，失败支照旧抛原文', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '宿主读不动' } }),
+        { headers: { 'content-type': 'application/json' } }))
+    await expect(buildDeps(createHttpRemote()).subagentCount('session-a')).rejects.toMatchObject({
+      code: 'sessiondelete/io',
+      message: '宿主读不动',
+    })
+    vi.unstubAllGlobals()
+  })
+})

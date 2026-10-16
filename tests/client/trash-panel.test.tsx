@@ -311,6 +311,19 @@ describe('回收站面板 · 其余行为', () => {
     await waitFor(() => expect(deps.purge).toHaveBeenCalledWith('a'))
   })
 
+  // 彻底删除按组走（10-15 稿 §11）⇒ 点下去页脚合计掉的是「父 + 全部孩子」。确认框那一格说的是
+  // "我即将失去多少"，所以它必须是同一个口径，不能只报父自己那一格（issue #2）。
+  it('单条彻底删除的确认卡片报的是整组要释放的字节（父 + 孩子）', async () => {
+    const group = [{ ...rows[0]!, sizeBytes: 1024, subagentCount: 2, subagentBytes: 512 }]
+    const deps = makeDeps({ list: vi.fn(async () => group) })
+    renderWide(deps)
+    const row = await screen.findByRole('option', { name: /code-review/ })
+    fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
+    const dialog = screen.getByRole('dialog')
+    expect(within(dialog).getByText(/1\.5KB/)).toBeInTheDocument()
+    expect(within(dialog).queryByText(/1\.0KB/)).not.toBeInTheDocument()
+  })
+
   it('清空的确认框里点名不可恢复；取消一个字节都不动', async () => {
     const deps = makeDeps({ purge: vi.fn() })
     render(<TrashPanel deps={deps as never} />)
