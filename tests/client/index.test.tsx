@@ -20,7 +20,7 @@ import { type ComponentType, type ReactElement, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearDeleteRequest } from '../../src/client/delete-confirm.js'
 import { apply, inject } from '../../src/client/index.js'
-import type { RawSessionDeleteRemote, TrashEntryLike } from '../../src/client/remote.js'
+import type { RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { clearUndoNotice } from '../../src/client/undo-toast.js'
 import { ROUTES, SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
 
@@ -65,20 +65,40 @@ const ROW: TrashEntryLike = {
   sizeBytes: 224 * 1024,
 }
 
-/** 一个**与实现同形**的 `RemoteResult` 面：四个方法各回一个信封。 */
+const DETAIL: TrashDetailLike = {
+  entryId: 'a',
+  cwd: 'C:/develop/p',
+  createdAt: 1,
+  lastActivity: 2,
+  logTitle: '/code-review',
+  models: ['m-1'],
+  turnCount: 1,
+  userMessageCount: 1,
+  assistantMessageCount: 1,
+  toolCallCount: 3,
+  injectedCount: 7,
+  messages: [
+    { role: 'user', time: 1, text: '先看改动', truncated: false },
+    { role: 'assistant', time: 2, text: '改动分四层', truncated: false },
+  ],
+  omittedByPayloadCap: 0,
+}
+
+/** 一个**与实现同形**的 `RemoteResult` 面：五个方法各回一个信封。 */
 function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
     delete: async () => ({ ok: true, value: ROW }),
     restore: async () => ({ ok: true, value: ROW }),
     purge: async () => ({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } }),
+    detail: async () => ({ ok: true, value: DETAIL }),
     ...overrides,
   }
 }
 
 /**
  * 取数通道的三种状态。
- * - `up`：四个端点按井号回信封（**探测过**）；
+ * - `up`：五个端点按井号回信封（**探测过**）；
  * - `throwing`：`fetch` 直接 reject（路由不在、宿主没起来）——探测不过；
  * - `not-json`：回的是 SPA 的 index.html（前缀路由没注册时落到兜底处理器）——探测也不过。
  */
@@ -242,7 +262,7 @@ describe('apply 的装配面', () => {
     expect(registered[3]?.order).toBe(900)
   })
 
-  it('探测只发一次 GET /list；后续四个端点走各自的段名（请求体是字段名，不是位置参数）', async () => {
+  it('探测只发一次 GET /list；动作各走自己那条 POST 段名（请求体是字段名，不是位置参数）', async () => {
     const del = vi.fn(async () => ({ ok: true, value: ROW }) as const)
     const restore = vi.fn(async () => ({ ok: true, value: ROW }) as const)
     const purge = vi.fn(async () => ({ ok: true, value: { removed: 1, freedBytes: 1 } }) as const)

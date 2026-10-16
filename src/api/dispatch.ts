@@ -27,6 +27,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
+import { readTrashDetail } from '../trash/detail.js'
 import { deleteSession, type DeleteDeps } from '../verbs/delete-session.js'
 import { purgeTrash } from '../verbs/purge-trash.js'
 import { restoreSession } from '../verbs/restore-session.js'
@@ -168,6 +169,12 @@ async function dispatch(method: string, rest: string, req: IncomingMessage, deps
   if (rest === ROUTES.purge) {
     requireMethod(method, 'POST', ROUTES.purge)
     return await purgeTrash(deps)(optionalString(await readJsonBody(req), PARAMS.entryId))
+  }
+  if (rest === ROUTES.detail) {
+    requireMethod(method, 'POST', ROUTES.detail)
+    // 读单条详情也走 POST：`requireString`、同源栅栏、错误映射这一整套都挂在 POST 支上，
+    // 改成 GET query 只是把同一道栅栏再写一遍（裁决见 2026-10-15 设计稿 §3）
+    return await readTrashDetail(deps)(requireString(await readJsonBody(req), PARAMS.entryId))
   }
   throw new Error(`未知路由：${method} ${rest === '' ? SESSION_DELETE_API_PREFIX : rest}`)
 }

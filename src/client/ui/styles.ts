@@ -20,6 +20,7 @@
  * 记一个本地标志位（见 `Tooltip.tsx`）。
  */
 import css from './ui.css'
+import markdownCss from './markdown.css'
 
 /** 认领标记：既是宿主 HMR 的归档线索，也是「已经装过」的幂等判据。 */
 const STYLE_MARKER = 'dsh-session-delete'
@@ -31,7 +32,10 @@ function install(): void {
   if (head.querySelector(`style[data-dsh-session-delete="${STYLE_MARKER}"]`) !== null) return
   const element = document.createElement('style')
   element.setAttribute('data-dsh-session-delete', STYLE_MARKER)
-  element.textContent = css
+  // `markdown.css` 与控件那份**分开写、一起装**：前者是我们给会话正文排的字阶（吃宿主 markdown
+  // token），后者是照官方明文逐字抄的那份表（核对口径见设计稿 §8 门 4：按文件头那张来源表逐属性
+  // 零差异，条数不钉在这里）——两份的来源与核对方式不同，装运可以同一趟。
+  element.textContent = `${css}\n${markdownCss}`
   head.appendChild(element)
 }
 

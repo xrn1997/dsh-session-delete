@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、四个端点段、请求字段名**——
+ * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、五个端点段、请求字段名**——
  * Node 半（`src/api/dispatch.ts` 注册并分发）与浏览器半（`src/client/remote.ts` 同源 fetch）
  * 之间唯一的那份真相。两侧都 import 它，不各写一份字面量。
  *
@@ -24,12 +24,14 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 四个端点的段名（相对前缀；`GET list` 读、其余三个 `POST` 写）。 */
+/** 五个端点的段名（相对前缀；`GET list` 读清单，其余四个 `POST` 按 id 取数或写）。 */
 export const ROUTES = {
   list: '/list',
   delete: '/delete',
   restore: '/restore',
   purge: '/purge',
+  /** 单条详情（读回收站目录里那条会话自己的日志）。用 POST 表达一个读：见设计稿 2026-10-15 §3。 */
+  detail: '/detail',
 } as const
 
 /** 请求体字段名：浏览器半发、Node 半读，同名同义（`purge` 的 `entryId` 缺席 = 清空）。 */

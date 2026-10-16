@@ -3,7 +3,10 @@
  *
  * 出处：逐条抄自 `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2` 随包发布的明文 CSS
  * （`lib/Button.module.css`、`Tag.module.css`、`Modal.module.css`、`Tooltip.module.css`、
- * `Toast.module.css`、`Menu.module.css`）。这是官方给第三方 UI 插件的处方：
+ * `Toast.module.css`、`Menu.module.css`；2026-10-15 又加两张：`lib/Checkbox.module.css`、
+ * `lib/DisclosureRow.module.css`，以及 `dsh-client-ui-conversation` 里的
+ * `ConversationRoot.module.css` 的 `.widthHandle` 那一族——宿主自己那根可拖的宽度把手）。
+ * 这是官方给第三方 UI 插件的处方：
  * 「copy markup, CSS, and behavior from the primitive into the plugin … Rename copied classes under
  * your plugin's prefix, keep only `--dsw-alias-*` token references」（宿主技能
  * `cordis-plugin-development/references/practices.md` 原文）。理由是那个包**随宿主换代而变、且不经类型检查**，
@@ -17,8 +20,16 @@
  *
  * 只收本插件真正用到的部分：Button 的 `primary`/`ghost`/`outline` 三档与 `md`/`sm` 两号
  * （没有 `toolbar` 变体、没有 `lg`）、Tag 的 `danger` 一档、Modal 的全部骨架、Tooltip 的三个方位、
- * Toast 全部、Menu 行的全部（含 danger 态与 separator）。**没抄进来的就是本插件不用的**，
+ * Toast 全部、Menu 行的全部（含 danger 态与 separator）、Checkbox 的全部、DisclosureRow 的
+ * 折叠头那一半（没有 `data-state` 那档状态点）、宽度把手的视觉与光标。**没抄进来的就是本插件不用的**，
  * 不预先铺开——宿主那套里还有几十个变体与控件，抄全了等于把它的表面积整个搬进来。
+ *
+ * **两处不是抄本**：① `.sd-resizing`（拖动期间挂在面板根上、关掉文字选中）——宿主那份没有对应的类，
+ * 它的把手由 JS 侧的 pointer capture 承担；② `[data-dsh-session-delete="trash-row"]:focus-visible`
+ * （清单那一行的键盘焦点描边，复用选中态那枚 `ghost-active-border`）——宿主那套表里行不是可聚焦
+ * div，我们这一行是 `role="option"` 且要吃 ↑↓，而这一代 `--dsw-focus-ring-color` 是 `transparent`。
+ * 整张表里就这两条是我们自造的，标在这里，
+ * 下次做「与官方逐条比对」时它属于**已知差异**，不是漂移。
  */
 
 /* ────────────────────────── Button ────────────────────────── */
@@ -459,4 +470,173 @@
   height: 0.5px;
   margin: 3px 2px;
   background: var(--dsw-alias-border-l2);
+}
+
+/* ────────────────────────── Checkbox ────────────────────────── */
+/* 抄 `lib/Checkbox.module.css` 全部四条声明，逐字。勾选框本体是**原生 input** + `accent-color`，
+   不是自绘的圆框——回收站多选态用它（清单行左侧那一格）。 */
+
+.sd-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.sd-checkbox input {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--dsw-alias-brand-primary);
+  cursor: inherit;
+}
+
+.sd-checkbox input:focus-visible {
+  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline-offset: 2px;
+}
+
+.sd-checkbox:has(input:disabled) {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* ────────────────────────── DisclosureRow（分组折叠头） ────────────────────────── */
+/* 抄 `lib/DisclosureRow.module.css` 的 `.root`/`.row`/`.leading`/`.title` 与那两枚 glyph 的
+   显隐。没抄进来的是 `StateDot`（`svg[data-state]`）那一档——它说"这是状态标记不是文字装饰"，
+   我们的组头没有状态点。行高与 leading 盒走 `--dsh-content-font-delta` 那根轴，
+   标题字号走 secondary 档：宿主的"设置里调正文字号"会一起推着它走。 */
+
+.sd-disclosure {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+.sd-disclosure-row {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  height: calc(24px + var(--dsh-content-font-delta, 0px));
+  min-width: 0;
+  color: var(--dsw-alias-label-tertiary);
+  transition: color 100ms ease;
+}
+
+.sd-disclosure-row[data-expandable] {
+  cursor: pointer;
+}
+
+.sd-disclosure-row:hover {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sd-disclosure-leading {
+  position: relative;
+  flex: none;
+  width: calc(16px + var(--dsh-content-font-delta, 0px));
+  height: calc(16px + var(--dsh-content-font-delta, 0px));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+.sd-disclosure-leading svg:not([data-state]) {
+  width: calc(14px + var(--dsh-content-font-delta, 0px));
+  height: calc(14px + var(--dsh-content-font-delta, 0px));
+}
+
+button.sd-disclosure-leading {
+  cursor: pointer;
+}
+
+.sd-disclosure-title {
+  flex: none;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-disclosure-row {
+    transition: none;
+  }
+}
+
+/* ────────────────────────── 宽度把手（可拖的分栏线） ────────────────────────── */
+/* 抄 `ConversationRoot.module.css` 的 `.widthHandle` 一族：10px 的命中区、`col-resize` 光标、
+   平时不画、悬停或拖动时才浮出一条 2px 的 `--dsw-alias-scrollbar-bg-l1` 短标（那条渐变里
+   `--dsh-width-handle-pointer-y` 的兜底是 50%，宿主靠 JS 跟着指针走；我们不跟，
+   停在中间——少一条 pointermove 上的写字，视觉上是同一族东西）。
+   与宿主的差别只有位置：它绝对定位在会话栏两侧，我们这根住在两栏之间的那一格 flex 位里，
+   所以 `top/bottom/position` 那三样交给内联布局，这里只留视觉与光标。 */
+
+.sd-width-handle {
+  position: relative;
+  z-index: 0;
+  cursor: col-resize;
+  align-self: stretch;
+  flex: 0 0 10px;
+  width: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+}
+
+.sd-width-handle::after {
+  content: "";
+  background: linear-gradient(
+    to bottom,
+    transparent calc(var(--dsh-width-handle-pointer-y, 50%) - 36px),
+    var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y, 50%) - 8px),
+    var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y, 50%) + 8px),
+    transparent calc(var(--dsh-width-handle-pointer-y, 50%) + 36px)
+  );
+  opacity: 0;
+  pointer-events: none;
+  border-radius: 2px;
+  width: 2px;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+}
+
+.sd-width-handle:hover::after,
+.sd-width-handle[data-dragging]::after {
+  opacity: 1;
+}
+
+.sd-width-handle:focus-visible {
+  outline: none;
+}
+
+.sd-width-handle:focus-visible::after {
+  opacity: 1;
+}
+
+/* 本插件自造的第一条（不是抄本，见文件头点名）：拖动期间整块面板别把文字选上了。 */
+.sd-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+/* 本插件自造的第二条（不是抄本，见文件头点名）：清单行是 `role="option"` 的可聚焦 div，而这一代
+   `--dsw-focus-ring-color` 逐字是 `transparent`（设计稿 2026-10-15 §1.3）——不自己描一条，键盘走
+   ↑↓ 选会话时就没有任何焦点可见性。描边**复用选中态那枚** `ghost-active-border`，不新造颜色；
+   0.5px 与 `outline-offset: 1px` 是行的描边宽度与一档外移，不动布局（outline 不进滚动区）。 */
+[data-dsh-session-delete="trash-row"]:focus-visible {
+  outline: 0.5px solid var(--dsw-alias-button-ghost-active-border);
+  outline-offset: 1px;
 }

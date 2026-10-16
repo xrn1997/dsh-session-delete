@@ -1,0 +1,81 @@
+/**
+ * 会话日志（`session.vN.jsonl.zstd`）的**逐帧读法**：帧边界交给 `zstd-frames.ts`，这一层只做
+ * 「帧 → 明文 → 一行一条 JSON」的解码，并把每条记录原样交给回调。
+ *
+ * **策略不在这里**（哪些 `type` 算正文、截断到多少字、算不算失败）——那是 `src/trash/detail.ts` 的事。
+ * 这一层只懂编解码，所以它能被单独验穿。
+ *
+ * 两条实测决定的口径：
+ * ① **必须逐帧**：Node 的 `zstdDecompressSync` 与 `createZstdDecompress()` 都只给第一帧（见
+ *    `zstd-frames.ts` 头注）；明文留在手里会一次装下整条日志（本机 125 条合计 280.7 MB），
+ *    所以**一帧一帧解、解完就撒手**，内存口径是"最大那一帧的明文"（实测 8.99 MB）而不是整条。
+ * ② **一行的余量跨帧带走**（2026-10-16 改，原来靠"跳过解不开的行"兜）：写作侧是一条条 append，
+ *    实测本机 686 个 `.jsonl.zstd` / 92 421 帧**没有一帧切在行中间**（连最后一帧都整行收尾），
+ *    所以旧口径当时并不丢东西；但"逐帧 `split('\n')`"一旦遇上切行就是**静默少一条记录**（半个头
+ *    加半个身，两半都解不开 JSON），而少掉的那条正是页面上要跟账的正文。带上余量之后这条不变量
+ *    不必再成立，顺带把**跨帧的多字节字符**也解对了——拼接在字节层做，`toString('utf8')` 只看整行。
+ *    真被切断的尾巴（写一半）仍然**跳过并计数**：绝不因为一行就抛整个读数，前面几百条是真的。
+ */
+import zlib from 'node:zlib'
+import { frameRanges } from './zstd-frames.js'
+
+/** 一行 JSONL 的最小面：`type` / `time` 之外都留在 `data`（或记录根）上，由调用方按 `type` 自己判。 */
+export interface SessionRecord {
+  type?: string
+  time?: number
+  /** `session` 那一行把这两个成员挂在**记录根**上（实测逐字），所以这里镜像出来。 */
+  createdAt?: number
+  cwd?: string
+  data?: unknown
+}
+
+export interface SessionLogStats {
+  frames: number
+  records: number
+  /** 解不开 JSON 的行数（多半就是被切的那半行）。 */
+  unparsedLines: number
+  /** 整条日志最后一个换行之后的字节数（>0 说明尾巴被切了一刀）。 */
+  truncatedTailBytes: number
+}
+
+const NEWLINE = 0x0a
+
+export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) => void): SessionLogStats {
+  const stats: SessionLogStats = { frames: 0, records: 0, unparsedLines: 0, truncatedTailBytes: 0 }
+  const feed = (line: string): void => {
+    if (line === '') return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      stats.unparsedLines += 1
+      return
+    }
+    stats.records += 1
+    onRecord(parsed !== null && typeof parsed === 'object' ? (parsed as SessionRecord) : {})
+  }
+
+  /** 上一帧没闭合的那一行。**存字节不存字符**：切在多字节字符中间的帧要拼回完整才解得对。 */
+  let carry: Buffer = Buffer.alloc(0)
+  for (const { start, end } of frameRanges(raw)) {
+    stats.frames += 1
+    let plain: Buffer
+    try {
+      plain = zlib.zstdDecompressSync(raw.subarray(start, end))
+    } catch (error) {
+      throw new Error(`回收站日志第 ${stats.frames} 帧解压失败：${String(error)}`)
+    }
+    const merged = carry.length === 0 ? plain : Buffer.concat([carry, plain])
+    const cut = merged.lastIndexOf(NEWLINE)
+    if (cut === -1) {
+      carry = merged
+      continue
+    }
+    carry = merged.subarray(cut + 1)
+    for (const line of merged.subarray(0, cut).toString('utf8').split('\n')) feed(line)
+  }
+
+  stats.truncatedTailBytes = carry.length
+  if (carry.length > 0) feed(carry.toString('utf8'))
+  return stats
+}

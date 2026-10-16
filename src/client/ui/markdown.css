@@ -1,0 +1,241 @@
+/**
+ * 回收站详情里**会话正文**的排版（2026-10-15 真机反馈后新增）。
+ *
+ * 为什么单独一个文件而不并进 `ui.css`：`ui.css` 是"照官方 primitives 逐字抄来的那一份表"，
+ * 那条 fidelity 核对（§8 门 4）要的是它与官方明文**逐属性零差异**，只许文件头点名的几类例外
+ * （类名前缀、`@keyframes` 改名，外加它点名的两处自造）；条数不钉在这里，钉了就会漂成假基线。这一份抄的是
+ * **另一个来源**（宿主 markdown 那一张表），混进去就把那份核对弄脏了。
+ *
+ * **来源（逐字抄，只改选择器与下面点名的三处）**：
+ * `app.asar` 里 `@deepseek-ai/dsh-client-ui-primitives/lib/markdown/MarkdownText.module.css`
+ * （`.markdown` 那一支；`.compact` 一支我们不用）+ `lib/markdown/CodeBlock.module.css` 的 `pre`。
+ * token 名一个没换：`--dsw-font-markdown-*` / `--dsw-alias-markdown-*` / `--dsh-content-font-*`
+ * 全是宿主会话区自己吃的那组，所以宿主调内容字号时，这里跟着一起动。
+ *
+ * 三处**有意**的差异，每条都是因为我们的 DOM 长不出宿主那个节点：
+ * ① 宿主给表包一层 `.tableScroll`（div）再横向滚动；react-markdown 不产这层 ⇒ 滚动挂在 `table`
+ *    自己身上（`display:block` + 匿名表盒）。这条得真机量过才算成立。
+ * ② 宿主的代码卡有 banner 行（语言名 + 复制），四个圆角被拆成"上圆角在 banner、下圆角在 pre"；
+ *    我们没有 banner ⇒ 圆角整块给 `pre`。
+ * ③ 宿主的链接可点（点开外链/文件），我们不碰宿主导航，链接渲成不可点的文本 ⇒ 保留链接色与字重，
+ *    **去掉** hover 的下划线（那是"点我"的邀请）。
+ *
+ * 抄过来但用不上的选择器已删：`.fileLink` / `.fileMention` / `.linkIcon` / `.image` / `.imageAlt`
+ * （图片渲成 `[图片 · alt]`）/ `.katex-display` / `:global(.md-code-block)` / `.shiki`（高亮由宿主
+ * 的 highlighter 提供，我们没有）。
+ */
+.sd-md {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font: var(--dsw-font-markdown-base);
+  color: var(--dsw-alias-label-primary);
+}
+
+.sd-md strong {
+  font-weight: 600;
+}
+
+.sd-md h1 {
+  font: var(--dsw-font-markdown-h1);
+  margin: 32px 0 16px;
+}
+
+.sd-md h2 {
+  font: var(--dsw-font-markdown-h2);
+  margin: 32px 0 16px;
+}
+
+.sd-md h3 {
+  font: var(--dsw-font-markdown-h3);
+  margin: 32px 0 16px;
+}
+
+.sd-md h4 {
+  font: var(--dsw-font-markdown-h4);
+  margin: 16px 0;
+}
+
+.sd-md :where(h5, h6) {
+  font: var(--dsw-font-markdown-base-strong);
+  margin: 16px 0;
+}
+
+.sd-md :where(h1, h2, h3, h4, h5, h6) strong {
+  font-weight: inherit;
+}
+
+.sd-md p {
+  margin: 16px 0;
+}
+
+/* Tighten h4–h6 against a following list (design: 8px gap). */
+.sd-md :where(h4, h5, h6) + :where(ul, ol) {
+  margin-top: 8px;
+}
+
+.sd-md :where(h4, h5, h6):has(+ :where(ul, ol)) {
+  margin-bottom: 8px;
+}
+
+/* 见文件头差异③：颜色与字重照抄，hover 的 dotted 下划线不抄——这里没有可点的东西。 */
+.sd-md-link {
+  color: var(--dsw-alias-link);
+  font-weight: 500;
+}
+
+.sd-md :where(ul, ol) {
+  margin: 16px 0;
+  padding-left: 18px;
+}
+
+.sd-md li:not(:first-child) {
+  margin-top: 6px;
+}
+
+.sd-md li > :where(ul, ol) {
+  margin-top: 4px;
+}
+
+.sd-md li::marker {
+  line-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* Nested ol under ul/ol: markers inside (models sometimes emit this shape). */
+.sd-md :where(ul, ol) ol {
+  list-style-position: inside;
+  padding-left: 0;
+}
+
+.sd-md :where(ul, ol) ol li p {
+  display: inline;
+}
+
+.sd-md li > p {
+  margin: 8px 0;
+}
+
+.sd-md li > *:first-child {
+  margin-top: 0;
+}
+
+.sd-md li > *:last-child {
+  margin-bottom: 0;
+}
+
+.sd-md hr {
+  display: block;
+  border: none;
+  height: 0.5px;
+  margin: 32px 0;
+  background: var(--dsw-alias-border-l2);
+}
+
+.sd-md blockquote {
+  border-left: 2px solid var(--dsw-alias-label-caption);
+  margin: 16px 0 0;
+  padding-left: 14px;
+}
+
+/* 代码卡：宿主的卡片由 `.block`（底色+圆角）与其内 `pre`（字号+内边距）两层拼成。
+   我们只有 `pre` 这一层，所以两层的声明合成在这里——见文件头差异②。 */
+.sd-md pre {
+  font: var(--dsw-font-markdown-code-block);
+  margin: 16px 0;
+  padding: 16px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-markdown-code-block);
+  border-radius: var(--dsw-radius-lg);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.sd-md pre code {
+  font: inherit;
+  background: none;
+  padding: 0;
+}
+
+.sd-md :not(pre) > code {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  font: var(--dsw-font-markdown-code);
+  font-family: var(--ds-font-family-code);
+  font-size: 0.875em !important;
+  background-color: var(--dsw-alias-markdown-inline-code);
+  border: 0.5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--dsw-radius-sm);
+  padding: 0 5px;
+}
+
+.sd-md :where(h1, h2, h3, h4, h5, h6) code {
+  font: inherit;
+  font-family: var(--ds-font-family-code);
+}
+
+.sd-md input[type='checkbox'] {
+  margin: 0 8px 0 0;
+  accent-color: var(--dsw-alias-label-secondary);
+}
+
+/* 见文件头差异①：宿主是 `.tableScroll > table`，我们没有那层 div。 */
+.sd-md table {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  border-collapse: collapse;
+  width: max-content;
+}
+
+.sd-md th {
+  text-align: start;
+  padding: 10px 16px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  border-top: none;
+  font: var(--dsw-font-markdown-table-head);
+  max-width: 320px;
+  max-width: min(30vw, 320px);
+  min-width: 100px;
+}
+
+.sd-md td {
+  padding: 10px 16px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  font: var(--dsw-font-markdown-table);
+  max-width: 320px;
+  max-width: min(30vw, 320px);
+  min-width: 100px;
+}
+
+.sd-md th:first-child,
+.sd-md td:first-child {
+  padding-left: 0;
+}
+
+.sd-md td:last-child {
+  padding-right: 0;
+}
+
+.sd-md table code {
+  font-size: 11px;
+}
+
+.sd-md > *:first-child,
+.sd-md p:first-child {
+  margin-top: 0 !important;
+}
+
+.sd-md > *:last-child,
+.sd-md p:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* 图片在回收站里读不到（路径属于会话当时的 cwd），渲成一句说明，字色用宿主的 tertiary。 */
+.sd-md-image {
+  color: var(--dsw-alias-label-tertiary);
+  font-style: italic;
+}

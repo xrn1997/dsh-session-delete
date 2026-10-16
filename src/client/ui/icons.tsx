@@ -1,14 +1,15 @@
 /**
- * 本插件 UI 层要用的六个图标（**逐条抄自** `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2`
+ * 本插件 UI 层要用的八个图标（**逐条抄自** `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2`
  * 随包发布的明文产物 `lib/index.js`；出处与改写规则见 `ui.css` 头注）。
  *
  * 只留本插件用到的：垃圾桶（删除动作 / 回收站）、警示（失败面）、刷新、打开的项目文件夹、
- * 关闭叉（对话框）、圆圈对勾（撤销提示的 success 档）。**几何、`viewBox`、`strokeWidth` 逐字不动**
- * ——它们是官方图标集的形状，改了就不再与宿主同屏同形。
+ * 关闭叉（对话框）、圆圈对勾（撤销提示的 success 档）、下折与右折 chevron（清单的分组折叠头，
+ * 2026-10-15 加：`DisclosureRow` 那套折叠行的两态 glyph）。
+ * **几何、`viewBox`、`strokeWidth` 逐字不动**——它们是官方图标集的形状，改了就不再与宿主同屏同形。
  *
  * 两条与官方实现的差异（都是减法，不是改写）：
  * - 只暴露 `size`（官方是 `{size, className, strokeWidth}` 三件套 + `Medium` 1.3px 那一档）：
- *   本插件六处调用只传 `size`，加别的等于摊开官方整个图标 API。
+ *   本插件调用处只传 `size`，加别的等于摊开官方整个图标 API。
  * - 不做 `ICON_REGULAR_STROKE` / `ICON_MEDIUM_STROKE` 常量：只有一个档位，直接写 1。
  */
 import type { ReactElement, ReactNode } from 'react'
@@ -113,6 +114,30 @@ export function IconCheckCircleOutlineRegular({ size }: IconProps): ReactElement
       <path
         d="M14.5996 8C14.5996 4.35492 11.6451 1.40039 8 1.40039C4.35492 1.40039 1.40039 4.35492 1.40039 8C1.40039 11.6451 4.35492 14.5996 8 14.5996C11.6451 14.5996 14.5996 11.6451 14.5996 8ZM15.9004 8C15.9004 12.363 12.363 15.9004 8 15.9004C3.63695 15.9004 0.0996094 12.363 0.0996094 8C0.0996094 3.63695 3.63695 0.0996094 8 0.0996094C12.363 0.0996094 15.9004 3.63695 15.9004 8Z"
         fill="currentColor"
+      />
+    </IconFrame>
+  )
+}
+
+/** 分组头「展开中」那一枚（官方 `IconChevronDownOutlineRegular`，`viewBox`/`d` 逐字）。 */
+export function IconChevronDownOutlineRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M4 6L7.29289 9.29289C7.68342 9.68342 8.31658 9.68342 8.70711 9.29289L12 6"
+        stroke="currentColor"
+      />
+    </IconFrame>
+  )
+}
+
+/** 分组头「已折叠」那一枚（官方 `IconChevronRightOutlineRegular`）。 */
+export function IconChevronRightOutlineRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M6 12L9.29289 8.70711C9.68342 8.31658 9.68342 7.68342 9.29289 7.29289L6 4"
+        stroke="currentColor"
       />
     </IconFrame>
   )

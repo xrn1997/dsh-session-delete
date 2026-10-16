@@ -39,4 +39,16 @@ describe('文件层端口', () => {
     await fs.ensureDir(p)
     expect(await fs.exists(p)).toBe(true)
   })
+
+  it('listFiles 只列名字（不递归）、readFile 把字节原样交回——回收站详情要的那两样', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshdel-'))
+    const fs = createFsPort()
+    await fs.ensureDir(join(root, 'session-trash', 'e1'))
+    await writeFile(join(root, 'session-trash', 'e1', 'session.v4.jsonl.zstd'), 'bytes')
+    await mkdir(join(root, 'session-trash', 'e1', 'nested'))
+    // 目录里的顺序不保证（readdir 依文件系统给），所以只断言"就是这两项、不多不少、不递归"
+    expect((await fs.listFiles(join(root, 'session-trash', 'e1'))).sort()).toEqual(['nested', 'session.v4.jsonl.zstd'])
+    const raw = await fs.readFile(join(root, 'session-trash', 'e1', 'session.v4.jsonl.zstd'))
+    expect(Buffer.isBuffer(raw) && raw.toString()).toBe('bytes')
+  })
 })

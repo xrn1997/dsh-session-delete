@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { builtinModules } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,6 +58,32 @@ const cssTextPlugin = {
 }
 
 const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map((id) => `node:${id}`)])
+
+/**
+ * `vfile`（`unified` → `remark-parse` → `react-markdown` 的传递依赖）用 package.json 的 `imports`
+ * 把三个内部请求分流成 Node/浏览器两套实现：
+ *
+ * ```json
+ * "#minpath": { "node": "./lib/minpath.js", "default": "./lib/minpath.browser.js" }
+ * ```
+ *
+ * **实测（2026-10-15）**：浏览器半是 CJS 输出，rolldown 解析这张图时按 Node 条件走，`node` 那一支赢了
+ * ——于是 `lib/minpath.js` 里那句 `export {…} from 'node:path'` 撞上纯度门（门先响了，见
+ * `gateClientImport`）。把 `'require'` 从 `conditionNames` 里摘掉试过，**不改变结果**：条件是解析器
+ * 自己加的，我们这一层摘不掉。所以在这里把这三个请求接到浏览器那一支——那本来就是包作者给浏览器的
+ * 实现（`minproc.browser.js` 就是 `cwd() → '/'`），不是我们替它编一个。
+ *
+ * 判据收得很窄：只认这三个 `#` 请求，且**必须**能在 importer 同级目录找到 `<名字>.browser.js`。
+ * vfile 换代若改了键名或文件名，这里返回 `null` ⇒ 走默认解析 ⇒ 纯度门重新响，不会静默带出 Node 依赖。
+ */
+const BROWSER_SPLIT_IMPORTS = ['#minpath', '#minproc', '#minurl']
+
+export function resolveBrowserBranchImport(source: string, importer: string | undefined): string | null {
+  if (!BROWSER_SPLIT_IMPORTS.includes(source) || importer === undefined) return null
+  const path = importer.startsWith('file:') ? fileURLToPath(importer) : importer
+  const target = resolve(dirname(path), `${source.slice(1)}.browser.js`)
+  return existsSync(target) ? target : null
+}
 
 const NODE_ENV = process.env.NODE_ENV ?? 'production'
 
@@ -134,6 +160,10 @@ export default defineConfig([
     },
     plugins: [
       cssTextPlugin,
+      {
+        name: 'dsh-session-delete-vfile-browser',
+        resolveId: resolveBrowserBranchImport,
+      },
       {
         name: 'dsh-session-delete-client-purity',
         resolveId: gateClientImport,

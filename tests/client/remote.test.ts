@@ -6,9 +6,15 @@
 //
 // 信封形状（`RemoteResult`）、失败形状（`RemoteFailure`）与标记位判别（`isDSHRemoteError`）的家是
 // 两半共用的 `src/shared/wire.js`；这里验的是**浏览器半对它们的使用**：判别、原文兜底、注入面展开。
-import { describe, expect, it } from 'vitest'
-import { isDSHRemoteError, type RemoteFailure } from '../../src/shared/wire.js'
-import { failureOf, unwrapRemoteResult } from '../../src/client/remote.js'
+import { describe, expect, it, vi } from 'vitest'
+import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, isDSHRemoteError, type RemoteFailure } from '../../src/shared/wire.js'
+import {
+  buildDeps,
+  createHttpRemote,
+  failureOf,
+  probeChannel,
+  unwrapRemoteResult,
+} from '../../src/client/remote.js'
 
 const FAILURE: RemoteFailure = { code: 'sessiondelete/live', message: '会话正在运行' }
 
@@ -55,5 +61,46 @@ describe('注入面的展开', () => {
     // 展开后抛出来的东西仍是「远程失败」——下游 `failureOf` 靠标记位而不是鸭子类型认出它。
     expect(isDSHRemoteError(thrown)).toBe(true)
     expect(failureOf(thrown)).toEqual(FAILURE)
+  })
+})
+
+describe('createHttpRemote · detail 那一趟（第五个端点）', () => {
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+
+  it('POST 到 /detail，请求体是 { entryId }（字段名与 Node 半同源）', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope({ entryId: 'e1', messages: [] })
+    })
+    await expect(createHttpRemote().detail('e1')).resolves.toMatchObject({ ok: true })
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.detail}`)
+    expect(calls[0]!.init?.method).toBe('POST')
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.entryId]: 'e1' })
+    vi.unstubAllGlobals()
+  })
+
+  it('注入面把失败支展成 throw，码与原文都不丢（详情读失败要能原样上屏）', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '读会话日志失败：第 2 帧解压失败' } }),
+        { headers: { 'content-type': 'application/json' } }))
+    const deps = buildDeps(createHttpRemote())
+    await expect(deps.detail('e1')).rejects.toMatchObject({
+      code: 'sessiondelete/io',
+      message: '读会话日志失败：第 2 帧解压失败',
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it('探测仍然只探 /list：通道在不在不由 detail 决定', async () => {
+    const paths: string[] = []
+    vi.stubGlobal('fetch', async (path: string) => {
+      paths.push(path)
+      return envelope([])
+    })
+    await expect(probeChannel(createHttpRemote())).resolves.toBe(true)
+    expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.list}`])
+    vi.unstubAllGlobals()
   })
 })

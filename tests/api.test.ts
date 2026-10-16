@@ -4,15 +4,16 @@
 // 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 四个端点各自的方法 + 路径；② 信封就是浏览器半消费的那个形状
+//  ① 五个端点各自的方法 + 路径（四个动词 + 单条详情）；② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
 //  ⑤ 取数通道的**同源栅栏**：跨源请求拒掉，且拒之前一个副作用都不发生。
 import http from 'node:http'
+import zlib from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiHandler } from '../src/api/dispatch.js'
-import { SESSION_DELETE_API_PREFIX, ROUTES } from '../src/shared/wire.js'
+import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../src/shared/wire.js'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
 import type { DeleteDeps } from '../src/verbs/delete-session.js'
@@ -30,7 +31,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 })
 
 /**
- * 四个端点的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
+ * 五个端点的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
  * 替身暴露出来（`fakes`）是为了让每条用例能只翻自己那一格，而不必重建整副依赖。
  */
 function makeDeps(over: { seed?: TrashEntry[]; live?: boolean } = {}) {
@@ -41,6 +42,9 @@ function makeDeps(over: { seed?: TrashEntry[]; live?: boolean } = {}) {
     ensureDir: vi.fn(async (_path: string) => {}),
     rename: vi.fn(async (_from: string, _to: string) => {}),
     removeDir: vi.fn(async (_path: string) => {}),
+    listFiles: vi.fn(async (_path: string) => ['session.v4.jsonl.zstd']),
+    readFile: vi.fn(async (_path: string) =>
+      zlib.zstdCompressSync(Buffer.from(`${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n`, 'utf8'))),
   }
   const host = {
     isLive: vi.fn(async (_sessionId: string) => over.live ?? false),
@@ -123,7 +127,7 @@ function rawCall(
   })
 }
 
-describe('路由层 · 四个端点', () => {
+describe('路由层 · 四个动词端点', () => {
   it('GET /list 回信封 {ok:true,value}，值就是清单（最近删除在前）', async () => {
     const { deps } = makeDeps({ seed: [entry('a', { deletedAt: 100 }), entry('b', { deletedAt: 200 })] })
     const base = await start(deps)
@@ -311,5 +315,69 @@ describe('路由层 · 同源栅栏', () => {
     const res = await rawCall(base, ROUTES.delete, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
     expect(res.status).toBe(403)
     expect(await manifest.list()).toEqual([])
+  })
+})
+
+describe('POST /detail（回收站单条详情，2026-10-15）', () => {
+  const seed = [entry('session-a', { title: '有标题', sizeBytes: 4096 })]
+  const json = { 'content-type': 'application/json' }
+
+  it('清册里有这一条 ⇒ 成功信封，值就是 detail 的形状（不回灌清册字段）', async () => {
+    const { deps } = makeDeps({ seed })
+    const base = await start(deps)
+    const { status, body: envelope } = await call(base, ROUTES.detail, {
+      method: 'POST',
+      body: { [PARAMS.entryId]: entryIdOf('session-a') },
+    })
+    expect(status).toBe(200)
+    expect(envelope.ok).toBe(true)
+    expect(envelope.value as Record<string, unknown>).toMatchObject({
+      entryId: entryIdOf('session-a'), cwd: 'C:/p', createdAt: 1, messages: [],
+    })
+    // 清册已有的字段不上线：清单里的大小与详情里的大小必须是同一个数
+    expect(Object.keys(envelope.value as object)).not.toContain('sizeBytes')
+    expect(Object.keys(envelope.value as object)).not.toContain('deletedAt')
+  })
+
+  it('entryId 不在清册 ⇒ trash-empty，且一次文件读都不做', async () => {
+    const { deps, fs } = makeDeps({ seed })
+    const base = await start(deps)
+    const { status, code } = await failureOf(base, ROUTES.detail, { method: 'POST', body: { [PARAMS.entryId]: 'nope' } })
+    expect(status).toBe(200) // 信封在场 ⇒ 状态一律 200，成败只看 ok
+    expect(code).toBe('sessiondelete/trash-empty')
+    expect(fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('目录里没有会话日志 ⇒ io，原文说的是哪个目录里有什么', async () => {
+    const { deps } = makeDeps({ seed })
+    ;(deps.fs as unknown as { listFiles: ReturnType<typeof vi.fn> }).listFiles = vi.fn(async () => ['notes.txt'])
+    const base = await start(deps)
+    const { code, message } = await failureOf(base, ROUTES.detail, { method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') } })
+    expect(code).toBe('sessiondelete/io')
+    expect(message).toMatch(/没有会话日志/)
+  })
+
+  it('路由层自检同表：GET 被拒说的是"需 POST"，body 缺/空/非串都落 io 并点名字段', async () => {
+    const { deps } = makeDeps({ seed })
+    const base = await start(deps)
+    const wrongMethod = await failureOf(base, ROUTES.detail, { method: 'GET' })
+    expect(wrongMethod.message).toMatch(/需 POST/)
+    for (const bad of [{}, { [PARAMS.entryId]: '' }, { [PARAMS.entryId]: 42 }]) {
+      const failure = await failureOf(base, ROUTES.detail, { method: 'POST', body: bad })
+      expect(failure.code).toBe('sessiondelete/io')
+      expect(failure.message).toMatch(PARAMS.entryId)
+    }
+  })
+
+  it('栅栏对第五个端点一视同仁：跨源 Origin 拒 403，桌面壳的 Referer 放行', async () => {
+    const { deps, fs } = makeDeps({ seed })
+    const base = await start(deps)
+    const payload = JSON.stringify({ [PARAMS.entryId]: entryIdOf('session-a') })
+    const evil = await rawCall(base, ROUTES.detail, 'POST', { ...json, origin: 'https://evil.example' }, payload)
+    expect(evil.status).toBe(403)
+    expect(fs.readFile).not.toHaveBeenCalled()
+    const shell = await rawCall(base, ROUTES.detail, 'POST', { ...json, referer: 'dsh-app://app/' }, payload)
+    expect(shell.status).toBe(200)
+    expect(JSON.parse(shell.text)).toMatchObject({ ok: true })
   })
 })

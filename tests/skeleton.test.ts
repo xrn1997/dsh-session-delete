@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { PLATFORM_MODULES, gateClientImport } from '../tsdown.config.js'
+import { PLATFORM_MODULES, gateClientImport, resolveBrowserBranchImport } from '../tsdown.config.js'
 import * as plugin from '../src/index.js'
 
 const manifest = JSON.parse(
@@ -140,6 +141,25 @@ describe('浏览器半平台模块表', () => {
   })
 })
 
+describe('抄本表点名的自造差异（§8 门 4：除这两条外一律与官方明文逐属性一致）', () => {
+  const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
+
+  it('文件头点名的两条自造规则真在表里（声明与实现对上）', () => {
+    expect(css).toContain('.sd-resizing {')
+    // 2026-10-16 补的第二条：清单行是 role="option" 的可聚焦 div，键盘焦点必须有可见描边
+    expect(css).toContain('[data-dsh-session-delete="trash-row"]:focus-visible {')
+    expect(/两处不是抄本/.test(css)).toBe(true)
+    expect(css.split('本插件自造的第').length - 1).toBe(2)
+  })
+
+  it('行那条描边复用选中态那枚 token，不新造颜色（设计稿 2026-10-15 §1.3）', () => {
+    // 不按字面多行比：仓库里 CSS 是 CRLF，钉"选择器 + 那条 outline 用的 token"这一件事就够
+    expect(css).toMatch(
+      /\[data-dsh-session-delete="trash-row"\]:focus-visible\s*\{\s*outline:\s*0\.5px solid var\(--dsw-alias-button-ghost-active-border\)/,
+    )
+  })
+})
+
 describe('浏览器半纯度门', () => {
   it('Node 内建一律抛出', () => {
     expect(() => gateClientImport('node:fs')).toThrow(/Node 内建/)
@@ -160,6 +180,37 @@ describe('浏览器半纯度门', () => {
     // 非 @deepseek-ai 的 npm 依赖由 alwaysBundle inline 进 bundle，不产生 require ⇒ 门不拦
     expect(gateClientImport('zod')).toBeNull()
     expect(gateClientImport('./delete-menu-item.js')).toBeNull()
+  })
+})
+
+describe('vfile 浏览器分流（react-markdown 那条依赖链）', () => {
+  // 构建期实测：CJS 输出下 rolldown 按 Node 条件解 vfile 的 `#min*` 内部请求，选中的是带
+  // `node:path`/`node:url`/`node:process` 的那一支 ⇒ 纯度门先响。这里把它接回包作者自备的
+  // `.browser.js`，并且**只在旁边真有那个文件时**才接。
+  const dir = mkdtempSync(join(tmpdir(), 'sd-vfile-'))
+  writeFileSync(join(dir, 'minpath.browser.js'), 'export const minpath = {}')
+  const importer = join(dir, 'index.js')
+
+  it('三个 # 请求接向同级的 .browser.js', () => {
+    expect(resolveBrowserBranchImport('#minpath', importer)).toBe(join(dir, 'minpath.browser.js'))
+    // 缺文件（换代改了名）⇒ null ⇒ 交回默认解析，让纯度门重新响，不静默放行
+    expect(resolveBrowserBranchImport('#minproc', importer)).toBeNull()
+    expect(resolveBrowserBranchImport('#minurl', importer)).toBeNull()
+  })
+
+  it('窄到只认这三个键：别的请求与非 vfile 的 importer 一律不接', () => {
+    expect(resolveBrowserBranchImport('#fs', importer)).toBeNull()
+    expect(resolveBrowserBranchImport('node:fs', importer)).toBeNull()
+    expect(resolveBrowserBranchImport('#minpath', undefined)).toBeNull()
+  })
+
+  it('真装的 vfile 旁边确实有那三个浏览器实现（不是我们编的）', () => {
+    const store = readdirSync(join(process.cwd(), 'node_modules', '.pnpm')).filter((n) => n.startsWith('vfile@'))
+    expect(store.length).toBeGreaterThan(0)
+    const lib = join(process.cwd(), 'node_modules', '.pnpm', store[0]!, 'node_modules', 'vfile', 'lib')
+    for (const name of ['minpath', 'minproc', 'minurl']) {
+      expect(resolveBrowserBranchImport(`#${name}`, join(lib, 'index.js'))).toBe(resolve(lib, `${name}.browser.js`))
+    }
   })
 })
 

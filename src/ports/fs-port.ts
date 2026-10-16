@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export interface FsPort {
@@ -9,6 +9,10 @@ export interface FsPort {
   rename(from: string, to: string): Promise<void>
   removeDir(p: string): Promise<void>
   sizeOfDir(p: string): Promise<number>
+  /** 目录下的条目名（**不递归**）。回收站详情要用它在那条目录里挑 `*.jsonl.zstd`。 */
+  listFiles(p: string): Promise<string[]>
+  /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），不在这里。 */
+  readFile(p: string): Promise<Buffer>
 }
 
 /** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
@@ -29,5 +33,8 @@ export function createFsPort(): FsPort {
     async rename(from, to) { await rename(from, to) },
     async removeDir(p) { await rm(p, { recursive: true, force: true }) },
     sizeOfDir: (p) => sizeOfDir(p),
+    // readdir 返回的既可能是字符串也可能是 Dirent（取决于 encoding），这里不传 withFileTypes ⇒ 名字串
+    async listFiles(p) { return readdir(p) },
+    async readFile(p) { return readFile(p) },
   }
 }

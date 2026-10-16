@@ -3,7 +3,7 @@
  * 加上信封判别与注入面那一处「展开成裸值」的适配。
  *
  * 通道形状（裁决）：真相/账本/判据全在宿主那边，Node 半用宿主**自己的 web server** 开一条
- * 插件专属前缀路由把四个动词搬出来（`src/api/dispatch.ts`），浏览器半同源调用。**不是重造后端**：
+ * 插件专属前缀路由把四个动词加一条详情搬出来（`src/api/dispatch.ts`），浏览器半同源调用。**不是重造后端**：
  * 路由层只做搬运与信封。为什么不用官方的 `remote.<namespace>`：那条路要**生成的 Typert 远程描述符**
  * 加一次 `$mount`，而盒内装配清单写死在 `dsh-api-remotes` 里、全宿主没有动态发现，第三方只能自挂自，
  * 对一个薄插件不划算。
@@ -25,7 +25,7 @@
  *    所以到了组件面前只剩「裸值 / throw」两支，调用方只写 `if (!outcome.ok)`，正常流里没有 try/catch；
  *    非本信封形状的异常（网络层、TypeError…）也不丢原文（见 `failureOf`）。
  *
- * 面（`list`/`delete`/`restore`/`purge`）与 Node 半路由的四个段名一一对应（段名本身的家是
+ * 面（`list`/`delete`/`restore`/`purge`/`detail`）与 Node 半路由的五个段名一一对应（段名本身的家是
  * `src/shared/wire.ts`）；`list/delete/restore` 回 `TrashEntry`，`purge` 回 `PurgeResult`。
  */
 import {
@@ -53,6 +53,37 @@ export interface TrashEntryLike {
 export interface PurgeResultLike {
   removed: number
   freedBytes: number
+}
+
+/** 详情正文里的一条消息（镜像 `TrashDetailMessage`；只读面）。 */
+export interface TrashDetailMessageLike {
+  role: 'user' | 'assistant'
+  time: number
+  text: string
+  truncated: boolean
+}
+
+/**
+ * 回收站单条详情（镜像 `src/trash/detail.ts` 的 `TrashDetail`；只读面）。
+ *
+ * **线上只有"日志里读出来的那几件"**：`deletedAt` / `sizeBytes` / `wasArchived` / 清册 `title` 这些
+ * 清册已有的字段一律不过线——组件按 `entryId` 与自己手上那份清单配对，这样"清单里的大小"和
+ * "详情里的大小"永远是同一个数，不会因为两次读数不同而各说各话。
+ */
+export interface TrashDetailLike {
+  entryId: string
+  cwd: string
+  createdAt: number
+  lastActivity: number
+  logTitle: string
+  models: string[]
+  turnCount: number
+  userMessageCount: number
+  assistantMessageCount: number
+  toolCallCount: number
+  injectedCount: number
+  messages: TrashDetailMessageLike[]
+  omittedByPayloadCap: number
 }
 
 /* 信封（`RemoteResult`）与失败形状（`RemoteFailure`）、以及标记位判别（`isDSHRemoteError`）都住在
@@ -115,6 +146,7 @@ export interface RawSessionDeleteRemote {
   delete(sessionId: string): Promise<RemoteResult<TrashEntryLike>>
   restore(entryId: string): Promise<RemoteResult<TrashEntryLike>>
   purge(entryId?: string): Promise<RemoteResult<PurgeResultLike>>
+  detail(entryId: string): Promise<RemoteResult<TrashDetailLike>>
 }
 
 /* ── 通道实现：同源 fetch 我们自己的前缀路由 ─────────────── */
@@ -160,6 +192,8 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
         prefix + ROUTES.purge,
         post(entryId === undefined ? {} : { [PARAMS.entryId]: entryId }),
       ),
+    detail: (entryId) =>
+      requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({ [PARAMS.entryId]: entryId })),
   }
 }
 
@@ -185,6 +219,7 @@ export interface SessionDeleteRemote {
   delete(sessionId: string): Promise<TrashEntryLike>
   restore(entryId: string): Promise<TrashEntryLike>
   purge(entryId?: string): Promise<PurgeResultLike>
+  detail(entryId: string): Promise<TrashDetailLike>
 }
 
 /**
@@ -201,6 +236,7 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
     delete: (sessionId) => raw.delete(sessionId).then((result) => unwrapRemoteResult(result)),
     restore: (entryId) => raw.restore(entryId).then((result) => unwrapRemoteResult(result)),
     purge: (entryId) => raw.purge(entryId).then((result) => unwrapRemoteResult(result)),
+    detail: (entryId) => raw.detail(entryId).then((result) => unwrapRemoteResult(result)),
   }
 }
 

@@ -32,6 +32,7 @@
  * `ctx.effect(() => ctx.locale.subscribe(syncPanels), 'ui-sidebar: panel labels')` 在语言切换时重读。
  * ⇒ 面板名传 `() => t('trash.title')` 就随语言走；**换成活计数就会 stale**（只在条目或语言变化时重读）。
  */
+import { relativeTime, type RelativeTimeUnit } from './ui/format.js'
 import type { ClientContextLike } from './context.js'
 
 /** 本插件的文案命名空间（第三方必须自带前缀；官方占用的是 `common` / `settings` / `sidebar` 这些）。 */
@@ -42,7 +43,8 @@ const ZH = {
   'common.untitled': '(无标题会话)',
   'common.cancel': '取消',
   'common.close': '关闭',
-  'common.refresh': '刷新',
+  'common.justNow': '刚刚',
+  'common.ago': '{n}{unit}前',
   'common.retry': '重试',
 
   'trash.title': '回收站',
@@ -71,6 +73,56 @@ const ZH = {
   'trash.confirm.body.strong': '之后没有任何副本可以恢复',
   'trash.confirm.purge': '彻底删除',
 
+  // 清单那一排的视图开关（2026-10-15：组折叠 / 拖分栏）。「折叠」管组内（项目名那一行以下）。
+  'trash.toolbar.collapseAll': '全部折叠',
+  'trash.toolbar.expandAll': '全部展开',
+  'trash.divider.label': '调整左右分栏宽度',
+  // 「刷新」只剩 aria-label + 悬停说明，屏幕上一个字都不占。
+  'trash.toolbar.refresh': '重新读一遍回收站',
+  'trash.select.group': '勾选「{project}」这 {count} 条会话',
+
+  // 多选与批量彻底删除（2026-10-15 真机反馈后开的一条口子：只批量删，不批量恢复，见 §2/§10）。
+  'trash.toolbar.select': '多选',
+  'trash.toolbar.selectExit': '退出多选',
+  'trash.select.count': '已选 {count} 条',
+  'trash.select.purge': '彻底删除 {count} 条',
+  'trash.select.needOne': '先勾选要彻底删除的会话',
+  'trash.select.row': '勾选「{title}」',
+  'trash.confirm.bulk': '彻底删除 {count} 个会话？',
+  // 页脚那句在两种页脚按钮下说的是两件事：那颗是「清空回收站…」时警告"清空"，是「彻底删除 N 条」时
+  // 警告"这一批"。整句各一个 key（同 `trash.footer.note` 的理由：这句必须看得见，不靠拼接）。
+  'trash.footer.noteBulk': '回收站本体在宿主数据根下的 {dir} 里，不自动过期；选中的 {count} 条彻底删除后不可恢复。',
+
+  // 详情那一层（设计稿 2026-10-15 §2.3）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
+  'detail.notSelected': '选中一条会话，看它讲了什么',
+  'detail.loading': '正在读这条会话…',
+  'detail.readFailed': '这条会话的正文读不出来',
+  'detail.noBody': '这条会话没有可显示的文字',
+  'detail.field.created': '创建',
+  'detail.field.lastActivity': '最后活动',
+  'detail.field.deletedAt': '删除于',
+  'detail.field.span': '活跃跨度',
+  'detail.field.size': '大小',
+  'detail.field.turns': '轮数',
+  'detail.field.userMessages': '提问',
+  'detail.field.assistantMessages': '回复',
+  'detail.field.toolCalls': '工具调用',
+  'detail.field.models': '模型',
+  'detail.field.project': '项目',
+  'detail.field.sessionId': '会话 id',
+  'detail.field.trashDir': '回收站目录',
+  'detail.field.wasArchived': '原本归档',
+  'detail.value.yes': '是',
+  'detail.value.no': '否',
+  'detail.value.spanHours': '{n} 小时',
+  'detail.value.spanDays': '{n} 天',
+  'detail.messages.hidden': '另有 {count} 条宿主注入的上下文未显示',
+  'detail.messages.omitted': '还有 {count} 条未显示',
+  'detail.back': '← 返回清单',
+  'detail.list.label': '回收站清单',
+  'detail.role.user': '你',
+  'detail.role.assistant': '助手',
+
   'menu.delete': '删除',
   'menu.live': '会话正在运行，先停止再删除',
 
@@ -91,7 +143,8 @@ const EN: Record<CopyKey, string> = {
   'common.untitled': '(Untitled session)',
   'common.cancel': 'Cancel',
   'common.close': 'Close',
-  'common.refresh': 'Refresh',
+  'common.justNow': 'just now',
+  'common.ago': '{n}{unit} ago',
   'common.retry': 'Retry',
 
   'trash.title': 'Trash',
@@ -121,6 +174,52 @@ const EN: Record<CopyKey, string> = {
   'trash.confirm.body': 'This removes the files from the trash; {strong}.',
   'trash.confirm.body.strong': 'no copy remains to restore it',
   'trash.confirm.purge': 'Delete permanently',
+
+  'trash.toolbar.collapseAll': 'Collapse all',
+  'trash.toolbar.expandAll': 'Expand all',
+  'trash.divider.label': 'Adjust the width of the list column',
+
+  'trash.toolbar.refresh': 'Re-read the trash',
+  'trash.select.group': 'Select all {count} sessions under “{project}”',
+
+  'trash.toolbar.select': 'Select',
+  'trash.toolbar.selectExit': 'Done selecting',
+  'trash.select.count': '{count} selected',
+  'trash.select.purge': 'Delete {count} permanently',
+  'trash.select.needOne': 'Pick the sessions to delete first',
+  'trash.select.row': 'Select “{title}”',
+  'trash.confirm.bulk': 'Delete these {count} sessions permanently?',
+  'trash.footer.noteBulk':
+    'The trash itself lives under the host data root in {dir}; it never expires on its own, and the {count} selected sessions cannot be recovered once deleted.',
+
+  'detail.notSelected': 'Select a session to see what it was about',
+  'detail.loading': 'Reading this session…',
+  'detail.readFailed': 'Could not read this session’s log',
+  'detail.noBody': 'This session has no readable text',
+  'detail.field.created': 'Created',
+  'detail.field.lastActivity': 'Last activity',
+  'detail.field.deletedAt': 'Deleted',
+  'detail.field.span': 'Active for',
+  'detail.field.size': 'Size',
+  'detail.field.turns': 'Turns',
+  'detail.field.userMessages': 'Prompts',
+  'detail.field.assistantMessages': 'Replies',
+  'detail.field.toolCalls': 'Tool calls',
+  'detail.field.models': 'Model',
+  'detail.field.project': 'Project',
+  'detail.field.sessionId': 'Session id',
+  'detail.field.trashDir': 'Trash folder',
+  'detail.field.wasArchived': 'Was archived',
+  'detail.value.yes': 'Yes',
+  'detail.value.no': 'No',
+  'detail.value.spanHours': '{n} h',
+  'detail.value.spanDays': '{n} d',
+  'detail.messages.hidden': '{count} injected context records not shown',
+  'detail.messages.omitted': '{count} more messages not shown',
+  'detail.back': '← Back to list',
+  'detail.list.label': 'Trash list',
+  'detail.role.user': 'You',
+  'detail.role.assistant': 'Assistant',
 
   'menu.delete': 'Delete',
   'menu.live': 'This session is running. Stop it first.',
@@ -180,4 +279,35 @@ export function splitOn(sentence: string, inner: string): [string, string, strin
   const at = sentence.indexOf(inner)
   if (at < 0) return [sentence, '', '']
   return [sentence.slice(0, at), inner, sentence.slice(at + inner.length)]
+}
+
+/**
+ * 绝对时间那一句串。清单行的 `title`、确认框里的meta、详情的元信息三处要的是同一个写法，
+ * 各自 `new Date(...).toLocaleString()` 一遍迟早会漂成两种样子。
+ */
+export function absoluteText(at: number): string {
+  return new Date(at).toLocaleString()
+}
+
+/**
+ * 单位词的键（`relativeTime` 只交回桶与量 `{unit, n}`，措辞按它自己的约定留在字典里；
+ * 数字与单位之间不空格是它的写法）。清单行与详情共用这一张表，别再各抄一份。
+ */
+const UNIT_KEY: Record<Exclude<RelativeTimeUnit, 'now'>, CopyKey> = {
+  minutes: 'trash.unit.minutes',
+  hours: 'trash.unit.hours',
+  days: 'trash.unit.days',
+  months: 'trash.unit.months',
+  years: 'trash.unit.years',
+}
+
+/** 单位词本身（调用方把它填进各自语言的整句模板里，语序由各语言自己钉）。 */
+export function unitWord(unit: RelativeTimeUnit, t: Translate): string {
+  return unit === 'now' ? t('common.justNow') : t(UNIT_KEY[unit])
+}
+
+/** 「7分钟前」这类**不带谓语**的相对短语；`now` 桶不套模板——"刚刚前"不是话。 */
+export function agoText(at: number, now: number, t: Translate): string {
+  const { unit, n } = relativeTime(at, now)
+  return unit === 'now' ? t('common.justNow') : t('common.ago', { n, unit: unitWord(unit, t) })
 }
