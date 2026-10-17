@@ -38,6 +38,8 @@ export interface DeleteMenuItemProps {
   title: string
   /** 会话在跑：这一行置灰，并把原因摆在行上。 */
   live?: boolean
+  /** 上方那条发丝线；缺省 true。多选入口排在删除前面时由它带线，删除行改成 false（`index.tsx`）。 */
+  separatorBefore?: boolean
   /**
    * 菜单 owner 交下来的「收起菜单」——槽位注入的 `useMenuOpenState`（`index.tsx` 的 `DeleteRow` 接住）。
    * 「关不关菜单是 owner 的决定」是官方对该槽位的契约；按下这一行时**先发请求、再收菜单**。
@@ -52,6 +54,7 @@ export function DeleteMenuItem({
   sessionId,
   title,
   live = false,
+  separatorBefore = true,
   dismissMenu,
   t = zhTranslate,
 }: DeleteMenuItemProps) {
@@ -66,7 +69,7 @@ export function DeleteMenuItem({
     <Tooltip label={t('menu.live')} side="right" portal disabled={!live}>
       <span>
         <MenuItemButton
-          separatorBefore
+          separatorBefore={separatorBefore}
           danger
           disabled={live}
           icon={<IconTrashOutlineRegular size={14} />}

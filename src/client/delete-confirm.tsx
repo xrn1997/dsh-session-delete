@@ -37,7 +37,7 @@ import { publishUndoNotice } from './undo-toast.js'
  * 的卡片 token：`bg-layer-2` + `border-l4` + `radius-lg`），两个对话框因此同形。
  * 浅色下 `bg-layer-2` 与对话框自身同色，分隔全靠那根描边——宿主自己的卡片在浅色下也是这样。
  */
-const TARGET_CARD = {
+export const TARGET_CARD = {
   padding: '10px 12px',
   background: 'var(--dsw-alias-bg-layer-2)',
   border: '0.5px solid var(--dsw-alias-border-l4)',

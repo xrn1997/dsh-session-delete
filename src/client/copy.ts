@@ -134,6 +134,23 @@ const ZH = {
   'dialog.hint': '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。',
   'dialog.confirm': '移入回收站',
 
+  // 宿主列表批量删除（第十三批）。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
+  // `dialog.subagents`（汇总），n=1 的标题复用 `dialog.title`，运行中原因复用 `menu.live`，
+  // 「多选/退出多选」复用回收站工具栏的 `trash.toolbar.select` / `selectExit`——不造第二句。
+  'batch.row.pick': '勾选「{title}」以批量删除',
+  'batch.bar.count': '已选 {n} 条',
+  'batch.bar.pickHint': '点击会话行选择',
+  'batch.bar.kids': '含 {k} 个子会话，跟着整组走',
+  'batch.bar.review': '查看已选',
+  'batch.bar.reviewClose': '收起已选',
+  'batch.bar.remove': '取消勾选「{title}」',
+  'batch.bar.selectAll': '全选',
+  'batch.bar.selectNone': '取消全选',
+  'batch.run': '移入回收站 {n} 条',
+  'dialog.batch.title': '删除这些 {n} 个会话？',
+  'dialog.batch.retry': '重试这 {n} 条',
+  'undo.movedBatch': '{n} 条会话已移入回收站',
+
   'undo.moved': '{title} 已移入回收站',
   'undo.session': '会话',
   'undo.undo': '撤销',
@@ -235,6 +252,20 @@ const EN: Record<CopyKey, string> = {
   'dialog.hint':
     'The session moves to the trash and can be restored at any time. Permanent deletion is a separate action in the trash.',
   'dialog.confirm': 'Move to trash',
+
+  'batch.row.pick': 'Select “{title}” for batch delete',
+  'batch.bar.count': '{n} selected',
+  'batch.bar.pickHint': 'Click a session row to select',
+  'batch.bar.kids': '{k} subagent sessions come along',
+  'batch.bar.review': 'Review selected',
+  'batch.bar.reviewClose': 'Hide list',
+  'batch.bar.remove': 'Unselect “{title}”',
+  'batch.bar.selectAll': 'Select all',
+  'batch.bar.selectNone': 'Deselect all',
+  'batch.run': 'Move {n} to trash',
+  'dialog.batch.title': 'Delete these {n} sessions?',
+  'dialog.batch.retry': 'Retry these {n}',
+  'undo.movedBatch': '{n} sessions were moved to the trash',
 
   'undo.moved': '{title} was moved to the trash',
   'undo.session': 'the session',

@@ -178,15 +178,38 @@ describe('浏览器半平台模块表', () => {
   })
 })
 
-describe('抄本表点名的自造差异（§8 门 4：除这两条外一律与官方明文逐属性一致）', () => {
+describe('抄本表点名的自造差异（§8 门 4：除这五条外一律与官方明文逐属性一致）', () => {
   const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
 
-  it('文件头点名的两条自造规则真在表里（声明与实现对上）', () => {
+  it('文件头点名的五条自造规则真在表里（声明与实现对上）', () => {
     expect(css).toContain('.sd-resizing {')
     // 2026-10-16 补的第二条：清单行是 role="option" 的可聚焦 div，键盘焦点必须有可见描边
     expect(css).toContain('[data-dsh-session-delete="trash-row"]:focus-visible {')
-    expect(/两处不是抄本/.test(css)).toBe(true)
-    expect(css.split('本插件自造的第').length - 1).toBe(2)
+    // 2026-10-17 第十三批补的第三条：官方那颗 iconButton 只有常态与 hover，勾选开关要按下/禁用两档
+    expect(css).toContain(".sd-rowaction-button[aria-pressed='true'] {")
+    // 第四条：宿主没有"浮条"这件控件
+    expect(css).toContain('.sd-batch-bar {')
+    // 第五条：宿主行自己的选中态归宿主，批量选择要有整行底色；状态点/归档行的兜底不能与行首重复
+    expect(css).toContain('[data-row-key^="session:"]:has([data-dsh-session-delete="batch-pick"][data-checked="true"])')
+    expect(css).toContain('[data-seat="leading"]) .sd-batch-pick-action')
+    expect(/五处不是抄本/.test(css)).toBe(true)
+    expect(css.split('本插件自造的第').length - 1).toBe(5)
+  })
+
+  it('批量浮条按内容展开：width:max-content + max-width，避免左半屏收缩把按钮挤到第二行', () => {
+    expect(css).toMatch(/\.sd-batch-bar\s*\{[^}]*width:\s*max-content/)
+    expect(css).toMatch(/\.sd-batch-bar\s*\{[^}]*max-width:\s*calc\(100vw - 48px\)/)
+  })
+
+  it('批量浮条压在确认框下面：浮条的 z-index 必须小于模态根（否则会盖住确认按钮）', () => {
+    const zIndexOf = (selector: string): number => {
+      const start = css.indexOf(`${selector} {`)
+      expect(start).toBeGreaterThanOrEqual(0)
+      const match = /z-index:\s*(\d+)/.exec(css.slice(start))
+      if (match === null) throw new Error(`${selector} 没有 z-index`)
+      return Number(match[1])
+    }
+    expect(zIndexOf('.sd-batch-bar')).toBeLessThan(zIndexOf('.sd-modal-root'))
   })
 
   it('行那条描边复用选中态那枚 token，不新造颜色（设计稿 2026-10-15 §1.3）', () => {

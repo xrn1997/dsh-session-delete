@@ -3,7 +3,7 @@
 // 这一层用**假的 `ctx`**（只给槽位注册表）与**假的 `fetch`**（我们自己的前缀路由）跑真的 `apply`，
 // 再把注册表里的贡献按**真宿主的形状**装起来（`Scene`：菜单槽的行渲染在一个假 `Menu` 里，
 // overlay 槽的贡献全挂上）。钉住四件事：
-// 1. **取数通道的探测是注册的前提**：探测通过才五次 `slots.inject`（槽位名、插件专属 id、order、
+// 1. **取数通道的探测是注册的前提**：探测通过才八次 `slots.inject`（槽位名、插件专属 id、order、
 //    以及 `main` 的 key 与 `sidebar.panellist` 的 id 同字）；探测不过 ⇒ 零注册、零抛错、`apply` 正常返回；
 // 2. **deps 装配**：HTTP 回的是我们的信封（`{ ok: true, value }` / `{ ok: false, error }`，与官方
 //    unary 面同形），失败支必须在注入面被展开成 throw——《remote.test.ts》钉形状，这里钉**端到端的
@@ -15,9 +15,11 @@
 //    点一下就是运行期抛错；
 // 4. **菜单收起的门**：`open === false` ⇒ 槽位行子树不渲染（真产物 `Menu` 逐字如此）。确认框必须脱离
 //    这棵子树，否则按下「删除」的那一帧它就被连坐卸载——真机上「移入回收站」永远点不到。
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { type ComponentType, type ReactElement, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearDeleteBatchRequest } from '../../src/client/batch-confirm.js'
+import { clearPicks, enterSelection, exitSelection } from '../../src/client/batch-select.js'
 import { clearDeleteRequest } from '../../src/client/delete-confirm.js'
 import { apply, inject } from '../../src/client/index.js'
 import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
@@ -28,9 +30,17 @@ import { ROUTES, SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
 beforeEach(() => {
   clearUndoNotice()
   clearDeleteRequest()
+  // 批量删除的三份模块级现场同样跨用例存活（多选模式、选中集、批量确认框的请求）
+  exitSelection()
+  clearPicks()
+  clearDeleteBatchRequest()
 })
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
+/** 会话行首 16px 格（状态点缺席时归第三方装饰）；批量删除的主勾选框住这里。 */
+const LEADING_SLOT = 'sidebar.session.row.leading'
+/** 会话行尾悬停排的座位（状态点/归档行的兜底勾选开关住这里，宿主自己的归档/置顶也在这里）。 */
+const ROW_ACTION_SLOT = 'sidebar.workspaces.session.row.action'
 const OVERLAY_SLOT = 'shell.overlay'
 const PANEL_SLOT = 'sidebar.panellist'
 const MAIN_SLOT = 'main'
@@ -39,7 +49,7 @@ const PANEL_ID = '@xrn1997/dsh-session-delete.trash'
 
 type SlotComponent = (props: Record<string, unknown>) => ReactElement
 type Props = Record<string, unknown>
-type RowState = { byId?: Record<string, { running?: boolean } | undefined> }
+type RowState = { byId?: Record<string, { running?: boolean; title?: string } | undefined> }
 type Select = (state: RowState) => boolean
 type FakeUseSessions = (select: Select) => boolean
 
@@ -214,7 +224,10 @@ function Scene({
   onMenuClose?: (open: boolean) => void
 }) {
   const [open, setOpen] = useState(true)
-  const menu = registered.find((row) => row.name === MENU_SLOT)
+  // 真宿主的菜单槽是 list：官方四行 + 我们的两行**全部**渲染（不是只渲染第一条），并且按 order 排。
+  const menus = registered
+    .filter((row) => row.name === MENU_SLOT)
+    .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
   const overlays = registered.filter((row) => row.name === OVERLAY_SLOT)
   const useMenuOpenState = (): readonly [boolean, (next: boolean) => void] =>
     [
@@ -224,19 +237,54 @@ function Scene({
         setOpen(next)
       },
     ] as const
-  const Row = menu?.component as SlotComponent | undefined
+  // 行首 16px 格：真宿主只投 `sessionId`，标题由 root hook 读（这里给同形的假 hook）
+  const leading = registered.find((row) => row.name === LEADING_SLOT)
+  const PickLeading = leading?.component as SlotComponent | undefined
+  const useSessionsForRow = (select: (state: RowState) => unknown): unknown =>
+    select({ byId: { 'session-a': { running: false, title: '/code-review' } } })
+  // 行尾悬停排：真宿主把它渲染在会话行末尾（`rowActions` 那层自己挡住点击冒泡）
+  const pick = registered.find((row) => row.name === ROW_ACTION_SLOT)
+  const PickRow = pick?.component as SlotComponent | undefined
   return (
     <>
+      <div data-slot="fake-row" data-row-key="session:session-a">
+        <div data-slot="fake-row-leading">
+          {PickLeading !== undefined ? (
+            <PickLeading
+              {...(leading?.inject?.() ?? {})}
+              sessionId="session-a"
+              useSessions={useSessionsForRow}
+              {...rowProps}
+            />
+          ) : null}
+        </div>
+        <div data-slot="fake-row-strip">
+          {PickRow !== undefined ? (
+            <PickRow
+              {...(pick?.inject?.() ?? {})}
+              sessionId="session-a"
+              displayTitle="/code-review"
+              {...rowProps}
+            />
+          ) : null}
+        </div>
+      </div>
       <div data-slot="fake-menu">
-        {open && Row !== undefined ? (
-          <Row
-            {...(menu?.inject?.() ?? {})}
-            sessionId="session-a"
-            displayTitle="/code-review"
-            useMenuOpenState={useMenuOpenState}
-            {...rowProps}
-          />
-        ) : null}
+        {open
+          ? menus.map((entry) => {
+            const MenuRow = entry.component as SlotComponent
+            return (
+              <MenuRow
+                key={entry.id}
+                {...(entry.inject?.() ?? {})}
+                sessionId="session-a"
+                displayTitle="/code-review"
+                useMenuOpenState={useMenuOpenState}
+                {...rowProps}
+              />
+            )
+          })
+          : null}
       </div>
       {overlays.map((entry) => {
         const Overlay = entry.component as SlotComponent
@@ -247,33 +295,54 @@ function Scene({
 }
 
 describe('apply 的装配面', () => {
-  it('取数通道可用时：菜单槽一次、overlay 槽两次（提示 + 确认框）、面板行与中央面板各一次；面板 id 与 main 的 key 同字', async () => {
+  it('取数通道可用时：菜单槽两行、行首格与行尾排各一次、overlay 槽四次（提示 + 单删框 + 浮条 + 批量框）、面板行与中央面板各一次；面板 id 与 main 的 key 同字', async () => {
     const { injected, registered } = await bootstrap()
     // 同一个槽位 key 多次 `slots.inject` 是官方写法本身（宿主对 `conversation.chat.node`
-    // 就连写十几次 inject，每次一个贡献），overlay 上的两样东西各是各的贡献。
-    expect(injected).toEqual([MENU_SLOT, OVERLAY_SLOT, OVERLAY_SLOT, PANEL_SLOT, MAIN_SLOT])
+    // 就连写十几次 inject，每次一个贡献），overlay 上的四样东西各是各的贡献。
+    expect(injected).toEqual([
+      MENU_SLOT,
+      MENU_SLOT,
+      LEADING_SLOT,
+      ROW_ACTION_SLOT,
+      OVERLAY_SLOT,
+      OVERLAY_SLOT,
+      OVERLAY_SLOT,
+      OVERLAY_SLOT,
+      PANEL_SLOT,
+      MAIN_SLOT,
+    ])
     expect(registered.map((row) => row.id)).toEqual([
       '@xrn1997/dsh-session-delete.delete',
+      '@xrn1997/dsh-session-delete.batch-select',
+      '@xrn1997/dsh-session-delete.batch-pick-leading',
+      '@xrn1997/dsh-session-delete.batch-pick',
       '@xrn1997/dsh-session-delete.undo-toast',
       '@xrn1997/dsh-session-delete.delete-confirm',
+      '@xrn1997/dsh-session-delete.batch-bar',
+      '@xrn1997/dsh-session-delete.batch-confirm',
       PANEL_ID,
       undefined,
     ])
     // 一对座位：`sidebar.panellist` 的 id 与 `main` 的 key 必须同字（官方 selectPanel 按 id
     // 去 main 里找占用者，找不着就抛）。
-    expect(registered[4]?.key).toBe(PANEL_ID)
+    expect(registered[9]?.key).toBe(PANEL_ID)
     // 行的名字由**注册元数据**给（宿主 `resolveSlotLabel(options.label)` 解析后画在行上），
     // 不是我们组件里写的字——所以这条必须钉在注册项上。**给的是 thunk**：官方
     // `resolveSlotLabel` 逐字 `typeof label === 'function' ? label() : label`，其 JSDoc 即
     // "thunks follow the active locale"，而宿主又挂了 `ctx.locale.subscribe(syncPanels)`
     // ⇒ 切语言时这一行跟着走（`copy.ts` 头注）。
-    const label = registered[3]?.label
+    const label = registered[8]?.label
     expect(typeof label).toBe('function')
     expect(typeof label === 'function' ? label() : label).toBe('回收站')
-    // 菜单行落在官方四行（pin 100 / rename 200 / fork 300 / archive 400）之后；面板行落在
-    // 官方两个面板行（plugins 0 / schedules）与第三方「小说」（20）之后。
+    // 菜单行落在官方四行（pin 100 / rename 200 / fork 300 / archive 400）之后：多选 850 在删除 900
+    // 之前；行首那一格由状态点优先占用（无状态点才轮到我们），行尾那颗落在宿主自己的
+    // archive(100) / pin(200) 之后；面板行落在官方两个面板行（plugins 0 / schedules）与第三方
+    // 「小说」（20）之后。
     expect(registered[0]?.order).toBe(900)
-    expect(registered[3]?.order).toBe(900)
+    expect(registered[1]?.order).toBe(850)
+    expect(registered[2]?.order).toBe(300)
+    expect(registered[3]?.order).toBe(300)
+    expect(registered[8]?.order).toBe(900)
   })
 
   it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {
@@ -297,6 +366,31 @@ describe('apply 的装配面', () => {
       { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'delete', ids: ['session-a'] } },
       { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'restore', ids: ['a'] } },
     ])
+  })
+
+  // 第十三批：宿主列表批量删除的端到端形状。「⋯ → 多选」进入模式 → 行首勾选 → 浮条 → 批量确认框
+  // 都是注册出来的真组件。
+  it('⋯ 多选 → 行首勾选 → 浮条 → 批量确认 → 一次 delete → 批量撤销横幅 → 撤销发一次批量 restore', async () => {
+    const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
+    const { registered, fetchCalls } = await bootstrap(rawRemote({ apply }))
+    render(<Scene registered={registered} />)
+    fireEvent.click(screen.getByRole('menuitem', { name: '多选' }))
+    expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量删除' }))
+    // 浮条那颗（此刻对话框还没开，全页只此一颗）
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+    // 确认框里那颗（与浮条同句同键 ⇒ 只能在 role="dialog" 里找）
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: '移入回收站 1 条' }))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith('delete', ['session-a']))
+    expect(screen.getByText('1 条会话已移入回收站')).toBeInTheDocument()
+    const posted = fetchCalls
+      .filter((c) => c.method === 'POST')
+      .map((c) => (c.body as { action: string }).action)
+    // 序只钉"含 count 且发过 delete"：浮条的防抖 count 与开框的 count 谁先落地不定（预裁记档）
+    expect(posted).toContain('count')
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    await waitFor(() => expect(apply).toHaveBeenLastCalledWith('restore', ['a']))
   })
 
   // 真机反馈：删完在侧栏菜单里，中央的回收站面板**不切走再回来就不更新**（面板是挂载时取一次数）。
@@ -446,6 +540,26 @@ describe('live selector（MenuRow 的 props 桥）', () => {
     const { Component, props } = seat(MENU_SLOT)
     render(<Component {...props} sessionId="session-a" displayTitle="t" />)
     expect(screen.getByRole('menuitem', { name: '删除' })).not.toBeDisabled()
+  })
+})
+
+describe('行首勾选的 props 桥（槽位只投 sessionId）', () => {
+  it('标题从 root hook 的 byId[id].title 读，拼出 aria 名字', async () => {
+    enterSelection()
+    const { seat } = await bootstrap()
+    const { Component, props } = seat(LEADING_SLOT)
+    const useSessions = (select: (state: RowState) => unknown): unknown =>
+      select({ byId: { 'session-a': { title: '/code-review' } } })
+    render(<Component {...props} sessionId="session-a" useSessions={useSessions} />)
+    expect(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量删除' })).toBeInTheDocument()
+  })
+
+  it('root hook 缺失时也不炸：多选态里勾选框照样出来，标题按空串处理', async () => {
+    enterSelection()
+    const { seat } = await bootstrap()
+    const { Component, props } = seat(LEADING_SLOT)
+    render(<Component {...props} sessionId="session-a" />)
+    expect(screen.getByRole('checkbox')).toBeInTheDocument()
   })
 })
 

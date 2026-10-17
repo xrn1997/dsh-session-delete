@@ -1,13 +1,25 @@
 /**
  * 浏览器半入口（CJS 单文件闭包工厂的 `factory` 体，构建契约见 tsdown.config.ts）。
  *
- * 共交付五个槽位贡献（合起来是四个用户可见入口），分三类：
+ * 共交付**十个**槽位贡献（第十三批起，批量删除再加五件），分四类：
  *
- * - `sidebar.workspaces.session.menu.item` —— 「删除」菜单行（`DeleteMenuItem`）。这一行**只发请求**
- *   （把 `{sessionId, title}` 写进 `delete-confirm.tsx` 的模块级现场）。
- * - `shell.overlay` —— 菜单之外的**两个**常驻宿主（各一次 `slots.inject`，与宿主自己对
+ * - `sidebar.workspaces.session.menu.item` —— 两行：「多选」入口（`BatchSelectMenuItem`，order 850）
+ *   与「删除」菜单行（`DeleteMenuItem`，order 900）。多选入口按下后进入多选模式（再按一次退出）
+ *   并收菜单；删除行**只发请求**（把 `{sessionId, title}` 写进 `delete-confirm.tsx` 的模块级现场）。
+ * - `sidebar.session.row.leading` —— 行首 16px 格的勾选框（`BatchPickCheckbox`，第十三批①）。
+ *   **只在多选模式内渲染**（入口在「⋯ → 多选」，不常驻）。宿主在「有状态点（运行中/待确认/未读完成）」
+ *   与归档行不渲染这一格 ⇒ 那些行由下面行尾那颗兜底；槽位只投 `sessionId`，标题
+ *   （`displayTitle`）从 root hook 的 `byId[id].title` 读。
+ * - `sidebar.workspaces.session.row.action` —— 行尾悬停排的**兜底勾选开关**（`BatchPickButton`）。
+ *   座位原文："一行一颗图标按钮（动作不适用于这一行时可以不渲染）、动作归自己"，且**排内点击不误开
+ *   会话** ⇒ 兜底开关不需要处理事件传播。两条与前一条不会同时出现（`ui.css` 的 `:has` 隐藏规则）。
+ *   它还负责把每行的标题／运行态登记给模式内的整行点击守卫（`batch-select.tsx`）。
+ *   与 overlay 上的**浮条**（`BatchBar`）、**批量确认框**（`BatchConfirmHost`）合起来才是批量删除那一套。
+ *   模式内点整行会拦截宿主的会话切换（document 捕获守卫）；执行仍走 `POST /apply`，单删那三件一律不动。
+ * - `shell.overlay` —— 菜单之外的**四个**常驻宿主（各一次 `slots.inject`，与宿主自己对
  *   `conversation.chat.node` 连写十几次 `inject` 的写法同形）：
- *   ① 撤销提示 `UndoToast`；② 删除确认框 `DeleteConfirmHost`。**它们不是额外入口**：两样东西都必须
+ *   ① 撤销提示 `UndoToast`；② 删除确认框 `DeleteConfirmHost`；③ 批量浮条 `BatchBar`；
+ *   ④ 批量确认框 `BatchConfirmHost`。**它们不是额外入口**：四样东西都必须
  *   活在菜单之外（真产物 `Menu` 是 `open && jsxs(MenuSurface, { … children: [items.map(renderEntry),
  *   children] })`，`open === false` 时槽位行根本不渲染、行随菜单一起卸载，见 delete-confirm.tsx 的头注）。
  * - **回收站入口 = 一对座位**（同一次探测之后、同一个同步块里注册）：
@@ -62,6 +74,10 @@
  * 杀掉整个进程）。
  * 所以：**`apply` 同步返回、绝不抛**，注册挂在探测的续拍上；探测不过就一个贡献都不注册。
  */
+import { BatchBar } from './batch-bar.js'
+import { BatchConfirmHost } from './batch-confirm.js'
+import { BatchSelectMenuItem } from './batch-menu-item.js'
+import { BatchPickButton, BatchPickCheckbox } from './batch-select.js'
 import { type ClientContextLike } from './context.js'
 import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
@@ -89,6 +105,10 @@ export const name = '@xrn1997/dsh-session-delete/client'
 export const inject = ['slots']
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
+/** 会话行首 16px 格（无状态点时归第三方装饰）；批量删除的主勾选框落这里，多选模式内可见。 */
+const LEADING_SLOT = 'sidebar.session.row.leading'
+/** 会话行尾的悬停按钮排（宿主自己的归档(100)/置顶(200) 也在这排）；状态点/归档行的兜底勾选落这里。 */
+const ROW_ACTION_SLOT = 'sidebar.workspaces.session.row.action'
 const OVERLAY_SLOT = 'shell.overlay'
 const PANEL_SLOT = 'sidebar.panellist'
 const MAIN_SLOT = 'main'
@@ -103,9 +123,8 @@ const PANEL_ID = `${PLUGIN_ID}.trash`
 /** `ui-session` 通过 `ctx.slots.provideRoot({ hooks: { sessions: ctx.sessions.list } })` 提供的根
  *  hook（asar @22967283 原文）——宿主自己的框架组件就是这样消费它的
  *  （`useSessions((state) => … state.byId[sessionId] …)`，asar @21178811）。 */
-type UseSessions = (
-  select: (state: { byId?: Record<string, { running?: boolean } | undefined> }) => boolean,
-) => boolean
+type SessionRowState = { byId?: Record<string, { running?: boolean; title?: string } | undefined> }
+type UseSessions = <T>(select: (state: SessionRowState) => T) => T
 
 /** 菜单槽注入的 `useMenuOpenState`：官方 `menuOpenStateFactory` 交回的是一对开合状态
  *  （asar @46195835 `const menuOpenStateFactory = (_standard, state) => () => state`），
@@ -119,15 +138,15 @@ interface MenuRowProps {
   useMenuOpenState?: UseMenuOpenState
 }
 
-/** 根 hook 缺失时的兜底：永不判 live。恒等身份，不会让 hook 顺序在两次渲染之间变化。 */
-const NEVER_LIVE: UseSessions = () => false
+/** 根 hook 缺失时的兜底：对空 state 求值（`running` 判 false、`title` 取空串）。恒等身份，不会让 hook 顺序在两次渲染之间变化。 */
+const NEVER_SESSIONS: UseSessions = (select) => select({})
 
 /** 槽位 hook 缺失时的兜底：什么都不关（同样恒等身份，hook 顺序不随渲染变）。 */
 const NEVER_MENU_OPEN_STATE: UseMenuOpenState = () => [false, () => undefined]
 
 /** 菜单行的宿主：文案与远程面都从槽位载荷来（`live` 由这一行自己从 root hook 读）。 */
 function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState, t }: MenuRowProps & { t: Translate }) {
-  const select = typeof useSessions === 'function' ? useSessions : NEVER_LIVE
+  const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
   const live = select((state) => state?.byId?.[sessionId]?.running === true)
   // 菜单收不收是 owner（本槽位的宿主菜单）的决定，我们只消费它给的这对状态：按下这一行时先发请求、
   // 再让 owner 收菜单——确认框不叠在菜单上（设计稿 §7 状态 ②；官方 README 的示例同序）。
@@ -138,10 +157,47 @@ function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState, t }
       sessionId={sessionId}
       title={displayTitle}
       live={live}
+      // 多选入口排在这一行前面并带发丝线；删除行不再重复画一条。
+      separatorBefore={false}
       t={t}
       dismissMenu={() => setMenuOpen(false)}
     />
   )
+}
+
+/** 「多选」入口的宿主：只吃菜单开合与文案；模式状态由 `BatchSelectMenuItem` 自己订阅。 */
+function SelectRow({ useMenuOpenState, t }: { useMenuOpenState?: UseMenuOpenState; t: Translate }) {
+  const useMenuState = typeof useMenuOpenState === 'function' ? useMenuOpenState : NEVER_MENU_OPEN_STATE
+  const [, setMenuOpen] = useMenuState()
+  return <BatchSelectMenuItem dismissMenu={() => setMenuOpen(false)} t={t} />
+}
+
+/** 多选模式行首勾选框的宿主：槽位只投 `sessionId`，标题从 root hook 的 `byId[id].title` 读。 */
+function PickLeadingRow({
+  sessionId,
+  useSessions,
+  t,
+}: {
+  sessionId: string
+  useSessions?: UseSessions
+  t: Translate
+}) {
+  const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
+  // 与宿主 `sessionTitle()` 同一口径（`title?.trim() ?? ''`），免得两颗入口给确认框的标题不一样。
+  const title = select((state) => state?.byId?.[sessionId]?.title?.trim() ?? '')
+  return <BatchPickCheckbox sessionId={sessionId} title={title} t={t} />
+}
+
+/** 行尾兜底勾选开关的宿主：投影与菜单行同款（`sessionId` / `displayTitle`），`live` 自己从 root hook 读。 */
+function PickRow({
+  sessionId,
+  displayTitle,
+  useSessions,
+  t,
+}: Omit<MenuRowProps, 'useMenuOpenState'> & { t: Translate }) {
+  const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
+  const live = select((state) => state?.byId?.[sessionId]?.running === true)
+  return <BatchPickButton sessionId={sessionId} title={displayTitle} live={live} t={t} />
 }
 
 /** 撤销提示的宿主：组件本身只吃 `restore` 与文案。 */
@@ -152,6 +208,16 @@ function UndoToastSlot({ deps, t }: { deps: SessionDeleteRemote; t: Translate })
 /** 确认框的宿主：组件只吃 `delete`（会话 id 来自模块级现场，不从这里走）。 */
 function DeleteConfirmSlot({ deps, t }: { deps: SessionDeleteRemote; t: Translate }) {
   return <DeleteConfirmHost deps={deps} t={t} />
+}
+
+/** 浮条的宿主：选中非空才渲染（组件自己收空态）。 */
+function BatchBarSlot({ deps, t }: { deps: SessionDeleteRemote; t: Translate }) {
+  return <BatchBar deps={deps} t={t} />
+}
+
+/** 批量确认框的宿主：与单删那张同理，必须脱离行开关那棵子树的生命周期。 */
+function BatchConfirmSlot({ deps, t }: { deps: SessionDeleteRemote; t: Translate }) {
+  return <BatchConfirmHost deps={deps} t={t} />
 }
 
 /** 面板行的占用者：宿主给 `SidebarPanelIconOwnerProps { size, active }`，我们只回一个 glyph。 */
@@ -188,6 +254,33 @@ async function activate(client: ClientContextLike): Promise<void> {
     ),
   )
 
+  // ①' 多选入口：官方四行之后、删除之前（order 850，带发丝线）；按下进入/退出多选模式并收菜单。
+  client.slots.inject(MENU_SLOT, () =>
+    client.slots.register(
+      { name: MENU_SLOT, id: `${PLUGIN_ID}.batch-select`, order: 850, inject: () => ({ t }) },
+      SelectRow,
+    ),
+  )
+
+  // ①' 行首勾选框：多选模式内的主勾选（第十三批①）。宿主只在没有状态点、非归档的行渲染这一格；
+  // 槽位只投 sessionId，标题由 root hook 补。勾选是原生 Checkbox，自己挡住冒泡（不误开会话）。
+  client.slots.inject(LEADING_SLOT, () =>
+    client.slots.register(
+      { name: LEADING_SLOT, id: `${PLUGIN_ID}.batch-pick-leading`, order: 300, inject: () => ({ t }) },
+      PickLeadingRow,
+    ),
+  )
+
+  // ①'' 行尾兜底勾选开关：状态点行 / 归档行的入口（行首格不渲染）。座位原文"一行一颗图标按钮、
+  // 动作归自己"，且**排内点击不误开会话**（`rowActions` 那层自己挡冒泡）⇒ 不需要我们处理传播。
+  // order 300 落在宿主 archive(100) / pin(200) 之后；行首格在场时由 `ui.css` 隐藏这一颗。
+  client.slots.inject(ROW_ACTION_SLOT, () =>
+    client.slots.register(
+      { name: ROW_ACTION_SLOT, id: `${PLUGIN_ID}.batch-pick`, order: 300, inject: () => ({ t }) },
+      PickRow,
+    ),
+  )
+
   // ② 撤销提示的常驻宿主（不在菜单里，理由见 §头注）
   client.slots.inject(OVERLAY_SLOT, () =>
     client.slots.register(
@@ -201,6 +294,22 @@ async function activate(client: ClientContextLike): Promise<void> {
     client.slots.register(
       { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-confirm`, inject: () => ({ deps, t }) },
       DeleteConfirmSlot,
+    ),
+  )
+
+  // ②'' 批量删除的两件浮层（第十三批）：浮条与批量确认框。与单删那两件同理，各一次 `inject`、
+  // 都住在 overlay 上——浮条要跟着每行的勾选开关重绘，确认框必须脱离行子树的生命周期。
+  client.slots.inject(OVERLAY_SLOT, () =>
+    client.slots.register(
+      { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-bar`, inject: () => ({ deps, t }) },
+      BatchBarSlot,
+    ),
+  )
+
+  client.slots.inject(OVERLAY_SLOT, () =>
+    client.slots.register(
+      { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-confirm`, inject: () => ({ deps, t }) },
+      BatchConfirmSlot,
     ),
   )
 

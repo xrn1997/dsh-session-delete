@@ -1,0 +1,324 @@
+// 批量删除浮条（第十三批①）：多选模式、计数、已选清单、行点击选择与确认框。
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  BatchPickButton,
+  clearPicks,
+  enterSelection,
+  exitSelection,
+  getPicks,
+  isSelecting,
+  togglePick,
+} from '../../src/client/batch-select.js'
+import { BatchBar } from '../../src/client/batch-bar.js'
+import { BatchConfirmHost, clearDeleteBatchRequest } from '../../src/client/batch-confirm.js'
+import type { ApplyOutcome } from '../../src/client/remote.js'
+
+beforeEach(() => {
+  exitSelection()
+  clearPicks()
+  clearDeleteBatchRequest()
+})
+
+afterEach(() => {
+  document.body.replaceChildren()
+})
+
+function countOutcomes(ids: readonly string[], kids: Record<string, number> = {}): ApplyOutcome[] {
+  return ids.map(
+    (id) => ({ id, action: 'count', ok: true, value: kids[id] ?? 0 }) as ApplyOutcome,
+  )
+}
+
+function countOnly(): { applyOutcomes: ReturnType<typeof vi.fn> } {
+  const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+    action === 'count' ? countOutcomes(ids) : [],
+  )
+  return { applyOutcomes }
+}
+
+/** 真宿主会话行替身：`data-row-key` 是守卫认行的唯一凭据，行自己的 onClick 模拟"切会话"。 */
+function fakeRow(sessionId: string, titleText = 'A'): {
+  row: HTMLDivElement
+  title: HTMLSpanElement
+  opened: () => number
+} {
+  const row = document.createElement('div')
+  row.setAttribute('data-row-key', `session:${sessionId}`)
+  const title = document.createElement('span')
+  title.textContent = titleText
+  row.appendChild(title)
+  document.body.appendChild(row)
+  let count = 0
+  row.addEventListener('click', () => { count += 1 })
+  return { row, title, opened: () => count }
+}
+
+describe('浮条', () => {
+  it('不在多选态整个不渲染', () => {
+    render(<BatchBar deps={{ applyOutcomes: vi.fn() } as never} />)
+    expect(screen.queryByText(/已选/)).not.toBeInTheDocument()
+  })
+
+  it('多选态 0 条也渲染：只剩提示、全选、禁用运行与退出', () => {
+    enterSelection()
+    render(<BatchBar deps={{ applyOutcomes: vi.fn() } as never} />)
+    expect(screen.queryByText(/已选 /)).not.toBeInTheDocument()
+    expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '移入回收站 0 条' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '全选' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消全选' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '查看已选' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '退出多选' }))
+    expect(isSelecting()).toBe(false)
+    expect(screen.queryByText('点击会话行选择')).not.toBeInTheDocument()
+  })
+
+  it('主行不再放汇总；条数与子会话数在「查看已选」列表头', async () => {
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
+      countOutcomes(ids, { a: 2 }),
+    )
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    togglePick({ sessionId: 'b', title: 'B' })
+    render(<BatchBar deps={{ applyOutcomes } as never} />)
+    expect(screen.getByRole('button', { name: '移入回收站 2 条' })).toBeInTheDocument()
+    expect(screen.queryByText('已选 2 条')).not.toBeInTheDocument()
+    expect(screen.queryByText(/跟着整组走/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
+    expect(screen.getByText('已选 2 条')).toBeInTheDocument()
+    expect(await screen.findByText('含 2 个子会话，跟着整组走')).toBeInTheDocument()
+  })
+
+  it('计数读不到就整句不说（不拿 0 冒充没有）', async () => {
+    const applyOutcomes = vi.fn(async () => {
+      throw Object.assign(new Error('读不到'), { code: 'sessiondelete/io' })
+    })
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    render(<BatchBar deps={{ applyOutcomes } as never} />)
+    fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
+    expect(screen.getByText('已选 1 条')).toBeInTheDocument()
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(screen.queryByText(/子会话/)).not.toBeInTheDocument()
+  })
+
+  it('旧响应不落地：后发的勾选才是准的', async () => {
+    const deferred: Array<(value: ApplyOutcome[]) => void> = []
+    const applyOutcomes = vi.fn(
+      (_action: string, _ids: readonly string[]) =>
+        new Promise<ApplyOutcome[]>((resolve) => deferred.push(resolve)),
+    )
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    const view = render(<BatchBar deps={{ applyOutcomes } as never} />)
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
+    togglePick({ sessionId: 'b', title: 'B' })
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
+    // 第二次的响应先回（a、b 都无子会话）……
+    deferred[1](countOutcomes(['a', 'b']))
+    await screen.findByRole('button', { name: '移入回收站 2 条' })
+    fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
+    await screen.findByText('已选 2 条')
+    // ……第一次的后回（a 带 2 个）——旧响应，不许把「含 2 个」盖回来
+    deferred[0](countOutcomes(['a'], { a: 2 }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.queryByText(/子会话/)).not.toBeInTheDocument()
+    view.unmount()
+  })
+
+  it('「查看已选」默认收起；展开后按勾选序列出标题，可逐条移除', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      action === 'count' ? countOutcomes(ids, { a: 2 }) : [],
+    )
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    togglePick({ sessionId: 'b', title: 'B' })
+    render(<BatchBar deps={{ applyOutcomes } as never} />)
+
+    expect(screen.queryByText('A')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
+    expect(screen.getByText('A')).toBeInTheDocument()
+    expect(screen.getByText('B')).toBeInTheDocument()
+    // 有子会话数就标在它自己那行（与浮条的合计句各说各的）
+    expect(await screen.findByText('含 2 个子会话')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '取消勾选「A」' }))
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['b'])
+    expect(screen.queryByText('A')).not.toBeInTheDocument()
+    expect(screen.getByText('已选 1 条')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '收起已选' }))
+    expect(screen.queryByText('B')).not.toBeInTheDocument()
+  })
+
+  it('清单里移除最后一条：留在多选态，浮条显示 0 条', () => {
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    render(<BatchBar deps={{ applyOutcomes: vi.fn() } as never} />)
+    fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
+    fireEvent.click(screen.getByRole('button', { name: '取消勾选「A」' }))
+    expect(getPicks()).toEqual([])
+    expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '全选' })).toBeInTheDocument()
+    expect(screen.queryByText(/已选 /)).not.toBeInTheDocument()
+  })
+
+  it('模式内点整行切换选中，并挡住行自己的 onClick（会话切换）', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchPickButton sessionId="s1" title="A" />
+      </>,
+    )
+    const { title, opened } = fakeRow('s1')
+
+    fireEvent.click(title)
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
+    expect(opened()).toBe(0)
+
+    fireEvent.click(title)
+    expect(getPicks()).toEqual([])
+    expect(opened()).toBe(0)
+  })
+
+  it('守卫挡得住 React 行自己的 onClick（真宿主用的就是合成事件）', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    const onOpen = vi.fn()
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchPickButton sessionId="s1" title="A" />
+        <div data-row-key="session:s1" onClick={onOpen}>
+          <span data-testid="react-row-title">A</span>
+        </div>
+      </>,
+    )
+    fireEvent.click(screen.getByTestId('react-row-title'))
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('行里的按钮/输入不被守卫拦截；二次点击不把刚选上的又反掉', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchPickButton sessionId="s1" title="A" />
+      </>,
+    )
+    const { row, title } = fakeRow('s1')
+
+    const action = document.createElement('button')
+    row.appendChild(action)
+    let actionClicks = 0
+    action.addEventListener('click', () => { actionClicks += 1 })
+    fireEvent.click(action)
+    expect(actionClicks).toBe(1)
+    expect(getPicks()).toEqual([])
+
+    fireEvent.click(title, { detail: 1 })
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
+    // 双击的第二下与 dblclick 都不能把刚选上的反掉（也别打开宿主的重命名）
+    fireEvent.click(title, { detail: 2 })
+    fireEvent.dblClick(title)
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
+  })
+
+  it('运行中的行点整行不选中（与置灰的勾选框同口径）', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchPickButton sessionId="s1" title="A" live />
+      </>,
+    )
+    const { title, opened } = fakeRow('s1')
+    fireEvent.click(title)
+    expect(getPicks()).toEqual([])
+    expect(opened()).toBe(0)
+  })
+
+  it('全选只收当前 DOM 里、已登记且不在跑的行（按侧栏顺序）；取消全选清空但留在模式内', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchPickButton sessionId="a" title="A" />
+        <BatchPickButton sessionId="b" title="B" />
+        <BatchPickButton sessionId="run" title="Running" live />
+        <BatchPickButton sessionId="hidden" title="Hidden" />
+      </>,
+    )
+    // 侧栏可见顺序 b → a → run；hidden 已登记但不在 DOM 里（折叠/过滤掉的替身）
+    fakeRow('b', 'B')
+    fakeRow('a', 'A')
+    fakeRow('run', 'Running')
+
+    fireEvent.click(screen.getByRole('button', { name: '全选' }))
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['b', 'a'])
+    expect(getPicks().map((p) => p.title)).toEqual(['B', 'A'])
+    // 同一位置切换成「取消全选」，两个按钮不同屏
+    expect(screen.getByRole('button', { name: '取消全选' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '全选' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
+    expect(getPicks()).toEqual([])
+    expect(isSelecting()).toBe(true)
+    expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '全选' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消全选' })).not.toBeInTheDocument()
+  })
+
+  it('已有选中保持在前；全选后同一位置切回取消全选', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchPickButton sessionId="a" title="A" />
+        <BatchPickButton sessionId="b" title="B" />
+      </>,
+    )
+    fakeRow('b', 'B')
+    fakeRow('a', 'A')
+
+    togglePick({ sessionId: 'a', title: 'A' })
+    fireEvent.click(screen.getByRole('button', { name: '全选' }))
+    expect(getPicks().map((p) => p.sessionId)).toEqual(['a', 'b'])
+    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
+    expect(getPicks()).toEqual([])
+  })
+
+  it('点「移入回收站 N 条」进确认框；取消后取消全选、退出多选', async () => {
+    const { applyOutcomes } = countOnly()
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchConfirmHost deps={{ applyOutcomes } as never} />
+      </>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站 1 条' }))
+    expect(await screen.findByText('删除这个会话？')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    await waitFor(() => expect(screen.queryByText('删除这个会话？')).not.toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
+    expect(getPicks()).toEqual([])
+    expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '退出多选' }))
+    expect(isSelecting()).toBe(false)
+    expect(screen.queryByText('点击会话行选择')).not.toBeInTheDocument()
+  })
+})
