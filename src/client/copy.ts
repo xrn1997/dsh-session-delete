@@ -59,6 +59,9 @@ const ZH = {
   'trash.row.deletedAgo': '删除于 {n}{unit}前',
   'trash.row.subagents': '含 {n} 个子会话',
   'trash.row.strandedSubagents': '盘上还剩 {n} 个子会话',
+  // 删除时记下的工作区已经不在账本里（宿主的「删除工作区」只删注册、保留日志）：
+  // 恢复照常回盘，但会落在「未分组」——行上先说，别等它从清单里消失才发现换了地方。
+  'trash.row.workspaceGone': '原工作区已不存在，恢复后归入未分组',
   'trash.unit.minutes': '分钟',
   'trash.unit.hours': '小时',
   'trash.unit.days': '天',
@@ -181,6 +184,7 @@ const EN: Record<CopyKey, string> = {
   'trash.row.deletedAgo': 'Deleted {n}{unit} ago',
   'trash.row.subagents': 'has {n} subagent sessions',
   'trash.row.strandedSubagents': '{n} subagent sessions still on disk',
+  'trash.row.workspaceGone': 'Its workspace no longer exists; it will be restored under “Ungrouped”',
   'trash.unit.minutes': 'min',
   'trash.unit.hours': 'h',
   'trash.unit.days': 'd',

@@ -838,6 +838,17 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         stranded > 0 ? t('trash.row.strandedSubagents', { n: stranded }) : '',
                       ].filter(Boolean).join(' · ')}
                     </div>
+                    {/* 原工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）：恢复照样能回盘，
+                        但会落在「未分组」。**点之前**就告诉用户它要去哪——这条不在行右侧的失败位，
+                        它是这一条的属性，不是某次动作的结果。 */}
+                    {entry.workspaceMissing === true ? (
+                      <div
+                        data-dsh-session-delete="trash-row-workspace-gone"
+                        style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}
+                      >
+                        {t('trash.row.workspaceGone')}
+                      </div>
+                    ) : null}
                     {/* 恢复/彻底删除 的失败原文留在这条记录上（2026-10-15 真机反馈：动作回到行内，
                         失败也就跟着回行内——"动作与它的原因在同一行"这条从 §7 沿下来，没换地方）。 */}
                     {actionFailure[entry.id] === undefined ? null : (
@@ -1123,6 +1134,12 @@ function TrashConfirm({
                 <div style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
                   {projectLabel(entry.projectDir, t)}
                 </div>
+                {/* 逐条说清去向：这一条的原工作区不存在，回去后会在「未分组」（与行上同一句）。 */}
+                {entry.workspaceMissing === true ? (
+                  <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+                    {t('trash.row.workspaceGone')}
+                  </div>
+                ) : null}
               </div>
             ))}
           </div>

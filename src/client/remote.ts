@@ -53,15 +53,18 @@ export interface TrashEntryLike {
   deletedAt: number
   title: string
   sizeBytes: number
-  /** 组视图的三个只读数，**都由 `list` 现算现给、不住在清册里**（清册只记 `parentEntryId` 那件事实）。
+  /** 组视图的只读数，**都由 `list` 现算现给、不住在清册里**（清册只记 `parentEntryId` 那件事实）。
    *  缺席 = 不知道或没有 ⇒ 界面上半句都不出现，也不许拿 0 冒充"没有"。
    *  `subagentCount`：跟着这条父会话**一起进了回收站**的孩子数（清册里指向它的孩子行）。
    *  `subagentBytes`：那些孩子的字节合计——孩子不单独列行，头部合计只加父那一格就会少报。
    *  `strandedSubagents`：**还留在盘上没被带走**的孩子数（来源是宿主 `sessionQuery`），
-   *  级联落地之前删掉的那些存量才非零。与 `subagentCount` 各说各的，不许互相冒充。 */
+   *  级联落地之前删掉的那些存量才非零。与 `subagentCount` 各说各的，不许互相冒充。
+   *  `workspaceMissing`：删除时记下的工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）——
+   *  恢复照常回盘，但会落在「未分组」。行上先说一句，别等它从清单里消失才发现换了地方。 */
   subagentCount?: number
   subagentBytes?: number
   strandedSubagents?: number
+  workspaceMissing?: boolean
 }
 
 /** 彻底删除的回执（镜像 `PurgeResult`）。 */

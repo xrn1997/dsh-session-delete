@@ -41,7 +41,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
  * "清单里有行而回收站根下空空"的世界会被对账当场摘空——那是不一致的世界（真实里行与目录成对出现），
  * 所以这里让二者默认一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
  */
-function makeDeps(over: { seed?: TrashEntry[]; live?: boolean; subagents?: Record<string, number> } = {}) {
+function makeDeps(over: { seed?: TrashEntry[]; live?: boolean; subagents?: Record<string, number>; workspaceExists?: boolean } = {}) {
   const manifest = createMemoryManifest(over.seed ?? [])
   const fs = {
     exists: vi.fn(async (_path: string) => true),
@@ -66,6 +66,7 @@ function makeDeps(over: { seed?: TrashEntry[]; live?: boolean; subagents?: Recor
     unarchive: vi.fn(async (_sessionId: string) => {}),
     detach: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
     attach: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
+    workspaceExists: vi.fn(async (_workspaceId: string) => over.workspaceExists ?? true),
     archive: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
     subagentCounts: vi.fn(async (_parentIds: readonly string[]) => over.subagents ?? {}),
     subagentMembers: vi.fn(async (_sessionId: string) => [] as { sessionId: string; projectDir: string }[]),
@@ -210,6 +211,30 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const { body } = await call(base, ROUTES.list)
     const rows = body.value as TrashEntry[]
     expect(JSON.parse(JSON.stringify(rows[0]))).toEqual(JSON.parse(JSON.stringify(entry('a'))))
+  })
+
+  // 宿主的「删除工作区」只删注册、保留日志 ⇒ 回收站里可能躺着"工作区已经没了"的条目。
+  // 恢复这半已经改成按「未分组」收（见 `restore-session.test.ts`），清单这半要在**点之前**说出这件事。
+  // 与另外三个只读数同一条规矩：只在真缺时出现，工作区还在时不给这个字段（不拿 false 冒充"判过了"）。
+  it('原工作区已不在账本 ⇒ 行上带 workspaceMissing；工作区还在时这个字段不出现', async () => {
+    const gone = makeDeps({ seed: [entry('a')], workspaceExists: false })
+    const goneBase = await start(gone.deps)
+    const goneRows = (await call(goneBase, ROUTES.list)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
+    expect(goneRows[0]).toMatchObject({ workspaceMissing: true })
+    expect(gone.host.workspaceExists).toHaveBeenCalledWith('ws-1')
+
+    const alive = makeDeps({ seed: [entry('a')] })
+    const aliveBase = await start(alive.deps)
+    const aliveRows = (await call(aliveBase, ROUTES.list)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
+    expect(aliveRows[0]!.workspaceMissing).toBeUndefined()
+  })
+
+  it('未分组条目（workspaceId 空串）不去问账本，也不带 workspaceMissing', async () => {
+    const { deps, host } = makeDeps({ seed: [entry('a', { workspaceId: '' })] })
+    const base = await start(deps)
+    const rows = (await call(base, ROUTES.list)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
+    expect(host.workspaceExists).not.toHaveBeenCalled()
+    expect(rows[0]!.workspaceMissing).toBeUndefined()
   })
 
   // 孩子折进父行是"父行在"的前提下才成立。父行不见了（手工摘的、清册半损的、对账把它当外人摘掉的），

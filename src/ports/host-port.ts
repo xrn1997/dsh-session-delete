@@ -4,6 +4,15 @@ export type EvictionOutcome = 'evicted' | 'not-live' | 'unknown'
 
 export interface HostPort {
   workspaceOf(sessionId: string): Promise<string | undefined>
+  /** 账本里还有这个工作区吗。**只读的判别**（`registry.get(id) !== undefined`），不抛。
+   *
+   *  **为什么恢复需要它**：宿主的「删除工作区」只删**注册**、保留目录与每一份会话日志
+   *  （asar `WorkspaceRegistry.delete` 的 JSDoc 原文 "Delete one workspace registration while
+   *  retaining its directory and every session log"），那些会话之后显示在「未分组」下。回收站里
+   *  **删在工作区之前**的条目记着那个已被删掉的 `workspaceId`，恢复时若照旧 `attach` 就会
+   *  `workspace not found` 整条失败（会话留在回收站里，用户看起来就是"恢复报错"）。所以恢复
+   *  先问这一句：不在 ⇒ 不挂账本，照常回盘、归入「未分组」（与宿主自己处理这类会话一致）。 */
+  workspaceExists(workspaceId: string): Promise<boolean>
   /** 会话落盘的**项目目录名**（`<sessions>/<projectKey(cwd)>`）；账本里没有这个会话 ⇒ `undefined`。
    *  与 `workspaceOf` 同一口径：**未命中是正常的 no-op，不是故障**（存储真故障照抛）。 */
   projectDirOf(sessionId: string): Promise<string | undefined>
@@ -336,6 +345,12 @@ export function createHostPort(ctx: unknown): HostPort {
     /** 账本里记着这个会话的工作区：`registry.list()` 的实体 `sessionIds`（该 getter 已按 canonical cwd 过滤过）。 */
     async workspaceOf(sessionId) {
       return registry.list().find(workspace => workspace.sessionIds.includes(sessionId))?.id
+    },
+
+    /** 账本里还有这个工作区吗：`registry.get(id)` 是 `this.entities.get(id)` 的直通（同步 Map 查找），
+     *  未知 id 回 `undefined` ⇒ 这里只做一次判别，不抛。 */
+    async workspaceExists(workspaceId) {
+      return registry.get(workspaceId) !== undefined
     },
 
     /**

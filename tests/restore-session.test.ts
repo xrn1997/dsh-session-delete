@@ -13,7 +13,7 @@ const entry: TrashEntry = {
 const trashDir = trashDirOf(entry.id, HOME)
 const sessionDir = sessionDirOf(entry.projectDir, entry.sessionId, HOME)
 
-function deps(over: Partial<{ dirExists: boolean }> = {}) {
+function deps(over: Partial<{ dirExists: boolean; workspaceExists: boolean }> = {}) {
   const calls: string[] = []
   const fs = {
     exists: vi.fn(async (p: string) => ('projectDir' in over ? false : true) && !p.includes('trash') ? (over.dirExists ?? true) : true),
@@ -31,6 +31,7 @@ function deps(over: Partial<{ dirExists: boolean }> = {}) {
     unarchive: vi.fn(async () => { calls.push('unarchive') }),
     detach: vi.fn(async () => {}),
     attach: vi.fn(async () => { calls.push('attach') }),
+    workspaceExists: vi.fn(async () => over.workspaceExists ?? true),
     archive: vi.fn(async () => { calls.push('archive') }),
   }
   return { calls, d: { fs, host, manifest: createMemoryManifest([entry]), home: HOME, now: () => 0 } as never }
@@ -65,6 +66,39 @@ describe('恢复动词', () => {
     await restoreSession(d)(entry.id)
     expect(calls).toEqual(['rename', 'unarchive', 'announceRestoredBatch(1)'])
     expect((d as never as { host: { attach: ReturnType<typeof vi.fn> } }).host.attach).not.toHaveBeenCalled()
+  })
+
+  // 宿主的「删除工作区」只删注册、保留目录与每一份会话日志（asar `WorkspaceRegistry.delete` 原文
+  // "retaining its directory and every session log"）⇒ 回收站里那些**删在工作区之前**的条目，
+  // 记下的 workspaceId 可能已经没有对应的工作区。恢复不该因此失败：文件照常回盘，会话落在「未分组」，
+  // 与宿主自己处理这类会话的方式一致。
+  it('原工作区已被删掉（账本里没有 ws-1）⇒ 照常恢复、不挂账本，归入未分组', async () => {
+    const { d, calls } = deps({ workspaceExists: false })
+    const host = (d as never as { host: { attach: ReturnType<typeof vi.fn> } }).host
+    await restoreSession(d)(entry.id)
+    expect(calls).toEqual(['rename', 'announceRestoredBatch(1)'])
+    expect(host.attach).not.toHaveBeenCalled()
+    expect(await (d as never as { manifest: { list(): Promise<unknown[]> } }).manifest.list()).toHaveLength(0)
+  })
+
+  it('原工作区已不存在 + 原本未归档：取消归档照旧，恢复完成', async () => {
+    const { d, calls } = deps({ workspaceExists: false })
+    await (d as never as { manifest: { add(e: TrashEntry): Promise<void> } }).manifest.add({ ...entry, wasArchived: false })
+    await restoreSession(d)(entry.id)
+    expect(calls).toEqual(['rename', 'unarchive', 'announceRestoredBatch(1)'])
+  })
+
+  // 「查过之后、挂之前」账本被删（宿主的删除工作区与这次恢复撞上）与上面是同一件事；
+  // 只有工作区仍在、attach 真失败才是 io。
+  it('attach 时工作区刚好被删掉 ⇒ 按未分组收，不回滚', async () => {
+    const { d, calls } = deps()
+    const host = (d as never as { host: { attach: ReturnType<typeof vi.fn>; workspaceExists: ReturnType<typeof vi.fn> } }).host
+    host.workspaceExists = vi.fn(async () => true).mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    host.attach = vi.fn(async () => { throw new Error('workspace not found (attach): ws-1') })
+    const rename = (d as never as { fs: { rename: ReturnType<typeof vi.fn> } }).fs.rename
+    await restoreSession(d)(entry.id)
+    expect(calls).toEqual(['rename', 'announceRestoredBatch(1)'])
+    expect(rename.mock.calls).toEqual([[trashDir, sessionDir]])
   })
 
   it('未分组 + 取消归档失败：回滚里没有摘账本那一步', async () => {
@@ -172,6 +206,7 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
       announceRestored: vi.fn(async () => {}), announceRemoved: vi.fn(async () => {}),
       announceRestoredBatch: vi.fn(async (_ids: readonly string[]) => {}),
       attach: vi.fn(async () => {}), detach: vi.fn(async () => {}),
+      workspaceExists: vi.fn(async () => true),
       unarchive: vi.fn(async () => {}), archive: vi.fn(async () => {}),
     }
     const manifest = createMemoryManifest(seed)

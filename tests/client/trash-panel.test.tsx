@@ -100,6 +100,21 @@ describe('回收站面板', () => {
     await waitFor(() => expect(deps.restore).toHaveBeenCalledWith('a'))
   })
 
+  // 原工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）⇒ 恢复照常回盘、落在「未分组」。
+  // 这句话必须在**点之前**就看得见：它不是某次动作的失败，是这一条要去哪。
+  it('原工作区已不存在：行上先说恢复后归入未分组；工作区还在时没有这句', async () => {
+    const gone = render(
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0]!, workspaceMissing: true }]) }) as never} />,
+    )
+    const row = await screen.findByRole('option', { name: /code-review/ })
+    expect(within(row).getByText('原工作区已不存在，恢复后归入未分组')).toBeInTheDocument()
+    gone.unmount()
+
+    render(<TrashPanel deps={makeDeps() as never} />)
+    await screen.findByRole('option', { name: /code-review/ })
+    expect(screen.queryByText(/原工作区已不存在/)).toBeNull()
+  })
+
   it('清空要先二次确认，确认后才调清空（一段一次）', async () => {
     const deps = makeDeps()
     render(<TrashPanel deps={deps as never} />)
@@ -821,6 +836,17 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     // 多选态不退：成功的勾选随行消失，头部计数跟着降
     expect(screen.getByRole('button', { name: '退出多选' })).toBeInTheDocument()
     expect(screen.getByText('已选 0 条')).toBeInTheDocument()
+  })
+
+  it('批量恢复的确认框里，原工作区不存在的条目也逐条说清去向', async () => {
+    const flagged = three.map((e) => (e.id === 'b' ? { ...e, workspaceMissing: true } : e))
+    const { container } = renderNarrow(depsOf({ list: vi.fn(async () => flagged) }))
+    await screen.findByText('第二条')
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    fireEvent.click(rowOf(container, 'b'))
+    fireEvent.click(footerButton('恢复 1 条'))
+    const dialog = within(await screen.findByRole('dialog'))
+    expect(dialog.getByText('原工作区已不存在，恢复后归入未分组')).toBeInTheDocument()
   })
 
   it('批量恢复部分失败：成功的走、失败的把原文留在它自己那一行', async () => {

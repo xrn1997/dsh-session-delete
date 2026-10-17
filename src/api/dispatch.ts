@@ -190,7 +190,7 @@ function requireMethod(method: string, want: string, route: string): void {
   if (method !== want) throw routeError('bad-method', 405, `方法不允许：${method}（${SESSION_DELETE_API_PREFIX}${route} 需 ${want}）`)
 }
 
-/** 清单交回浏览器的那一行：清册那一行 + 组视图的三个只读数。 */
+/** 清单交回浏览器的那一行：清册那一行 + 组视图的只读数。 */
 export interface TrashRow extends TrashEntry {
   /** 跟着这条父会话一起进回收站的孩子数（来源：清册里 `parentEntryId` 指向它的行）。 */
   readonly subagentCount?: number
@@ -199,13 +199,17 @@ export interface TrashRow extends TrashEntry {
   /** **盘上还留着、没被带走**的孩子数（来源：宿主 `sessionQuery`）。级联落地前删掉的那些存量才非零；
    *  与 `subagentCount` 是两件事，界面上必须各说各的（不许用一个冒充另一个）。 */
   readonly strandedSubagents?: number
+  /** 删除时记下的工作区**已经不在账本里**（宿主的「删除工作区」只删注册、保留日志）。恢复会照常
+   *  回盘、归入「未分组」——界面上点之前就得知道，别等它从清单里消失才发现换了地方。
+   *  缺席 = 工作区还在 / 没有工作区可判（与上面三个只读数同一条"不拿缺席冒充否"的规矩）。 */
+  readonly workspaceMissing?: boolean
 }
 
 /**
  * 把清册的全部行装配成「一行 = 一组」：孩子折进父那一行、不单独列（宿主的客户端本来就藏孩子，
  * 我们若单列就会冒出一堆点不到的行）；父行不在时孩子自己站出来占一行，否则它既看不见也清不掉。
- * 三个只读数只加在这次回信上，**不落清册**——清册该记的是
- * 文件里真有的事实，而"还剩几个孩子"是随盘上随时变的一个数。取数失败照抛（响亮失败，不端一份
+ * 四个只读数只加在这次回信上，**不落清册**——清册该记的是
+ * 文件里真有的事实，而"还剩几个孩子""工作区还在不在"是随盘上随时变的一个数。取数失败照抛（响亮失败，不端一份
  * 少了这栏的清单当没事发生）。
  */
 async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]): Promise<TrashRow[]> {
@@ -226,11 +230,18 @@ async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]):
   }
 
   const visible = rows.filter(row => !foldedInto.has(row.id))
-  const stranded = await deps.host.subagentCounts(visible.map(row => row.sessionId))
-  return visible.map((row) => {
+  // 两个取数面各管各的：`subagentCounts` 是宿主 `sessionQuery` 的批量口（一处调用），
+  // `workspaceExists` 是账本 Map 的逐行只读判别（空串是「未分组」，没有工作区可问）。
+  const [stranded, workspaceMissing] = await Promise.all([
+    deps.host.subagentCounts(visible.map(row => row.sessionId)),
+    Promise.all(visible.map(async row =>
+      row.workspaceId === '' ? false : !(await deps.host.workspaceExists(row.workspaceId)))),
+  ])
+  return visible.map((row, index) => {
     const kids = kidsByParent.get(row.id)
     const left = stranded[row.sessionId]
-    if (kids === undefined && left === undefined) return row
+    const missing = workspaceMissing[index] === true
+    if (kids === undefined && left === undefined && !missing) return row
     return {
       ...row,
       ...(kids === undefined ? {} : {
@@ -238,6 +249,7 @@ async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]):
         subagentBytes: kids.reduce((total, kid) => total + kid.sizeBytes, 0),
       }),
       ...(left === undefined ? {} : { strandedSubagents: left }),
+      ...(missing ? { workspaceMissing: true } : {}),
     }
   })
 }

@@ -88,20 +88,21 @@ function makeEnv(over: {
 }
 
 describe('宿主服务层端口的接线', () => {
-  it('十六个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
+  it('十七个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
     const { ctx } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }], headers: { s1: { cwd: 'C:/p' } } })
     const host = createHostPort(ctx)
     const results = [
       host.workspaceOf('s1'), host.projectDirOf('s1'), host.titleOf('s1'),
       host.isLive('s1'), host.isArchived('s1'), host.unarchive('s1'),
       host.detach('s1', 'ws-1'), host.attach('s1', 'ws-1'), host.archive('s1', 'ws-1'),
+      host.workspaceExists('ws-1'),
       // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 整批通告的预取/发送 + 清单的两个只读/取数面），
       // 契约都是"不抛"
       host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored('s1'),
       host.restoredSummariesOf(), host.announceRestoredBatch(['s1']),
       host.subagentCounts(['s1']), host.subagentMembers('s1'),
     ]
-    expect(results.length).toBe(16)
+    expect(results.length).toBe(17)
     for (const r of results) expect(r).toBeInstanceOf(Promise)
     await expect(Promise.all(results)).resolves.toBeDefined()
   })
@@ -383,6 +384,17 @@ describe('宿主服务层端口的接线', () => {
     const host = createHostPort(ctx)
     await expect(host.detach('s1', 'gone')).rejects.toThrow(/workspace/)
     await expect(host.attach('s1', 'gone')).rejects.toThrow(/workspace/)
+  })
+
+  // 恢复拿它判"记下的工作区还在不在"：宿主的「删除工作区」只删注册、保留目录与日志 ⇒
+  // 回收站里的老条目可能指着一个已经不存在的工作区。这个判据**不抛**（registry.get 是同步 Map 查找），
+  // 才好在写任何字节之前问一遍。
+  it('workspaceExists 走 registry.get：在 ⇒ true，不在 ⇒ false，不抛', async () => {
+    const { ctx, calls } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }] })
+    const host = createHostPort(ctx)
+    expect(await host.workspaceExists('ws-1')).toBe(true)
+    expect(await host.workspaceExists('gone')).toBe(false)
+    expect(calls).toEqual(['registry.get(ws-1)', 'registry.get(gone)'])
   })
 
   // 这是本仓走宿主**内部入口**的两处之一（另一处是 `announceRemoved` 发的转发事件）——
