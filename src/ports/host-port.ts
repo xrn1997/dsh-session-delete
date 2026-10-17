@@ -23,6 +23,16 @@ export interface HostPort {
   /** **如实通告**客户端"这个会话回来了"：摘要取自宿主自己的会话列表，发 `api-session/added`。
    *  取不到摘要就不发（恢复本身已经完成）。 */
   announceRestored(sessionId: string): Promise<void>
+  /** 宿主会话表的一次预取：`[{ sessionId, summary }]`，`summary` 是宿主**原样**那一条。
+   *  给 {@link announceRestoredBatch} 当 `known` 用——整批只拉一次表。服务没挂回空表，不抛。 */
+  restoredSummariesOf(): Promise<readonly { readonly sessionId: string; readonly summary: unknown }[]>
+  /** 一组会话的通告（2026-10-17 批量重构）：`known` 是调用方**整批预取**的摘要表——给了就一次都不
+   *  再拉表（每条一次 `controller.list()` 在 100 条的批量里就是 100 遍全表扫，那是那次"恢复很慢"的
+   *  头号来源）；没给则自己拉一次。缺席 id 不发，不影响已完成的恢复。 */
+  announceRestoredBatch(
+    ids: readonly string[],
+    known?: readonly { readonly sessionId: string; readonly summary: unknown }[],
+  ): Promise<void>
   unarchive(sessionId: string): Promise<void>
   detach(sessionId: string, workspaceId: string): Promise<void>
   attach(sessionId: string, workspaceId: string): Promise<void>
@@ -296,8 +306,23 @@ function sessionIdShapes(id: string): string[] {
   return [...new Set([id, bare, `session-${bare}`])]
 }
 
+/** 宿主会话表的一次取数（`ctx.sessionController.list()` 的两种返回形状都折成数组）。
+ *  服务没挂 / 形状不对 / 抛错 ⇒ 空表——**这条不替宿主兜错误**：调用方拿空表的语义都是"少发一条通告"，
+ *  不是"恢复失败"。 */
+async function controllerItems(host: HostCtxLike): Promise<readonly unknown[]> {
+  try {
+    const controller = host.get('sessionController') as SessionListLike | undefined
+    if (controller === undefined || controller === null || typeof controller.list !== 'function') return []
+    const listed = await controller.list()
+    const items: unknown = Array.isArray(listed) ? listed : (listed as { items?: unknown } | null)?.items
+    return Array.isArray(items) ? items : []
+  } catch {
+    return []
+  }
+}
+
 /**
- * 宿主服务层的**真实绑定**：十四个方法各自把动词层的问题翻成宿主官方服务的调用。
+ * 宿主服务层的**真实绑定**：各方法把动词层的问题翻成宿主官方服务的调用。
  *
  * 每个方法的依据（服务 / 方法 / 入参）与原文切片见各自的实现处注释。
  * 出错一律**原样抛**（不在这里裹动词码）：动词层把原始错误挂在 `cause` 上，
@@ -433,21 +458,45 @@ export function createHostPort(ctx: unknown): HostPort {
      * 摘要**取自宿主自己的会话列表**（`ctx.sessionController.list()`），不自己造一行：客户端 `handleSessionAdded`
      * 要的是宿主 `summaryFor` 那套形状（sessionId / updatedAt / blank / projections…），照抄宿主的那一份最可靠。
      * 取不到（控制器缺席 / 列表里没有它 / 抛错）就**一条都不发**——恢复本身已经完成，只是要等下次重连才上屏。
+     *
+     * **单条路各拉一次表**；批量走 {@link HostPort.announceRestoredBatch} + 一次预取（见 {@link restoredSummariesOf}），
+     * 100 条的批量恢复用这条就是 100 遍全表扫——那是 2026-10-17 那次"恢复很慢"的头号来源。
      */
     async announceRestored(sessionId) {
+      const summary = (await this.restoredSummariesOf()).find(item => item.sessionId === sessionId)?.summary
+      if (summary === undefined) return
       try {
-        const controller = host.get('sessionController') as SessionListLike | undefined
-        if (controller === undefined || controller === null || typeof controller.list !== 'function') return
-        const listed = await controller.list()
-        const items: unknown = Array.isArray(listed) ? listed : (listed as { items?: unknown } | null)?.items
-        if (!Array.isArray(items)) return
-        const summary = items.find(item => (item as { sessionId?: unknown } | null)?.sessionId === sessionId)
-        if (summary === undefined) return
         // 过一遍 JSON：转发器对转发事件做 lossless-JSON 断言（`assertJsonArgs`），
         // `undefined` 字段在 stringify 时自然消失，正是客户端那一侧要的形状。
         host.emit('api-session/added', JSON.parse(JSON.stringify(summary)))
       } catch {
-        // 同上：通告失败不影响恢复的结果
+        // 通告是收尾：某个监听者抛错不该把已经完成的恢复翻成失败
+      }
+    },
+
+    /** 整批预取一次会话表（`[{ sessionId, summary }]`）：通告的路径与单条一致，**拉表从每条一次抬成整批一次**。 */
+    async restoredSummariesOf() {
+      const out: { sessionId: string; summary: unknown }[] = []
+      for (const item of await controllerItems(host)) {
+        const sessionId = (item as { sessionId?: unknown } | null)?.sessionId
+        if (typeof sessionId === 'string') out.push({ sessionId, summary: item })
+      }
+      return out
+    },
+
+    /** 一组会话的通告（2026-10-17 批量重构）：`known` 给了就**一次都不拉表**，只按它筛。
+     *  与 {@link announceRestored} 同一判据、同一事件、同一载荷形状，只是取数由整批共享。 */
+    async announceRestoredBatch(ids, known) {
+      if (ids.length === 0) return
+      const summaries = known ?? await this.restoredSummariesOf()
+      for (const id of ids) {
+        const summary = summaries.find(item => item.sessionId === id)?.summary
+        if (summary === undefined) continue
+        try {
+          host.emit('api-session/added', JSON.parse(JSON.stringify(summary)))
+        } catch {
+          // 同 announceRestored：收尾失败不翻结果
+        }
       }
     },
 

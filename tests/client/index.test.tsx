@@ -20,7 +20,7 @@ import { type ComponentType, type ReactElement, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { clearDeleteRequest } from '../../src/client/delete-confirm.js'
 import { apply, inject } from '../../src/client/index.js'
-import type { RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
+import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { clearUndoNotice } from '../../src/client/undo-toast.js'
 import { ROUTES, SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
 
@@ -84,22 +84,30 @@ const DETAIL: TrashDetailLike = {
   omittedByPayloadCap: 0,
 }
 
-/** 一个**与实现同形**的 `RawSessionDeleteRemote`：六个方法各回一个信封。 */
+/** 一次 `apply` 的逐条成功结果（判别联合要的是**字面量**动作，所以按动作分支造，不靠展开）。 */
+function okOutcomes(action: ApplyAction, ids: readonly string[]): ApplyOutcome[] {
+  return ids.map((id) => {
+    if (action === 'count') return { id, action, ok: true as const, value: 0 }
+    if (action === 'purge') return { id, action, ok: true as const, value: { removed: 1, freedBytes: 224 * 1024 } }
+    return { id, action, ok: true as const, value: ROW }
+  })
+}
+
+/** 一个**与实现同形**的 `RawSessionDeleteRemote`：五个段名各回一个信封（写动词全走 `apply`）。 */
 function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
-    delete: async () => ({ ok: true, value: ROW }),
-    restore: async () => ({ ok: true, value: ROW }),
-    purge: async () => ({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } }),
+    ping: async () => ({ ok: true, value: 'pong' }),
     detail: async () => ({ ok: true, value: DETAIL }),
-    subagentCount: async () => ({ ok: true, value: 0 }),
+    apply: async (action, ids) => ({ ok: true, value: okOutcomes(action, ids) }),
+    empty: async () => ({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } }),
     ...overrides,
   }
 }
 
 /**
  * 取数通道的三种状态。
- * - `up`：六个端点按井号回信封（**探测过**）；
+ * - `up`：五个段名按井号回信封（**探测过**）；
  * - `throwing`：`fetch` 直接 reject（路由不在、宿主没起来）——探测不过；
  * - `not-json`：回的是 SPA 的 index.html（前缀路由没注册时落到兜底处理器）——探测也不过。
  */
@@ -112,12 +120,14 @@ function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { c
   const calls: FetchCall[] = []
   const handler: Record<string, (body: Record<string, unknown>) => Promise<unknown>> = {
     [SESSION_DELETE_API_PREFIX + ROUTES.list]: async () => raw.list(),
-    [SESSION_DELETE_API_PREFIX + ROUTES.delete]: async (body) => raw.delete(body['sessionId'] as string),
-    [SESSION_DELETE_API_PREFIX + ROUTES.restore]: async (body) => raw.restore(body['entryId'] as string),
-    [SESSION_DELETE_API_PREFIX + ROUTES.purge]: async (body) => raw.purge(body['entryId'] as string | undefined),
-    // 两条纯读也要有座位：确认框在打开的那一刻会问一次计数（少注册一条就是"假 fetch 不认这路径"）
+    // 探测走这一问（不再每次页面加载都跑一遍全表对账）
+    [SESSION_DELETE_API_PREFIX + ROUTES.ping]: async () => raw.ping(),
+    // 两条纯读要有座位：面板挂载读详情、确认框打开那一刻问一次计数
     [SESSION_DELETE_API_PREFIX + ROUTES.detail]: async (body) => raw.detail(body['entryId'] as string),
-    [SESSION_DELETE_API_PREFIX + ROUTES.subagentCount]: async (body) => raw.subagentCount(body['sessionId'] as string),
+    // 写动词一段收口：`/apply` 按 body 里的动作与 ids 分派（与 Node 半那张路由表同形）
+    [SESSION_DELETE_API_PREFIX + ROUTES.apply]: async (body) =>
+      raw.apply(body['action'] as never, body['ids'] as string[]),
+    [SESSION_DELETE_API_PREFIX + ROUTES.empty]: async () => raw.empty(),
   }
   globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
     const path = String(input)
@@ -266,27 +276,26 @@ describe('apply 的装配面', () => {
     expect(registered[3]?.order).toBe(900)
   })
 
-  it('探测只发一次 GET /list；动作各走自己那条 POST 段名（请求体是字段名，不是位置参数）', async () => {
-    const del = vi.fn(async () => ({ ok: true, value: ROW }) as const)
-    const restore = vi.fn(async () => ({ ok: true, value: ROW }) as const)
-    const purge = vi.fn(async () => ({ ok: true, value: { removed: 1, freedBytes: 1 } }) as const)
-    const { registered, fetchCalls } = await bootstrap(rawRemote({ delete: del, restore, purge }))
-    // 探测那一次
-    expect(fetchCalls[0]).toEqual({ path: `${SESSION_DELETE_API_PREFIX}${ROUTES.list}`, method: 'GET', body: {} })
+  it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {
+    const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
+    const { registered, fetchCalls } = await bootstrap(rawRemote({ apply }))
+    // 探测那一次：最便宜的在/不在
+    expect(fetchCalls[0]).toEqual({ path: `${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`, method: 'GET', body: {} })
 
     render(<Scene registered={registered} />)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
-    await waitFor(() => expect(del).toHaveBeenCalledWith('session-a'))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith('delete', ['session-a']))
     fireEvent.click(await screen.findByRole('button', { name: '撤销' }))
-    await waitFor(() => expect(restore).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith('restore', ['a']))
 
     const posted = fetchCalls.filter((c) => c.method === 'POST')
-    // 计数排在删除**之前**：那半句「含 N 个子会话」要在点下去之前就摆出来，而那一刻这条会话还不在回收站里
+    // 一段管所有动作：三次请求都打同一条路径，**动作住在 body 里**；
+    // 计数排在删除**之前**：那半句「含 N 个子会话」要在点下去之前就摆出来（那一刻这条会话还不在回收站里）
     expect(posted).toEqual([
-      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.subagentCount}`, method: 'POST', body: { sessionId: 'session-a' } },
-      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.delete}`, method: 'POST', body: { sessionId: 'session-a' } },
-      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.restore}`, method: 'POST', body: { entryId: 'a' } },
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'count', ids: ['session-a'] } },
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'delete', ids: ['session-a'] } },
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'restore', ids: ['a'] } },
     ])
   })
 
@@ -299,7 +308,7 @@ describe('apply 的装配面', () => {
     const { registered } = await bootstrap(
       rawRemote({
         list,
-        delete: async () => { rows = [ROW]; return { ok: true, value: ROW } as const },
+        apply: async (action) => { if (action === 'delete') rows = [ROW]; return { ok: true as const, value: okOutcomes('delete', ['session-a']) } },
       }),
     )
     const panel = registered.find((row) => row.name === MAIN_SLOT)
@@ -311,14 +320,14 @@ describe('apply 的装配面', () => {
       </>,
     )
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
-    // 两次：探测那一次 + 面板挂载那一次
-    expect(list).toHaveBeenCalledTimes(2)
+    // 一次：面板挂载那一次（探测走 `/ping`，不再读清单——2026-10-17 第四批）
+    expect(list).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
 
-    // 第三次 = 删除成功后的那次重读（本轮修的就是它）
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(3))
+    // 第二次 = 删除成功后的那次重读（本轮修的就是它）
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
   })
@@ -350,7 +359,7 @@ describe('deps 装配：信封的失败支落到界面上的后果', () => {
   it('delete 回 { ok: false, error } 时原文上屏、确认框留着——不走「已移入回收站」那条成功路径', async () => {
     const { registered } = await bootstrap(
       rawRemote({
-        delete: async () => ({ ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } }),
+        apply: async () => ({ ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } }) as const,
       }),
     )
     render(<Scene registered={registered} />)
@@ -377,9 +386,12 @@ describe('deps 装配：信封的失败支落到界面上的后果', () => {
     expect(screen.queryByText('undefined')).not.toBeInTheDocument()
   })
 
-  it('delete 回 { ok: true, value } 时照常走成功路径（展开不吃掉值，撤销拿到真的条目 id）', async () => {
-    const restore = vi.fn(async () => ({ ok: true, value: ROW }) as const)
-    const { registered } = await bootstrap(rawRemote({ restore }))
+  it('单条支展成裸值时撤销拿到真的条目 id（不是信封本体）', async () => {
+    const apply = vi.fn(async (action: 'delete' | 'restore', ids: string[]) => ({
+      ok: true as const,
+      value: ids.map((id) => ({ id, action, ok: true as const, value: ROW })),
+    }))
+    const { registered } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
@@ -387,7 +399,7 @@ describe('deps 装配：信封的失败支落到界面上的后果', () => {
 
     // 展开前 `outcome.value` 是 `{ ok, value }`，拿 `.id` 会得到 undefined——撤销会去打 restore(undefined)。
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
-    await waitFor(() => expect(restore).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith('restore', ['a']))
   })
 })
 
@@ -449,8 +461,11 @@ describe('菜单收起 = 行子树卸载（真 Menu 的那条门）', () => {
   })
 
   it('按下这一行后菜单关掉、行没了——确认框仍在、且「移入回收站」点得到', async () => {
-    const del = vi.fn(async () => ({ ok: true, value: ROW }) as const)
-    const { registered } = await bootstrap(rawRemote({ delete: del }))
+    const apply = vi.fn(async (action: 'delete', ids: string[]) => ({
+      ok: true as const,
+      value: ids.map((id) => ({ id, action, ok: true as const, value: ROW })),
+    }))
+    const { registered } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)
 
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
@@ -462,7 +477,7 @@ describe('菜单收起 = 行子树卸载（真 Menu 的那条门）', () => {
     const confirmButton = screen.getByRole('button', { name: '移入回收站' })
     expect(confirmButton).not.toBeDisabled()
     fireEvent.click(confirmButton)
-    await waitFor(() => expect(del).toHaveBeenCalledWith('session-a'))
+    await waitFor(() => expect(apply).toHaveBeenCalledWith('delete', ['session-a']))
   })
 })
 

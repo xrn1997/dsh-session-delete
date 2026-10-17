@@ -36,7 +36,12 @@ type Undo = () => Promise<void>
  *    账本跟着挂、可见性跟着还原），失败照抛——不留"半组在回收站、半组在原地"的世界。
  */
 export function deleteSession(deps: DeleteDeps) {
-  return async function deleteSession(sessionId: string): Promise<TrashEntry> {
+  return async function deleteSession(
+    sessionId: string,
+    /** 批量层（`verbs/apply.ts`）在写之前收一份"这次真正要搬的成员"（父 + 盘上存在的孩子），
+     *  成功后用它记下"已被同批前一条带走"的 id。单条调用不传。 */
+    options: { readonly onMembers?: (sessionIds: readonly string[]) => void } = {},
+  ): Promise<TrashEntry> {
     const kids = await deps.host.subagentMembers(sessionId)
 
     const parentProjectDir = await deps.host.projectDirOf(sessionId)
@@ -63,6 +68,9 @@ export function deleteSession(deps: DeleteDeps) {
         members.push({ sessionId: kid.sessionId, projectDir: kid.projectDir })
       }
     }
+    // 名单在**写之前**交给批量层；批量层只在 `deleteSession` 成功返回后才把它记成"已带走"，
+    // 中途失败并整组回滚时不会误判。
+    options.onMembers?.(members.map(member => member.sessionId))
 
     const deletedAt = deps.now()
     const done: Undo[] = []

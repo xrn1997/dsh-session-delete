@@ -81,17 +81,20 @@ const ZH = {
   'trash.divider.label': '调整左右分栏宽度',
   'trash.select.group': '勾选「{project}」这 {count} 条会话',
 
-  // 多选与批量彻底删除（2026-10-15 真机反馈后开的一条口子：只批量删，不批量恢复，见 §2/§10）。
+  // 多选与批量动作（2026-10-15 开的口子先只有"批量彻底删除"；2026-10-17 按用户裁定加上"批量恢复"：
+  // 恢复是加法，但一批条目多、去向是各自的旧项目目录，点之前也要过一道确认框——**批量**走框，
+  // 单行那颗仍然直接执行）。
   'trash.toolbar.select': '多选',
   'trash.toolbar.selectExit': '退出多选',
   'trash.select.count': '已选 {count} 条',
   'trash.select.purge': '彻底删除 {count} 条',
-  'trash.select.needOne': '先勾选要彻底删除的会话',
+  'trash.select.restore': '恢复 {count} 条',
+  'trash.select.needOne': '先勾选要处理的会话',
   'trash.select.row': '勾选「{title}」',
   'trash.confirm.bulk': '彻底删除 {count} 个会话？',
-  // 页脚那句在两种页脚按钮下说的是两件事：那颗是「清空回收站…」时警告"清空"，是「彻底删除 N 条」时
-  // 警告"这一批"。整句各一个 key（同 `trash.footer.note` 的理由：这句必须看得见，不靠拼接）。
-  'trash.footer.noteBulk': '回收站本体在宿主数据根下的 {dir} 里，不自动过期；选中的 {count} 条彻底删除后不可恢复。',
+  'trash.confirm.restore': '恢复 {count} 个会话？',
+  'trash.confirm.restore.body': '这一批会回到它们各自的原项目目录，恢复到会话列表里。',
+  'trash.confirm.restoreNow': '恢复',
 
   // 详情那一层（设计稿 2026-10-15 §2.3）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
   'detail.notSelected': '选中一条会话，看它讲了什么',
@@ -187,11 +190,13 @@ const EN: Record<CopyKey, string> = {
   'trash.toolbar.selectExit': 'Done selecting',
   'trash.select.count': '{count} selected',
   'trash.select.purge': 'Delete {count} permanently',
-  'trash.select.needOne': 'Pick the sessions to delete first',
+  'trash.select.restore': 'Restore {count}',
+  'trash.select.needOne': 'Pick the sessions to work on first',
   'trash.select.row': 'Select “{title}”',
   'trash.confirm.bulk': 'Delete these {count} sessions permanently?',
-  'trash.footer.noteBulk':
-    'The trash itself lives under the host data root in {dir}; it never expires on its own, and the {count} selected sessions cannot be recovered once deleted.',
+  'trash.confirm.restore': 'Restore these {count} sessions?',
+  'trash.confirm.restore.body': 'They go back to their original project folders and reappear in the session list.',
+  'trash.confirm.restoreNow': 'Restore',
 
   'detail.notSelected': 'Select a session to see what it was about',
   'detail.loading': 'Reading this session…',

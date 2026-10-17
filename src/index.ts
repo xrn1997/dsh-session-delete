@@ -28,7 +28,7 @@ export const name = '@xrn1997/dsh-session-delete'
  *   它取不到时 `titleOf` 返回空串，正是契约允许的降级。
  *
  * `webServer` 是**浏览器半取数通道的承载者**（那条薄线）：插件用它注册 `/dsh-session-delete-api`
- * 前缀路由，浏览器半同源 fetch 那六个端点。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
+ * 前缀路由，浏览器半同源 fetch 那五个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
  * `super(ctx, "webServer")`），服务名与 `register({kind:'prefix', path, handler})` 的形状按
  * `dsh-host-webserver/lib/index.js` 与 `README.md` 原文读实，不是猜的。
  */
@@ -151,18 +151,32 @@ interface StorageDomainCtxLike {
 
 /**
  * 清单的真实绑定：官方 storage domain → `ManifestPort`（`StorageDomainLike` 在动词层保持一种读法）。
- * 域**懒开**且只开一次（`apply` 是同步的，而 `open()` 是异步的），并挂一条 `ctx.effect` 清理：
- * 插件卸载时关掉句柄（句柄归调用方所有，这是 `open()` 的 JSDoc 明写的契约）。
+ * 域**懒开**且成功句柄只开一次（`apply` 是同步的，而 `open()` 是异步的），并挂一条 `ctx.effect` 清理：
+ * 插件卸载时关掉句柄并把 `close()` 的落地交回框架（句柄归调用方所有，这是 `open()` 的 JSDoc 明写的契约；
+ * 2026-10-17 起不再 `void` 走掉——没关严的句柄会让下一份同名域撞 `already-open`）。
+ *
+ * **失败不缓存**：`open()` 被拒是瞬态（域被别的持有者占着、装载竞态），把第一次的 rejected promise
+ * 缓存起来等于"这个会话永远删不掉"——下一次读会重新走 `open()`，成功才落下活句柄。
  */
 export function createStorageManifest(ctx: Context): ManifestPort {
   const host = ctx as unknown as StorageDomainCtxLike
+  let domain: DomainLike | undefined
   let opening: Promise<DomainLike> | undefined
-  ctx.effect(() => () => {
-    void opening?.then(handle => handle.close()).catch(() => { /* 关不掉只说明域已经不在了 */ })
+  ctx.effect(() => async () => {
+    // 开失败过就没有句柄要关：那条拒绝在这里就地咽掉，不让它从卸载路径上冒出来。
+    const handle = (opening !== undefined ? await opening.catch(() => undefined) : undefined) ?? domain
+    await handle?.close()
   }, 'session-delete.manifest')
   const table = async (): Promise<DomainTableLike> => {
-    opening ??= host.storageDomain.open(trashDomainSpec)
-    return (await opening).table('entries')
+    if (domain === undefined) {
+      opening ??= host.storageDomain.open(trashDomainSpec)
+      try {
+        domain = await opening
+      } finally {
+        opening = undefined
+      }
+    }
+    return domain.table('entries')
   }
   const adapter: StorageDomainLike = {
     readAll: async () => [...(await table()).entries()].map(([, record]) => record),

@@ -10,10 +10,13 @@ const manifest = JSON.parse(
   readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
 ) as {
   name: string
+  main: string
+  types: string
   exports: Record<string, unknown>
   files: string[]
   icon: string
   peerDependencies: Record<string, string>
+  devDependencies: Record<string, string>
   publishConfig: { access?: string }
   repository: { url?: string }
   scripts: Record<string, string>
@@ -102,9 +105,40 @@ describe('宿主安装闸与浏览器半声明', () => {
     for (const status of Object.values(releases)) expect(status).toBe('compatible')
   })
 
+  // **包形不变式**（官方 `reference/cookbook/adding-a-package` 逐字：`main: "lib/index.js"`、
+  // `types: "lib/types/index.d.ts"`、`exports["."].types: "./lib/types/index.d.ts"`、
+  // `exports["."].default: "./lib/index.js"`，并且**不发布** `src`、声明映射、JS map、陈旧的根声明文件）。
+  // `./client` 那两件的形状不是推的——宿主 `dsh-client-connection` 的 `package.json` 原文就写着
+  // `{ "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" }`（asar 实读，见现状稿 §9）。
+  it('包形不变式：main / types / 两个出口的 types+default 都在 lib/ 与 lib/types/ 下', () => {
+    expect(manifest.main).toBe('lib/index.js')
+    expect(manifest.types).toBe('lib/types/index.d.ts')
+    expect(manifest.exports['.']).toEqual({ types: './lib/types/index.d.ts', default: './lib/index.js' })
+    expect(manifest.exports['./client']).toEqual({
+      types: './lib/types/client/index.d.ts', default: './lib/client.js',
+    })
+  })
+
+  // `files` 从「整目录 `lib`」收成**精确产物**：整目录会把 1.26 MB 的 `lib/client.js.map` 一起发出去
+  // （官方那条明写"不要发布 JS map"），而 `link:` 装法根本不看这份清单——两处不同步就会只有 npm 在发垃圾。
+  it('发布清单精确到产物：不列整目录 lib、不带任何 .map', () => {
+    expect(manifest.files).not.toContain('lib')
+    for (const entry of manifest.files) expect(entry, entry).not.toMatch(/\.map$/)
+    expect(manifest.files).toContain('lib/index.js')
+    expect(manifest.files).toContain('lib/client.js')
+    expect(manifest.files).toContain('lib/types/**/*.d.ts')
+  })
+
+  // 官方那条"peer 与 dev **同范围**、每条 dsh 对等依赖都在 devDependencies 里镜像"要防的是这一件事：
+  // 声明的地板是 4.0.2、编译时装的是 4.0.4 ⇒ 那个地板从没被编译过，却写进了契约。
+  it('每条 peer 若在 devDependencies 里镜像，范围必须逐字相同', () => {
+    for (const [dep, range] of Object.entries(manifest.peerDependencies)) {
+      if (dep in manifest.devDependencies) expect(manifest.devDependencies[dep], dep).toBe(range)
+    }
+  })
+
   it('两条半产物的入口在 manifest 里声明齐全', () => {
     expect(manifest.dsh.bundle.patch).toBe('./cordis.patch.yml')
-    expect(manifest.exports['./client']).toBe('./lib/client.js')
   })
 
   /* ── npm 发布面（缺哪一条，`npm publish` 不是失败就是发出去一个坏包） ── */
@@ -113,10 +147,13 @@ describe('宿主安装闸与浏览器半声明', () => {
     expect(manifest.publishConfig.access).toBe('public')
   })
 
-  it('发布即构建：prepack 里跑 build（lib/ 是构建产物、不入库）', () => {
+  it('发布即构建：build 两步（tsdown 出台面 JS，tsc 出 lib/types 声明），prepack 跑 build', () => {
     // `prepack` 在 `npm pack` / `pnpm pack` / `npm|pnpm publish` 四条路上都会跑，
     // 所以"手滑直接 publish 出一个空的 lib/"这件事不可能发生。
     expect(manifest.scripts.prepack).toBe('npm run build')
+    // 声明换成 tsc 出到 `lib/types/`（tsdown 那份 `lib/index.d.ts` 正是官方点名不要的"根声明文件"），
+    // 顺序不能反：tsdown 的 Node 半配置带 `clean: true`，会先把 `lib/` 抹干净。
+    expect(manifest.scripts.build).toBe('tsdown && tsc -p tsconfig.build.json')
   })
 
   it('展示元信息：locale 两套语言与图标都进了发布清单', () => {

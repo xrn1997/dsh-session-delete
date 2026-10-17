@@ -112,14 +112,17 @@ export function gateClientImport(source: string): null {
 
 export default defineConfig([
   {
-    // Node 半：ESM node，`@deepseek-ai/*` 留 import（真实安装里由宿主提供），npm 依赖 inline，dts 直出
+    // Node 半：ESM node，`@deepseek-ai/*` 留 import（真实安装里由宿主提供），npm 依赖 inline
     entry: { index: 'src/index.ts' },
     outDir: 'lib',
     format: ['esm'],
     platform: 'node',
     target: 'es2024',
     fixedExtension: false,
-    dts: true,
+    // 声明由 `tsc -p tsconfig.build.json` 出到 `lib/types/`（官方包形不变式；tsdown 那份落在
+    // `lib/index.d.ts`，正是官方点名不要的"陈旧的根声明文件"）。`build` 脚本里 tsc 排在 tsdown 之后，
+    // 因为下面这个 `clean` 会先把整个 `lib/` 抹掉。
+    dts: false,
     clean: true,
     deps: {
       // 归属已由 neverBundle/alwaysBundle 全量表定，onlyBundle 关闭其白名单过滤并消掉构建期 hint

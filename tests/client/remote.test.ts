@@ -40,6 +40,20 @@ describe('失败判别（标记位）与原文兜底', () => {
     })
     expect(failureOf('炸了')).toEqual({ code: 'client/unknown', message: '炸了' })
   })
+
+  // 2026-10-17 错误面对齐：详情（`sessionId` / `activity`）必须一路走到组件面，不能在这里掉。
+  it('带标记位的失败把 details 第三件原样带出', () => {
+    const marked = Object.assign(new Error('会话正在运行'), {
+      code: 'workspace/session-active',
+      isDSHRemoteError: true,
+      details: { sessionId: 'session-a', activity: [{ kind: 'turn' }] },
+    })
+    expect(failureOf(marked)).toEqual({
+      code: 'workspace/session-active',
+      message: '会话正在运行',
+      details: { sessionId: 'session-a', activity: [{ kind: 'turn' }] },
+    })
+  })
 })
 
 describe('注入面的展开', () => {
@@ -93,45 +107,73 @@ describe('createHttpRemote · detail 那一趟（第五个端点）', () => {
     vi.unstubAllGlobals()
   })
 
-  it('探测仍然只探 /list：通道在不在不由 detail 决定', async () => {
+  it('探测走最便宜的 GET /ping：不再拿一次全表对账当健康检查', async () => {
     const paths: string[] = []
     vi.stubGlobal('fetch', async (path: string) => {
       paths.push(path)
-      return envelope([])
+      return envelope('pong')
     })
     await expect(probeChannel(createHttpRemote())).resolves.toBe(true)
-    expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.list}`])
+    expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`])
     vi.unstubAllGlobals()
   })
 })
 
-// 第六个端点：删除确认框那一句「含 N 个子会话」要的数（issue #3）。那一刻会话还在盘上，
-// 这个数挂不到 `list` 上，只能现问一次；它是纯读，所以探测照样不该带上它。
-describe('createHttpRemote · 删除前的那次计数', () => {
+// 2026-10-17 批量重构：写动词从「一条一段」收成一段 `POST /apply`（body `{action, ids}`，
+// 回逐条 `ApplyOutcome`）。这里钉通道的两件事：**只发一次请求**，以及**单条的失败不在信封层找**。
+describe('createHttpRemote · /apply 一段管所有动作', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
-  it('POST 到 /subagent-count，请求体是 { sessionId }（字段名与 Node 半同源）', async () => {
+  it('POST 到 /apply，请求体是 { action, ids }（字段名与 Node 半同源）', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       calls.push({ path, init })
-      return envelope(3)
+      return envelope([{ id: 'e1', action: 'restore', ok: true, value: { id: 'e1' } }])
     })
-    await expect(createHttpRemote().subagentCount('session-parent')).resolves.toEqual({ ok: true, value: 3 })
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.subagentCount}`)
+    await expect(createHttpRemote().apply('restore', ['e1', 'e2'])).resolves.toMatchObject({ ok: true })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`)
     expect(calls[0]!.init?.method).toBe('POST')
-    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.sessionId]: 'session-parent' })
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.action]: 'restore', [PARAMS.ids]: ['e1', 'e2'] })
     vi.unstubAllGlobals()
   })
 
-  it('注入面把信封里的数展成裸值，失败支照旧抛原文', async () => {
-    vi.stubGlobal('fetch', async () =>
-      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '宿主读不动' } }),
-        { headers: { 'content-type': 'application/json' } }))
-    await expect(buildDeps(createHttpRemote()).subagentCount('session-a')).rejects.toMatchObject({
-      code: 'sessiondelete/io',
-      message: '宿主读不动',
+  it('清空是另一段 /empty：聚合回执，不带 ids', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope({ removed: 3, freedBytes: 1 })
     })
+    await expect(createHttpRemote().empty()).resolves.toMatchObject({ ok: true, value: { removed: 3 } })
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.empty}`)
+    vi.unstubAllGlobals()
+  })
+
+  it('注入面：单条便捷包装展成裸值；批量里单条的失败**不 throw**（它住在 outcome 里）', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({
+        ok: true,
+        value: [
+          { id: 'a', action: 'restore', ok: true, value: { id: 'a' } },
+          { id: 'b', action: 'restore', ok: false, error: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' } },
+        ],
+      }), { headers: { 'content-type': 'application/json' } }))
+    const deps = buildDeps(createHttpRemote())
+    const outcomes = await deps.applyOutcomes('restore', ['a', 'b'])
+    expect(outcomes.map((o) => o.ok)).toEqual([true, false])
+    // N=1 的那一支才把失败展成 throw（组件按"这条没成"处理，与批量同一张表）
+    await expect(deps.restore('b')).rejects.toMatchObject({ code: 'sessiondelete/project-missing' })
+    vi.unstubAllGlobals()
+  })
+
+  it('整次调用没办成（顶层 ok:false）时便捷支与批量口都抛原文', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '方法不允许' } }),
+        { headers: { 'content-type': 'application/json' } }))
+    const deps = buildDeps(createHttpRemote())
+    await expect(deps.applyOutcomes('purge', ['a'])).rejects.toMatchObject({ code: 'sessiondelete/io', message: '方法不允许' })
+    await expect(deps.countSubagents('x')).rejects.toMatchObject({ code: 'sessiondelete/io' })
     vi.unstubAllGlobals()
   })
 })

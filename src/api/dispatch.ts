@@ -10,12 +10,14 @@
  * 四条口径：
  *  ① **不依赖 Cordis**：`createApiHandler(deps)` 是纯构造器，返回一个 `(req, res) => Promise<void>`
  *     ——所以它能用真 `node:http` server 直接单测（`tests/api.test.ts`），与宿主怎么挂它无关。
- *  ② **信封就是浏览器半消费的那个形状**：`{ok:true,value}` / `{ok:false,error:{code,message}}`。
+ *  ② **信封就是浏览器半消费的那个形状**：`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`。
  *     `error.code` 走 `src/remote/map-error.ts` 的**同一张表**（设计稿 §6 的五个码），原文进
- *     `error.message`——浏览器半的 `unwrapRemoteResult` / `failureOf` 因此一行都不用改。
- *  ③ **HTTP 状态不是第二套语义**：信封在场时状态一律 200（含 `ok:false`）——我们与浏览器半之间的
+ *     `error.message`，结构化附带物进可选的 `error.details`——浏览器半的 `unwrapRemoteResult` /
+ *     `failureOf` 因此一行都不用改。
+ *  ③ **HTTP 状态不是第二套语义**：**操作失败**时状态一律 200（含 `ok:false`）——我们与浏览器半之间的
  *     契约是信封本身，判断成败只看 `ok`（同宿主网关"每次 unary 调用 resolve 成 RemoteResult、
- *     不为载体问题 reject"的那条规矩）。唯一的例外是同源栅栏：拒的是**请求**而不是操作，回 403。
+ *     不为载体问题 reject"的那条规矩）。**请求本身不对**才用 4xx（400 请求体 / 405 方法 / 404
+ *     未知路由），同源栅栏拒的是**请求**而不是操作，回 403；浏览器半先解信封再看状态。
  *  ④ **同源栅栏**：本机回环上一条能删会话的写口不能被任意网页用 simple request CSRF 打——没有栅栏时
  *     `content-type: text/plain` 的跨源 POST 不触发预检、直接生效。放行的形状见 {@link isTrustedRequest}：
  *     同源（浏览器直接打开宿主那行 URL）、桌面壳自己的页面（`dsh-app://app`，真机那条路，见
@@ -23,20 +25,26 @@
  *     （`dsh-novel` 的 `api/wire.ts`）只认前两条里的"同源"，本文件多的是桌面壳那一条——**它必须有**：
  *     桌面版的请求被壳摘掉了 `Origin`，漏掉它等于真机上四个入口一个都不出现（而直连 http 的过门
  *     读数看不出来）。
- *  ⑤ **`list` 是"对账 + 读"，且它与三个写动词按到达序串行**（{@link createApiHandler} 里那条进程内链）：
+ *  ⑤ **`list` 是"对账 + 读"，且它与写动作按到达序串行**（{@link createApiHandler} 里那条进程内链）：
  *     对账（`reconcileTrash`）与删除/恢复/彻底删除都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩
  *     ——删除刚把目录搬进回收站、行还没写上时，对账抢先把这行按目录"重建"出来，再被真实行覆盖成降级
- *     元数据。串行的代价只是排队（单进程单用户，毫秒级）；两条纯读（`detail` 与 `subagent-count`）不占这条链。
+ *     元数据。串行的代价只是排队（单进程单用户，毫秒级）；纯读（`detail`、`ping`、`apply/count`）
+ *     不占这条链。
+ *  ⑥ **一段 `POST /apply` 管所有写动作**（2026-10-17 批量重构）：旧形状是「一条一段、一次一发」，
+ *     批量只能由调用方循环拼出来——100 条 = 100 次往返 ×（一次全量清册读 + 每条一次宿主会话表）。
+ *     现在一组 id 一次进、逐条 `ApplyOutcome` 出；单条就是 N=1，仓里不留第二条执行路径。
+ *     清空是聚合回执（不按条回），所以单独一段 `POST /empty`。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
 import type { TrashEntry } from '../trash/entry.js'
-import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
+import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyAction } from '../shared/wire.js'
 import { readTrashDetail } from '../trash/detail.js'
 import { reconcileTrash } from '../trash/reconcile.js'
-import { deleteSession, type DeleteDeps } from '../verbs/delete-session.js'
+import { applyActions } from '../verbs/apply.js'
 import { purgeTrash } from '../verbs/purge-trash.js'
-import { restoreSession } from '../verbs/restore-session.js'
+import { routeError } from '../verbs/errors.js'
+import type { DeleteDeps } from '../verbs/delete-session.js'
 
 /** 请求体字节上限：这条通道只收几个 id，1MiB 是"够用且不给自己开一条内存放大器"的量级。 */
 const JSON_BODY_MAX_BYTES = 1024 * 1024
@@ -84,9 +92,16 @@ function writeOk(res: ServerResponse, value: unknown): void {
   writeJson(res, 200, { ok: true, value })
 }
 
-/** 失败信封：码与原文都来自 `toRemoteFailure`（本插件唯一的错误映射表），值就是线上形状本身。 */
-function writeFailure(res: ServerResponse, error: unknown, status = 200): void {
-  writeJson(res, status, { ok: false, error: toRemoteFailure(error) })
+/** 失败信封：码与原文都来自 `toRemoteFailure`（本插件唯一的错误映射表）。
+ *  **状态语义（2026-10-17 错误面对齐）**：**请求本身不对**不再伪装成 200——请求体不对 400、方法不对 405、
+ *  未知路由 404、栅栏拒 403（它们不是"一次办成的操作"，是"这条请求不归我办/你没资格办"）。
+ *  **操作失败**仍回 200 + 信封（口径 ③ 不变：盘上没有、原目录已不在、会话在跑……都是办完了才知道的结果）。
+ *  浏览器半先解信封再看状态，所以 4xx 上带的信封照样读得出原文；`code` 一律折成 `sessiondelete/io`，
+ *  那三个路由标签（`bad-request` / `bad-method` / `not-found-route`）是**抛出处给读代码的人看的站点名**，
+ *  不许冒充 §6 的五个动词码上客户端。 */
+function writeFailure(res: ServerResponse, error: unknown, status?: number): void {
+  const carried = (error as { httpStatus?: unknown })?.httpStatus
+  writeJson(res, status ?? (typeof carried === 'number' ? carried : 200), { ok: false, error: toRemoteFailure(error) })
 }
 
 /**
@@ -115,47 +130,64 @@ function isTrustedRequest(req: IncomingMessage): boolean {
   try { return new URL(referer).host === host } catch { return false }
 }
 
-/** 流式读 body 并解析成 JSON 对象：空体回 `null`，超限 / 非法 JSON / 不是对象一律抛（→ 失败信封）。 */
+/** 流式读 body 并解析成 JSON 对象：空体回 `null`，超限 / 非法 JSON / 不是对象一律抛（→ 400 + 失败信封）。
+ *  **请求本身不对**（400）与**那次操作读不到东西**（200 + 信封）是两件事：前者是调用方没组好请求，
+ *  后者是盘上没有；把前者也写成 200，代理与日志里就再也分不出这两类。 */
 async function readJsonBody(req: IncomingMessage): Promise<JsonBody> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string)
     size += buf.length
-    if (size > JSON_BODY_MAX_BYTES) throw new Error(`请求体超过 ${JSON_BODY_MAX_BYTES} 字节上限`)
+    if (size > JSON_BODY_MAX_BYTES) throw routeError('bad-request', 400, `请求体超过 ${JSON_BODY_MAX_BYTES} 字节上限`)
     chunks.push(buf)
   }
   const text = Buffer.concat(chunks).toString('utf8').trim()
   if (text === '') return null
-  let parsed: unknown
   try {
-    parsed = JSON.parse(text)
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw routeError('bad-request', 400, '请求体需为 JSON 对象')
+    }
+    return parsed as Record<string, unknown>
   } catch (error) {
-    throw new Error(`请求体不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
+    if (error instanceof SyntaxError) {
+      throw routeError('bad-request', 400, `请求体不是合法 JSON：${error.message}`)
+    }
+    throw error
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('请求体需为 JSON 对象')
-  }
-  return parsed as Record<string, unknown>
 }
 
 /** 必填的非空字符串字段（缺、空串、类型不对都是**同一句话**：说清是哪个字段）。 */
 function requireString(body: JsonBody, field: string): string {
   const value = body?.[field]
-  if (typeof value !== 'string' || value === '') throw new Error(`请求体需带非空字符串字段 ${field}`)
+  if (typeof value !== 'string' || value === '') {
+    throw routeError('bad-request', 400, `请求体需带非空字符串字段 ${field}`)
+  }
   return value
 }
 
-/** `purge` 的 `entryId` 可选（缺席 = 清空），但在场就必须是像样的值——不把 `42` 当成"没带"。 */
-function optionalString(body: JsonBody, field: string): string | undefined {
-  const value = body?.[field]
-  if (value === undefined) return undefined
-  if (typeof value !== 'string' || value === '') throw new Error(`字段 ${field} 若在场必须是非空字符串`)
-  return value
+/** `/apply` 的动作：认不得的一律点名拒掉，不折成"空批量"糊弄过去。 */
+const APPLY_ACTIONS: readonly ApplyAction[] = ['delete', 'restore', 'purge', 'count']
+function requireAction(body: JsonBody): ApplyAction {
+  const value = body?.[PARAMS.action]
+  if (typeof value !== 'string' || !(APPLY_ACTIONS as readonly string[]).includes(value)) {
+    throw routeError('bad-request', 400, `批量动作不认识：需是 ${APPLY_ACTIONS.join(' / ')} 之一`)
+  }
+  return value as ApplyAction
+}
+
+/** `/apply` 的 id 组：必须是非空字符串数组（空数组不是"什么都不做"，是调用方自己没组好）。 */
+function requireIdArray(body: JsonBody): string[] {
+  const value = body?.[PARAMS.ids]
+  if (!Array.isArray(value) || value.length === 0 || value.some(id => typeof id !== 'string' || id === '')) {
+    throw routeError('bad-request', 400, `请求体需带 ${PARAMS.ids}：非空字符串组成的非空数组`)
+  }
+  return value as string[]
 }
 
 function requireMethod(method: string, want: string, route: string): void {
-  if (method !== want) throw new Error(`方法不允许：${method}（${SESSION_DELETE_API_PREFIX}${route} 需 ${want}）`)
+  if (method !== want) throw routeError('bad-method', 405, `方法不允许：${method}（${SESSION_DELETE_API_PREFIX}${route} 需 ${want}）`)
 }
 
 /** 清单交回浏览器的那一行：清册那一行 + 组视图的三个只读数。 */
@@ -210,44 +242,55 @@ async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]):
   })
 }
 
-/** 路由表：段名 → 一个把「方法 + 请求体」变成返回值的处理器。动词在每次调用时才取。 */
-async function dispatch(method: string, rest: string, req: IncomingMessage, deps: DeleteDeps): Promise<unknown> {
+/** 路由表：段名 → 一个把「方法 + 预读好的请求体」变成返回值的处理器。动词在每次调用时才取。
+ *  `body` 由 {@link purityOf} 读一次交下来——同一条请求的流不能被消费两遍。 */
+async function dispatch(method: string, rest: string, body: JsonBody, deps: DeleteDeps): Promise<unknown> {
   if (rest === ROUTES.list) {
     requireMethod(method, 'GET', ROUTES.list)
     // 「读清单」=「对账 + 读」：清单以 `session-trash/` 里的目录为准修回一致（口径见 `reconcile.ts`）
     const rows = await reconcileTrash(deps)
     return assembleTrashRows(deps, rows)
   }
-  if (rest === ROUTES.delete) {
-    requireMethod(method, 'POST', ROUTES.delete)
-    return await deleteSession(deps)(requireString(await readJsonBody(req), PARAMS.sessionId))
+  if (rest === ROUTES.ping) {
+    requireMethod(method, 'GET', ROUTES.ping)
+    // 客户端探测专用的最便宜一问：不碰清册、不碰盘、不进链。它的**信封**就是答案（"路由在、
+    // 依赖接上了、映射生效了"），不是清单里此刻有几条——那是 `/list` 的事，拿它当健康检查
+    // 等于每次页面加载都跑一遍对账（2026-10-17 第四批改掉的就是这个）。
+    return 'pong'
   }
-  if (rest === ROUTES.restore) {
-    requireMethod(method, 'POST', ROUTES.restore)
-    return await restoreSession(deps)(requireString(await readJsonBody(req), PARAMS.entryId))
+  if (rest === ROUTES.apply) {
+    requireMethod(method, 'POST', ROUTES.apply)
+    // 一组 id 上的同一个动作（2026-10-17 批量重构）：单条就是长度为 1 的批量，逐条回结果。
+    return await applyActions(deps, requireAction(body), requireIdArray(body))
   }
-  if (rest === ROUTES.purge) {
-    requireMethod(method, 'POST', ROUTES.purge)
-    return await purgeTrash(deps)(optionalString(await readJsonBody(req), PARAMS.entryId))
-  }
-  if (rest === ROUTES.subagentCount) {
-    requireMethod(method, 'POST', ROUTES.subagentCount)
-    // 删除确认框那句「含 N 个子会话」：问的是**还在盘上**的那条会话，此刻它不在回收站里 ⇒
-    // 这个数只能现问宿主（走 `subagentCounts` 的传递闭包），拿不到就是 0。
-    const sessionId = requireString(await readJsonBody(req), PARAMS.sessionId)
-    const counts = await deps.host.subagentCounts([sessionId])
-    return counts[sessionId] ?? 0
+  if (rest === ROUTES.empty) {
+    requireMethod(method, 'POST', ROUTES.empty)
+    // 清空回收站：聚合回执，不按条回——这是它与 `/apply` 唯一的区别，也是它单独一段的理由。
+    return await purgeTrash(deps)()
   }
   if (rest === ROUTES.detail) {
     requireMethod(method, 'POST', ROUTES.detail)
     // 读单条详情也走 POST：`requireString`、同源栅栏、错误映射这一整套都挂在 POST 支上，
     // 改成 GET query 只是把同一道栅栏再写一遍（裁决见 2026-10-15 设计稿 §3）
-    return await readTrashDetail(deps)(requireString(await readJsonBody(req), PARAMS.entryId))
+    return await readTrashDetail(deps)(requireString(body, PARAMS.entryId))
   }
-  throw new Error(`未知路由：${method} ${rest === '' ? SESSION_DELETE_API_PREFIX : rest}`)
+  throw routeError('not-found-route', 404, `未知路由：${method} ${rest === '' ? SESSION_DELETE_API_PREFIX : rest}`)
 }
 
-/** 宿主 `webServer.register({kind:'prefix', path: SESSION_DELETE_API_PREFIX, handler})` 的那个 handler。 */
+/** 纯读的支路：`ping`、`detail` 与 `apply` 里的 `count`——一次探测、一次大正文读或一个只读数不该把
+ *  写按钮堵在身后。body 在这里**只读一次**（读完交给下游复用，流不能消费两遍），所以判断必须发生在
+ *  `dispatch` 之前。 */
+interface Purity { readonly pure: boolean; readonly body: JsonBody }
+
+async function purityOf(req: IncomingMessage, rest: string): Promise<Purity> {
+  if (rest === ROUTES.ping) return { pure: true, body: null }
+  if (rest === ROUTES.detail) return { pure: true, body: await readJsonBody(req) }
+  if (rest !== ROUTES.apply) return { pure: false, body: null }
+  const body = await readJsonBody(req)
+  // `count` 不碰清册也不动文件（它问的是**还在盘上**的会话），和详情一样走豁免；
+  // 其余三个动作都动清单，必须排在链上。
+  return { pure: body?.[PARAMS.action] === 'count', body }
+}
 export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   /**
    * 到达序串行链（文件头 ⑤）：`list`（含对账）与三个写动词一个跑完再放下一个。`tail` 由构造保证
@@ -267,13 +310,15 @@ export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: 
     try {
       const url = new URL(req.url ?? '/', 'http://dsh.internal')
       if (!url.pathname.startsWith(SESSION_DELETE_API_PREFIX)) {
-        throw new Error(`未知路由：${url.pathname}`)
+        throw routeError('not-found-route', 404, `未知路由：${url.pathname}`)
       }
       const rest = url.pathname.slice(SESSION_DELETE_API_PREFIX.length)
-      const task = (): Promise<unknown> => dispatch(req.method ?? 'GET', rest, req, deps)
-      // 两条纯读不进链（详情、删除前的那次计数）：别让一次大正文读或一个只读数把删除按钮堵在身后
-      const pureRead = rest === ROUTES.detail || rest === ROUTES.subagentCount
-      writeOk(res, await (pureRead ? task() : throughChain(task)))
+      // body 在这里读一次（`apply` 的纯读判断与分发共用这一份；其余段读到的是 `null`，各支自己不看它）
+      const { pure, body } = await purityOf(req, rest)
+      const task = (): Promise<unknown> => dispatch(req.method ?? 'GET', rest, body, deps)
+      // `ping`、详情、以及 `apply` 里那个 `count` 不排队：别让一次探测、大正文读或只读数
+      // 把删除按钮堵在身后。其余（`list` 对账、三个写动作）一律按到达序上链。
+      writeOk(res, await (pure ? task() : throughChain(task)))
     } catch (error) {
       writeFailure(res, error)
     }

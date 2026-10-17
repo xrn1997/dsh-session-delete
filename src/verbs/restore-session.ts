@@ -17,8 +17,17 @@ type Undo = () => Promise<void>
  * ③ 中途失败把这个成员自己退回回收站（就地回滚），并把**已经恢复完的**兄弟按相反顺序一起退回，失败照抛。
  */
 export function restoreSession(deps: DeleteDeps) {
-  return async function restoreSession(entryId: string): Promise<TrashEntry> {
-    const all = await deps.manifest.list()
+  return async function restoreSession(
+    entryId: string,
+    options: {
+      readonly snapshot?: TrashEntry[]
+      /** 批量（`verbs/apply.ts`）**自己收尾一次发**时传 `suppressAnnounce`：动词不再逐条通告——
+       *  单条一份摘要 = 一条一次宿主全表扫，那是 2026-10-17 "恢复很慢"的头号来源。 */
+      readonly suppressAnnounce?: boolean
+    } = {},
+  ): Promise<TrashEntry> {
+    // 一次 `manifest.list()` 按调用算——批量把整批的这一次抬到外面来传进来。
+    const all = options.snapshot ?? await deps.manifest.list()
     const target = all.find(e => e.id === entryId)
     if (!target) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
 
@@ -37,14 +46,18 @@ export function restoreSession(deps: DeleteDeps) {
     }
 
     const done: Undo[] = []
-    for (const entry of group) {
-      try {
+    const restored: string[] = []
+    try {
+      for (const entry of group) {
         done.push(await restoreOne(deps, entry))
-      } catch (error) {
-        for (const undo of done.reverse()) await undo()
-        throw error
+        restored.push(entry.sessionId)
       }
+    } catch (error) {
+      for (const undo of done.reverse()) await undo()
+      throw error
     }
+    // 单条路各发各的（拉一次表换一条通告，量级无所谓）；批量路由 `apply.ts` 在整批末尾一次发。
+    if (options.suppressAnnounce !== true) await deps.host.announceRestoredBatch(restored)
     return target
   }
 }
@@ -96,9 +109,8 @@ async function restoreOne(deps: DeleteDeps, entry: TrashEntry): Promise<Undo> {
     await deps.fs.rename(sessionDir, trashDir).catch(() => {})
     throw verbError('io', `摘回收站条目失败：${String(error)}`, error)
   }
-  // ④ 通告客户端"它回来了"。不发也不影响结果，只是要等下次重连才上屏。
-  await deps.host.announceRestored(entry.sessionId)
-
+  // ④ **通告不在这里发**：整组恢复完由调用方一次性发（见 `restoreSession` 末尾的 `announceRestoredBatch`），
+  //    单条一份摘要 = 一条一次全表扫，批量下就是那次"恢复很慢"的主因。
   // 反向动作（组里别的成员失败时才用）：行先回去、再按删除那趟的顺序退回去（归档 → 摘账本 → 目录搬回回收站）。
   return async () => {
     await deps.manifest.add(entry).catch(() => {})

@@ -27,13 +27,31 @@ const detailFixture: TrashDetailLike = {
   ],
 }
 
-type Deps = { list: ReturnType<typeof vi.fn>; restore: ReturnType<typeof vi.fn>; purge: ReturnType<typeof vi.fn>; detail: ReturnType<typeof vi.fn> }
+type Deps = {
+  list: ReturnType<typeof vi.fn>
+  restore: ReturnType<typeof vi.fn>
+  detail: ReturnType<typeof vi.fn>
+  /** 2026-10-17 批量重构：写动作一段一接口——批量与单条都打 `applyOutcomes`，逐条结果回。 */
+  applyOutcomes: ReturnType<typeof vi.fn>
+  emptyTrash: ReturnType<typeof vi.fn>
+}
+
+/** 逐条成功的 `apply` 结果（按动作分派，判别联合的形状与 `shared/wire.ts` 一致）。 */
+function outcomesOf(action: string, ids: readonly string[], fail: Record<string, string> = {}) {
+  return ids.map((id) => {
+    const message = fail[id]
+    if (message !== undefined) return { id, action, ok: false, error: { code: 'sessiondelete/io', message } }
+    const value = action === 'purge' ? { removed: 1, freedBytes: 1 } : action === 'count' ? 0 : {}
+    return { id, action, ok: true, value }
+  })
+}
 
 function makeDeps(over: Partial<Omit<Deps, 'detail'>> & { detail?: ReturnType<typeof vi.fn> } = {}): Deps {
   return {
     list: vi.fn(async () => rows),
     restore: vi.fn(async () => ({})),
-    purge: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
+    applyOutcomes: vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids)),
+    emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
     detail: vi.fn(async () => detailFixture),
     ...over,
   }
@@ -82,13 +100,13 @@ describe('回收站面板', () => {
     await waitFor(() => expect(deps.restore).toHaveBeenCalledWith('a'))
   })
 
-  it('清空要先二次确认，确认后才调 purge（不带 entryId）', async () => {
+  it('清空要先二次确认，确认后才调清空（一段一次）', async () => {
     const deps = makeDeps()
     render(<TrashPanel deps={deps as never} />)
     fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
-    expect(deps.purge).not.toHaveBeenCalled()
+    expect(deps.emptyTrash).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
-    await waitFor(() => expect(deps.purge).toHaveBeenCalledWith(undefined))
+    await waitFor(() => expect(deps.emptyTrash).toHaveBeenCalledTimes(1))
   })
 
   // 动作住在行内 ⇒ 它的失败也就留在行内（与 2026-10-01 那条"失败写在该行上"同一条规则）。
@@ -300,15 +318,15 @@ describe('回收站面板 · 其余行为', () => {
     await waitFor(() => expect(deps.restore).toHaveBeenCalledTimes(2))
   })
 
-  it('行里的「彻底删除…」也要先确认，确认后 purge 带上那一条的 id', async () => {
+  it('行里的「彻底删除…」也要先确认，确认后走一次 purge（N=1 的批量）', async () => {
     const deps = makeDeps()
     renderWide(deps)
     const row = await screen.findByRole('option', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
-    expect(deps.purge).not.toHaveBeenCalled()
+    expect(deps.applyOutcomes).not.toHaveBeenCalled()
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
-    await waitFor(() => expect(deps.purge).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('purge', ['a']))
   })
 
   // 彻底删除按组走（10-15 稿 §11）⇒ 点下去页脚合计掉的是「父 + 全部孩子」。确认框那一格说的是
@@ -325,12 +343,13 @@ describe('回收站面板 · 其余行为', () => {
   })
 
   it('清空的确认框里点名不可恢复；取消一个字节都不动', async () => {
-    const deps = makeDeps({ purge: vi.fn() })
+    const deps = makeDeps({ emptyTrash: vi.fn() })
     render(<TrashPanel deps={deps as never} />)
     fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    expect(deps.purge).not.toHaveBeenCalled()
+    expect(deps.emptyTrash).not.toHaveBeenCalled()
+    expect(deps.applyOutcomes).not.toHaveBeenCalled()
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
@@ -619,14 +638,24 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
   })
 })
 
-describe('回收站面板 · 多选与批量彻底删除（2026-10-15）', () => {
+describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17 补恢复）', () => {
   const three = [
     { ...rows[0], id: 'a', projectDir: '--P-one--', title: '第一条', deletedAt: 300 },
     { ...rows[0], id: 'b', projectDir: '--P-one--', title: '第二条', deletedAt: 200 },
     { ...rows[0], id: 'c', projectDir: '--P-one--', title: '第三条', deletedAt: 100 },
   ]
-  const depsOf = (over: { purge?: ReturnType<typeof vi.fn>; list?: ReturnType<typeof vi.fn> } = {}): Deps =>
-    makeDeps({ list: over.list ?? vi.fn(async () => three), purge: over.purge ?? vi.fn(async () => ({ removed: 1, freedBytes: 1 })) })
+  const depsOf = (
+    over: {
+      list?: ReturnType<typeof vi.fn>
+      restore?: ReturnType<typeof vi.fn>
+      applyOutcomes?: ReturnType<typeof vi.fn>
+    } = {},
+  ): Deps =>
+    makeDeps({
+      list: over.list ?? vi.fn(async () => three),
+      restore: over.restore ?? vi.fn(async () => ({})),
+      applyOutcomes: over.applyOutcomes ?? vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids)),
+    })
 
   const boxes = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-dsh-session-delete="trash-row"] input[type="checkbox"]')] as HTMLInputElement[]
@@ -680,12 +709,10 @@ describe('回收站面板 · 多选与批量彻底删除（2026-10-15）', () =>
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('页脚那颗换成「彻底删除 N 条」：确认后按清单顺序逐条 purge，并重读一次', async () => {
-    // 带签名造这个 mock：`vi.fn()` 空手造出来的调用类型是空元组，`calls[i][0]` 过不了类型检查
-    // （断言"按清单顺序逐条删"正是要读那第一个参数）。
-    const purge = vi.fn(async (_entryId: string) => ({ removed: 1, freedBytes: 1 }))
+  it('页脚那颗换成「彻底删除 N 条」：**一次** apply 带走整批（顺序仍是清单从上往下），并重读一次', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids))
     const list = vi.fn(async () => three)
-    const { container } = renderNarrow(depsOf({ purge, list }))
+    const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     fireEvent.click(rowOf(container, 'b'))
@@ -695,21 +722,41 @@ describe('回收站面板 · 多选与批量彻底删除（2026-10-15）', () =>
     expect(await screen.findByText('彻底删除 2 个会话？')).toBeInTheDocument()
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
-    await waitFor(() => expect(purge).toHaveBeenCalledTimes(2))
-    // 顺序按清单从上往下，不按点击顺序——"我勾了哪几条"不该影响删除的读感
-    expect(purge.mock.calls.map((call) => call[0])).toEqual(['a', 'b'])
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
+    // 顺序按清单从上往下，不按点击顺序；**不是**每条一次请求（那是"恢复很慢"的那个形状）
+    expect(applyOutcomes).toHaveBeenCalledWith('purge', ['a', 'b'])
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
   })
 
+  // 跨项目多选是**扁平 entries 序**与**屏幕分组序**唯一会分叉的地方：组间按各组最新一条排，
+  // 组内按删除时间排；顺序若取扁平序，批量动作的"清单从上往下"就是假话。
+  it('跨项目多选：批量顺序按屏幕上的分组顺序（组间最新一条、组内删除时间），不是扁平 deletedAt 序', async () => {
+    const crossed = [
+      { ...rows[0], id: 'a', projectDir: '--P-one--', title: 'A1', deletedAt: 300 },
+      { ...rows[0], id: 'b', projectDir: '--P-two--', title: 'B1', deletedAt: 250 },
+      { ...rows[0], id: 'c', projectDir: '--P-one--', title: 'A2', deletedAt: 100 },
+    ]
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids))
+    const list = vi.fn().mockResolvedValueOnce(crossed).mockResolvedValue([])
+    const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
+    await screen.findByText('A1')
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    for (const id of ['a', 'b', 'c']) fireEvent.click(rowOf(container, id))
+    fireEvent.click(footerButton('恢复 3 条'))
+    const dialog = within(await screen.findByRole('dialog'))
+    // 确认框列出的顺序与批量执行共用同一份 checkedIds（A1、A2 同组，B1 在下一组）
+    expect(dialog.getAllByText(/^[AB][12]$/).map((node) => node.textContent)).toEqual(['A1', 'A2', 'B1'])
+    fireEvent.click(dialog.getByRole('button', { name: '恢复' }))
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledWith('restore', ['a', 'c', 'b']))
+  })
+
   it('部分失败：删掉的走、没删掉的把原文留在它自己那一行，多选态不退', async () => {
-    const purge = vi
-      .fn()
-      .mockResolvedValueOnce({ removed: 1, freedBytes: 1 })
-      .mockRejectedValueOnce(Object.assign(new Error('该会话正被占用'), { code: 'sessiondelete/live' }))
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
+      outcomesOf('purge', ids, { b: '该会话正被占用' }))
     // 注意 `mockResolvedValue` 调两次是**替换**实现、不是排队（踩过：首屏就直接拿到第二批数据），
     // 要"先给全量、重读后给少一条"必须用 `mockResolvedValueOnce` 起头。
     const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[1], three[2]])
-    const { container } = renderNarrow(depsOf({ purge, list }))
+    const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     fireEvent.click(rowOf(container, 'a'))
@@ -735,6 +782,87 @@ describe('回收站面板 · 多选与批量彻底删除（2026-10-15）', () =>
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(screen.getByText('已选 1 条')).toBeInTheDocument()
     expect(boxes(container).map((box) => box.checked)).toEqual([true, false])
+  })
+
+  it('一条没勾时批量恢复也置灰，点它不弹确认', async () => {
+    renderNarrow(depsOf())
+    await screen.findByText('第一条')
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    const bulk = footerButton('恢复 0 条')
+    expect(bulk.disabled).toBe(true)
+    fireEvent.click(bulk)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('批量恢复走确认框：列出条目、确认后**一次** apply 带回整批顺序，恢复成功的不留行', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids))
+    const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[2]])
+    const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
+    await screen.findByText('第一条')
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    fireEvent.click(rowOf(container, 'b'))
+    fireEvent.click(rowOf(container, 'a'))
+    expect(footerButton('恢复 2 条').disabled).toBe(false)
+    fireEvent.click(footerButton('恢复 2 条'))
+    const dialog = within(await screen.findByRole('dialog'))
+    // 确认框把要恢复的条目列出来（标题各一份）；恢复不是破坏性动作，不提"不可恢复"
+    expect(dialog.getByText('恢复 2 个会话？')).toBeInTheDocument()
+    expect(dialog.getByText('第二条')).toBeInTheDocument()
+    expect(dialog.getByText(/原项目目录/)).toBeInTheDocument()
+    expect(dialog.queryByText(/没有任何副本可以恢复/)).toBeNull()
+    // 确认框那颗与页脚那颗不同名（「恢复」vs「恢复 2 条」，同「彻底删除」那对的形状）
+    fireEvent.click(dialog.getByRole('button', { name: '恢复' }))
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
+    // 顺序按清单从上往下（同批量彻底删除），不按点击顺序；一次请求带走整批
+    expect(applyOutcomes).toHaveBeenCalledWith('restore', ['a', 'b'])
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    expect(await screen.findByText('第三条')).toBeInTheDocument()
+    expect(screen.queryByText('第一条')).toBeNull()
+    // 多选态不退：成功的勾选随行消失，头部计数跟着降
+    expect(screen.getByRole('button', { name: '退出多选' })).toBeInTheDocument()
+    expect(screen.getByText('已选 0 条')).toBeInTheDocument()
+  })
+
+  it('批量恢复部分失败：成功的走、失败的把原文留在它自己那一行', async () => {
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
+      outcomesOf('restore', ids, { b: '原项目目录已不存在' }))
+    const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[1]])
+    const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
+    await screen.findByText('第一条')
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    fireEvent.click(rowOf(container, 'a'))
+    fireEvent.click(rowOf(container, 'b'))
+    fireEvent.click(footerButton('恢复 2 条'))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '恢复' }))
+    expect(await screen.findByText('原项目目录已不存在')).toBeInTheDocument()
+    expect(rowOf(container, 'b').textContent).toContain('原项目目录已不存在')
+    expect(screen.queryByText('第一条')).toBeNull()
+    expect(screen.getByRole('button', { name: '退出多选' })).toBeInTheDocument()
+  })
+
+  // 在飞的 `list` 不保证按发起顺序落地（对账耗时随盘上条目数摆动）——后到的旧响应不许盖掉新状态。
+  it('重读只应用**最新一次**的结果：慢的旧响应后到也不许把清单盖回去', async () => {
+    const open = <T,>(): { promise: Promise<T>; resolve: (value: T) => void } => {
+      let resolve!: (value: T) => void
+      const promise = new Promise<T>((inResolve) => { resolve = inResolve })
+      return { promise, resolve }
+    }
+    const first = open<typeof three>()
+    const second = open<typeof three>()
+    const list = vi
+      .fn<() => Promise<typeof three>>()
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+    renderNarrow(depsOf({ list }))
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+    act(() => { invalidateTrash() })
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    // 第二次**先**落地、第一次更晚才回 ⇒ 后到的那份旧数据必须被丢掉
+    second.resolve([three[2]])
+    expect(await screen.findByText('第三条')).toBeInTheDocument()
+    first.resolve(three)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(screen.queryByText('第一条')).toBeNull()
   })
 
   it('多选态：listbox 声明可多选，aria-selected 说的是勾选；退出后回到"选中看详情"那套', async () => {

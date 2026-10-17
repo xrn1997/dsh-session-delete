@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、六个端点段、请求字段名**——
+ * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、五个端点段、请求字段名**——
  * Node 半（`src/api/dispatch.ts` 注册并分发）与浏览器半（`src/client/remote.ts` 同源 fetch）
  * 之间唯一的那份真相。两侧都 import 它，不各写一份字面量。
  *
@@ -9,7 +9,7 @@
  *  ② 跨插件一律 `import type`——本文件干脆没有 import。
  *
  * 信封（`RemoteResult`）与失败形状（`RemoteFailure`）也在这里——**因为它们本来就是两半的共同契约**：
- * Node 半按它产出（`src/api/dispatch.ts` 的失败支就是 `RemoteFailure` 那两件），浏览器半按它判别
+ * Node 半按它产出（`src/api/dispatch.ts` 的失败支就是 `RemoteFailure` 那三件），浏览器半按它判别
  * （`src/client/remote.ts` 的 `unwrapRemoteResult` / `failureOf`）。形状取自宿主网关客户端面的原文
  * 「每次 unary 调用 resolve 成 RemoteResult、不为载体问题 reject」，但**它是本仓自己的 wire 契约**，
  * 不是对宿主模块的 import。
@@ -24,34 +24,85 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 六个端点的段名（相对前缀；`GET list` **对账并读**清单——`session-trash/` 里的目录是准，其余五个
- *  `POST` 按 id 取数或写）。 */
+/** 五个段名（相对前缀）。2026-10-17 批量重构：写动词从「一条一段」收成**一段 `/apply`**——
+ *  一次 HTTP 带一组 id、逐条回结果；单条就是长度为 1 的批量，仓里不再留第二条执行路径。
+ *  - `GET /list`：**对账并读**清单（`session-trash/` 里的目录是准）。
+ *  - `GET /ping`：最便宜的在/不在（不碰清册、不碰盘、不进链）——客户端探测用它，不用一次全表读。
+ *  - `POST /detail`：单条详情（用 POST 表达一个读：见设计稿 2026-10-15 §3）。
+ *  - `POST /apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count`），逐条回 `ApplyOutcome`。
+ *  - `POST /empty`：清空回收站（聚合回执，**不**按条回）。 */
 export const ROUTES = {
   list: '/list',
-  delete: '/delete',
-  restore: '/restore',
-  purge: '/purge',
-  /** 单条详情（读回收站目录里那条会话自己的日志）。用 POST 表达一个读：见设计稿 2026-10-15 §3。 */
+  /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
+  ping: '/ping',
+  /** 单条详情（读回收站目录里那条会话自己的日志）。 */
   detail: '/detail',
-  /** 一条**还没进回收站**的会话在盘上有几个后代——删除确认框那一句「含 N 个子会话」要的数。
-   *  它长在 `sessionQuery` 上、与清单无关，所以不能挂在 `list` 上（那一刻这条会话还不在回收站里）。 */
-  subagentCount: '/subagent-count',
+  /** 一组 id 上的同一个动作；删除确认框那句「含 N 个子会话」也走这里（`action: 'count'`，纯读语义）。 */
+  apply: '/apply',
+  /** 清空回收站。 */
+  empty: '/empty',
 } as const
 
-/** 请求体字段名：浏览器半发、Node 半读，同名同义（`purge` 的 `entryId` 缺席 = 清空）。 */
+/** `/apply` 的四个动作。id 的含义随动作走：`delete`/`count` 是**宿主会话 id**（还没进回收站），
+ *  `restore`/`purge` 是**回收站条目 id**。 */
+export type ApplyAction = 'delete' | 'restore' | 'purge' | 'count'
+
+/** 每个动作的成功值：`count` 是一个数（拿不到就是 0，界面上那半句整句不出现）；
+ *  `delete`/`restore` 是回收站那一行（`null` = 这一条已被**同批前一条**带走，幂等 no-op）；
+ *  `purge` 是这一组的聚合回执（同批已带走 ⇒ `{removed:0,freedBytes:0}`）。 */
+export type ApplyValueByAction = {
+  delete: TrashEntryWire | null
+  restore: TrashEntryWire | null
+  purge: PurgeStatsWire
+  count: number
+}
+
+/** 一条动作的落地：原始输入 id 一律回带，成败各按信封（成功 `value` / 失败 `error`）。
+ *  按 `action` + `ok` 双重可判别——浏览器半的便捷包装靠它把 `value` 收成各自动作的类型。 */
+export type ApplyOutcome = { id: string } & {
+  [A in ApplyAction]:
+    | { action: A; ok: true; value: ApplyValueByAction[A] }
+    | { action: A; ok: false; error: RemoteFailure }
+}[ApplyAction]
+
+/** `TrashEntry` 的线上形状（浏览器半自己有一份窄镜像 `TrashEntryLike`）。 */
+export interface TrashEntryWire {
+  id: string
+  sessionId: string
+  projectDir: string
+  workspaceId: string
+  wasArchived: boolean
+  deletedAt: number
+  title: string
+  sizeBytes: number
+  parentEntryId?: string
+}
+
+/** 清空回收站的回执（与旧 `purge` 同形）。 */
+export interface PurgeStatsWire {
+  removed: number
+  freedBytes: number
+}
+
+/** 请求体字段名：浏览器半发、Node 半读，同名同义（`empty` 没有入参）。 */
 export const PARAMS = {
-  sessionId: 'sessionId',
   entryId: 'entryId',
+  action: 'action',
+  ids: 'ids',
 } as const
 
 /**
- * 失败信封的**线上形状**（设计稿 §6）：两半之间只走这两件——`code` 是判别依据
- * （`sessiondelete/<五个码>`），`message` 是上屏原文。**没有 `details`**：本插件的失败没有需要
- * 过线的结构化附带物（原始抛出物只住在 Node 进程里，出不了进程边界）。
+ * 失败信封的**线上形状**（设计稿 §6）：`code` 是判别依据、`message` 是上屏原文、
+ * `details` 是**可选的结构化附带物**——对齐官方 `rpcErrorSchema` 那三件
+ * （`dsh-client-connection` 原文：`z.object({ code, message, details: z.record(z.string(), z.unknown()) })`）。
+ * 来历两类：宿主类型化错误自己身上的字段（`WorkspaceActiveSessionError` 的 `sessionId` / `activity`…），
+ * 以及动词在抛出处就地给的（`verbError(code, msg, cause, details)`）。没有附带物时**整件缺席**，
+ * 不写空表——"带过但为空"和"没有可带的"是两件事。
  */
 export interface RemoteFailure {
   code: string
   message: string
+  details?: Record<string, unknown>
 }
 
 /** 两半之间的一次落地（**信封**）：要么值，要么失败。 */

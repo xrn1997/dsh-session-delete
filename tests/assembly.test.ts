@@ -88,18 +88,20 @@ function makeEnv(over: {
 }
 
 describe('宿主服务层端口的接线', () => {
-  it('十四个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
+  it('十六个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
     const { ctx } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }], headers: { s1: { cwd: 'C:/p' } } })
     const host = createHostPort(ctx)
     const results = [
       host.workspaceOf('s1'), host.projectDirOf('s1'), host.titleOf('s1'),
       host.isLive('s1'), host.isArchived('s1'), host.unarchive('s1'),
       host.detach('s1', 'ws-1'), host.attach('s1', 'ws-1'), host.archive('s1', 'ws-1'),
-      // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 清单的两个只读/取数面），契约都是"不抛"
+      // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 整批通告的预取/发送 + 清单的两个只读/取数面），
+      // 契约都是"不抛"
       host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored('s1'),
+      host.restoredSummariesOf(), host.announceRestoredBatch(['s1']),
       host.subagentCounts(['s1']), host.subagentMembers('s1'),
     ]
-    expect(results.length).toBe(14)
+    expect(results.length).toBe(16)
     for (const r of results) expect(r).toBeInstanceOf(Promise)
     await expect(Promise.all(results)).resolves.toBeDefined()
   })
@@ -520,21 +522,25 @@ function makeStorageEnv(seed: TrashEntry[] = []) {
     delete: async (key: string) => rows.delete(key),
   }
   let spec: unknown
-  let disposer: (() => unknown) | undefined
-  const ctx = {
+  let setup: (() => unknown) | undefined
+  const ctx: {
+    storageDomain: { open: (spec: unknown) => Promise<unknown> }
+    effect: (fn: () => unknown, label?: string) => unknown
+  } = {
     storageDomain: {
       open: async (s: unknown) => { spec = s; calls.push('open()'); return unit },
     },
     effect: (fn: () => unknown) => {
       calls.push('effect()')
-      const d = fn()
-      if (typeof d === 'function') disposer = d as () => unknown
-      return d
+      setup = fn
+      return undefined
     },
   }
   return {
     ctx, calls, rows,
-    dispose: async () => { await disposer?.() },
+    /** 真 cordis 的语义：`effect(fn)` 当场跑 `fn()` 拿到 disposer，**卸载时**才跑 disposer 并等它的落地。
+     *  这里把 disposer 的 promise **原样交回**（不 await），调用方才量得到"它到底等的是谁的落地"。 */
+    dispose: () => (setup?.() as (() => Promise<unknown>) | undefined)?.(),
     get spec() { return spec as { name: string; version: number; layout?: string; invalidRecords?: string; tables: Record<string, { valueSchema: { parse(v: unknown): unknown } }> } },
     get closedCount() { return closed },
   }
@@ -584,5 +590,52 @@ describe('清单的 storage domain 绑定', () => {
     expect(env.calls).toContain('effect()')
     await env.dispose()
     expect(env.closedCount).toBe(1)
+  })
+
+  // 打开失败**不许缓存成永久 rejected**：storage 域被别的持有者占着是瞬态（重启、卸载竞态），
+  // 缓存住第一次的拒绝就等于"这个会话永远删不掉"，而它其实下一次 `open()` 就能成。
+  it('open 失败不缓存 rejected promise：下一次读会重开一次，成功后照常', async () => {
+    const env = makeStorageEnv()
+    const open = env.ctx.storageDomain.open
+    let attempts = 0
+    env.ctx.storageDomain.open = async (s: unknown) => {
+      attempts += 1
+      if (attempts === 1) throw new Error('domain already open')
+      return open(s)
+    }
+    const m = createStorageManifest(env.ctx as never)
+    await expect(m.list()).rejects.toThrow(/already open/)
+    expect(await m.list()).toEqual([]) // 第二次重新走 open()，拿到的就是活的句柄
+    expect(attempts).toBe(2)
+  })
+
+  // 卸载时那条拒绝**不许从 disposer 里冒出来**：句柄没开成就没有东西要关，disposer 安静落地即可
+  // （框架那边正等它的 promise，抛出去只会变成卸载期的一条 unhandled）。
+  it('open 失败后立刻卸载：disposer 不等那条拒绝，安静落地', async () => {
+    const env = makeStorageEnv()
+    env.ctx.storageDomain.open = async () => { throw new Error('domain already open') }
+    const m = createStorageManifest(env.ctx as never)
+    await expect(m.list()).rejects.toThrow(/already open/)
+    await expect(env.dispose()).resolves.toBeUndefined()
+    expect(env.closedCount).toBe(0)
+  })
+
+  // disposer 把 `close()` 的 promise 交回框架（官方 `ctx.effect` 会等 disposer 的落地）——
+  // `void` 走掉意味着卸载时句柄可能还没关，下一份同名域就会撞 `already-open` 闸。
+  it('卸载的 disposer 返回 close() 的 promise，而不是走空', async () => {
+    const env = makeStorageEnv()
+    let closeStarted = false
+    let finishClose!: () => void
+    env.ctx.storageDomain.open = async () => ({
+      table: () => ({ entries: () => [][Symbol.iterator](), put: async () => {}, delete: async () => false }),
+      close: () => { closeStarted = true; return new Promise<void>((r) => { finishClose = r }) },
+    })
+    const m = createStorageManifest(env.ctx as never)
+    await m.list()
+    const disposed: unknown = env.dispose() // 不 await：等的正是这条还没落地的 promise
+    expect(closeStarted).toBe(true)
+    expect(disposed).toBeInstanceOf(Promise)
+    finishClose()
+    await disposed
   })
 })

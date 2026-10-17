@@ -61,7 +61,7 @@ import {
 } from 'react'
 import { unescapeProjectKey } from '../shared/wire.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
-import { callRemote, type SessionDeleteRemote, type TrashDetailLike, type TrashEntryLike } from './remote.js'
+import { callRemote, type ApplyOutcome, type SessionDeleteRemote, type TrashDetailLike, type TrashEntryLike } from './remote.js'
 import { useTrashRevision } from './trash-store.js'
 import { TrashDetail, type TrashDetailState } from './trash-detail.js'
 import { useColumnResize } from './use-column-resize.js'
@@ -80,7 +80,8 @@ import { Modal } from './ui/Modal.js'
 import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
 
-export type TrashPanelDeps = Pick<SessionDeleteRemote, 'list' | 'restore' | 'purge' | 'detail'>
+/** 批量重构（2026-10-17）后这份依赖面：两个读 + 一个批量口 + 清空 + 单条恢复的便捷包装。 */
+export type TrashPanelDeps = Pick<SessionDeleteRemote, 'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'restore'>
 
 export interface TrashPanelProps {
   deps: TrashPanelDeps
@@ -88,11 +89,13 @@ export interface TrashPanelProps {
   t?: Translate
 }
 
-/** 待确认的彻底删除：一条记录、整个回收站、或多选挑出来的一批（`ids` 已按清单顺序排好）。 */
-type PendingPurge =
+/** 待确认的动作：一条记录、整个回收站、或多选挑出来的一批（`ids` 已按清单顺序排好）。
+ *  `purge` 与 `restore` 的确认框共用这一个壳——两者都是"点之前先说清这一批有哪些、要去哪"。 */
+type PendingAction =
   | { kind: 'entry'; entry: TrashEntryLike }
   | { kind: 'all' }
   | { kind: 'entries'; ids: readonly string[] }
+  | { kind: 'restore'; ids: readonly string[] }
 
 /**
  * 整页那唯一一块实心红：`variant="primary"` + 在元素上覆盖 primary 那对填充 token。
@@ -301,7 +304,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const [listFailure, setListFailure] = useState<string | null>(null)
   /** 恢复/彻底删除 的失败原文，按条目 id 存：切走再回来还在，不是一次性的。 */
   const [actionFailure, setActionFailure] = useState<Readonly<Record<string, string>>>({})
-  const [pending, setPending] = useState<PendingPurge | null>(null)
+  const [pending, setPending] = useState<PendingAction | null>(null)
   const [busy, setBusy] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
@@ -314,9 +317,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
    */
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set())
   /**
-   * 多选态与勾选集合（2026-10-15 开的一条口子：**只批量彻底删除**，不批量恢复）。
-   * 勾选住 `Set<entryId>`，渲染顺序不跟点击顺序——页脚那颗按**清单从上往下**删，
-   * "我先后点了哪几条"不该影响一批不可恢复动作的执行顺序读感。
+   * 多选态与勾选集合（2026-10-15 开的口子先只配了**批量彻底删除**；2026-10-17 补上**批量恢复**）。
+   * 勾选住 `Set<entryId>`，渲染顺序不跟点击顺序——页脚两颗按**清单从上往下**执行，
+   * "我先后点了哪几条"不该影响一批动作的执行顺序读感。
    */
   const [selectMode, setSelectMode] = useState(false)
   const [checked, setChecked] = useState<ReadonlySet<string>>(new Set())
@@ -344,8 +347,15 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍就把清单重读一遍。
   const revision = useTrashRevision()
 
+  /**
+   * 重读带**到达序号**：在飞的 `list` 不保证按发起顺序落地（对账耗时随盘上条目数摆动），
+   * 后到的旧响应不许盖掉刚发生的动作带来的新状态。只应用序号最大的一份。
+   */
+  const reloadSeq = useRef(0)
   const reload = useCallback(async (): Promise<void> => {
+    const seq = ++reloadSeq.current
     const outcome = await callRemote(() => deps.list())
+    if (seq !== reloadSeq.current) return
     if (!outcome.ok) {
       setListFailure(outcome.failure.message)
       setEntries(null)
@@ -404,8 +414,13 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const toggleAllGroups = (): void => {
     setCollapsedGroups(allCollapsed ? new Set() : new Set(groups.map((group) => group.projectDir)))
   }
-  /** 按清单顺序排好的勾选 id（页脚那颗与批量执行都读这一份）。 */
-  const checkedIds = (entries ?? []).filter((entry) => checked.has(entry.id)).map((entry) => entry.id)
+  /** 按**清单从上往下**排好的勾选 id（页脚两颗与批量执行都读这一份）。
+   *  顺序必须走 `groups`（组间按各组最新一条、组内按删除时间），不能用扁平 `entries`：后者是
+   *  全局 `deletedAt` 序，跨项目多选时与屏幕上的分组顺序不同。折叠组里的条目照样算在内。 */
+  const checkedIds = groups
+    .flatMap((group) => group.entries)
+    .filter((entry) => checked.has(entry.id))
+    .map((entry) => entry.id)
   const toggleCheck = (entryId: string): void => {
     setChecked((current) => {
       const next = new Set(current)
@@ -538,46 +553,69 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     await reload()
   }
 
-  const confirmPurge = async (): Promise<void> => {
-    const target = pending
-    if (target === null) return
+  /** 一段批量 → 组件状态：成功的丢详情缓存，失败的原文落回它自己那一行。整批一次上屏、一次重读。 */
+  const settleOutcomes = (outcomes: readonly ApplyOutcome[]): void => {
+    const failures: Array<{ id: string; message: string }> = []
+    for (const outcome of outcomes) {
+      if (outcome.ok) detailCache.current.delete(outcome.id)
+      else failures.push({ id: outcome.id, message: outcome.error.message })
+    }
+    if (failures.length > 0) {
+      setActionFailure((current) => {
+        const next = { ...current }
+        for (const failure of failures) next[failure.id] = failure.message
+        return next
+      })
+    }
+  }
+
+  /**
+   * 批量彻底删除 / 批量恢复**共用这一条**（2026-10-17 批量重构）：一次 `apply` 把整批交给 Node 半，
+   * 逐条成败住在 `ApplyOutcome` 里 ⇒ 组件不再自己拼循环、也不再"每条一次全量重读"。
+   */
+  const confirmApply = async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
     setBusy(true)
-    if (target.kind === 'entries') {
-      // 批量：**串行**逐条走那个单条动词（不新增端点、不碰 Node 半）。并行会让"哪几条失败"
-      // 变成一坨竞态，而这条恰恰必须逐条说清——失败原文要落回它自己那一行。
-      const failures: Array<{ id: string; message: string }> = []
-      for (const id of target.ids) {
-        const outcome = await callRemote(() => deps.purge(id))
-        if (outcome.ok) detailCache.current.delete(id)
-        else failures.push({ id, message: outcome.failure.message })
-      }
-      setBusy(false)
-      setPending(null)
-      if (failures.length > 0) {
-        setActionFailure((current) => {
-          const next = { ...current }
-          for (const failure of failures) next[failure.id] = failure.message
-          return next
-        })
-      }
+    const outcome = await callRemote(() => deps.applyOutcomes(action, ids))
+    setBusy(false)
+    setPending(null)
+    if (!outcome.ok) {
+      // 整次调用没办成（路由自检 / 通道断）：这批一条都没落地 ⇒ 原文摆到每一行，别让清单看起来"删成功了"
+      for (const id of ids) failRow(id, outcome.failure.message)
       await reload()
       return
     }
-    const outcome = await callRemote(() =>
-      target.kind === 'entry' ? deps.purge(target.entry.id) : deps.purge(undefined),
-    )
-    setBusy(false)
-    if (!outcome.ok) {
-      setPending(null)
-      if (target.kind === 'entry') failRow(target.entry.id, outcome.failure.message)
-      else setListFailure(outcome.failure.message)
-      return
-    }
-    setPending(null)
-    if (target.kind === 'entry') detailCache.current.delete(target.entry.id)
-    else detailCache.current.clear()
+    settleOutcomes(outcome.value)
     await reload()
   }
+
+  const confirmPurge = async (): Promise<void> => {
+    const target = pending
+    if (target === null) return
+    if (target.kind === 'entries') return confirmApply('purge', target.ids)
+    if (target.kind === 'restore') return confirmApply('restore', target.ids)
+    if (target.kind === 'entry') return confirmApply('purge', [target.entry.id])
+    // 清空：聚合回执、不按条回，所以它不走 `apply`（形状不同，不是偷懒）
+    setBusy(true)
+    const outcome = await callRemote(() => deps.emptyTrash())
+    setBusy(false)
+    setPending(null)
+    if (!outcome.ok) {
+      setListFailure(outcome.failure.message)
+      return
+    }
+    detailCache.current.clear()
+    await reload()
+  }
+
+  /**
+   * 详细信息那块的选中集合：确认框要把"这一批有哪些、要去哪"摆出来，靠的全量条目是从勾选 id 反查
+   * （顺序已经是"清单从上往下"）——清单里找不到的 id 是别的窗口刚动过，滤掉不等于丢动作
+   * （重读会把它从勾选里也剔掉）。
+   */
+  const byIdEntries = useMemo(() => new Map((entries ?? []).map((entry) => [entry.id, entry])), [entries])
+  const restoreEntries = pending?.kind === 'restore'
+    ? pending.ids.map((id) => byIdEntries.get(id)).filter((entry): entry is TrashEntryLike => entry !== undefined)
+    : []
 
   // 头部合计要把组里孩子的字节算上：孩子不单独列行，只加父那一格就会少报（少报的就是那 74.6 MB 那一类）
   const totalBytes = (entries ?? []).reduce((sum, entry) => sum + releaseBytesOf(entry), 0)
@@ -585,10 +623,11 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   // 交互或失效通告为止（桶最细到分钟，而回收站不是盯着看的界面）。这是取舍，不是"不会停在旧读数"。
   const now = Date.now()
   const hasEntries = entries !== null && entries.length > 0
-  const noteText = selectMode
-    ? t('trash.footer.noteBulk', { dir: TRASH_DIR, count: checkedIds.length })
-    : t('trash.footer.note', { dir: TRASH_DIR })
-  const noteParts = splitOn(noteText, TRASH_DIR)
+  /**
+   * 页脚那句在两种模式（清理 / 多选）下用同一份：多选态现在能删也能恢复，"选中的 N 条不可恢复"
+   * 在准备批量恢复时是假话——那类具体警告归各自的确认框，这里只留两件事：回收站在哪、不自动过期。
+   */
+  const noteParts = splitOn(t('trash.footer.note', { dir: TRASH_DIR }), TRASH_DIR)
   /**
    * 选中那条从**全量条目**里找，不从 `ordered`（只含展开的组）里找：把选中那条所在的组折叠起来
    * 只是把那一列收掉，右栏那条不该跟着消失——详情读的是这条会话，跟清单怎么分段无关。
@@ -949,35 +988,51 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             borderTop: '0.5px solid var(--dsw-alias-border-l2)',
           }}
         >
-          {/* 这句里的「清空后不可恢复」是**必须看得见**的告警，所以别处都用 ELLIPSIS、这一处不用：
+          {/* 这句里「不自动过期」是**必须看得见**的告警，所以别处都用 ELLIPSIS、这一处不用：
               520px 窗（正文列 405）量到这句 `scrollWidth 360 > clientWidth 280` ⇒ 套上省略号就被截断。
               句子整体一个 key（`trash.footer.note`，占位符 `{dir}`），渲染时按 `dir` 的值切一刀、把那一截
-              包成 code——不拆成前后两段翻译，免得两种语言各钉一次语序。 */}
+              包成 code——不拆成前后两段翻译，免得两种语言各钉一次语序。多选态共用这一份：动作专属的
+              警告（"不可恢复"）归各自的确认框，2026-10-17 起这句不再分两版。 */}
           <span style={{ minWidth: 0, fontSize: 11.5, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
             {noteParts[0]}
             <span style={{ fontFamily: 'var(--ds-font-family-code)', fontSize: 11 }}>{noteParts[1]}</span>
             {noteParts[2]}
           </span>
-          <span style={{ marginLeft: 'auto', flex: 'none' }}>
-            {/* 页脚那颗**只有一个**：多选态下它从「清空回收站…」换成「彻底删除 N 条」，位置与
-                那款实心红都不动（§7 那句"整页唯一一块实心红"靠这个不换位置来守）。
-                一条没勾时置灰，原因走 Tooltip——置灰的按钮自己不吃 hover，anchor 用一层 span，
+          <span style={{ marginLeft: 'auto', flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* 多选态下这里住两颗：**恢复 N 条**（描边款，无确认框的单行「恢复」的批量版——它带确认框，
+                因为一批条目多、去向是各自的旧项目目录）与**彻底删除 N 条**（实心红）。危险那颗位置不换：
+                §7 那句"整页唯一一块实心红"靠"它永远是这一排的最后一个"来守。
+                一条没勾时两颗都置灰，原因走 Tooltip——置灰的按钮自己不吃 hover，anchor 用一层 span，
                 与 `delete-menu-item` 那处运行中置灰是同一个路子。 */}
             {selectMode ? (
-              <Tooltip label={t('trash.select.needOne')} side="top" portal disabled={checkedIds.length > 0}>
-                <span>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    style={BULK_DANGER}
-                    icon={<IconTrashOutlineRegular size={13} />}
-                    disabled={checkedIds.length === 0 || busy}
-                    onClick={() => setPending({ kind: 'entries', ids: checkedIds })}
-                  >
-                    {t('trash.select.purge', { count: checkedIds.length })}
-                  </Button>
-                </span>
-              </Tooltip>
+              <>
+                <Tooltip label={t('trash.select.needOne')} side="top" portal disabled={checkedIds.length > 0}>
+                  <span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={checkedIds.length === 0 || busy}
+                      onClick={() => setPending({ kind: 'restore', ids: checkedIds })}
+                    >
+                      {t('trash.select.restore', { count: checkedIds.length })}
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip label={t('trash.select.needOne')} side="top" portal disabled={checkedIds.length > 0}>
+                  <span>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      style={BULK_DANGER}
+                      icon={<IconTrashOutlineRegular size={13} />}
+                      disabled={checkedIds.length === 0 || busy}
+                      onClick={() => setPending({ kind: 'entries', ids: checkedIds })}
+                    >
+                      {t('trash.select.purge', { count: checkedIds.length })}
+                    </Button>
+                  </span>
+                </Tooltip>
+              </>
             ) : (
               <Button
                 variant="primary"
@@ -994,31 +1049,89 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       ) : null}
 
       {pending === null ? null : (
-        <TrashPurgeConfirm
+        <TrashConfirm
           pending={pending}
+          restoreEntries={restoreEntries}
           busy={busy}
           t={t}
           onCancel={() => setPending(null)}
-          onConfirm={() => void confirmPurge()}
+          onConfirmPurge={() => void confirmPurge()}
+          onConfirmRestore={(ids) => void confirmApply('restore', ids)}
         />
       )}
     </div>
   )
 }
 
-function TrashPurgeConfirm({
+/**
+ * 两种批量动作共用这一个确认框壳：`purge`（不可恢复）与 `restore`（加法，但一批条目多、去向是
+ * 各自的旧项目目录，点之前也要过一道）。标题、正文、确认键的措辞各处一套；批量恢复把选中条目
+ * 列成卡片（标题 + 项目名——恢复的去向是**每条各自的**旧项目目录，逐条列出来是这句话的正文）；
+ * 批量彻底删除只给条数——那批的"去哪"没有可说的，而"不可恢复"那句警告才是要读的。
+ */
+function TrashConfirm({
   pending,
+  restoreEntries,
   busy,
   t,
   onCancel,
-  onConfirm,
+  onConfirmPurge,
+  onConfirmRestore,
 }: {
-  pending: PendingPurge
+  pending: PendingAction
+  restoreEntries: readonly TrashEntryLike[]
   busy: boolean
   t: Translate
   onCancel: () => void
-  onConfirm: () => void
+  onConfirmPurge: () => void
+  onConfirmRestore: (ids: readonly string[]) => void
 }) {
+  if (pending.kind === 'restore') {
+    return (
+      <Modal
+        open
+        onClose={onCancel}
+        title={t('trash.confirm.restore', { count: pending.ids.length })}
+        closeLabel={t('common.close')}
+        footer={
+          <>
+            <Button variant="outline" onClick={onCancel}>
+              {t('common.cancel')}
+            </Button>
+            <Button variant="primary" disabled={busy} onClick={() => onConfirmRestore(pending.ids)}>
+              {t('trash.confirm.restoreNow')}
+            </Button>
+          </>
+        }
+      >
+        {restoreEntries.length === 0 ? null : (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+              maxHeight: 280,
+              overflow: 'auto',
+              marginBlockEnd: 10,
+            }}
+          >
+            {restoreEntries.map((entry) => (
+              <div key={entry.id} style={{ ...CARD, flexDirection: 'column', alignItems: 'stretch', gap: 2, padding: '9px 12px' }}>
+                <div style={{ ...ELLIPSIS, fontSize: 13.5, lineHeight: '19px' }}>
+                  {entry.title === '' ? t('common.untitled') : entry.title}
+                </div>
+                <div style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+                  {projectLabel(entry.projectDir, t)}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <p>{t('trash.confirm.restore.body')}</p>
+      </Modal>
+    )
+  }
+
   const title =
     pending.kind === 'all' ? t('trash.confirm.all')
     : pending.kind === 'entries' ? t('trash.confirm.bulk', { count: pending.ids.length })
@@ -1036,7 +1149,7 @@ function TrashPurgeConfirm({
           <Button variant="outline" onClick={onCancel}>
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirm}>
+          <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirmPurge}>
             {t('trash.confirm.purge')}
           </Button>
         </>

@@ -96,19 +96,19 @@ describe('确认框', () => {
   // 宿主的客户端本来就藏孩子 ⇒ 用户点完才发现侧栏少了一整片，而"少了什么"不可自证。
   // 所以那句话必须摆在**点之前**（issue #3）：数只能删除前现问一次（那一刻它还没进回收站，清单里没有它）。
   it('目标在盘上有后代 ⇒ 确认框点之前就说清有多少个一起移入回收站', async () => {
-    const subagentCount = vi.fn(async () => 3)
-    renderScene({ sessionId: 'session-parent', title: '父会话' }, { delete: vi.fn(async () => ({ id: 'e1' })), subagentCount } as never)
+    const countSubagents = vi.fn(async () => 3)
+    renderScene({ sessionId: 'session-parent', title: '父会话' }, { delete: vi.fn(async () => ({ id: 'e1' })), countSubagents } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
-    expect(subagentCount).toHaveBeenCalledWith('session-parent')
+    expect(countSubagents).toHaveBeenCalledWith('session-parent')
     expect(await screen.findByText(/含 3 个子会话/)).toBeInTheDocument()
   })
 
   it('没有后代 ⇒ 那半句一个字都不出现（不许写「含 0 个」冒充说了话）', async () => {
-    const subagentCount = vi.fn(async () => 0)
-    renderScene({ sessionId: 's', title: 't' }, { delete: vi.fn(async () => ({ id: 'e1' })), subagentCount } as never)
+    const countSubagents = vi.fn(async () => 0)
+    renderScene({ sessionId: 's', title: 't' }, { delete: vi.fn(async () => ({ id: 'e1' })), countSubagents } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     const dialog = await screen.findByRole('dialog')
-    await waitFor(() => expect(subagentCount).toHaveBeenCalled())
+    await waitFor(() => expect(countSubagents).toHaveBeenCalled())
     await new Promise((resolve) => { setTimeout(resolve, 0) }) // 让那次取数落进 state
     expect(dialog.textContent).not.toContain('子会话')
   })
@@ -118,7 +118,7 @@ describe('确认框', () => {
     const del = vi.fn(async () => ({ id: 'e1' }))
     renderScene(
       { sessionId: 's', title: 't' },
-      { delete: del, subagentCount: vi.fn(async () => { throw new Error('通道断了') }) } as never,
+      { delete: del, countSubagents: vi.fn(async () => { throw new Error('通道断了') }) } as never,
     )
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     await screen.findByRole('dialog')

@@ -4,19 +4,24 @@
   "description": "在 DeepSeek Harness 里删除会话：删除=移入回收站（可恢复），另设显式彻底删除",
   "type": "module",
   "main": "lib/index.js",
-  "types": "lib/index.d.ts",
+  "types": "lib/types/index.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index.d.ts",
+      "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
-    "./client": "./lib/client.js",
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
     "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "icon": "./icon.svg",
   "files": [
-    "lib",
+    "lib/index.js",
+    "lib/client.js",
+    "lib/types/**/*.d.ts",
     "locale",
     "icon.svg",
     "cordis.patch.yml",
@@ -27,17 +32,17 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cordis": "^4.0.4",
     "react": "^18.3.1"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/cordis": "^4.0.4",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.10.0",
     "@testing-library/react": "^16.3.3",
@@ -45,7 +50,7 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.5",
     "jsdom": "^26.1.0",
-    "react": "18.3.1",
+    "react": "^18.3.1",
     "react-dom": "18.3.1",
     "tsdown": "0.23.0",
     "typescript": "5.9.3",

@@ -129,7 +129,7 @@ function ConfirmDialog({
   useEffect(() => {
     let alive = true
     void (async () => {
-      const outcome = await callRemote(() => deps.subagentCount(current.sessionId))
+      const outcome = await callRemote(() => deps.countSubagents(current.sessionId))
       // 读不到就**不说那半句**（0 也是"没说"）：它是加法，一次取数失败不许锁死删除按钮，
       // 也不许把"读不出"写成"它没有子会话"那种假话。
       if (alive) setSubagents(outcome.ok ? outcome.value : 0)
@@ -149,7 +149,9 @@ function ConfirmDialog({
     clearDeleteRequest()
     // 回收站多了一条：让正开着的清单面板重读（它挂载时只取一次数，见 trash-store.ts 头注）。
     invalidateTrash()
-    publishUndoNotice({ entryId: outcome.value.id, title: current.title })
+    // 单条删除（N=1）不会命中"已被同批前一条带走"的幂等值；真遇上（批量入口共用这条包装、
+    // 或通道被别的窗口抢先动过）就只刷新，不 publish 一条没有落点的撤销提示。
+    if (outcome.value !== null) publishUndoNotice({ entryId: outcome.value.id, title: current.title })
   }
 
   return (

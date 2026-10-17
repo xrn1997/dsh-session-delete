@@ -1,7 +1,7 @@
 // **错误映射**（`src/remote/map-error.ts`）
 //
-// 这张表是插件唯一的错误词汇（设计稿 §6 的五个码），产出的是**线上信封的那两件**（`{code, message}`）——
-// 消费者是 `src/api/dispatch.ts`（路由层把结果原样塞进失败信封）。
+// 这张表是插件唯一的错误词汇（设计稿 §6 的五个码），产出的是**线上信封那三件**
+// （`{code, message, details?}`）——消费者是 `src/api/dispatch.ts`（路由层把结果原样塞进失败信封）。
 import { describe, expect, it } from 'vitest'
 import { toRemoteFailure } from '../src/remote/map-error.js'
 import { verbError } from '../src/verbs/errors.js'
@@ -65,12 +65,13 @@ describe('错误映射', () => {
     }
   })
 
-  it('五个码之外一律落 io（别域、别前缀、别因都不许穿线）', () => {
+  it('五个码之外的怪 code 一律落 io；官方域的 code 不再被改写（2026-10-17 错误面对齐）', () => {
     expect(toRemoteFailure(Object.assign(new Error('z'), { code: 'sessiondelete/nope' })).code)
       .toBe('sessiondelete/io')
-    expect(toRemoteFailure(Object.assign(new Error('z'), { code: 'gateway/internal' })).code)
-      .toBe('sessiondelete/io')
     expect(toRemoteFailure(undefined).code).toBe('sessiondelete/io')
+    // 旧断言把 `gateway/internal` 折成 `io`——那等于把宿主的判断抹成我们的，如今原样过桥
+    expect(toRemoteFailure(Object.assign(new Error('z'), { code: 'gateway/internal' })).code)
+      .toBe('gateway/internal')
   })
 
   // 上屏原文这条许诺对**非 Error 抛出物**同样成立（丢掉它就会让用户看到 `[object Object]`）。
@@ -79,11 +80,50 @@ describe('错误映射', () => {
       .toEqual({ code: 'sessiondelete/io', message: '宿主抛了个裸对象' })
   })
 
-  // 路由层把映射结果折成线上信封（`{code, message}` 两件）：`code` 是浏览器半的判别依据，
+  // 映射结果带着线上信封要的 code 与 message：`code` 是浏览器半的判别依据，
   // `message` 是上屏的原文——两样都必须从返回值上拿得到。
-  it('映射结果带着线上信封要的两件：code 与 message', () => {
+  it('映射结果带着线上信封要的 code 与 message', () => {
     const mapped = toRemoteFailure(verbError('project-missing', '原项目目录已不存在：/x'))
     expect(mapped.code).toBe('sessiondelete/project-missing')
     expect(mapped.message).toBe('原项目目录已不存在：/x')
+  })
+
+  // ── 2026-10-17 错误面对齐（第三批）──────────────────────────────
+  // 官方 `rpcErrorSchema` 是 `{code, message, details}` 三件；动词的结构化附带物不该在桥上被丢掉。
+  it('动词错误带 details ⇒ 原样过桥（宿主把 activity/sessionId 塞在错误自己身上的那种）', () => {
+    const e = Object.assign(verbError('live', '会话正在运行：session-a'), { sessionId: 'session-a', activity: [{ kind: 'turn' }] })
+    const mapped = toRemoteFailure(e)
+    expect(mapped.code).toBe('sessiondelete/live')
+    // 官方 schema 是 `Record<string, unknown>`：activity 保留结构，不降级成 JSON 字符串。
+    expect(mapped.details).toEqual({ sessionId: 'session-a', activity: [{ kind: 'turn' }] })
+  })
+
+  it('verbError 自己就能带 details（字符串表），第三件跟着上线', () => {
+    const mapped = toRemoteFailure(verbError('project-missing', '原项目目录已不存在：/x', undefined, { path: '/x' }))
+    expect(mapped).toEqual({ code: 'sessiondelete/project-missing', message: '原项目目录已不存在：/x', details: { path: '/x' } })
+  })
+
+  // 「就近优先」：动词在抛出处挂的 details 比 cause 链上宿主错误自己带的字段更近。
+  it('details 就近优先：外层 verbError 挂的 details 覆盖 cause 上的宿主字段', () => {
+    const inner = Object.assign(hostError('WorkspaceActiveSessionError', 'busy'), {
+      sessionId: 'inner', activity: [{ kind: 'turn' }],
+    })
+    const mapped = toRemoteFailure(verbError('io', '包了一层', inner, { sessionId: 'outer' }))
+    expect(mapped.code).toBe('sessiondelete/live')
+    expect(mapped.details).toEqual({ sessionId: 'outer' })
+  })
+
+  // 带**官方形状 code**（`<域>/<名>`）的抛出物不再折成我们的 `io`：改写法就是把宿主的判断抹成我们的。
+  // 没有 code 的仍按 cause 链/五个码走；**不合规式的 code**（没斜杠、非本域）照旧兜 io（上面那条已钉）。
+  it('宿主自己域的失败（workspace/*、session/*）原样过桥，不被改写成 sessiondelete/io', () => {
+    const active = Object.assign(new Error('cannot archive session x'), { code: 'workspace/session-active', sessionId: 'x' })
+    expect(toRemoteFailure(active)).toMatchObject({ code: 'workspace/session-active', message: 'cannot archive session x' })
+  })
+
+  it('带标记位的失败若挂着 details，第三件也一起带出', () => {
+    const marked = Object.assign(new Error('原话'), {
+      code: 'workspace/session-active', isDSHRemoteError: true, details: { sessionId: 'x' },
+    })
+    expect(toRemoteFailure(marked).details).toEqual({ sessionId: 'x' })
   })
 })

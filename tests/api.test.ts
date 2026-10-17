@@ -4,8 +4,10 @@
 // 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 六个端点各自的方法 + 路径（四个动词 + 两条纯读：单条详情、删除前那次计数）；② 信封就是浏览器半消费的那个形状
-//  （`{ok:true,value}` / `{ok:false,error:{code,message}}`）；③ 码只从那五个里出、且失败的
+//  ① 五个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
+//    POST empty＝清空）；
+//  ② 信封就是浏览器半消费的那个形状
+//  （`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
 //  ⑤ 取数通道的**同源栅栏**：跨源请求拒掉，且拒之前一个副作用都不发生。
 import http from 'node:http'
@@ -17,6 +19,7 @@ import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../src/shared/wire.js
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
 import type { DeleteDeps } from '../src/verbs/delete-session.js'
+import { restoreSession } from '../src/verbs/restore-session.js'
 
 const HOME = '/h'
 const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
@@ -31,7 +34,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 })
 
 /**
- * 六个端点的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
+ * 五个段名的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
  * 替身暴露出来（`fakes`）是为了让每条用例能只翻自己那一格，而不必重建整副依赖。
  *
  * `listDirs` 按种子（`over.seed`）给：`list` 现在**先对账再读**（`reconcileTrash`），
@@ -66,6 +69,11 @@ function makeDeps(over: { seed?: TrashEntry[]; live?: boolean; subagents?: Recor
     archive: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
     subagentCounts: vi.fn(async (_parentIds: readonly string[]) => over.subagents ?? {}),
     subagentMembers: vi.fn(async (_sessionId: string) => [] as { sessionId: string; projectDir: string }[]),
+    // 批量恢复的通告预取（`apply` 整批只调一次；单条动词没带预取时仍走 `announceRestored`）
+    restoredSummariesOf: vi.fn(async () => [] as { sessionId: string; summary: unknown }[]),
+    announceRestoredBatch: vi.fn(
+      async (_ids: readonly string[], _known?: readonly { sessionId: string; summary: unknown }[]) => {},
+    ),
   }
   return { deps: { fs, host, manifest, home: HOME, now: () => NOW } as unknown as DeleteDeps, fs, host, manifest }
 }
@@ -110,10 +118,30 @@ async function failureOf(base: string, path: string, init: CallInit = {}): Promi
   return { status, code: error.code, message: error.message }
 }
 
+/** `/apply` 的**单条**失败：顶层信封照回 `ok:true`（一次调用办成了），逐条的 `ok:false` 里才是码与原文。
+ *  这里把"只有一条且它失败"这一形状钉死，取回那一条的失败面。 */
+async function failureOfOutcome(
+  base: string, path: string, init: CallInit = {},
+): Promise<{ code: string; message: string }> {
+  const { body } = await call(base, path, init)
+  expect(body.ok).toBe(true)
+  const outcomes = body.value as Array<{ ok: boolean; error?: { code: string; message: string } }>
+  expect(outcomes).toHaveLength(1)
+  expect(outcomes[0]!.ok).toBe(false)
+  const error = outcomes[0]!.error as { code: string; message: string }
+  expect(error.code.startsWith('sessiondelete/')).toBe(true)
+  return { code: error.code, message: error.message }
+}
+
 /**
  * 原生 `http.request` 形态的一次调用。**栅栏用例必须用它**：`Origin` / `Referer` 在 Fetch 规范里
  * 是 forbidden header name，`fetch()` 传了也会被丢掉——那样测出来的就是"没有 Origin"那条放行支。
  */
+/** 一次 `POST /apply` 的 body：动作 + 一组 id。 */
+function applyBody(action: string, ids: string[]) {
+  return JSON.stringify({ [PARAMS.action]: action, [PARAMS.ids]: ids })
+}
+
 function rawCall(
   base: string, path: string, method: string, headers: Record<string, string>, body?: string,
 ): Promise<{ status: number; text: string }> {
@@ -134,7 +162,7 @@ function rawCall(
   })
 }
 
-describe('路由层 · 六个端点的契约', () => {
+describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17）', () => {
   it('GET /list 回信封 {ok:true,value}，值就是清单（最近删除在前）', async () => {
     const { deps } = makeDeps({ seed: [entry('a', { deletedAt: 100 }), entry('b', { deletedAt: 200 })] })
     const base = await start(deps)
@@ -222,57 +250,69 @@ describe('路由层 · 六个端点的契约', () => {
   })
 
   // 删除确认框要说「含 N 个子会话，将一起移入回收站」（issue #3）⇒ 那个数必须在**删除之前**问得到。
-  // 它不能挂在 `/list` 上：那一刻这条会话还在盘上，回收站清单里没有它。
-  it('POST /subagent-count 交回这条会话在盘上的后代数（确认框删除前取一次数）', async () => {
+  // 2026-10-17 批量重构后它挂在 `/apply` 的 `count` 上（一条一段退役了），纯读豁免跟着一起搬。
+  it('apply count 交回这条会话在盘上的后代数（确认框删除前取一次数）', async () => {
     const { deps, host } = makeDeps({ subagents: { 'session-parent': 3 } })
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.subagentCount, { method: 'POST', body: { sessionId: 'session-parent' } })
+    const { status, body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent'] },
+    })
     expect(status).toBe(200)
-    expect(body).toEqual({ ok: true, value: 3 })
+    expect(body).toEqual({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 3 }] })
     expect(host.subagentCounts).toHaveBeenCalledWith(['session-parent'])
   })
 
   // 没挂 `sessionQuery`（或这条确实没后代）⇒ 0。0 不是"不知道"，界面上那一栏在 n===0 时整句不出现，
   // 所以这个数不会被读成"有一个数说没有孩子"。
-  it('subagent-count 拿不到数 ⇒ 0（界面上那一栏在 n===0 时整句不出现，所以 0 不会被读成"有一个数说没孩子"）', async () => {
+  it('apply count 拿不到数 ⇒ 0（界面上那一栏在 n===0 时整句不出现，所以 0 不会被读成"有一个数说没孩子"）', async () => {
     const { deps } = makeDeps({ subagents: {} })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.subagentCount, { method: 'POST', body: { sessionId: 'session-none' } })
-    expect(body).toEqual({ ok: true, value: 0 })
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-none'] },
+    })
+    expect(body).toEqual({ ok: true, value: [{ id: 'session-none', action: 'count', ok: true, value: 0 }] })
   })
 
-  it('POST /delete 拿 body 里的 sessionId 走删除动词，回移入回收站的那一条', async () => {
+  it('apply delete 拿一组 sessionId 走删除动词，回移入回收站的那一条', async () => {
     const { deps, manifest, host } = makeDeps()
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.delete, { method: 'POST', body: { sessionId: 'session-abc' } })
+    const { status, body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] },
+    })
     expect(status).toBe(200)
-    expect(body.ok).toBe(true)
-    expect(body.value).toMatchObject({ sessionId: 'session-abc', title: '会话标题', sizeBytes: 224 * 1024 })
+    expect((body.value as Array<Record<string, unknown>>)[0]).toMatchObject({
+      ok: true, value: { sessionId: 'session-abc', title: '会话标题', sizeBytes: 224 * 1024 },
+    })
     // 清单真的多了一行（路由不是把动词的返回值转发一下了事），且账本/归档都动到了
     expect((await manifest.list()).map((e) => e.sessionId)).toEqual(['session-abc'])
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
   })
 
-  it('POST /restore 拿 body 里的 entryId 走恢复动词，成功即从清单消失', async () => {
+  it('apply restore 拿一组 entryId 走恢复动词，成功即从清单消失', async () => {
     const { deps, manifest } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.restore, { method: 'POST', body: { entryId: entryIdOf('a') } })
+    const { status, body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [entryIdOf('a')] },
+    })
     expect(status).toBe(200)
-    expect(body.ok).toBe(true)
-    expect(body.value).toMatchObject({ id: entryIdOf('a') })
+    expect((body.value as Array<Record<string, unknown>>)[0]).toMatchObject({ ok: true, value: { id: entryIdOf('a') } })
     expect(await manifest.list()).toEqual([])
   })
 
-  it('POST /purge 带 entryId = 单条；不带 = 清空（回执 {removed,freedBytes}）', async () => {
-    const one = makeDeps({ seed: [entry('a'), entry('b')] })
+  it('apply purge 一组 id 单条；/empty 清空（回执 {removed,freedBytes}）', async () => {
+    // `entry('a')` 的 id 就是 `entryIdOf('a')`（夹具第一参是**原目录名**，不是整串 id）
+    const two = () => [entry('a'), entry('b')]
+    const one = makeDeps({ seed: two() })
     const oneBase = await start(one.deps)
-    const single = await call(oneBase, ROUTES.purge, { method: 'POST', body: { entryId: entryIdOf('a') } })
-    expect(single.body).toMatchObject({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } })
+    const single = await call(oneBase, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [entryIdOf('a')] },
+    })
+    expect((single.body.value as Array<Record<string, unknown>>)[0]).toMatchObject({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } })
     expect((await one.manifest.list()).map((e) => e.id)).toEqual([entryIdOf('b')])
 
-    const all = makeDeps({ seed: [entry('a'), entry('b')] })
+    const all = makeDeps({ seed: two() })
     const allBase = await start(all.deps)
-    const cleared = await call(allBase, ROUTES.purge, { method: 'POST', body: {} })
+    const cleared = await call(allBase, ROUTES.empty, { method: 'POST', body: {} })
     expect(cleared.body).toMatchObject({ ok: true, value: { removed: 2, freedBytes: 448 * 1024 } })
     expect(await all.manifest.list()).toEqual([])
   })
@@ -330,7 +370,7 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
     const base = await start(deps)
     const listPromise = call(base, ROUTES.list)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const deletePromise = call(base, ROUTES.delete, { method: 'POST', body: { sessionId: 'session-abc' } })
+    const deletePromise = call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] } })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(host.isLive).not.toHaveBeenCalled() // 删除的第一个副作用都还没发生：它被链挡在门外
     release()
@@ -339,9 +379,9 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
     expect(host.isLive).toHaveBeenCalledWith('session-abc') // 前一个一松开，它就接着跑完
   })
 
-  // 纯读不排队（`detail` 早就在这一条上）：确认框那一句「含 N 个子会话」挂的是一次 `subagent-count`，
-  // 它不该被前面一次对账堵在身后——否则"打开菜单点删除"要等一次磁盘扫描才有回音。
-  it('链被对账占住时，/subagent-count 照样立刻回', async () => {
+  // 纯读不排队（`detail`、`ping` 早就在这条路上）：确认框那一句「含 N 个子会话」挂的是
+  // `/apply` 的 `action:'count'`，它不该被前面一次对账堵在身后——否则"打开菜单点删除"要等一次磁盘扫描才有回音。
+  it('链被对账占住时，apply 的 count 照样立刻回（纯读豁免跟着段名一起搬进 /apply）', async () => {
     const { deps, fs } = makeDeps({ subagents: { 'session-parent': 2 } })
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
@@ -356,8 +396,8 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
     const base = await start(deps)
     const listPromise = call(base, ROUTES.list)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const count = await call(base, ROUTES.subagentCount, { method: 'POST', body: { sessionId: 'session-parent' } })
-    expect(count.body).toEqual({ ok: true, value: 2 }) // 没有等在对账后面
+    const count = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent'] } })
+    expect(count.body).toEqual({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 2 }] }) // 没有等在对账后面
     release()
     await listPromise
   })
@@ -367,19 +407,18 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
   it('删一个正在跑的会话 ⇒ sessiondelete/live，且一个字节都没动', async () => {
     const { deps, manifest, fs } = makeDeps({ live: true })
     const base = await start(deps)
-    const { code, message } = await failureOf(base, ROUTES.delete, { method: 'POST', body: { sessionId: 'session-abc' } })
+    const { code, message } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] } })
     expect(code).toBe('sessiondelete/live')
     expect(message).toContain('session-abc')
     expect(fs.rename).not.toHaveBeenCalled()
     expect(await manifest.list()).toEqual([])
   })
 
-  it('恢复一条不在清单里的 id ⇒ sessiondelete/trash-empty', async () => {
+  // 「没有这一条」只在**真正没被同批带走**时响亮报错；被同批前一条带走的 id 才是幂等 no-op。
+  // 幽灵 id（整批开始前就不在清册）必须报 `trash-empty`，不许被"已被带走"粉饰成成功。
+  it('恢复一条不在清单里的 id ⇒ 单条动词响亮抛 trash-empty（与混合批里被带走的幂等 no-op 是两件事）', async () => {
     const { deps } = makeDeps()
-    const base = await start(deps)
-    const { code, message } = await failureOf(base, ROUTES.restore, { method: 'POST', body: { entryId: 'ghost' } })
-    expect(code).toBe('sessiondelete/trash-empty')
-    expect(message).toContain('ghost')
+    await expect(restoreSession(deps)('ghost')).rejects.toThrow(/ghost/)
   })
 
   it('恢复时原项目目录没了 ⇒ sessiondelete/project-missing（不静默建目录）', async () => {
@@ -387,7 +426,7 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
     // 清单在、回收站目录也在，唯独 sessions 根不在
     fs.exists.mockImplementation(async (path: string) => path !== `${HOME}/sessions`)
     const base = await start(deps)
-    const { code } = await failureOf(base, ROUTES.restore, { method: 'POST', body: { entryId: entryIdOf('a') } })
+    const { code } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [entryIdOf('a')] } })
     expect(code).toBe('sessiondelete/project-missing')
     expect(fs.rename).not.toHaveBeenCalled()
   })
@@ -396,15 +435,16 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
     const { deps, host } = makeDeps()
     host.projectDirOf.mockResolvedValue(undefined)
     const base = await start(deps)
-    const { code } = await failureOf(base, ROUTES.delete, { method: 'POST', body: { sessionId: 'ghost' } })
+    const { code } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['ghost'] } })
     expect(code).toBe('sessiondelete/not-found')
   })
 
-  it('清空一条不存在的 entryId ⇒ sessiondelete/trash-empty', async () => {
-    const { deps } = makeDeps({ seed: [entry('a')] })
+  it('彻底删除一条不存在的 entryId ⇒ sessiondelete/trash-empty（幂等只留给"被同批前一条带走"，不粉饰幽灵 id）', async () => {
+    const { deps, fs } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
-    const { code } = await failureOf(base, ROUTES.purge, { method: 'POST', body: { entryId: 'ghost' } })
+    const { code } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: ['ghost'] } })
     expect(code).toBe('sessiondelete/trash-empty')
+    expect(fs.removeDir).not.toHaveBeenCalled()
   })
 
   it('list 的域层故障也过同一张映射表 ⇒ sessiondelete/io，原文带出', async () => {
@@ -418,10 +458,21 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
 })
 
 describe('路由层 · 自检（不静默吞）', () => {
-  it('方法不对：GET /delete 不在 list 那条道上', async () => {
+  it('路由自检有自己的 HTTP 状态：方法不对 405、未知路径 404，信封照带原文（2026-10-17 错误面对齐）', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const { message } = await failureOf(base, ROUTES.delete)
+    const wrongMethod = await call(base, ROUTES.apply)
+    expect(wrongMethod.status).toBe(405)
+    expect(wrongMethod.body.ok).toBe(false)
+    const unknown = await call(base, '/nope')
+    expect(unknown.status).toBe(404)
+    expect((unknown.body.error as { message: string }).message).toMatch(/未知路由/)
+  })
+
+  it('方法不对：GET /apply 不在 list 那条道上', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    const { message } = await failureOf(base, ROUTES.apply)
     expect(message).toMatch(/方法不允许/)
   })
 
@@ -435,30 +486,41 @@ describe('路由层 · 自检（不静默吞）', () => {
     expect((await failureOf(bare, '/outside')).message).toMatch(/未知路由/)
   })
 
-  it('body 不对：缺 sessionId / 不是字符串 / 非法 JSON，都回信封而不是崩成空响应', async () => {
+  it('body 不对：缺动作 / ids 不是串数组 / 非法 JSON，一律 400 + 信封（不崩成空响应，也不伪装成 200）', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    expect((await failureOf(base, ROUTES.delete, { method: 'POST', body: {} })).message).toMatch(/sessionId/)
-    expect((await failureOf(base, ROUTES.delete, { method: 'POST', body: { sessionId: 42 } })).message).toMatch(/sessionId/)
-    expect((await failureOf(base, ROUTES.restore, { method: 'POST', body: {} })).message).toMatch(/entryId/)
-    expect((await failureOf(base, ROUTES.purge, { method: 'POST', body: { entryId: 42 } })).message).toMatch(/entryId/)
+    const badBodies: Array<Record<string, unknown>> = [
+      {},
+      { [PARAMS.action]: 'delete' },
+      { [PARAMS.action]: 'delete', [PARAMS.ids]: [] },
+      { [PARAMS.action]: 'delete', [PARAMS.ids]: [42] },
+      { [PARAMS.action]: 'nuke', [PARAMS.ids]: ['x'] },
+    ]
+    for (const body of badBodies) {
+      const { status, message } = await failureOf(base, ROUTES.apply, { method: 'POST', body })
+      expect(message, JSON.stringify(body)).toMatch(/动作|ids/)
+      // 请求本身不对 ⇒ 自己的 4xx。**操作**失败才是 200 + 信封（那条口径见下面 `/detail` 读不到那条）。
+      expect(status, JSON.stringify(body)).toBe(400)
+    }
+    expect((await failureOf(base, ROUTES.detail, { method: 'POST', body: {} })).status).toBe(400)
 
-    const res = await fetch(`${base}${ROUTES.delete}`, {
+    const res = await fetch(`${base}${ROUTES.apply}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
     })
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(400)
     expect((await res.json() as { ok: boolean }).ok).toBe(false)
   })
 })
 
 describe('路由层 · 同源栅栏', () => {
-  const body = JSON.stringify({ sessionId: 'session-abc' })
+  // 栅栏不认段名也不认动作：这里钉的是 `/apply` 那**一段**（写口），形状与退役前的四条一段一致。
+  const body = applyBody('delete', ['session-abc'])
   const json = { 'content-type': 'application/json' }
 
   it('跨源的 Origin（无 Referer 也会带）被挡在门外：403，且一个副作用都不发生', async () => {
     const { deps, manifest, fs } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.delete, 'POST', { ...json, origin: 'https://evil.example' }, body)
+    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, origin: 'https://evil.example' }, body)
     expect(res.status).toBe(403)
     expect(fs.rename).not.toHaveBeenCalled()
     expect(await manifest.list()).toEqual([])
@@ -467,7 +529,7 @@ describe('路由层 · 同源栅栏', () => {
   it('跨源的 Referer 同样被挡', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.delete, 'POST', { ...json, referer: 'https://evil.example/x' }, body)
+    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'https://evil.example/x' }, body)
     expect(res.status).toBe(403)
   })
 
@@ -475,12 +537,12 @@ describe('路由层 · 同源栅栏', () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
     const host = new URL(base).host
-    const sameOrigin = await rawCall(base, ROUTES.delete, 'POST', { ...json, origin: `http://${host}`, referer: `http://${host}/` }, body)
+    const sameOrigin = await rawCall(base, ROUTES.apply, 'POST', { ...json, origin: `http://${host}`, referer: `http://${host}/` }, body)
     expect(sameOrigin.status).toBe(200)
     expect(JSON.parse(sameOrigin.text)).toMatchObject({ ok: true })
     expect((await manifest.list()).length).toBe(1)
 
-    const bare = await rawCall(base, ROUTES.delete, 'POST', json, JSON.stringify({ sessionId: 'session-xyz' }))
+    const bare = await rawCall(base, ROUTES.apply, 'POST', json, applyBody('delete', ['session-xyz']))
     expect(bare.status).toBe(200)
     expect((await manifest.list()).length).toBe(2)
   })
@@ -492,7 +554,7 @@ describe('路由层 · 同源栅栏', () => {
   it('桌面壳转发的形态（Origin 被摘掉、Referer 是 dsh-app://app/）放行', async () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.delete, 'POST', { ...json, referer: 'dsh-app://app/' }, body)
+    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'dsh-app://app/' }, body)
     expect(res.status).toBe(200)
     expect(JSON.parse(res.text)).toMatchObject({ ok: true })
     expect((await manifest.list()).length).toBe(1)
@@ -501,7 +563,7 @@ describe('路由层 · 同源栅栏', () => {
   it('挂着 dsh-app 前缀但不是桌面壳那个 origin 的 Referer 照样挡（别把它写成前缀匹配）', async () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.delete, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
+    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
     expect(res.status).toBe(403)
     expect(await manifest.list()).toEqual([])
   })
@@ -532,7 +594,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     const { deps, fs } = makeDeps({ seed })
     const base = await start(deps)
     const { status, code } = await failureOf(base, ROUTES.detail, { method: 'POST', body: { [PARAMS.entryId]: 'nope' } })
-    expect(status).toBe(200) // 信封在场 ⇒ 状态一律 200，成败只看 ok
+    expect(status).toBe(200) // 操作失败 ⇒ 200 + 信封；4xx 只留给请求本身不对
     expect(code).toBe('sessiondelete/trash-empty')
     expect(fs.readFile).not.toHaveBeenCalled()
   })
@@ -571,21 +633,20 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
   })
 })
 
-// 新段名**不自带豁免**：方法自检、字段点名、同源栅栏三样都得当场钉一次——一条能读盘上会话结构的路由
-// 与那四个写口吃的是同一道栅栏（AGENTS.md：栅栏必须认得桌面壳那条摘掉头的光路）。
-describe('POST /subagent-count 的自检与栅栏（第六个端点，2026-10-16）', () => {
+/** 一次 `POST /apply`：body 自己带动作与 ids。 */
+describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作，2026-10-17）', () => {
   const json = { 'content-type': 'application/json' }
-  const payload = JSON.stringify({ [PARAMS.sessionId]: 'session-parent' })
+  const payload = applyBody('count', ['session-parent'])
 
-  it('GET 被拒说的是"需 POST"，body 缺/空/非串都落 io 并点名字段', async () => {
+  it('GET 被拒说的是"需 POST"，body 缺动作 / ids 不成形都落 io 并点名字段', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const wrongMethod = await failureOf(base, ROUTES.subagentCount, { method: 'GET' })
+    const wrongMethod = await failureOf(base, ROUTES.apply, { method: 'GET' })
     expect(wrongMethod.message).toMatch(/需 POST/)
-    for (const bad of [{}, { [PARAMS.sessionId]: '' }, { [PARAMS.sessionId]: 42 }]) {
-      const failure = await failureOf(base, ROUTES.subagentCount, { method: 'POST', body: bad })
+    for (const bad of [{}, { [PARAMS.action]: 'count' }, { [PARAMS.action]: 'count', [PARAMS.ids]: '' }]) {
+      const failure = await failureOf(base, ROUTES.apply, { method: 'POST', body: bad })
       expect(failure.code).toBe('sessiondelete/io')
-      expect(failure.message).toMatch(PARAMS.sessionId)
+      expect(failure.message).toMatch(/动作|ids/)
     }
   })
 
@@ -593,11 +654,225 @@ describe('POST /subagent-count 的自检与栅栏（第六个端点，2026-10-16
     const { deps, host } = makeDeps({ subagents: { 'session-parent': 1 } })
     const base = await start(deps)
     const hostHeader = { ...json, host: new URL(base).host }
-    const evil = await rawCall(base, ROUTES.subagentCount, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
+    const evil = await rawCall(base, ROUTES.apply, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
     expect(evil.status).toBe(403)
     expect(host.subagentCounts).not.toHaveBeenCalled()
-    const shell = await rawCall(base, ROUTES.subagentCount, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
+    const shell = await rawCall(base, ROUTES.apply, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
     expect(shell.status).toBe(200)
-    expect(JSON.parse(shell.text)).toMatchObject({ ok: true, value: 1 })
+    expect(JSON.parse(shell.text)).toMatchObject({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 1 }] })
+  })
+})
+
+// 批量通道（2026-10-17 重构批）：写动词从「一条一段」收成 `POST /apply`——一次 HTTP 带一组 id，
+// 逐条回 `ApplyOutcome`。钉的是契约：整批只读一次清单、只预取一次宿主会话表；重复 id 去重；
+// 「已被同批前一条带走」是幂等成功不是失败；一条失败不传染下一条。
+describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => {
+  const restoreId = (n: string) => entryIdOf(`session-${n}`)
+
+  it('restore 混合批：成功的回条目、失败的带原文码，清单只读一次', async () => {
+    const seed = [
+      entry('session-a', { sessionId: 'session-a', projectDir: '--p-good--' }),
+      entry('session-b', { sessionId: 'session-b', projectDir: '--p-gone--' }),
+    ]
+    const { deps, manifest, fs } = makeDeps({ seed })
+    // 只让 b 的原项目目录缺席（sessions 根与 a 的目录都在）：a 成功、b 报原文、ghost 报"没有这一条"
+    fs.exists.mockImplementation(async (path: string) => !path.includes('--p-gone--'))
+    const listSpy = vi.spyOn(manifest, 'list')
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.apply, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), 'ghost', restoreId('b')] },
+    })
+    expect(status).toBe(200)
+    expect(body.ok).toBe(true)
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes.map((o) => o.id)).toEqual([restoreId('a'), 'ghost', restoreId('b')])
+    expect(outcomes[0]).toMatchObject({ ok: true, action: 'restore', value: { id: restoreId('a') } })
+    expect(outcomes[1]).toMatchObject({ ok: false })
+    expect((outcomes[1]!.error as { code: string }).code).toBe('sessiondelete/trash-empty')
+    expect((outcomes[1]!.error as { message: string }).message).toContain('ghost')
+    expect(outcomes[2]).toMatchObject({ ok: false, action: 'restore' })
+    expect((outcomes[2]!.error as { code: string }).code).toBe('sessiondelete/project-missing')
+    // 整批一次清单读（不是每条一次）
+    expect(listSpy).toHaveBeenCalledTimes(1)
+    // ghost 不在清单也不在任何组里 ⇒ 它**不是**幂等 no-op（没有前一条带走它），照报 trash-empty
+    expect(await manifest.list()).toHaveLength(1) // 只剩 b（a 已回来）
+  })
+
+  it('restore 一条失败不传染下一条', async () => {
+    const seed = [entry('session-a', { sessionId: 'session-a' }), entry('session-b', { sessionId: 'session-b' })]
+    const { deps, fs } = makeDeps({ seed })
+    // 只让 a 的回收站目录缺席：a 失败、b 照常成功
+    fs.exists.mockImplementation(async (path: string) => !path.endsWith(restoreId('a')))
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
+    })
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes[0]).toMatchObject({ ok: false })
+    expect((outcomes[0]!.error as { code: string }).code).toBe('sessiondelete/trash-empty')
+    expect(outcomes[1]).toMatchObject({ ok: true, value: { id: restoreId('b') } })
+  })
+
+  it('同批前一条已把后一条带走 ⇒ 后一条是幂等成功（null），不是失败', async () => {
+    const parent = entry('session-p', { sessionId: 'session-p' })
+    const child = entry('session-c', { sessionId: 'session-c', parentEntryId: parent.id, deletedAt: 2 })
+    const { deps } = makeDeps({ seed: [child, parent] })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [parent.id, child.id] },
+    })
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes[0]).toMatchObject({ ok: true, value: { id: parent.id } })
+    expect(outcomes[1]).toEqual({ id: child.id, action: 'restore', ok: true, value: null })
+  })
+
+  it('purge 一组 id：父行带走它的孩子、清单同步收缩、重复 id 去重', async () => {
+    const parent = entry('session-p', { sessionId: 'session-p' })
+    const child = entry('session-c', { sessionId: 'session-c', parentEntryId: parent.id, deletedAt: 2 })
+    const { deps, manifest } = makeDeps({ seed: [child, parent] })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [parent.id, parent.id, child.id] },
+    })
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes).toHaveLength(2) // 去重后
+    expect(outcomes[0]).toMatchObject({ ok: true, value: { removed: 2 } })
+    expect(outcomes[1]).toMatchObject({ ok: true, value: { removed: 0 } }) // 已被父带走
+    expect(await manifest.list()).toEqual([])
+  })
+
+  it('count 一组会话 id ⇒ 每条一个数，拿不到的回 0（不报错）', async () => {
+    const { deps, host } = makeDeps()
+    host.subagentCounts.mockResolvedValue({ 'session-parent': 2 })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent', 'session-none'] },
+    })
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes[0]).toMatchObject({ ok: true, value: 2 })
+    expect(outcomes[1]).toMatchObject({ ok: true, value: 0 })
+  })
+
+  it('delete 一组会话 id：各自成行进清册，一条失败不传染下一条', async () => {
+    const { deps, manifest, host } = makeDeps()
+    host.projectDirOf.mockImplementation(async (sessionId: string) => (sessionId === 'session-bad' ? undefined : '--p--'))
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-a', 'session-bad', 'session-b'] },
+    })
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes[0]).toMatchObject({ ok: true, value: { sessionId: 'session-a' } })
+    expect(outcomes[1]).toMatchObject({ ok: false })
+    expect((outcomes[1]!.error as { code: string }).code).toBe('sessiondelete/not-found')
+    expect(outcomes[2]).toMatchObject({ ok: true, value: { sessionId: 'session-b' } })
+    expect((await manifest.list()).length).toBe(2)
+  })
+
+  // 批量删除里父先走、孩子跟着搬进回收站 ⇒ 后到的孩子 id 是一次幂等 no-op，不是 not-found。
+  // 单条删除（N=1）不会命中这台分支。
+  it('delete 同批父先走：跟着父亲被带走的子会话返回幂等 null', async () => {
+    const { deps, manifest, host } = makeDeps()
+    host.subagentMembers.mockImplementation(async (sessionId: string) =>
+      sessionId === 'session-parent'
+        ? [{ sessionId: 'session-child', projectDir: '--p--' }]
+        : [])
+    // 孩子如果真被单独走一遍会在这里拿到 undefined；幂等支根本不该进动词。
+    host.projectDirOf.mockImplementation(async (sessionId: string) =>
+      (sessionId === 'session-child' ? undefined : '--p--'))
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-parent', 'session-child'] },
+    })
+    const outcomes = body.value as Array<Record<string, unknown>>
+    expect(outcomes[0]).toMatchObject({ ok: true, value: { sessionId: 'session-parent' } })
+    expect(outcomes[1]).toEqual({ id: 'session-child', action: 'delete', ok: true, value: null })
+    expect(await manifest.list()).toHaveLength(2)
+  })
+
+  it('整批恢复只预取一次宿主会话表，通告走批量口', async () => {
+    const seed = [entry('session-a', { sessionId: 'session-a' }), entry('session-b', { sessionId: 'session-b' })]
+    const { deps, host } = makeDeps({ seed })
+    host.restoredSummariesOf.mockResolvedValue([
+      { sessionId: 'session-a', summary: { sessionId: 'session-a' } },
+      { sessionId: 'session-b', summary: { sessionId: 'session-b' } },
+    ])
+    const base = await start(deps)
+    await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
+    })
+    expect(host.restoredSummariesOf).toHaveBeenCalledTimes(1)
+    expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
+    expect(host.announceRestored).not.toHaveBeenCalled()
+    expect(host.unarchive).toHaveBeenCalledTimes(2)
+    // 通告必须在可见性还原之后发（客户端拿到的摘要才是"回来了"的那一份）
+    const batchOrder = (host.announceRestoredBatch.mock.invocationCallOrder as unknown as number[])[0]
+    const unarchiveOrders = host.unarchive.mock.invocationCallOrder as unknown as number[]
+    expect(batchOrder).toBeGreaterThan(Math.max(...unarchiveOrders))
+  })
+
+  // 用户勾的是父那一行，回来的是**一整组**。通告漏掉孩子 = 客户端那一行永远还挂着"在回收站"的读感
+  // （宿主的分组面不会自己想起它）。单条动词那条路早就钉过（`restore-session.test.ts` 数到 3），
+  // 这条钉的是**批量这一层**：它自己攒 `restored` 名单，不靠动词发通告。
+  it('整批恢复：跟着父亲一起回来的孩子也进那一次批量通告', async () => {
+    const parent = entry('session-a', { sessionId: 'session-a' })
+    const kid = entry('session-kid', { sessionId: 'session-kid', parentEntryId: parent.id })
+    const { deps, host } = makeDeps({ seed: [parent, kid] })
+    const base = await start(deps)
+    await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a')] },
+    })
+    expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
+    const announced = (host.announceRestoredBatch.mock.calls[0] as unknown as [readonly string[]])[0]
+    expect([...announced].sort()).toEqual(['session-a', 'session-kid'])
+  })
+})
+
+describe('路由层 · GET /ping（探测专用：零副作用的最便宜一问）', () => {
+  it('回 pong，且一次清单读、一次文件读都不做', async () => {
+    const { deps, manifest, fs } = makeDeps({ seed: [entry('a')] })
+    const listSpy = vi.spyOn(manifest, 'list')
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.ping)
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: 'pong' })
+    expect(listSpy).not.toHaveBeenCalled()
+    expect(fs.listDirs).not.toHaveBeenCalled()
+  })
+
+  // 探测必须**不进串行链**：否则一次 100 条的恢复/对账在飞时，页面加载会被它堵在身后，
+  // 恰好违背这条零成本探测的初衷。
+  it('链被对账占住时 ping 照样立刻回', async () => {
+    const { deps, fs } = makeDeps({ seed: [entry('a')] })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    fs.listDirs.mockImplementation(async () => {
+      if (first) {
+        first = false
+        await gate
+      }
+      return []
+    })
+    const base = await start(deps)
+    const listPromise = call(base, ROUTES.list)
+    await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
+    const ping = await call(base, ROUTES.ping)
+    expect(ping.body).toEqual({ ok: true, value: 'pong' })
+    release()
+    await listPromise
+  })
+})
+
+describe('路由层 · POST /empty（清空 = 聚合回执，不按条回）', () => {
+  it('清掉全部行并回 {removed,freedBytes}', async () => {
+    // 夹具第一参是**原目录名**：`entry('a')` / `entry('b')` 才是两个不同的 id
+    const { deps, manifest } = makeDeps({ seed: [entry('a'), entry('b')] })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.empty, { method: 'POST', body: {} })
+    expect(status).toBe(200)
+    expect(body.ok).toBe(true)
+    expect(body.value).toMatchObject({ removed: 2 })
+    expect(await manifest.list()).toEqual([])
   })
 })
