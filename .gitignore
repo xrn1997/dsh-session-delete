@@ -40,6 +40,7 @@ Thumbs.db
 
 # agent 的临时工作区（批量改写脚本、改动对照、动手前的文件备份）不入库
 .task-scratch/
+.worktrees/
 
 # 视觉工具产物（截图 / 裁剪 / OCR / 预览等 QA 中间件）——本机调试证据，不入库
 .dsh-vision-toolkit/
