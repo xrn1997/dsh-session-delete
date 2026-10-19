@@ -27,8 +27,8 @@ const manifest = JSON.parse(
   }
 }
 
-/** 本插件只声明兼容的一代宿主（实测于 desktop 0.2.0-rc.2）。 */
-const HOST_GENERATION = '0.2.0-rc.2'
+/** 本插件真跑过的宿主代次（桌面版实测）。新增一代先在这里落账，再同步 dshReleases。 */
+const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2']
 
 /** 从 app.asar 抽出的宿主冻结平台模块表原文——**9 个键**，不是 312 个包名的并集。
  *  这里与 `tsdown.config.ts` 的 `PLATFORM_MODULES` 各自独立记录同一事实：
@@ -72,13 +72,13 @@ describe('宿主安装闸与浏览器半声明', () => {
     expect(peers).toEqual([])
   })
 
-  // 真加了的话只能开当前这一代：peer 区间在 semver 预发布规则下没有"免维护写法"。
-  it('若将来确要声明 dsh* peer，区间只能是实测过的那一代（正控）', () => {
+  // 真加了的话只能开实测过的某一代：peer 区间在 semver 预发布规则下没有"免维护写法"。
+  it('若将来确要声明 dsh* peer，区间只能是实测过的某一代（正控）', () => {
     const declared = Object.entries(manifest.peerDependencies).filter(([dep]) =>
       dep.startsWith('@deepseek-ai/dsh-'),
     )
     for (const [dep, range] of declared) {
-      expect(range, `${dep} 的 peer 区间只能开当前一代`).toBe(HOST_GENERATION)
+      expect(TESTED_HOST_GENERATIONS, `${dep} 的 peer 区间只能开实测过的一代`).toContain(range)
     }
   })
 
@@ -99,9 +99,11 @@ describe('宿主安装闸与浏览器半声明', () => {
     expect(JSON.stringify(manifest)).not.toContain('dsh-client-connection')
   })
 
-  it('dshReleases 只写状态词 compatible，且当前一代在册', () => {
+  it('dshReleases 只写状态词 compatible，且实测代次全部在册', () => {
     const releases = manifest.dsh.compatibility.dshReleases
-    expect(releases[HOST_GENERATION]).toBe('compatible')
+    for (const generation of TESTED_HOST_GENERATIONS) {
+      expect(releases[generation]).toBe('compatible')
+    }
     for (const status of Object.values(releases)) expect(status).toBe('compatible')
   })
 

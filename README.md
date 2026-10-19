@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-session-delete.svg)](https://www.npmjs.com/package/@xrn1997/dsh-session-delete)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Tested with DSH Desktop 0.2.0-rc.2](https://img.shields.io/badge/DSH%20Desktop-0.2.0--rc.2-brightgreen)
+![Tested with DSH Desktop 0.2.0-rc.2 / 0.2.1-rc.1 / 0.2.1-rc.2](https://img.shields.io/badge/DSH%20Desktop-0.2.0--rc.2%20%7C%200.2.1--rc.1%20%7C%200.2.1--rc.2-brightgreen)
 
 给 DeepSeek Harness（DSH）加一个**删除会话**的能力。DSH 官方有归档、没有删除——归档只是把会话从列表里挪走，文件还在。本插件补上删除，并且让删除可恢复：删除 = 移入回收站，另有一个显式的「彻底删除」。
 
@@ -130,7 +130,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 **兼容性分两层，别混**：
 
 - **装得上**由 `package.json` 的 `peerDependencies` 决定——宿主的 `dsh plugin add` 会拿运行中的宿主版本逐项比对 `@deepseek-ai/dsh*` peer 区间，不满足即拒绝并回滚。本插件**一条 `dsh-*` peer 都没有**（控件与图标已固化在 `src/client/ui/*`，浏览器半只 require React 家族三个冻结平台模块），所以这道闸不限制它装在哪些代上。
-- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列实测过的宿主：**DSH Desktop 0.2.0-rc.2**（`compatible`）。别的版本装得上，但没验过。
+- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2**（均 `compatible`）。别的版本装得上，但没验过。
 
 ## 数据与安全
 
