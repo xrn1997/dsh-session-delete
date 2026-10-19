@@ -129,8 +129,8 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 **兼容性分两层，别混**：
 
-- **装得上**由 `package.json` 的 `peerDependencies` 决定——宿主的 `dsh plugin add` 会拿运行中的宿主版本逐项比对 `@deepseek-ai/dsh*` peer 区间，不满足即拒绝并回滚。本插件**一条 `dsh-*` peer 都没有**（控件与图标已固化在 `src/client/ui/*`，浏览器半只 require React 家族三个冻结平台模块），所以这道闸不限制它装在哪些代上。
-- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2**（均 `compatible`）。别的版本装得上，但没验过。
+- **装得上**由 `package.json` 的 `engines.dsh` 决定：宿主的 `dsh plugin add` 会拿运行中的宿主版本比这个区间，不满足即拒绝并回滚；清单里声明了 `engines.dsh` 时，`@deepseek-ai/dsh*` 的 peer 区间不再参与判断（本插件仍保持零 `dsh-*` peer）。当前窗口是 **`>=0.1.7-rc.2 <0.3.0-0`**（预发布版本参与匹配）。地板是**完整功能**的最低代次：`0.1.7-rc.2` 在 CLI 台架上验过四个槽位齐全、激活零错误；更低的 `0.1.7-rc.1` 缺行首勾选槽位，`0.1.5` 起连会话行入口都没有。
+- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列桌面真机实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2**（均 `compatible`）。窗口内的其他代次装得上但没在桌面真机上验过；窗口外的一律拒装。
 
 ## 数据与安全
 

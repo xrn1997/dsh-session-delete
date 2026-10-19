@@ -254,7 +254,7 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 | 首版不做 agent 工具面 | 挂插件专属前缀的工具让 AI 也能删 | YAGNI，要加是一句话的事 |
 | live 会话一律拒绝 | 先停下会话再删 | 不替用户终止正在进行的活 |
 | 客户端那一行**等宿主确实不再列它**才消失（动词返回 → 如实通告） | **乐观移除**：点下删除就立刻把行摘掉，不等落盘（旧界面稿 ④ 的「交互规则」里写过这条，2026-10-01 随稿删除时记到这里） | 提前摘行要在失败时说假话：搬文件/摘账本任一步失败都要回滚，而用户已经看见"没了"；通告那条路本来就负责表达"宿主不再列它"，两件事不该由一个动画代劳 |
-| **控件与图标自造**（`src/client/ui/*`，按官方技能的处方抄明文 CSS/JS，类名加前缀、只留 token），**拆掉 `@deepseek-ai/dsh-client-ui-primitives` 依赖** | ① 保留 primitives 依赖（peer 精确钉死一代）；② 只把它从 `peerDependencies` 摘掉、运行时照旧 require | 用户 2026-10-02 的裁定是"这个插件不能钉死宿主版本"。**关键事实**：安装闸（`dsh-app-boot` 的 `evaluatePluginCompatibility`）**只比对 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 两类 peer**，而 primitives 是本插件唯一一条 dsh\* peer ⇒ 摘掉它，任何代宿主都装得上。①被否：官方技能 `references/practices.md` 明写 "Do not require any Harness Client package as a module … They change without notice, a plain-JS plugin has no type check, and a throwing component blanks your slot entry (`slot entry crashed in '<slot>'`)"，而 peer 钉死正是"用安装闸去代替兼容性"这条别扭的路。②被否：那样安装闸放行了、运行时却仍吃一个会变的客户端包，等于把风险从"装不上"换成"装上了也未必对"，而且仍违反同一条官方规则。**代价明写**：控件样式从此由我们维护，宿主换菜单/卡片样式时本插件不会自动跟随（判据：`--dsw-alias-*` token 改名只会让外观变差，不会崩）；抄写保真度由 §8 门 4 的"按 `ui.css` 来源表逐属性零差异 + 两档几何"复核兜着（214 那个条数已不再钉，见第六批） |
+| **控件与图标自造**（`src/client/ui/*`，按官方技能的处方抄明文 CSS/JS，类名加前缀、只留 token），**拆掉 `@deepseek-ai/dsh-client-ui-primitives` 依赖** | ① 保留 primitives 依赖（peer 精确钉死一代）；② 只把它从 `peerDependencies` 摘掉、运行时照旧 require | 用户 2026-10-02 的裁定是"这个插件不能钉死宿主版本"。**关键事实**：安装闸（`dsh-app-boot` 的 `evaluatePluginCompatibility`）**只比对 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 两类 peer**，而 primitives 是本插件唯一一条 dsh\* peer ⇒ 摘掉它，安装闸就不再由 peer 决定（2026-10-19 起改由 `engines.dsh` 的窗口表达，见 §11 与第十六批）。①被否：官方技能 `references/practices.md` 明写 "Do not require any Harness Client package as a module … They change without notice, a plain-JS plugin has no type check, and a throwing component blanks your slot entry (`slot entry crashed in '<slot>'`)"，而 peer 钉死正是"用安装闸去代替兼容性"这条别扭的路。②被否：那样安装闸放行了、运行时却仍吃一个会变的客户端包，等于把风险从"装不上"换成"装上了也未必对"，而且仍违反同一条官方规则。**代价明写**：控件样式从此由我们维护，宿主换菜单/卡片样式时本插件不会自动跟随（判据：`--dsw-alias-*` token 改名只会让外观变差，不会崩）；抄写保真度由 §8 门 4 的"按 `ui.css` 来源表逐属性零差异 + 两档几何"复核兜着（214 那个条数已不再钉，见第六批） |
 | 可见文案收进 `copy.ts` 的命名空间字典，经 `ctx.get('locale')` **可选读**宿主 locale 服务 | ① 把 `locale` 写进客户端 `inject`；② 保持中文字面量散在组件里 | ①被否但不是错的：宿主自己的 `ui-sidebar` 就硬注入 `locale`（它知道那一代一定有）。本插件要跨代活着，而客户端条目 pending = **宿主进程死**（`web boot: N entry did not activate` ⇒ `reportFatal`），所以走宿主对可选服务的官方写法 `ctx.get('…')?.…`，缺席时降级到内置 zh。②被否：官方规则是 "Route visible UI text through the Client locale service"，且面板行名要靠 thunk 随语言切换 |
 | 面板行名用 **thunk**（`() => t('trash.title')`） | 注册时把字符串求值好写死 | 宿主 `resolveSlotLabel` 逐字 `typeof label === 'function' ? label() : label`，JSDoc 即 "thunks follow the active locale"，且自带 `ctx.effect(() => ctx.locale.subscribe(syncPanels), 'ui-sidebar: panel labels')` ⇒ 切语言时这一行跟着走。**反向不成立**：`syncPanels` 只在条目或语言变化时重读，拿 thunk 当活计数必然 stale（§7 已记） |
 | 详情按需读：**选中一条才去解压那一条**，面板存活期内每条只读一次 | 打开面板就把全部条目的正文预读出来；或每次切换都重读 | 本机实测：读一条最大 135ms、典型 3–80ms，而**全读一遍 2.0s 另加 280.7MB 解压量**——预读把一个瞬时动作变成一次长任务；反过来每次切换都重读，是同一件事白做两遍（缓存 keyed by `entryId`，恢复/彻底删除后丢掉那一条） |
@@ -274,7 +274,7 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 
 ## 11. 待定
 
-- **跟版策略**：**2026-10-02 起不再是"钉死一代"的问题**——`@deepseek-ai/dsh-client-ui-primitives` 这条唯一的 dsh\* peer 已拆（§10），安装闸不再拦任何代；浏览器半只 require React 家族（冻结平台模块表里最稳的三个键）+ `slots` 服务，文案走可选读的 `locale`。所以"能装上"已经不依赖代；**剩下的代价是"哪一代真的跑过"**：`dsh.compatibility.dshReleases` 只列真机复核过的代次——2026-10-19 记，桌面版 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2 均已在册；更高代次仍要真机复核才敢加名单（判据仍是 §8 门 3/4 那几条真机项）。
+- **跟版策略**：宿主要求只住一处——`package.json` 的**顶层 `engines.dsh`**（2026-10-19 第十六批起）。判据是 asar 里的官方原文：清单声明了 `engines.dsh` 时**只由该范围决定、`peerDependencies` 被忽略**；没有它才逐条比对 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer（预发布版本参与匹配）。§10 拆掉 `dsh-client-ui-primitives` 之后留下的"能装上"问题，现在由这个窗口正面回答：`>=0.1.7-rc.2 <0.3.0-0`（地板 = **完整功能**的最低代次：`0.1.7-rc.2` 由 CLI 台架验过四槽位齐全、激活零错误，**台架读数不进 `dshReleases`**；`0.1.7-rc.1` 缺行首槽位，`0.1.5` 起连会话行入口都没有。天花板 = 下一条线的起点，`-0` 把 0.3.0 的预发布也挡在外面）；peer 保持为零，两个家会写出两种结论。**"哪一代真的跑过"是另一笔账**：`dsh.compatibility.dshReleases` 只列真机复核过的代次——2026-10-19 记，桌面版 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2 均已在册；更高代次仍要真机复核才敢加名单（判据仍是 §8 门 3/4 那几条真机项），而窗口外的代次不是"没验过"，是**装不上**。**在册说的是"哪份产物"在那一代上跑过**：rc.1/rc.2 验的是 `link:` 回本仓的工作树，而 `package.json` 的 `version` 仍是 `0.2.0`——npm 上那份 0.2.0 是 2026-10-17 从 tag `V0.2.0` 发的，它的 `dshReleases` 里只有 `0.2.0-rc.2`，也不含第十四批的修复（`npm view @xrn1997/dsh-session-delete@0.2.0 dsh.compatibility` 实测）。所以这两代的在册**要随下一版发布才落到可安装产物上**；发出去之前，README 那句"Tested with …"读作"这一份 dev 树在那两代上跑过"。名单与实测代次现在由 `tests/skeleton.test.ts` **双向**钉住（多塞一代没跑过也变红）。
 - **原位恢复**要不要（需记账本序号 + `insertSessionBefore`）。
 - 实现顺序由 writing-plans 产出。
 
@@ -526,4 +526,59 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 
 **读数**：Node 半 **92.09 kB / gzip 34.91 kB**（上一批 90.90 / 34.51 ⇒ +1.19 / +0.40：端口一个新方法、清单装配一次账本判别、恢复那段与两处注释）；浏览器半 **847.92 kB / gzip 194.98 kB**（上一批 847.03 / 194.82 ⇒ +0.89 / +0.16：类型窄镜像、行与确认框各一句、一条文案键）。发布包 **55 文件 / 286.0 kB**（上一批 55 / 284.6；没有新文件）。产物纯度照旧：`require()` 逐字三条 `react` / `react-dom` / `react/jsx-runtime`，`node:` 与裸内建 0 条（只有注释里出现 `node:`）。`ui.css` / `markdown.css` 一个字没动 ⇒ §8 门 4 逐属性比对不必重跑。
 
-**未跑的（如实记）**：两半都改了 ⇒ Node 半要重启宿主才生效；浏览器半那趟按 AGENTS.md 的硬约束仍要在**有可见浏览器的隔离 home** 上过一遍再装进 live profile。本轮**没有起隔离宿主**，只跑了单测 / 类型 / 构建三道门。真机门交用户：删掉一个工作区 → 回收站里**删在工作区之前**的旧条目上应出现那句 → 点「恢复」应成功、会话落在「未分组」；工作区还在的条目不应出现那句，也不该有任何行为变化。
+**交付时的门**：两半都改了 ⇒ Node 半要重启宿主才生效；浏览器半那趟按 AGENTS.md 的硬约束仍要在**有可见浏览器的隔离 home** 上过一遍再装进 live profile。这一批交付时只跑了单测 / 类型 / 构建三道门，真机门交给用户的四条判据是：删掉一个工作区 → 回收站里**删在工作区之前**的旧条目上应出现那句 → 点「恢复」应成功、会话落在「未分组」；工作区还在的条目不应出现那句，也不该有任何行为变化。
+
+**真机门实跑（2026-10-19，用户桌面）**：上面四条**逐条走过、都对得上**——旧条目上那句出现、恢复成功、会话落在「未分组」，工作区还在的条目一句未出、行为无变化。宿主是 **0.2.1-rc.1 与 0.2.1-rc.2**，装法 `link:` 回本仓工作树（含这批修复）。**如实记下偏差**：走的是 live profile，没有先起「有可见浏览器的隔离 home」那道顺序——本仓那条硬约束防的是"客户端条目激活失败 = 宿主进程死"，这次两代宿主上浏览器半都正常起来了，现象侧没有残余风险，但**顺序本身没按字面走**（第十五批之后要补的就是把它按字面走一遍，或者把这条硬约束的判据改成"live 上验过浏览器半正常激活即可"）。
+
+### 2026-10-19 评审批（第十五批）：同一判据只留一个家，兜底只认它该认的那句
+
+来由：以 `15b7fb6`（发版 0.2.0）为基线对 HEAD 跑了一次两轴评审（规范轴 + 规格轴）。六条里**五条动 Node 半与端口层、一条动注释与文档**，浏览器半一个字没碰；收的都是第十四批自己留下的形状问题，不是新需求。
+
+**改的六件事**：
+
+1. **端口给它的失败一个判据**（`src/ports/host-port.ts`）：`attach` / `detach` 抛的那句「账本里没这个工作区」的原话前缀收成 `WORKSPACE_MISSING_MESSAGE`，并导出 `isWorkspaceMissingError`——原话与认它的判据同住一处，调用方不许另抄字符串。**消息逐字未变**。
+2. **竞态兜底收窄**（`restoreOne`）：第十四批「查过之后、挂之前账本被删」那条兜底原本吞**任何** attach 错误。现在只在"错误就是端口那句"且"再问一次工作区确实没了"时才按未分组收；别的失败（哪怕同一刻工作区刚好也没了）照旧回滚报 `io`——不给一次存储故障伪装成「归入未分组」的机会。
+3. **`attachedTo: string | undefined` 取代 `attached: boolean`**：三处回滚点上 `attached && workspaceId !== undefined` 的后半句恒真，而真正的第三态是"有工作区但没挂上"。一个变量说一件事，三处 `&&` 删净。
+4. **判据同源**：`attachableWorkspaceId(host, entry)`（这次挂不挂账本）与由它派生的 `isWorkspaceMissing(host, entry)`（那句说不说）导出在 `verbs/restore-session.ts`；`assembleTrashRows` 不再自己写一遍极性相反的判据。行上的承诺与动词的决定从此只能一起变。
+5. **装配按 `entry.id` 键控**：`workspaceMissing[index]` 那种靠两个 `Promise.all` 下标对齐的写法换成 Map——旁边 `stranded` 本来就是键控的。
+6. **两处「只读数」的镜像陈述**：`assembleTrashRows` 的头注释不再把一个 boolean 叫"数"、也不钉条数；10-15 稿 §11 那句「分三个只读数交出去」改成「这一批加的是……，总数不钉在这里」。
+
+**闸**：`tests/skeleton.test.ts` 里 `dshReleases` 那条现在**双向**钉（实测代次全在册 + 在册的全属实测代次），名单里塞一个没跑过的代次会红。
+
+**保持的偏差**（评审点名后判为不动，各有各的理由）：① **删除侧 `undoOneIn` 不同步新判据**——它只在 `deleteSession` 内部整组退回时跑（用户点的「撤销」走的是 `restoreSession`），每一步 `.catch(() => {})` 是它的契约；工作区没了 ⇒ attach 静默失败、会话落「未分组」，与恢复侧**终态一致**、无用户可见差异，改它只是给一条没人看的线加读数。② peer 正控从 `.toBe` 换成 `toContain`（实测过的某一代）语义未坏。③ `archive` 那个没人收的第二参、行上的 `data-dsh-session-delete` 锚点、行内那处 inline style 是**存量约定**（同款 style 已有五份、同款锚点九处多数被测试消费），不是这批的债。
+
+**用例账**：433 → **435**（+2：attach 抛的不是端口那句 ⇒ 工作区刚好也没了也照样回滚报 `io`；挂账本的判据与清单那句同源——还在 / 没了 / 从来就没有，三个结论）。**红检**：新那条在改前的代码上会红（旧兜底会吞掉它、按成功走完）；反向闸与键控改动由既有用例覆盖。
+
+**三道门**（逐个 capture，不接管道）：`npm test` **0**（435 通过 / 28 个文件）、`tsc --noEmit` **0**、`npm run build` **0**（tsdown + tsc 两步）。
+
+**读数**：Node 半 **94.11 kB / gzip 35.62 kB**（上一批 92.09 / 34.91 ⇒ +2.02 / +0.71：端口那句判据、恢复侧两个同源函数、装配换键控）；浏览器半 **847.92 kB / gzip 194.98 kB**（**未动**——这批一个字没碰 `src/client/`）。发布包 **55 文件 / 288.1 kB**（上一批 55 / 286.0）。
+
+**真机门（未跑，交用户）**：这批只动 Node 半与端口层 ⇒ 重启宿主即生效，不涉及那条「隔离 home」的硬约束（浏览器半无改动）。判据三条：① 回收站清单照常出（装配换了取数写法，含孩子折进父行那套）；② 原工作区没了的旧条目那句仍在、点恢复仍成功、仍落「未分组」；③ 挂账本真故障时仍是回滚 + 原文上屏，不会静默把会话改归属。
+
+### 2026-10-19 宿主要求批（第十六批）：顶层 `engines.dsh` 正面回答"装得上"
+
+来由：素材商店（dsh-market）的卡片上，本仓 0.2.0 与 `dsh-novel` 0.6.2 都被标成「未声明宿主要求」。顺着 dsh-market 的解析读回去，商店的牌子和宿主的安装闸读的是同一处：**顶层 `engines.dsh`**（没有才退到 `dsh.engines.dsh`，再没有才看 `@deepseek-ai/dsh*` peer）。本仓自 2026-10-02 拆掉唯一一条 dsh\* peer 之后，清单里再没有任何 DSH 声明；`dsh.compatibility.dshReleases` **谁都不读**（dsh-market 源码与桌面 asar 零命中），所以牌子只能停在「未声明」。
+
+**判据（逐字读自桌面 asar 与 dsh-market 的 `discovery-compatibility.ts` / `verify.ts`）**：
+
+- 宿主：声明了 `engines.dsh` ⇒ **只由该范围决定、peer 被忽略**；没有才逐条比对 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer；预发布版本参与匹配；空/无效范围（含 `workspace:`）视为不兼容；两者都未声明 ⇒ 不施加约束。
+- 商店：读 npm `latest` 清单的 `engines.dsh` ?? `dsh.engines.dsh` + `@deepseek-ai/dsh*` peer（cordis / schemastery 被明确排除）；**任何范围串超过 256 字符整条丢弃**——`dsh-novel` 0.6.2 的 `dsh-tools` peer 是 261 字符，本机缓存里的 facts 就只剩 cordis / schemastery，于是同样落进「未声明」。有效声明为零 ⇒ `basis:'undeclared'`。
+- awesome 的 `index.json`：每晚 probe 只读**顶层** `engines.dsh`（2951 条里 485 条带它）。
+
+**改的**：`package.json` 的 `engines` 加 `"dsh": ">=0.1.7-rc.2 <0.3.0-0"`——地板 = **完整功能**的最低代次（见下段实测），天花板是下一条线的起点（`<0.3.0` 在 includePrerelease 语义下会放行 `0.3.0-alpha`，必须 `-0`）；长度 21，远低于 256。**peer 保持零条**：dsh\* 判断只住 `engines.dsh` 一处。README 的「兼容性分两层」与 §11 跟版策略按新判据改写；AGENTS.md 那条不变量从"peer 是闸"改成"`engines.dsh` 是唯一声明处"。
+
+**地板探针（2026-10-19，CLI 台架；各代装进临时 DSH_HOME 的 web profile，浏览器看控制台与资源加载，另直连 `/ping`）**：
+
+| 代次 | Node 半 | 客户端半 | 判据 |
+| --- | --- | --- | --- |
+| 0.1.5-rc.1 | ping 通 | 资源加载、ping 通；三个会话行槽位（`menu.item` / `row.action` / `row.leading`）**全缺** | 只剩回收站面板，删不了会话 |
+| 0.1.7-rc.1 | ping 通 | 资源加载、ping 通、控制台零错误；**只缺** `sidebar.session.row.leading` | 能用；批量选择缺行首主勾选框（行尾兜底还在） |
+| 0.1.7-rc.2 | ping 通 | 四槽位齐全、零错误 | **完整功能下界** |
+
+两条排除：① 0.1.5 页面上那个 `slot entry crashed in 'sidebar.workspaces'`（`retainAccountKeys` 里 `Object.entries(undefined)`）在**不装任何第三方插件的裸模板**上原样复现 ⇒ 是那一代宿主自己的问题；② rc.1 缺槽位不会让插件崩（`slots.inject` 只是不触发），现象是"模式进去了但行首没有勾选框"。**台架读数只用于定 `engines.dsh` 地板，不进 `dshReleases`**（那份仍只收桌面真机跑过的代次）。
+
+**闸**：`tests/skeleton.test.ts` 新增一条（用真 `semver`，devDependency；另用 semver 7 离线验过三代命中、`0.3.0-alpha.1` 命不中）：窗口盖住全部实测代次、不越过下一条线、≤256 字符、不在 `dsh.engines` 另写一份。既有的"零 dsh peer"与 `dshReleases` 双向一致照旧。
+
+**三道门**（逐个 capture，不接管道）：`npm test` **0**（436 通过 / 28 个文件）、`tsc --noEmit` **0**、`npm run build` **0**。**读数**：Node 半 **94.11 kB / gzip 35.62 kB**、浏览器半 **847.92 kB / gzip 194.98 kB**（两半都未动，只有清单、测试与文档变了）；发布包 **55 文件 / 288.2 kB**（上一批 55 / 288.1）。
+
+**真机门（未跑，交用户）**：只动清单与文档，两半零改动 ⇒ 不需要重启即无行为变化。装/验判据三条：① `dsh plugin add` 在 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2 上不拒；② **发布下一版之后**，商店卡片应显示 `engines.dsh: >=0.1.7-rc.2 <0.3.0-0` 而不是「未声明宿主要求」（商店读 npm `latest`，工作树改了不会变；本机清单缓存 TTL 24h）；③ 将来有 0.3.0-* 宿主时，应被拒装。

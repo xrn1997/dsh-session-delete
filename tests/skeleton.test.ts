@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import semver from 'semver'
 import { describe, expect, it } from 'vitest'
 import { PLATFORM_MODULES, gateClientImport, resolveBrowserBranchImport } from '../tsdown.config.js'
 import * as plugin from '../src/index.js'
@@ -15,6 +16,7 @@ const manifest = JSON.parse(
   exports: Record<string, unknown>
   files: string[]
   icon: string
+  engines: Record<string, string>
   peerDependencies: Record<string, string>
   devDependencies: Record<string, string>
   publishConfig: { access?: string }
@@ -29,6 +31,16 @@ const manifest = JSON.parse(
 
 /** 本插件真跑过的宿主代次（桌面版实测）。新增一代先在这里落账，再同步 dshReleases。 */
 const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2']
+
+/** 完整功能的最低宿主代次（2026-10-19 **CLI 台架**实测：四个槽位齐全、激活零错误、ping 通）。
+ *  它只决定 `engines.dsh` 的地板——**台架读数不进 `dshReleases`**（那份只收真机跑过的代次）。
+ *  边界实测：0.1.7-rc.1 缺 `sidebar.session.row.leading`（行首勾选静默缺席），0.1.5-rc.1 起
+ *  `menu.item` / `row.action` / `row.leading` 三个会话行槽位都没有（删不了会话）。 */
+const BENCH_VERIFIED_FLOOR = '0.1.7-rc.2'
+
+/** 宿主要求的唯一声明处。天花板是下一条线的起点——`<0.3.0-0` 才能连 0.3.0 的预发布
+ *  一起挡在外面（`<0.3.0` 挡不住）。 */
+const HOST_ENGINE_RANGE = '>=0.1.7-rc.2 <0.3.0-0'
 
 /** 从 app.asar 抽出的宿主冻结平台模块表原文——**9 个键**，不是 312 个包名的并集。
  *  这里与 `tsdown.config.ts` 的 `PLATFORM_MODULES` 各自独立记录同一事实：
@@ -59,13 +71,33 @@ describe('插件入口形状', () => {
   })
 })
 
-describe('宿主安装闸与浏览器半声明', () => {
-  // 安装闸（asar `dsh-app-boot/lib/index.js` 的 `evaluatePluginCompatibility`）**只比对
-  // `@deepseek-ai/dsh` 与 `@deepseek-ai/dsh-*` 这两类 peer**：`@deepseek-ai/cordis`、`react` 都不在其列。
-  // 所以"装着开着不让人装"只由 dsh* peer 决定，而本插件**一条都没有**——控件与图标已自造、
-  // 不再 require 宿主的 `dsh-client-ui-primitives`（见 `src/client/ui/*`）。这条用例把"不钉死宿主代数"
-  // 钉成可判的形式：哪天有人加回一条 dsh* peer，它会先红一次，逼一次显式裁定。
-  it('没有任何 @deepseek-ai/dsh-* peer（安装闸因此不把插件钉死在某一代宿主上）', () => {
+describe('宿主要求声明与浏览器半声明', () => {
+  // 宿主导入插件时的判据（asar 里官方原文）：清单声明了 `engines.dsh` 时**只由该范围决定、
+  // peerDependencies 被忽略**；没有它才逐条比对 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer。
+  // 本插件的唯一声明处因此是顶层 `engines.dsh`——dsh-market 的清单解析也先读它、再退到
+  // `dsh.engines.dsh`；两处都写等于给同一件事开了两个家。窗口要盖住真机名单里的每一代，
+  // 地板必须正好是台架验过的完整功能下界，并且**只许盖到下一条线为止**。
+  it('engines.dsh 是唯一的宿主要求：窗口盖住全部真机代次、地板对上台架下界、不越过下一条线', () => {
+    expect(manifest.engines.dsh).toBe(HOST_ENGINE_RANGE)
+    expect(HOST_ENGINE_RANGE.startsWith(`>=${BENCH_VERIFIED_FLOOR} `)).toBe(true)
+    expect(semver.validRange(HOST_ENGINE_RANGE)).not.toBeNull()
+    for (const generation of TESTED_HOST_GENERATIONS) {
+      expect(
+        semver.satisfies(generation, HOST_ENGINE_RANGE, { includePrerelease: true }),
+        `${generation} 是实测代次，必须落在 engines.dsh 窗口内`,
+      ).toBe(true)
+    }
+    // 天花板必须是下一条线的起点：`<0.3.0` 在宿主的 includePrerelease 语义下会放行 0.3.0-alpha.1
+    expect(semver.satisfies('0.3.0-alpha.1', HOST_ENGINE_RANGE, { includePrerelease: true })).toBe(false)
+    // dsh-market 的 manifestFacts 把超过 256 字符的范围整条当不存在——越界就会在市场里变成"未声明"
+    expect(HOST_ENGINE_RANGE.length).toBeLessThanOrEqual(256)
+    expect(manifest.dsh).not.toHaveProperty('engines')
+  })
+
+  // dsh-market 的卡片把 `engines.dsh` 与 dsh* peer **一起**算（宿主在前者存在时忽略后者），
+  // 两个家迟早写出两种结论。peer 保持为零，dsh* 相关的判断只住 `engines.dsh` 一处；
+  // 控件与图标已自造、不再 require 宿主的 `dsh-client-ui-primitives`（见 `src/client/ui/*`）。
+  it('没有任何 @deepseek-ai/dsh-* peer（dsh* 判断只由 engines.dsh 说）', () => {
     const peers = Object.keys(manifest.peerDependencies).filter(
       (dep) => dep === '@deepseek-ai/dsh' || dep.startsWith('@deepseek-ai/dsh-'),
     )
@@ -99,10 +131,15 @@ describe('宿主安装闸与浏览器半声明', () => {
     expect(JSON.stringify(manifest)).not.toContain('dsh-client-connection')
   })
 
-  it('dshReleases 只写状态词 compatible，且实测代次全部在册', () => {
+  it('dshReleases 只写状态词 compatible，且名单与实测代次**双向**一致', () => {
     const releases = manifest.dsh.compatibility.dshReleases
     for (const generation of TESTED_HOST_GENERATIONS) {
       expect(releases[generation]).toBe('compatible')
+    }
+    // 反方向才是 AGENTS.md 那条规矩的本体：没真跑过的代次不许进名单（只查上面那个方向时，
+    // 名单里多塞一代照样绿）。
+    for (const generation of Object.keys(releases)) {
+      expect(TESTED_HOST_GENERATIONS, `${generation} 没实测过就不许进 dshReleases`).toContain(generation)
     }
     for (const status of Object.values(releases)) expect(status).toBe('compatible')
   })
