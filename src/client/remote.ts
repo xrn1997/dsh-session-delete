@@ -3,7 +3,7 @@
  * 加上信封判别与注入面那一处「展开成裸值」的适配。
  *
  * 通道形状（裁决）：真相/账本/判据全在宿主那边，Node 半用宿主**自己的 web server** 开一条
- * 插件专属前缀路由把五个段名（`list` / `ping` / `detail` / `apply` / `empty`）搬出来
+ * 插件专属前缀路由把六个段名（`list` / `ping` / `orphans` / `detail` / `apply` / `empty`）搬出来
  * （`src/api/dispatch.ts`），浏览器半同源调用。**不是重造后端**：
  * 路由层只做搬运与信封。为什么不用官方的 `remote.<namespace>`：那条路要**生成的 Typert 远程描述符**
  * 加一次 `$mount`，而盒内装配清单写死在 `dsh-api-remotes` 里、全宿主没有动态发现，第三方只能自挂自，
@@ -26,11 +26,13 @@
  *    所以到了组件面前只剩「裸值 / throw」两支，调用方只写 `if (!outcome.ok)`，正常流里没有 try/catch；
  *    非本信封形状的异常（网络层、TypeError…）也不丢原文（见 `failureOf`）。
  *
- * 面（`list` / `ping` / `detail` / `apply` / `empty`）与 Node 半路由的五个段名一一对应（段名本身的家是
- * `src/shared/wire.ts`）；`list` 回一行行的条目，`ping` 只回一个探针值，`detail` 回单条正文，
+ * 面（`list` / `ping` / `orphans` / `detail` / `apply` / `empty`）与 Node 半路由的六个段名一一对应（段名本身的家是
+ * `src/shared/wire.ts`）；`list` 回一行行的条目，`ping` 只回一个探针值，`orphans` 回一份**纯读**的
+ * 残留扫描报告，`detail` 回单条正文，
  * `apply` 回**一组逐条结果**，`empty` 回聚合回执。2026-10-17 之前是六个动作段（一条一段），
  * 批量只能由调用方循环拼——那正是「恢复 100 条很慢」的形状来源，收成一段之后这条通道不再有
- * "第二条执行路径"。
+ * "第二条执行路径"。**清理无主子会话也不另开一段**：它是 `apply` 的第五个动作，`orphans` 只负责
+ * "有多少、在哪、多大"。
  */
 import {
   PARAMS,
@@ -39,70 +41,31 @@ import {
   isDSHRemoteError,
   type ApplyAction,
   type ApplyOutcome,
+  type OrphanReportWire,
+  type PurgeStatsWire,
   type RemoteFailure,
   type RemoteResult,
+  type TrashDetailWire,
+  type TrashRowWire,
 } from '../shared/wire.js'
 
-/** 回收站条目（镜像 `src/trash/entry.ts` 的 `TrashEntry`；只读面）。 */
-export interface TrashEntryLike {
-  id: string
-  sessionId: string
-  projectDir: string
-  workspaceId: string
-  wasArchived: boolean
-  deletedAt: number
-  title: string
-  sizeBytes: number
-  /** 组视图的只读数，**都由 `list` 现算现给、不住在清册里**（清册只记 `parentEntryId` 那件事实）。
-   *  缺席 = 不知道或没有 ⇒ 界面上半句都不出现，也不许拿 0 冒充"没有"。
-   *  `subagentCount`：跟着这条父会话**一起进了回收站**的孩子数（清册里指向它的孩子行）。
-   *  `subagentBytes`：那些孩子的字节合计——孩子不单独列行，头部合计只加父那一格就会少报。
-   *  `strandedSubagents`：**还留在盘上没被带走**的孩子数（来源是宿主 `sessionQuery`），
-   *  级联落地之前删掉的那些存量才非零。与 `subagentCount` 各说各的，不许互相冒充。
-   *  `workspaceMissing`：删除时记下的工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）——
-   *  恢复照常回盘，但会落在「未分组」。行上先说一句，别等它从清单里消失才发现换了地方。 */
-  subagentCount?: number
-  subagentBytes?: number
-  strandedSubagents?: number
-  workspaceMissing?: boolean
-}
+/**
+ * 回收站条目（`/list` 那一行）。**形状的家在 `shared/wire.ts`**（ADR-0003）：这里只是旧名的别名，
+ * 所以浏览器半不再自己抄一遍字段；下面几处"只读面"的镜像同理。
+ */
+export type TrashEntryLike = TrashRowWire
 
-/** 彻底删除的回执（镜像 `PurgeResult`）。 */
-export interface PurgeResultLike {
-  removed: number
-  freedBytes: number
-}
-
-/** 详情正文里的一条消息（镜像 `TrashDetailMessage`；只读面）。 */
-export interface TrashDetailMessageLike {
-  role: 'user' | 'assistant'
-  time: number
-  text: string
-  truncated: boolean
-}
+/** 彻底删除的回执（`PurgeStatsWire`）。 */
+export type PurgeResultLike = PurgeStatsWire
 
 /**
- * 回收站单条详情（镜像 `src/trash/detail.ts` 的 `TrashDetail`；只读面）。
+ * 回收站单条详情（`TrashDetailWire`）。
  *
  * **线上只有"日志里读出来的那几件"**：`deletedAt` / `sizeBytes` / `wasArchived` / 清册 `title` 这些
  * 清册已有的字段一律不过线——组件按 `entryId` 与自己手上那份清单配对，这样"清单里的大小"和
  * "详情里的大小"永远是同一个数，不会因为两次读数不同而各说各话。
  */
-export interface TrashDetailLike {
-  entryId: string
-  cwd: string
-  createdAt: number
-  lastActivity: number
-  logTitle: string
-  models: string[]
-  turnCount: number
-  userMessageCount: number
-  assistantMessageCount: number
-  toolCallCount: number
-  injectedCount: number
-  messages: TrashDetailMessageLike[]
-  omittedByPayloadCap: number
-}
+export type TrashDetailLike = TrashDetailWire
 
 /* 信封（`RemoteResult`）与失败形状（`RemoteFailure`）、以及标记位判别（`isDSHRemoteError`）都住在
  * `../shared/wire.js`——两半的共同契约只有那一份家。这里只管通道实现。 */
@@ -172,11 +135,15 @@ export async function callRemote<T>(run: () => Promise<T>): Promise<RemoteOutcom
  *  每个方法 resolve 成 `RemoteResult<T>`。
  *
  * 2026-10-17 批量重构：写动词收成**一个 `apply`**（一段管所有动作、一组 id 进、逐条结果出），
- * 再加一段**纯探测** `ping` ⇒ 面是五段：`list` / `ping` / `detail` / `apply` / `empty`（原先六个动作段）。 */
+ * 再加一段**纯探测** `ping`；2026-10-19 又加一段**纯读扫描** `orphans` ⇒ 面是六段：
+ * `list` / `ping` / `orphans` / `detail` / `apply` / `empty`（原先六个动作段）。 */
 export interface RawSessionDeleteRemote {
   list(): Promise<RemoteResult<TrashEntryLike[]>>
   /** 通道的"在不在"：一次零成本的 GET（探测专用，见 `src/api/dispatch.ts` 的 `ping` 支）。 */
   ping(): Promise<RemoteResult<string>>
+  /** 纯读：回收站之外的无主子会话扫描。它**不清理**——清理是 `apply` 的 `orphan-clean` 动作，
+   *  这一段只交回"有多少、在哪、多大"（读不到语料时报 `io`，调用方不许把它折成"零条残留"）。 */
+  orphans(): Promise<RemoteResult<OrphanReportWire>>
   detail(entryId: string): Promise<RemoteResult<TrashDetailLike>>
   /** 一组 id 上的同一个动作。顶层信封的 `ok:false` 只表示**整次调用**没办成（路由自检、栅栏之外）；
    *  单条动作的成败住在 `ApplyOutcome` 里——这是批量接口的判据，别在信封层找它。 */
@@ -220,6 +187,7 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
   return {
     list: () => requestEnvelope<TrashEntryLike[]>(prefix + ROUTES.list, { method: 'GET' }),
     ping: () => requestEnvelope<string>(prefix + ROUTES.ping, { method: 'GET' }),
+    orphans: () => requestEnvelope<OrphanReportWire>(prefix + ROUTES.orphans, { method: 'GET' }),
     detail: (entryId) =>
       requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({ [PARAMS.entryId]: entryId })),
     apply: (action, ids) =>
@@ -247,37 +215,58 @@ export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean
   }
 }
 
-/** `shared/wire.ts` 的 `ApplyOutcome` 从这里转出去——浏览器半只认 `remote.js` 这一扇门。 */
-export type { ApplyAction, ApplyOutcome } from '../shared/wire.js'
+/** `shared/wire.ts` 的 `ApplyOutcome` 与那份扫描报告从这里转出去——浏览器半只认 `remote.js` 这一扇门。 */
+export type { ApplyAction, ApplyOutcome, OrphanReportWire } from '../shared/wire.js'
 
 /** 一段管所有写动作的返回值（逐条）。`ApplySuccess<A>` = 某动作成功支（`value` 按动作收窄）。 */
 export type ApplySuccess<A extends ApplyAction> = Extract<ApplyOutcome, { action: A; ok: true }>
 
+/**
+ * 注入面（`deps`）的 interface：**与六个段名一一对应的五个方法**（`ping` 只给探测用，留在 raw 层）。
+ *
+ * **不再有 N=1 的便捷方法**（ADR 复核候选 6）：`delete` / `restore` / `countSubagents` 曾是同一段
+ * `/apply` 的三种写法，于是一个 `module` 里同一个动作有两条路（回收站面板的 deps 同时躺着
+ * `applyOutcomes` 与 `restore`）。现在它们收成一个自由函数 {@link applyOne}——要旧形状就显式调它，
+ * 而不是让 interface 多背三个方法。
+ */
 export interface SessionDeleteRemote {
   list(): Promise<TrashEntryLike[]>
+  /** 回收站之外的无主子会话报告（纯读）。读不到就是 throw —— 界面上那是**一次失败的检查**，
+   *  不是"零条残留"（把 `io` 折成空报告等于把"不知道"说成"没有"）。 */
+  scanOrphans(): Promise<OrphanReportWire>
   detail(entryId: string): Promise<TrashDetailLike>
   /** 一段管所有写动作（2026-10-17 批量重构）：一次调用把整批办完，逐条结果原样交回组件。 */
   applyOutcomes(action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]>
   /** 清空回收站（聚合回执）。 */
   emptyTrash(): Promise<PurgeResultLike>
-  /** 单条便捷包装 = `applyOutcomes` 的 N=1 支。`null` 是批量里"已被同批前一条带走"的幂等值；
-   *  单条删除（N=1）永远不会命中它。 */
-  delete(sessionId: string): Promise<TrashEntryLike | null>
-  restore(entryId: string): Promise<TrashEntryLike | null>
-  /** 这条会话在盘上有几个后代（删除确认框那句「含 N 个子会话」）。拿不到 ⇒ 0，那一栏整句不出现。 */
-  countSubagents(sessionId: string): Promise<number>
+}
+
+/** 需要"单条便捷支"的组件只要这一段 deps（同一段 `/apply` 的 N=1 写法，见 {@link applyOne}）。 */
+export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
+
+/**
+ * **N=1 的 `apply`**：一个动作 + 一个 id → 那一条的成功支（`value` 按动作收窄）。
+ *
+ * 三条判据都在这一处：
+ * - **按发出去的那个 id** 取结果（取"第一条"会把别条的成败安在这条头上）；
+ * - 一条没回是**通道的错**，不是"没做成"（后者住在 outcome 的 `ok:false` 里）；
+ * - `null` 是批量里"已被同批前一条带走"的幂等值——单条调用（N=1）永远不会命中它。
+ */
+export async function applyOne<A extends ApplyAction>(deps: OneShotDeps, action: A, id: string): Promise<ApplySuccess<A>> {
+  const outcomes = await deps.applyOutcomes(action, [id])
+  const outcome = outcomes.find((candidate) => candidate.id === id)
+  if (outcome === undefined) throw new Error(`批量通道没回这一条的结果：${action} ${id}`)
+  if (!outcome.ok) throwRemoteFailure(outcome.error)
+  // `applyOutcomes` 回来的 `action` 是宽化的联合；这里按调用方传的字面量收窄（同一请求自己发的动作）
+  return outcome as ApplySuccess<A>
 }
 
 /**
- * 注入面的**唯一一处适配**：`RemoteResult` → 裸值，外加「一段批量」→「单条便捷面」的展开。
+ * 注入面的**唯一一处适配**：`RemoteResult` → 裸值。
  *
  * **为什么必须有这一步**：通道那头的调用 resolve 成 `RemoteResult<T>`（`{ ok: true, value }` /
  * `{ ok: false, error }`），失败是**返回**而不是 reject。组件面要的是「拿到值 / 抛异常」，
- * 所以在这里展开一次：`ok ? value : throw`。放在这一处而不是组件里，是为了让三个组件的 props 契约
- * （以及钉住它们的用例）保持裸值形状不变。
- *
- * **单条支里只有一条落地**：没有它（幽灵 id、或路由整次没办成）就 throw——"批量只回了一条别的"
- * 不是成功，也不是 0。
+ * 所以在这里展开一次：`ok ? value : throw`。
  */
 export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
   /** 一次 `apply`：顶层信封先展开（那是"这次调用办没办成"），逐条结果原样交给调用方。 */
@@ -286,26 +275,14 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
     if (!result.ok) throwRemoteFailure(result.error)
     return result.value
   }
-  /** N=1 的便捷支：**按发出去的那个 id** 取结果（取"第一条"会把别条的成败安在这条头上）。
-   *  一条没回是**通道的错**，不是"没做成"（后者住在 outcome 的 `ok:false` 里）。 */
-  const applyOne = async <A extends ApplyAction>(action: A, id: string): Promise<ApplySuccess<A>> => {
-    const outcomes = await applyOnce(action, [id])
-    const outcome = outcomes.find((candidate) => candidate.id === id)
-    if (outcome === undefined) throw new Error(`批量通道没回这一条的结果：${action} ${id}`)
-    if (!outcome.ok) throwRemoteFailure(outcome.error)
-    // `applyOnce` 回来的 `action` 是宽化的联合；这里按调用方传的字面量收窄（同一请求自己发的动作）
-    return outcome as ApplySuccess<A>
-  }
   return {
     list: () => raw.list().then((result) => unwrapRemoteResult(result)),
+    scanOrphans: () => raw.orphans().then((result) => unwrapRemoteResult(result)),
     detail: (entryId) => raw.detail(entryId).then((result) => unwrapRemoteResult(result)),
     applyOutcomes: applyOnce,
     emptyTrash: () => raw.empty().then((result) => unwrapRemoteResult(result)),
-    delete: async (sessionId) => (await applyOne('delete', sessionId)).value as TrashEntryLike | null,
-    restore: async (entryId) => (await applyOne('restore', entryId)).value as TrashEntryLike | null,
-    countSubagents: async (sessionId) => (await applyOne('count', sessionId)).value as number,
   }
 }
 
-/** 「删除」确认框的宿主需要的两件：提交删除的那条便捷包装，与删除前那一次计数（那句「含 N 个子会话」）。 */
-export type DeleteConfirmDeps = Pick<SessionDeleteRemote, 'delete' | 'countSubagents'>
+/** 「删除」确认框的宿主只需要那一段 `/apply`：提交删除与删除前那一次计数都走 {@link applyOne}。 */
+export type DeleteConfirmDeps = OneShotDeps

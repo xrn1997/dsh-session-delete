@@ -30,7 +30,8 @@ export interface HostPort {
    *  冷会话没有活体可摘，但同样需要这一条——否则那一行要等到重连（`handleConnected` → 重列）才消失。 */
   announceRemoved(sessionId: string): Promise<void>
   /** **如实通告**客户端"这个会话回来了"：摘要取自宿主自己的会话列表，发 `api-session/added`。
-   *  取不到摘要就不发（恢复本身已经完成）。 */
+   *  正常恢复走 {@link HostPort.announceRestoredBatch}（整批一次预取）；这一条单条路是**删除组回滚**
+   *  用的（成员已经收过"已移除"、退回原处后补发）。取不到摘要就不发。 */
   announceRestored(sessionId: string): Promise<void>
   /** 宿主会话表的一次预取：`[{ sessionId, summary }]`，`summary` 是宿主**原样**那一条。
    *  给 {@link announceRestoredBatch} 当 `known` 用——整批只拉一次表。服务没挂回空表，不抛。 */
@@ -48,6 +49,13 @@ export interface HostPort {
   /** 归档是 registry **全局**的，与工作区账目无关 ⇒ `workspaceId` 只是调用点对称用的可选入参
    *  （未分组的会话没有工作区可传）。 */
   archive(sessionId: string, workspaceId?: string): Promise<void>
+  /** 整个会话语料（live ∪ persisted）的只读身份表。**服务缺席回 `undefined`**，不拿空数组冒充
+   *  “这个家没有会话”；扫描方必须把缺席当失败。 */
+  listSessions(): Promise<readonly SessionIdentity[] | undefined>
+  /** 一次 BFS 点出多个父的全部后代；键按调用方传进来的写法回。
+   *  `sessionQuery` 缺席时回 `{}`（与 delete 的降级一致）——写侧不能把这当成"盘上没有后代"，
+   *  只能当成"这一趟看不见"，残留留给 `GET /orphans` 兜底。 */
+  subagentMembersBatch(parentIds: readonly string[]): Promise<Record<string, readonly SubagentMember[]>>
   /** 数一组父会话在盘上的**后代**条数（孩子与孙代都算——回收站清单上那个只读计数，宿主客户端把
    *  `origin:"subagent"` 的行藏掉了 ⇒ 不说就没人知道删了父还剩多少）。键按**传进来的那个写法**回；
    *  没有后代的不表现在结果里（缺省即 0）；`sessionQuery` 没挂回 `{}`，不抛。 */
@@ -138,6 +146,14 @@ interface HostCtxLike {
  *  判据逐字是 `filter.values.includes(record.header.parentSession ?? null)`
  *  （`dsh-session-query/lib/index.js` 的 `sessionPredicate`，代次 0.2.0-rc.2）。 */
 interface SessionQueryLike {
+  listSessions(signal?: unknown): Promise<readonly {
+    readonly header?: {
+      readonly id?: string
+      readonly cwd?: string
+      readonly parentSession?: string
+      readonly origin?: string
+    }
+  }[]>
   filterSessions(
     filters: readonly { readonly kind: string; readonly values: readonly string[] }[],
   ): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string } }[]>
@@ -155,6 +171,18 @@ async function filterChildrenOf(
 interface Descendant {
   readonly id: string
   readonly bare: string
+  readonly projectDir: string
+}
+
+export interface SessionIdentity {
+  readonly sessionId: string
+  readonly parentSessionId?: string
+  readonly projectDir: string
+  readonly subagent: boolean
+}
+
+export interface SubagentMember {
+  readonly sessionId: string
   readonly projectDir: string
 }
 
@@ -223,6 +251,25 @@ function subtreeOf(children: ReadonlyMap<string, Descendant[]>, rootBare: string
     }
     frontier = next
   }
+  return out
+}
+
+function toMember(d: Descendant): SubagentMember {
+  return { sessionId: d.id, projectDir: d.projectDir }
+}
+
+/** `subagentCounts` / `subagentMembers` / `subagentMembersBatch` 共用的一次 BFS。
+ *  空清单在调用宿主之前就返回（不为一张空表扫全库）。 */
+async function membersFor(
+  sessionQuery: SessionQueryLike,
+  parentIds: readonly string[],
+): Promise<Record<string, readonly Descendant[]>> {
+  const wanted: string[] = []
+  for (const id of parentIds) if (id.length > 0 && !wanted.includes(id)) wanted.push(id)
+  if (wanted.length === 0) return {}
+  const children = await descendantsByParent(sessionQuery, wanted)
+  const out: Record<string, readonly Descendant[]> = {}
+  for (const id of wanted) out[id] = subtreeOf(children, bareSessionId(id))
   return out
 }
 
@@ -305,7 +352,7 @@ function isUnknownSession(error: unknown): boolean {
 }
 
 /** 会话 id 去掉 `session-` 前缀后的形状（同一个父在两代里写法不同，见 {@link HostPort.subagentCounts}）。 */
-function bareSessionId(id: string): string {
+export function bareSessionId(id: string): string {
   return id.startsWith('session-') ? id.slice('session-'.length) : id
 }
 
@@ -478,14 +525,15 @@ export function createHostPort(ctx: unknown): HostPort {
     },
 
     /**
-     * 通告客户端"这个会话回来了"（恢复用）。
+     * 通告客户端"这个会话回来了"。
      *
      * 摘要**取自宿主自己的会话列表**（`ctx.sessionController.list()`），不自己造一行：客户端 `handleSessionAdded`
      * 要的是宿主 `summaryFor` 那套形状（sessionId / updatedAt / blank / projections…），照抄宿主的那一份最可靠。
-     * 取不到（控制器缺席 / 列表里没有它 / 抛错）就**一条都不发**——恢复本身已经完成，只是要等下次重连才上屏。
+     * 取不到（控制器缺席 / 列表里没有它 / 抛错）就**一条都不发**。
      *
-     * **单条路各拉一次表**；批量走 {@link HostPort.announceRestoredBatch} + 一次预取（见 {@link restoredSummariesOf}），
-     * 100 条的批量恢复用这条就是 100 遍全表扫——那是 2026-10-17 那次"恢复很慢"的头号来源。
+     * **这一条单条路是删除组回滚用的**：成员已经收过 `api-session/removed`，退回 `sessions/` 之后要补一条
+     * "added"，否则客户端那一行要等到重连才回来。正常恢复走 {@link announceRestoredBatch} + 一次预取——
+     * 100 条的批量用单条路就是 100 遍全表扫，那正是 2026-10-17 那次"恢复很慢"的头号来源。
      */
     async announceRestored(sessionId) {
       const summary = (await this.restoredSummariesOf()).find(item => item.sessionId === sessionId)?.summary
@@ -552,6 +600,26 @@ export function createHostPort(ctx: unknown): HostPort {
       await registry.archiveSession(sessionId)
     },
 
+    async listSessions() {
+      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
+      if (typeof sessionQuery?.listSessions !== 'function') return undefined
+      const records = await sessionQuery.listSessions()
+      const out: SessionIdentity[] = []
+      for (const record of records) {
+        const id = record.header?.id
+        if (typeof id !== 'string' || id === '') continue
+        const parent = record.header?.parentSession
+        const cwd = record.header?.cwd
+        out.push({
+          sessionId: id,
+          ...(typeof parent === 'string' && parent !== '' ? { parentSessionId: parent } : {}),
+          projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
+          subagent: record.header?.origin === 'subagent',
+        })
+      }
+      return out
+    },
+
     /**
      * 官方 `sessionQuery.filterSessions([{kind:'parent', values}])`，不自扫 `~/.dsh/sessions`。
      *
@@ -565,19 +633,11 @@ export function createHostPort(ctx: unknown): HostPort {
      * 最后按**调用方给的那个写法**把键交回去（调用方拿 `entry.sessionId` 直接查得到）。
      */
     async subagentCounts(parentIds) {
-      const wanted: string[] = []
-      for (const id of parentIds) if (id.length > 0 && !wanted.includes(id)) wanted.push(id)
-      if (wanted.length === 0) return {} // 空清单不去扫全库
-
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
       if (typeof sessionQuery?.filterSessions !== 'function') return {}
-
-      const children = await descendantsByParent(sessionQuery, wanted)
+      const members = await membersFor(sessionQuery, parentIds)
       const counts: Record<string, number> = {}
-      for (const id of wanted) {
-        const n = subtreeOf(children, bareSessionId(id)).length
-        if (n > 0) counts[id] = n
-      }
+      for (const [id, list] of Object.entries(members)) if (list.length > 0) counts[id] = list.length
       return counts
     },
 
@@ -591,11 +651,17 @@ export function createHostPort(ctx: unknown): HostPort {
     async subagentMembers(sessionId) {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
       if (typeof sessionQuery?.filterSessions !== 'function') return []
+      const members = await membersFor(sessionQuery, [sessionId])
+      return (members[sessionId] ?? []).map(toMember)
+    },
 
-      const children = await descendantsByParent(sessionQuery, [sessionId])
-      return subtreeOf(children, bareSessionId(sessionId)).map(d => ({
-        sessionId: d.id, projectDir: d.projectDir,
-      }))
+    async subagentMembersBatch(parentIds) {
+      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
+      if (typeof sessionQuery?.filterSessions !== 'function') return {}
+      const members = await membersFor(sessionQuery, parentIds)
+      return Object.fromEntries(
+        Object.entries(members).map(([id, list]) => [id, list.map(toMember)]),
+      )
     },
   }
 }

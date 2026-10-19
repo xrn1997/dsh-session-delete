@@ -164,6 +164,14 @@ describe('回收站对账', () => {
     expect(fs.listFiles).not.toHaveBeenCalledWith(`${ROOT}/backup`)
   })
 
+  it('名字像条目但原目录名带分隔符 ⇒ 也按外人跳过，不拼路径', async () => {
+    const bad = '20261016T020000Z-a\\b'
+    const { deps, fs } = world({ dirs: [bad], logs: { [bad]: headerLog({ type: 'session', id: 'session-a' }) } })
+    const rows = await reconcileTrash(deps)
+    expect(rows).toEqual([])
+    expect(fs.listFiles).not.toHaveBeenCalledWith(`${ROOT}/${bad}`)
+  })
+
   it('目录里没有日志 / 日志读不出 / 日志里没有 header：各跳过各的，绝不抛、也绝不为它删目录', async () => {
     const noLog = idOf('session-nolog')
     const unreadable = idOf('session-unreadable')

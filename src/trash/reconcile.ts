@@ -23,11 +23,12 @@
  * 对账与删除/恢复/彻底删除都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩——删除刚把目录搬进
  * 回收站、行还没写上时，对账抢先把这行按目录"重建"出来，随后又被真实行覆盖成降级元数据。
  */
-import { parseEntryId, trashDirOf, type TrashEntry } from './entry.js'
+import { isSinglePathSegment, parseEntryId, trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
 import type { FsPort } from '../ports/fs-port.js'
 import { NO_CWD_PROJECT_DIR, projectKey } from '../ports/host-port.js'
 import { pickSessionLog, readSessionHeader } from '../log/session-log.js'
+import { TRASH_DIR_NAME } from '../shared/wire.js'
 
 export interface ReconcileDeps {
   fs: FsPort
@@ -35,11 +36,11 @@ export interface ReconcileDeps {
   home: string
 }
 
-/** 目录名是不是一条条目 id（形状契约在 `entry.ts`：`<删除时刻UTC>-<原目录名>`）。 */
+/** 目录名是不是一条条目 id（形状契约在 `entry.ts`：`<删除时刻UTC>-<原目录名>`；
+ *  原目录名还必须能安全地拼回磁盘路径——带分隔符的名字仍按"外人"跳过，不让一次对账读崩）。 */
 function isEntryId(name: string): boolean {
   try {
-    parseEntryId(name)
-    return true
+    return isSinglePathSegment(parseEntryId(name).sessionDirName)
   } catch {
     return false
   }
@@ -102,7 +103,7 @@ async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry |
 /** 对账并回清单——**返回的就是修好之后的那份**（与 `manifest.list()` 同序：最近删除在前）。 */
 export async function reconcileTrash(deps: ReconcileDeps): Promise<TrashEntry[]> {
   const rows = await deps.manifest.list()
-  const root = `${deps.home}/session-trash`
+  const root = `${deps.home}/${TRASH_DIR_NAME}`
   if (!(await deps.fs.exists(root))) return rows
 
   const dirIds = new Set<string>()

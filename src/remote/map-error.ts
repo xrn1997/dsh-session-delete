@@ -1,10 +1,16 @@
-import { isDSHRemoteError, type RemoteFailure } from '../shared/wire.js'
-import { VERB_CODES, type VerbCode } from '../verbs/errors.js'
+import {
+  isDSHRemoteError,
+  SESSION_DELETE_ERROR_DOMAIN,
+  VERB_CODES,
+  type RemoteFailure,
+  type VerbCode,
+} from '../shared/wire.js'
 
-/** 插件专属远程域名（设计稿 §6）：与宿主官方域（`workspace/*`、`session/*`、`gateway/*`…）不重名。 */
-const DOMAIN = 'sessiondelete'
+/** 插件专属远程域名（设计稿 §6）：与宿主官方域（`workspace/*`、`session/*`、`gateway/*`…）不重名。
+ *  字面量的家在 `shared/wire.ts`（ADR-0003）——浏览器半也按同一个域认码。 */
+const DOMAIN = SESSION_DELETE_ERROR_DOMAIN
 
-/** 五个码的家在 `verbs/errors.ts`（`io` 是唯一兜底）——这里只是取来用，不再抄第二份。 */
+/** 五个码的家同样在 `shared/wire.ts`（`io` 是唯一兜底）——这里只是取来用，不再抄第二份。 */
 type Code = VerbCode
 
 /** 宿主两条类型化错误 → 我们的码（设计稿 §6 的两行映射）。
@@ -91,7 +97,7 @@ function detailsOf(error: unknown): Record<string, unknown> | undefined {
  * - 其余（别域的怪 code、前缀外的因、非 Error 抛出物）⇒ `io`，message 保留原文。
  *
  * **返回的是线上形状、不是 `Error`**：这份东西唯一的去处是 `src/api/dispatch.ts` 的失败信封
- * （以及 `verbs/apply.ts` 的逐条 `error`），而本仓的跨插件 import 红线也不许为此去引宿主的
+ * （以及 `verbs/batch.ts` 的逐条 `error`），而本仓的跨插件 import 红线也不许为此去引宿主的
  * `RemoteError` 类（实例也上不了线：信封只走这三件）。
  */
 export function toRemoteFailure(error: unknown): RemoteFailure {

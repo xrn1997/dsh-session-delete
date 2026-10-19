@@ -4,8 +4,8 @@
 // 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 五个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
-//    POST empty＝清空）；
+//  ① 六个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
+//    POST empty＝清空、GET orphans＝无主子会话扫描）；
 //  ② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
@@ -15,11 +15,11 @@ import zlib from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiHandler } from '../src/api/dispatch.js'
-import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX } from '../src/shared/wire.js'
+import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyOutcome } from '../src/shared/wire.js'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
-import { createMemoryManifest } from '../src/trash/manifest.js'
 import type { DeleteDeps } from '../src/verbs/delete-session.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
+import { createFakeDeps } from './support/fake-deps.js'
 
 const HOME = '/h'
 const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
@@ -34,49 +34,46 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 })
 
 /**
- * 五个段名的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身。
- * 替身暴露出来（`fakes`）是为了让每条用例能只翻自己那一格，而不必重建整副依赖。
+ * 六个段名的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身
+ * （`tests/support/fake-deps.ts` 里那第二个 adapter，ADR 之外的架构复核候选 7）。
+ * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
  * `listDirs` 按种子（`over.seed`）给：`list` 现在**先对账再读**（`reconcileTrash`），
  * "清单里有行而回收站根下空空"的世界会被对账当场摘空——那是不一致的世界（真实里行与目录成对出现），
  * 所以这里让二者默认一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
  */
-function makeDeps(over: { seed?: TrashEntry[]; live?: boolean; subagents?: Record<string, number>; workspaceExists?: boolean } = {}) {
-  const manifest = createMemoryManifest(over.seed ?? [])
-  const fs = {
-    exists: vi.fn(async (_path: string) => true),
-    sizeOfDir: vi.fn(async (_path: string) => 224 * 1024),
-    ensureDir: vi.fn(async (_path: string) => {}),
-    rename: vi.fn(async (_from: string, _to: string) => {}),
-    removeDir: vi.fn(async (_path: string) => {}),
-    listFiles: vi.fn(async (_path: string) => ['session.v4.jsonl.zstd']),
-    listDirs: vi.fn(async (_path: string) => (over.seed ?? []).map((e) => e.id)),
-    readFile: vi.fn(async (_path: string) =>
-      zlib.zstdCompressSync(Buffer.from(`${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n`, 'utf8'))),
-  }
-  const host = {
-    isLive: vi.fn(async (_sessionId: string) => over.live ?? false),
-    projectDirOf: vi.fn(async (_sessionId: string): Promise<string | undefined> => '--p--'),
-    workspaceOf: vi.fn(async (_sessionId: string): Promise<string | undefined> => 'ws-1'),
-    titleOf: vi.fn(async (_sessionId: string) => '会话标题'),
-    isArchived: vi.fn(async (_sessionId: string) => false),
-    evictLive: vi.fn(async (_sessionId: string) => 'not-live' as const),
-    announceRemoved: vi.fn(async (_sessionId: string) => {}),
-    announceRestored: vi.fn(async (_sessionId: string) => {}),
-    unarchive: vi.fn(async (_sessionId: string) => {}),
-    detach: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
-    attach: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
-    workspaceExists: vi.fn(async (_workspaceId: string) => over.workspaceExists ?? true),
-    archive: vi.fn(async (_sessionId: string, _workspaceId: string) => {}),
-    subagentCounts: vi.fn(async (_parentIds: readonly string[]) => over.subagents ?? {}),
-    subagentMembers: vi.fn(async (_sessionId: string) => [] as { sessionId: string; projectDir: string }[]),
-    // 批量恢复的通告预取（`apply` 整批只调一次；单条动词没带预取时仍走 `announceRestored`）
-    restoredSummariesOf: vi.fn(async () => [] as { sessionId: string; summary: unknown }[]),
-    announceRestoredBatch: vi.fn(
-      async (_ids: readonly string[], _known?: readonly { sessionId: string; summary: unknown }[]) => {},
-    ),
-  }
-  return { deps: { fs, host, manifest, home: HOME, now: () => NOW } as unknown as DeleteDeps, fs, host, manifest }
+function makeDeps(over: {
+  seed?: TrashEntry[]
+  live?: boolean
+  subagents?: Record<string, number>
+  members?: Record<string, Array<{ sessionId: string; projectDir: string }>>
+  workspaceExists?: boolean
+} = {}) {
+  const seed = over.seed ?? []
+  const made = createFakeDeps({
+    seed,
+    now: NOW,
+    live: over.live ?? false,
+    // 计数与"盘上后代"两个口共用 `members`：给了 `subagents` 就按它回，否则按成员数推（与宿主同口径）。
+    counts: over.subagents,
+    members: over.members ?? {},
+    workspaceExists: over.workspaceExists ?? true,
+    fs: {
+      exists: true,
+      size: 224 * 1024,
+      // 回收站详情要在条目目录里挑日志；`*.jsonl.zstd` 是 `pickSessionLog` 认得出的一代。
+      files: ['session.v4.jsonl.zstd'],
+      // `list` 现在**先对账再读**：清单里有行而回收站根下空空的世界不一致（真实里行与目录成对出现），
+      // 所以默认让二者一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
+      dirs: seed.map((e) => e.id),
+      readFile: () =>
+        zlib.zstdCompressSync(Buffer.from(
+          `${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n`,
+          'utf8',
+        )),
+    },
+  })
+  return { deps: made.deps, fs: made.fs, host: made.host, manifest: made.manifest }
 }
 
 const servers: Array<() => Promise<void>> = []
@@ -177,21 +174,37 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   // 一堆点不到的行）。折进去的同时要报出个数与字节，页脚合计才算得上它们。
   // 另一个数 `strandedSubagents` 来自宿主：这条父会话**在盘上还留着几个没被带走的孩子**——
   // 级联落地之前删掉的那些存量才非零。两个数分开给，不许用一个冒充另一个。
-  // 三者都**不落清册**：落进去就是"一个会变的数住在一份该如实的记录里"（`reconcile.ts` 五条口径第③条）。
+  // 这些派生读数都**不落清册**：落进去就是"一个会变的数住在一份该如实的记录里"（`reconcile.ts` 五条口径第③条）。
   it('GET /list 只列父行，孩子折进父行并报出个数与字节', async () => {
     const parent = entry('session-parent')
     const kids = [
       entry('session-kidA', { parentEntryId: parent.id, sizeBytes: 700 }),
       entry('session-kidB', { parentEntryId: parent.id, sizeBytes: 300 }),
     ]
-    const { deps, host } = makeDeps({ seed: [parent, ...kids], subagents: { 'session-parent': 2 } })
+    const { deps, host } = makeDeps({
+      seed: [parent, ...kids],
+      members: {
+        'session-parent': [
+          { sessionId: 'session-kidA', projectDir: '--p--' },
+          { sessionId: 'session-kidB', projectDir: '--p--' },
+          // 两个盘上孙代不在清册里：它们才是「盘上还剩」的那一份；折进来的两个孩子在清册里，
+          // 不能既算 `subagentBytes` 又算 `strandedBytes`（否则 releaseBytes 会多报一份）。
+          { sessionId: 'session-grandkidA', projectDir: '--p--' },
+          { sessionId: 'session-grandkidB', projectDir: '--p--' },
+        ],
+      },
+    })
     const base = await start(deps)
     const { body } = await call(base, ROUTES.list)
-    const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number; strandedSubagents?: number }>
+    const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number; strandedSubagents?: number; strandedBytes?: number; releaseBytes?: number }>
     expect(rows.map(r => r.sessionId)).toEqual(['session-parent'])
-    expect(rows[0]).toMatchObject({ subagentCount: 2, subagentBytes: 1000, strandedSubagents: 2 })
-    expect(host.subagentCounts).toHaveBeenCalledTimes(1)
-    expect([...(host.subagentCounts.mock.calls[0] as [readonly string[]])[0]]).toEqual(['session-parent'])
+    expect(rows[0]).toMatchObject({
+      subagentCount: 2, subagentBytes: 1000,
+      strandedSubagents: 2, strandedBytes: 448 * 1024,
+      // 唯一算式：本行（0）+ 折进来的 1000 + 盘上孙代 448KB；清册里已有的两个孩子不重复算。
+      releaseBytes: 1000 + 448 * 1024,
+    })
+    expect(host.subagentMembersBatch).toHaveBeenCalledTimes(1)
   })
 
   it('盘上没有剩 ⇒ 不出现 strandedSubagents（界面上那半句也不该有）', async () => {
@@ -205,12 +218,28 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     expect(rows[0]!.strandedSubagents).toBeUndefined()
   })
 
-  it('普通行（没孩子）三个字段都不出现，行形状与从前一致', async () => {
+  it('宿主记录还在、目录已经不在 ⇒ 不算盘上残留（count 与 bytes 同一条存在性判据）', async () => {
+    const parent = entry('session-parent')
+    const { deps, fs, host } = makeDeps({
+      seed: [parent],
+      members: { 'session-parent': [{ sessionId: 'session-kid', projectDir: '--p--' }] },
+    })
+    fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith('session-kid'))
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.list)
+    const rows = body.value as Array<TrashEntry & { strandedSubagents?: number; strandedBytes?: number }>
+    expect(host.subagentMembersBatch).toHaveBeenCalled()
+    expect(rows[0]!.strandedSubagents).toBeUndefined()
+    expect(rows[0]!.strandedBytes).toBeUndefined()
+  })
+
+  it('普通行（没孩子）只多一格 `releaseBytes`（= 它自己那一格），三个可选读数都不出现', async () => {
     const { deps } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
     const { body } = await call(base, ROUTES.list)
     const rows = body.value as TrashEntry[]
-    expect(JSON.parse(JSON.stringify(rows[0]))).toEqual(JSON.parse(JSON.stringify(entry('a'))))
+    // `releaseBytes` 是存储侧必填的那一格（本行 + 孩子 + 盘上后代）；没孩子没后代 ⇒ 等于 sizeBytes
+    expect(JSON.parse(JSON.stringify(rows[0]))).toEqual({ ...JSON.parse(JSON.stringify(entry('a'))), releaseBytes: 0 })
   })
 
   // 宿主的「删除工作区」只删注册、保留日志 ⇒ 回收站里可能躺着"工作区已经没了"的条目。
@@ -575,7 +604,7 @@ describe('路由层 · 同源栅栏', () => {
   // 桌面壳那条路（asar `/lib/main.js`）：渲染进程从 `dsh-app://app/` 加载，页面里对非静态路径的
   // 请求由 `protocol.handle("dsh-app")` 转给宿主，转之前它**摘掉 `origin`**（并换成宿主 cookie）。
   // 所以桌面版的请求到了我们这里既没有 Origin、Referer 也不是 http 同源——栅栏必须认得这个形状，
-  // 否则真机上探测永远 403、四个入口一个都不出现（而 headless Edge 直连 http 的过门读数看不出来）。
+  // 否则真机上探测永远 403、所有入口一个都不出现（而 headless Edge 直连 http 的过门读数看不出来）。
   it('桌面壳转发的形态（Origin 被摘掉、Referer 是 dsh-app://app/）放行', async () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
@@ -626,7 +655,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
 
   it('目录里没有会话日志 ⇒ io，原文说的是哪个目录里有什么', async () => {
     const { deps } = makeDeps({ seed })
-    ;(deps.fs as unknown as { listFiles: ReturnType<typeof vi.fn> }).listFiles = vi.fn(async () => ['notes.txt'])
+    ;deps.fs.listFiles = vi.fn(async () => ['notes.txt'])
     const base = await start(deps)
     const { code, message } = await failureOf(base, ROUTES.detail, { method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') } })
     expect(code).toBe('sessiondelete/io')
@@ -645,7 +674,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     }
   })
 
-  it('栅栏对第五个端点一视同仁：跨源 Origin 拒 403，桌面壳的 Referer 放行', async () => {
+  it('栅栏对六个段名一视同仁（这里打的是 POST /detail）：跨源 Origin 拒 403，桌面壳的 Referer 放行', async () => {
     const { deps, fs } = makeDeps({ seed })
     const base = await start(deps)
     const payload = JSON.stringify({ [PARAMS.entryId]: entryIdOf('session-a') })
@@ -831,8 +860,8 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     expect(host.announceRestored).not.toHaveBeenCalled()
     expect(host.unarchive).toHaveBeenCalledTimes(2)
     // 通告必须在可见性还原之后发（客户端拿到的摘要才是"回来了"的那一份）
-    const batchOrder = (host.announceRestoredBatch.mock.invocationCallOrder as unknown as number[])[0]
-    const unarchiveOrders = host.unarchive.mock.invocationCallOrder as unknown as number[]
+    const batchOrder = host.announceRestoredBatch.mock.invocationCallOrder[0]!
+    const unarchiveOrders = host.unarchive.mock.invocationCallOrder
     expect(batchOrder).toBeGreaterThan(Math.max(...unarchiveOrders))
   })
 
@@ -848,8 +877,189 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a')] },
     })
     expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
-    const announced = (host.announceRestoredBatch.mock.calls[0] as unknown as [readonly string[]])[0]
+    const announced = host.announceRestoredBatch.mock.calls[0]?.[0]
     expect([...announced].sort()).toEqual(['session-a', 'session-kid'])
+  })
+})
+
+// 无主子会话维护（2026-10-19 第十七批）：父被彻底删掉之后，它的 subagent 孩子还留在 `sessions/` 里，
+// 而宿主的客户端把 `origin:"subagent"` 整排藏了 ⇒ 这一坨字节既看不见也清不掉。
+// 扫描是**纯读**（不占到达序链、一个字都不动），清理是**写动作**（上链，且点之前先对账）。
+describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2026-10-19）', () => {
+  const corpus = () => [
+    { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--p--', subagent: true },
+    { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--p--', subagent: false },
+  ]
+
+  it('GET /orphans 是纯读：交回闭包总数、字节、项目分组；不删任何东西', async () => {
+    const { deps, fs, host, manifest } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.orphans)
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      ok: true,
+      value: {
+        roots: ['session-root'], totalSessions: 2, totalBytes: 448 * 1024, missingParents: 1,
+        groups: [{ projectDir: '--p--', sessions: 2, bytes: 448 * 1024 }],
+      },
+    })
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    expect(await manifest.list()).toEqual([])
+  })
+
+  // 语料面缺席 ≠ "这个家没有孤儿"。回一份 `roots: []` 的空报告会让界面说一句"没有要清理的"，
+  // 而盘上真躺着几百 MB ⇒ 必须是 `io` 信封（Task 2 在动词层立的判据，这里钉它能过桥到线上）。
+  it('GET /orphans 的 sessionQuery 缺席 ⇒ io 信封，不冒充空报告', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    const failure = await failureOf(base, ROUTES.orphans)
+    // **操作**读不到 ⇒ 200 + 信封（404 是"这条路由不存在"，那是另一件事，见上面 POST 那条）
+    expect(failure.status).toBe(200)
+    expect(failure.code).toBe('sessiondelete/io')
+  })
+
+  // 第六个段名是**读**段：不留第二条写路径——清理只有 `POST /apply` 的 `orphan-clean` 这一条路。
+  it('POST /orphans 不是写动作 ⇒ 405', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    const { status } = await call(base, ROUTES.orphans, { method: 'POST', body: {} })
+    expect(status).toBe(405)
+  })
+
+  it('POST /apply orphan-clean：按根清闭包，回逐根字节与条数', async () => {
+    const { deps, host, fs } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] } })
+    expect(body.ok).toBe(true)
+    expect((body.value as ApplyOutcome[])[0]).toMatchObject({
+      action: 'orphan-clean', ok: true, value: { removed: 2, freedBytes: 448 * 1024 },
+    })
+    expect(fs.removeDir).toHaveBeenCalledTimes(2)
+  })
+
+  it('POST /apply orphan-clean：根 id 去前缀后仍匹配（session-root 与 root 都认）', async () => {
+    const { deps, host } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['root'] } })
+    expect((body.value as ApplyOutcome[])[0]).toMatchObject({
+      id: 'root', action: 'orphan-clean', ok: true, value: { removed: 2, freedBytes: 448 * 1024 },
+    })
+  })
+
+  it('POST /apply orphan-clean：会话语料缺席 ⇒ 顶层 io 信封，不回零条假回执', async () => {
+    const { deps, fs } = makeDeps()
+    const base = await start(deps)
+    const failure = await failureOf(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
+    })
+    expect(failure.code).toBe('sessiondelete/io')
+    expect(fs.removeDir).not.toHaveBeenCalled()
+  })
+
+  it('POST /apply orphan-clean：删到一半失败 ⇒ failure.error.details 带部分回执', async () => {
+    const { deps, host, fs } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    fs.removeDir.mockImplementation(async (...args: unknown[]) => {
+      if (String(args[0]).endsWith('session-kid')) throw new Error('boom')
+    })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
+    })
+    const outcome = (body.value as ApplyOutcome[])[0]!
+    expect(outcome.ok).toBe(false)
+    expect(outcome.ok ? {} : outcome.error).toMatchObject({
+      code: 'sessiondelete/io',
+      details: { removed: 1, freedBytes: 224 * 1024, failedSessionId: 'session-kid' },
+    })
+  })
+
+  it('POST /apply orphan-clean：成员在跑 ⇒ live，零删', async () => {
+    const { deps, host, fs } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    host.isLive = vi.fn(async (id: string) => id === 'session-kid')
+    const base = await start(deps)
+    const failure = await failureOfOutcome(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
+    })
+    expect(failure.code).toBe('sessiondelete/live')
+    expect(fs.removeDir).not.toHaveBeenCalled()
+  })
+
+  // 点之后到清理落地之间，回收站可能被手工动过。写动作**自己先对账**（与三个写动词同一条链、同一份
+  // 判据）：刚手工搬进回收站的那一格目录要能被认成"父还在回收站里等着"（stranded，不该被当孤儿删掉）。
+  it('POST /apply orphan-clean 是写动作：清册里躺着这个父 ⇒ 不再是孤儿，报 not-found 且零删', async () => {
+    const { deps, host, fs, manifest } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    // 手工搬进来的父目录：清册里还没有这一行，只有目录 ⇒ 先对账把它重建出来，父从此是"已知的"（stranded，
+    // 该跟着父恢复或彻底删除，不是这里能替用户决定的）。不先对账的话这一条会被当成孤儿**直接删掉**。
+    fs.listDirs = vi.fn(async () => [entryIdOf('session-gone')])
+    fs.readFile = vi.fn(async () => zlib.zstdCompressSync(Buffer.from(
+      `${JSON.stringify({ type: 'session', version: 4, id: 'session-gone', createdAt: 1, cwd: 'C:/p' })}\n`, 'utf8')))
+    const base = await start(deps)
+    const failure = await failureOfOutcome(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
+    })
+    expect(failure.code).toBe('sessiondelete/not-found')
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    // 对账真的写过清册（父行立起来了），而这一组一个字没动
+    expect((await manifest.list()).map((row) => row.sessionId)).toEqual(['session-gone'])
+  })
+
+  // 纯读的那一半：链被对账占住时 `/orphans` 照样立刻回——残留条是面板打开时就读的一份读数，
+  // 不该排在一次 100 条的恢复/对账后面（与 `ping`、`detail`、`apply/count` 同一条豁免）。
+  it('链被对账占住时 GET /orphans 照样立刻回（纯读不占链）', async () => {
+    const { deps, fs, host } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    fs.listDirs.mockImplementation(async () => {
+      if (first) {
+        first = false
+        await gate
+      }
+      return []
+    })
+    const base = await start(deps)
+    const listPromise = call(base, ROUTES.list)
+    await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
+    const scanned = await call(base, ROUTES.orphans)
+    expect(scanned.body).toMatchObject({ ok: true, value: { totalSessions: 2, roots: ['session-root'] } })
+    release()
+    await listPromise
+  })
+
+  // 写的那一半必须在链上：`orphan-clean` 自己要先读清单再动文件，与对账交错跑就会互相踩。
+  it('链被对账占住时 orphan-clean 的副作用不发生（写动作一律上链）', async () => {
+    const { deps, fs, host } = makeDeps()
+    host.listSessions = vi.fn(async () => corpus())
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    fs.listDirs.mockImplementation(async () => {
+      if (first) {
+        first = false
+        await gate
+      }
+      return []
+    })
+    const base = await start(deps)
+    const listPromise = call(base, ROUTES.list)
+    await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
+    const cleanPromise = call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(host.listSessions).not.toHaveBeenCalled()
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    release()
+    await cleanPromise
+    await listPromise
+    expect(host.listSessions).toHaveBeenCalled()
   })
 })
 
@@ -898,6 +1108,19 @@ describe('路由层 · POST /empty（清空 = 聚合回执，不按条回）', (
     expect(status).toBe(200)
     expect(body.ok).toBe(true)
     expect(body.value).toMatchObject({ removed: 2 })
+    expect(await manifest.list()).toEqual([])
+  })
+
+  // 清空**先对账再清**（与 `/list` 同一条判据，2026-10-19）：手工搬进回收站的那一格在清册里还没有行，
+  // 只按清册清就会留下一个永远点不到的目录——而"清空"在用户那里说的是"这里一个不剩"。
+  it('empty 先对账：只有目录、清册里没有的条目也会被清空带走', async () => {
+    const { deps, fs, manifest } = makeDeps()
+    const id = entryIdOf('session-ghost')
+    fs.listDirs = vi.fn(async () => [id])
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.empty, { method: 'POST', body: {} })
+    expect(body.ok).toBe(true)
+    expect(fs.removeDir).toHaveBeenCalledWith(`/h/session-trash/${id}`)
     expect(await manifest.list()).toEqual([])
   })
 })

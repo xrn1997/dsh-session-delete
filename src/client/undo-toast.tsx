@@ -14,12 +14,12 @@
  */
 import { useSyncExternalStore } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
-import { callRemote, type SessionDeleteRemote } from './remote.js'
+import { applyOne, callRemote, type OneShotDeps } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
 
-export type UndoToastDeps = Pick<SessionDeleteRemote, 'restore' | 'applyOutcomes'>
+export type UndoToastDeps = OneShotDeps
 
 /**
  * 一次待撤销的事。两形（第十三批②起）：单条删除（主语是会话名）／批量删除（主语是条数）。
@@ -98,7 +98,7 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
   if (current.kind === 'one' && current.entryId === '') return
   const outcome =
     current.kind === 'one'
-      ? await callRemote(() => deps.restore(current.entryId))
+      ? await callRemote(() => applyOne(deps, 'restore', current.entryId).then((item) => item.value))
       : await callRemote(() => deps.applyOutcomes('restore', current.entryIds))
   if (outcome.ok) {
     // 回收站少了几条：让正开着的清单面板重读（撤销也是"从别处动回收站"的一种）。

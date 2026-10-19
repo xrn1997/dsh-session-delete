@@ -99,6 +99,23 @@ const ZH = {
   'trash.confirm.restore.body': '这一批会回到它们各自的原项目目录，恢复到会话列表里。',
   'trash.confirm.restoreNow': '恢复',
 
+  // 回收站之外的无主子会话（2026-10-19 那条维护入口）。父会话既不在宿主语料也不在清册里，它的孩子
+  // 就没人再列、也没人能删——宿主客户端把 `origin:"subagent"` 整排藏掉了（10-15 稿 §10），所以这一格
+  // 只能由我们报出来。**清理走 `/apply` 的 `orphan-clean`**，回执按组：`not-found` 单列「已不在了」，
+  // 真失败可能带部分回执（已删目录数/字节）；这里不写"整组已清完"这种服务端没说的话。
+  'trash.orphans.banner': '回收站之外发现 {count} 个无主子会话',
+  'trash.orphans.meta': '共 {size}，来自 {parents} 个失踪的父会话',
+  'trash.orphans.open': '查看并清理',
+  'trash.orphans.confirm': '清理 {count} 个无主子会话？',
+  'trash.orphans.body': '这些子会话的父会话已经不在会话列表或回收站里，清理后不可恢复。正在运行的子会话会被拒绝，不会被删除。',
+  'trash.orphans.group': '{project} · {count} 个 · {size}',
+  'trash.orphans.cacheNote': '本次只清理会话目录，不包含宿主投影缓存和附件。',
+  'trash.orphans.clean': '清理',
+  'trash.orphans.failure': '残留检查/清理失败：{message}',
+  'trash.orphans.cleanFailed': '{count} 组未清理：{message}',
+  'trash.orphans.cleanPartial': '已先删掉 {removed} 个会话目录（{size}）',
+  'trash.orphans.cleanGone': '有 {count} 组已不在了（可能已被别处清理，或父会话已恢复）',
+
   // 详情那一层（设计稿 2026-10-15 §2.3）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
   'detail.notSelected': '选中一条会话，看它讲了什么',
   'detail.loading': '正在读这条会话…',
@@ -218,6 +235,20 @@ const EN: Record<CopyKey, string> = {
   'trash.confirm.restore': 'Restore these {count} sessions?',
   'trash.confirm.restore.body': 'They go back to their original project folders and reappear in the session list.',
   'trash.confirm.restoreNow': 'Restore',
+
+  // 与 zh 逐键同序。漏一个键由 `Record<CopyKey, string>` 直接编译不过，这段注释只负责两块读得对齐。
+  'trash.orphans.banner': 'Found {count} orphan subagent sessions outside the trash',
+  'trash.orphans.meta': '{size} total, from {parents} missing parent sessions',
+  'trash.orphans.open': 'Review and clean',
+  'trash.orphans.confirm': 'Clean {count} orphan subagent sessions?',
+  'trash.orphans.body': 'Their parent sessions are no longer in the session list or the trash; this cannot be undone. Running sessions are refused and left untouched.',
+  'trash.orphans.group': '{project} · {count} sessions · {size}',
+  'trash.orphans.cacheNote': 'This cleans session directories only; host projection caches and attachments are not included.',
+  'trash.orphans.clean': 'Clean',
+  'trash.orphans.failure': 'Orphan check/cleanup failed: {message}',
+  'trash.orphans.cleanFailed': '{count} groups were not cleaned: {message}',
+  'trash.orphans.cleanPartial': 'Removed {removed} session directories first ({size})',
+  'trash.orphans.cleanGone': '{count} groups were already gone (cleaned elsewhere or their parent was restored)',
 
   'detail.notSelected': 'Select a session to see what it was about',
   'detail.loading': 'Reading this session…',

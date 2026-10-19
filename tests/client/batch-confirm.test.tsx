@@ -98,7 +98,7 @@ describe('批量确认框', () => {
     render(
       <>
         <BatchConfirmHost deps={{ applyOutcomes } as never} />
-        <UndoToast deps={{ applyOutcomes, restore: vi.fn() } as never} />
+        <UndoToast deps={{ applyOutcomes } as never} />
       </>,
     )
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
@@ -118,7 +118,7 @@ describe('批量确认框', () => {
     render(
       <>
         <BatchConfirmHost deps={{ applyOutcomes } as never} />
-        <UndoToast deps={{ applyOutcomes, restore: vi.fn() } as never} />
+        <UndoToast deps={{ applyOutcomes } as never} />
       </>,
     )
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))

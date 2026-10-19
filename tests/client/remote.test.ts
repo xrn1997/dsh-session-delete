@@ -9,12 +9,15 @@
 import { describe, expect, it, vi } from 'vitest'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, isDSHRemoteError, type RemoteFailure } from '../../src/shared/wire.js'
 import {
+  applyOne,
   buildDeps,
   createHttpRemote,
   failureOf,
   probeChannel,
   unwrapRemoteResult,
+  type SessionDeleteRemote,
 } from '../../src/client/remote.js'
+import type { TrashPanelDeps } from '../../src/client/trash-panel.js'
 
 const FAILURE: RemoteFailure = { code: 'sessiondelete/live', message: '会话正在运行' }
 
@@ -78,7 +81,7 @@ describe('注入面的展开', () => {
   })
 })
 
-describe('createHttpRemote · detail 那一趟（第五个端点）', () => {
+describe('createHttpRemote · detail 那一趟（六个段名里的 `POST /detail`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
@@ -119,6 +122,43 @@ describe('createHttpRemote · detail 那一趟（第五个端点）', () => {
   })
 })
 
+describe('createHttpRemote · orphans 那一趟（六个段名里的 `GET /orphans`）', () => {
+  const report = {
+    roots: ['session-root'],
+    totalSessions: 2,
+    totalBytes: 2048,
+    missingParents: 1,
+    groups: [{ projectDir: '--p--', sessions: 2, bytes: 2048 }],
+  }
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+
+  it('GET 到 /orphans，不带 body；成功信封原样展开成报告', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope(report)
+    })
+    await expect(createHttpRemote().orphans()).resolves.toEqual({ ok: true, value: report })
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.orphans}`)
+    expect(calls[0]!.init?.method).toBe('GET')
+    expect(calls[0]!.init?.body).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
+  it('注入面把失败支展成 throw：扫描失败不许折成"零条残留"', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: 'sessionQuery 不在' } }),
+        { headers: { 'content-type': 'application/json' } }))
+    const deps = buildDeps(createHttpRemote())
+    await expect(deps.scanOrphans()).rejects.toMatchObject({
+      code: 'sessiondelete/io',
+      message: 'sessionQuery 不在',
+    })
+    vi.unstubAllGlobals()
+  })
+})
+
 // 2026-10-17 批量重构：写动词从「一条一段」收成一段 `POST /apply`（body `{action, ids}`，
 // 回逐条 `ApplyOutcome`）。这里钉通道的两件事：**只发一次请求**，以及**单条的失败不在信封层找**。
 describe('createHttpRemote · /apply 一段管所有动作', () => {
@@ -150,7 +190,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
     vi.unstubAllGlobals()
   })
 
-  it('注入面：单条便捷包装展成裸值；批量里单条的失败**不 throw**（它住在 outcome 里）', async () => {
+  it('注入面：applyOne 展成裸值；批量里单条的失败**不 throw**（它住在 outcome 里）', async () => {
     vi.stubGlobal('fetch', async () =>
       new Response(JSON.stringify({
         ok: true,
@@ -163,7 +203,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
     const outcomes = await deps.applyOutcomes('restore', ['a', 'b'])
     expect(outcomes.map((o) => o.ok)).toEqual([true, false])
     // N=1 的那一支才把失败展成 throw（组件按"这条没成"处理，与批量同一张表）
-    await expect(deps.restore('b')).rejects.toMatchObject({ code: 'sessiondelete/project-missing' })
+    await expect(applyOne(deps, 'restore', 'b')).rejects.toMatchObject({ code: 'sessiondelete/project-missing' })
     vi.unstubAllGlobals()
   })
 
@@ -173,7 +213,28 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
         { headers: { 'content-type': 'application/json' } }))
     const deps = buildDeps(createHttpRemote())
     await expect(deps.applyOutcomes('purge', ['a'])).rejects.toMatchObject({ code: 'sessiondelete/io', message: '方法不允许' })
-    await expect(deps.countSubagents('x')).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    await expect(applyOne(deps, 'count', 'x')).rejects.toMatchObject({ code: 'sessiondelete/io' })
     vi.unstubAllGlobals()
+  })
+})
+
+describe('注入面 · 一个动作只有一条路（架构复核候选 6）', () => {
+  it('注入面与面板的 deps 里都没有单条便捷方法：N=1 走 `applyOne`', () => {
+    // 这两行是**类型层**的闸：谁把 `restore` / `delete` / `countSubagents` 加回 interface，
+    // 它们立刻编译不过（同一个动作在一个 module 里有两条路，正是这一条候选要拆掉的形状）。
+    const remoteHasRestore: 'restore' extends keyof SessionDeleteRemote ? true : false = false
+    const panelHasRestore: 'restore' extends keyof TrashPanelDeps ? true : false = false
+    const remoteHasCount: 'countSubagents' extends keyof SessionDeleteRemote ? true : false = false
+    expect([remoteHasRestore, panelHasRestore, remoteHasCount]).toEqual([false, false, false])
+  })
+
+  it('`applyOne` 取的是**发出去的那个 id** 的结果，不是第一条', async () => {
+    const deps = {
+      applyOutcomes: async (action: 'restore', ids: readonly string[]) => ids.map((id) => ({
+        id, action, ok: true as const, value: { id } as never,
+      })),
+    }
+    const outcome = await applyOne(deps, 'restore', 'only-one')
+    expect(outcome.id).toBe('only-one')
   })
 })

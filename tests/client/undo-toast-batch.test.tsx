@@ -37,7 +37,7 @@ describe('批量撤销横幅', () => {
       throw Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' })
     })
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
-    render(<UndoToast deps={{ applyOutcomes, restore: vi.fn() } as never} />)
+    render(<UndoToast deps={{ applyOutcomes } as never} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(await screen.findByText(/原项目目录已不在/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument()

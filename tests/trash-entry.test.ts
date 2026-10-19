@@ -30,6 +30,16 @@ describe('条目命名', () => {
     expect(trashDirOf('20260930T130500Z-session-abc', HOME))
       .toBe('C:/Users/x/.dsh/session-trash/20260930T130500Z-session-abc')
   })
+
+  it('破坏性路径只接受单段：非单段 id/项目名一律拒绝，空 sessionDirName 仍可用于项目根', () => {
+    const badSegments = ['..', '.', '../x', 'a/b', 'a\\b', 'x\0y', '']
+    for (const bad of badSegments) {
+      expect(() => sessionDirOf(bad, 'session-abc', HOME)).toThrow()
+      expect(() => trashDirOf(bad, HOME)).toThrow()
+      if (bad !== '') expect(() => sessionDirOf('--p--', bad, HOME)).toThrow(/不是单段/)
+    }
+    expect(sessionDirOf('--p--', '', HOME)).toBe('C:/Users/x/.dsh/sessions/--p--/')
+  })
 })
 
 /** 夹具标注 `TrashEntry`：字段缺一个 `pnpm typecheck` 即红（这里是**类型层面**的约束）。

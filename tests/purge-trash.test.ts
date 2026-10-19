@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { purgeTrash } from '../src/verbs/purge-trash.js'
-import { createMemoryManifest } from '../src/trash/manifest.js'
-import type { TrashEntry } from '../src/trash/entry.js'
+import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { createFakeDeps } from './support/fake-deps.js'
 
 const HOME = '/h'
 const e = (id: string): TrashEntry => ({
@@ -9,22 +9,18 @@ const e = (id: string): TrashEntry => ({
   deletedAt: 1, title: '', sizeBytes: 0,
 })
 
+/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：世界由参数描述，不再自己凑端口。
+ *  日志只记 evictLive / announceRemoved 两件——彻底删除对宿主内存做的事就这两件。 */
 function deps(seed: TrashEntry[]) {
-  const fs = {
-    exists: vi.fn(async () => true), rename: vi.fn(async () => {}),
-    removeDir: vi.fn(async () => {}), sizeOfDir: vi.fn(async () => 512),
-  }
   const calls: string[] = []
-  const host = {
-    workspaceOf: vi.fn(async () => 'ws-1'), projectDirOf: vi.fn(async () => '--p--'),
-    isLive: vi.fn(async () => false), isArchived: vi.fn(async () => false),
-    evictLive: vi.fn(async (sessionId: string) => { calls.push(`evictLive(${sessionId})`); return 'evicted' as const }),
-    announceRemoved: vi.fn(async (sessionId: string) => { calls.push(`announceRemoved(${sessionId})`) }),
-    announceRestored: vi.fn(async () => {}),
-    unarchive: vi.fn(async () => {}), detach: vi.fn(async () => {}),
-    attach: vi.fn(async () => {}), archive: vi.fn(async () => {}),
-  }
-  return { calls, fs, d: { fs, host, manifest: createMemoryManifest(seed), home: HOME, now: () => 0 } as never }
+  const { deps: d, fs, host, manifest } = createFakeDeps({
+    seed,
+    fs: { size: 512 },
+    log: calls,
+    logMethods: ['evictLive', 'announceRemoved'],
+    format: (method, args) => `${method}(${String(args[0])})`,
+  })
+  return { calls, fs, host, manifest, d }
 }
 
 describe('彻底删除', () => {
@@ -33,7 +29,7 @@ describe('彻底删除', () => {
     const r = await purgeTrash(d)('a')
     expect(r).toEqual({ removed: 1, freedBytes: 512 })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
-    expect(await (d as never as { manifest: { list(): Promise<unknown[]> } }).manifest.list()).toHaveLength(1)
+    expect(await d.manifest.list()).toHaveLength(1)
   })
 
   it('不传 entryId = 清空：移除全部并移除各自的目录', async () => {
@@ -41,7 +37,7 @@ describe('彻底删除', () => {
     const r = await purgeTrash(d)()
     expect(r.removed).toBe(2)
     expect(fs.removeDir).toHaveBeenCalledTimes(2)
-    expect(await (d as never as { manifest: { list(): Promise<unknown[]> } }).manifest.list()).toHaveLength(0)
+    expect(await d.manifest.list()).toHaveLength(0)
   })
 
   // 彻底删除也必须把宿主内存里那一份请掉、并如实通告——否则文件与清单都没了，侧栏却还留着一行、还能点开
@@ -56,12 +52,11 @@ describe('彻底删除', () => {
   })
 
   it('摘内存结果未知（unknown）时不发通告，彻底删除的结果不受影响', async () => {
-    const { d } = deps([e('a')])
-    const host = (d as never as { host: { evictLive: ReturnType<typeof vi.fn>; announceRemoved: ReturnType<typeof vi.fn> } }).host
+    const { d, host } = deps([e('a')])
     host.evictLive = vi.fn(async () => 'unknown' as const)
     const r = await purgeTrash(d)('a')
     expect(r).toEqual({ removed: 1, freedBytes: 512 })
-    expect(await (d as never as { manifest: { list(): Promise<unknown[]> } }).manifest.list()).toHaveLength(0)
+    expect(await d.manifest.list()).toHaveLength(0)
     expect(host.evictLive).toHaveBeenCalledWith('a')
     expect(host.announceRemoved).not.toHaveBeenCalled()
   })
@@ -73,7 +68,7 @@ describe('彻底删除', () => {
 
   it('目录已被手工删掉：仍移除清单行，不报错', async () => {
     const { d } = deps([e('a')])
-    ;(d as never as { fs: { exists: ReturnType<typeof vi.fn> } }).fs.exists = vi.fn(async () => false)
+    ;d.fs.exists.mockImplementation(async () => false)
     const r = await purgeTrash(d)('a')
     expect(r.removed).toBe(1)
   })
@@ -89,7 +84,7 @@ describe('彻底删除', () => {
     const r = await purgeTrash(d)('p')
     expect(r.removed).toBe(3)
     expect(fs.removeDir).toHaveBeenCalledTimes(3)
-    const left = await (d as never as { manifest: { list(): Promise<TrashEntry[]> } }).manifest.list()
+    const left = await d.manifest.list()
     expect(left.map(x => x.id)).toEqual(['z'])
   })
 
@@ -100,5 +95,75 @@ describe('彻底删除', () => {
     const r = await purgeTrash(d)('k')
     expect(r.removed).toBe(1)
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
+  })
+
+  // 级联落地前删掉的父：孩子在盘上还剩着，purge 必须收尾把它们一起清掉——先 unarchive（盘上后代
+  // 本来没被删过，账本也可能是挂着的），再删目录；`removed` 与 `freedBytes` 都算上这些目录。
+  it('盘上还剩的后代跟着一起清：先 unarchive，再删目录，字节与条数都算上', async () => {
+    const { d, fs, host } = deps([e('p')])
+    host.subagentMembersBatch = vi.fn(async () => ({
+      p: [{ sessionId: 'session-kid', projectDir: '--p--' }],
+    }))
+    const r = await purgeTrash(d)('p')
+    expect(r).toEqual({ removed: 2, freedBytes: 1024 })
+    expect(host.unarchive).toHaveBeenCalledWith('p')
+    expect(host.unarchive).toHaveBeenCalledWith('session-kid')
+    expect(fs.removeDir).toHaveBeenCalledWith(sessionDirOf('--p--', 'session-kid', HOME))
+  })
+
+  it('盘上后代在跑 ⇒ live，整个条目一条目录都不删，归档/账本/清册也零副作用', async () => {
+    const { d, fs, host } = deps([e('p')])
+    host.subagentMembersBatch = vi.fn(async () => ({
+      p: [{ sessionId: 'session-kid', projectDir: '--p--' }],
+    }))
+    host.isLive = vi.fn(async (id: string) => id === 'session-kid')
+    await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    expect(host.unarchive).not.toHaveBeenCalled()
+    expect(host.detach).not.toHaveBeenCalled()
+    expect(await d.manifest.list()).toHaveLength(1)
+  })
+
+  it('盘上后代的 session id 非单段 ⇒ 响亮失败，不删任何目录', async () => {
+    const { d, fs, host } = deps([e('p')])
+    host.subagentMembersBatch = vi.fn(async () => ({
+      p: [{ sessionId: '../escape', projectDir: '--p--' }],
+    }))
+    await expect(purgeTrash(d)('p')).rejects.toThrow(/不是单段路径/)
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    expect(await d.manifest.list()).toHaveLength(1)
+  })
+
+  it('清册里已经有的孩子不按盘上后代重复删', async () => {
+    const parent = e('p')
+    const kid = { ...e('k'), parentEntryId: 'p' }
+    const { d, fs, host } = deps([parent, kid])
+    host.subagentMembersBatch = vi.fn(async () => ({
+      p: [{ sessionId: 'k', projectDir: '--p--' }],
+    }))
+    await purgeTrash(d)('p')
+    expect(fs.removeDir).toHaveBeenCalledTimes(2) // p 与 k 的回收站目录，不是 3
+    expect(fs.removeDir).not.toHaveBeenCalledWith(sessionDirOf('--p--', 'k', HOME))
+  })
+
+  // ADR-0001 的行为收口：此前这里是 `id === x || parentEntryId === x`，不认根行 ⇒ 在**嵌套组**
+  // （父行自己也是孩子）上会把不属于这一组的孙代一起删掉，而彻底删除不可恢复。
+  it('嵌套组（父自己也是孩子）⇒ 只清它自己，不连带孙代', async () => {
+    const top = e('top')
+    const mid = { ...e('mid'), parentEntryId: 'top' }
+    const leaf = { ...e('leaf'), parentEntryId: 'mid' }
+    const { d, fs, manifest } = deps([top, mid, leaf])
+    const r = await purgeTrash(d)('mid')
+    expect(r.removed).toBe(1)
+    expect(fs.removeDir).toHaveBeenCalledTimes(1)
+    expect((await manifest.list()).map(x => x.id).sort()).toEqual(['leaf', 'top'])
+  })
+
+  it('unarchive 失败 ⇒ io，目录与清册行都不动', async () => {
+    const { d, fs, host } = deps([e('p')])
+    host.unarchive = vi.fn(async () => { throw new Error('archive boom') })
+    await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    expect(await d.manifest.list()).toHaveLength(1)
   })
 })

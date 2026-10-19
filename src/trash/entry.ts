@@ -1,3 +1,5 @@
+import { TRASH_DIR_NAME } from '../shared/wire.js'
+
 /** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<原目录名>`）——**它不是随手起的键**：
  *  回收站目录名就是它，恢复也按它反推出原目录名放回（设计稿 §3），所以 id 的形状有契约意义。
  *  其余字段在删除那一刻就地取。 */
@@ -12,8 +14,8 @@ export interface TrashEntry {
    *  恢复时按这个字段还原可见性：true ⇒ 仍处归档态，false ⇒ 取消归档放回树里。 */
   wasArchived: boolean
   deletedAt: number
-  /** 删除时**尽力**取的会话标题（来源：`storages/session_projcache/sessions/<会话id>.json`
-   *  里的 `rows.title.val`）；取不到存空串，绝不因此让删除失败。 */
+  /** 删除时**尽力**取的会话标题（来源：宿主 projection cache 服务；底层是
+   *  `storages/session_projcache/sessions/<会话id>.json` 里的 `title` 投影）。取不到存空串，绝不因此让删除失败。 */
   title: string
   /** 删除时用 `fs.sizeOfDir` 量到的会话目录字节数。 */
   sizeBytes: number
@@ -24,6 +26,20 @@ export interface TrashEntry {
    *  的如实结果，不假装知道（设计稿 2026-10-15 §10）。 */
   parentEntryId?: string
 }
+
+/**
+ * 清册里**每条记录都必须有**的那几格（`TrashEntry` 的非可选字段）——运行期校验器与「文件里真有的事实」
+ * 共用这一份清单。
+ *
+ * **可选字段不在这里**：`parentEntryId`（级联那批加的）缺席是合法的——老行没有它，缺了就是"没有父"；
+ * 校验器只管这几格的类型，其余键**原样带走**（`parse` 交回的就是 `raw` 本身）⇒ 新字段照旧存得住。
+ *
+ * 键集与接口由 `tests/wire-shape.test.ts` 双向钉住：接口加一个必填字段而这里没跟 ⇒ 测试红。
+ */
+export const REQUIRED_ENTRY_FIELDS = {
+  id: 'string', sessionId: 'string', projectDir: 'string', workspaceId: 'string',
+  wasArchived: 'boolean', deletedAt: 'number', title: 'string', sizeBytes: 'number',
+} as const
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0')
 
@@ -45,10 +61,30 @@ export function parseEntryId(id: string): { deletedAt: number; sessionDirName: s
   return { deletedAt: Date.UTC(+y, +mo - 1, +d, +h, +mi, +s), sessionDirName }
 }
 
+/** 路径里的每一段都必须是**单段**：这一层不信宿主的 `header.id` 与清册，破坏性动词直接删目录。
+ *  `/`、`\`、`.`、`..` 与 NUL 都能把递归删除带出 `sessions/` / `session-trash/`。 */
+export function isSinglePathSegment(value: string): boolean {
+  return value !== '' && value !== '.' && value !== '..' && !/[\\/\0]/u.test(value)
+}
+
+function assertSingleSegment(value: string, label: string, allowEmpty = false): void {
+  if (value === '') {
+    if (allowEmpty) return
+    throw new Error(`${label} 不能为空`)
+  }
+  if (!isSinglePathSegment(value)) {
+    throw new Error(`${label} 不是单段路径：${value}`)
+  }
+}
+
+/** `sessionDirName` 允许空串：恢复的预检用它取**项目根**（`sessions/<projectDir>`），不是会话目录。 */
 export function sessionDirOf(projectDir: string, sessionDirName: string, home: string): string {
+  assertSingleSegment(projectDir, '项目目录名')
+  assertSingleSegment(sessionDirName, '会话目录名', true)
   return `${home}/sessions/${projectDir}/${sessionDirName}`
 }
 
 export function trashDirOf(entryId: string, home: string): string {
-  return `${home}/session-trash/${entryId}`
+  assertSingleSegment(entryId, '回收站条目 id')
+  return `${home}/${TRASH_DIR_NAME}/${entryId}`
 }

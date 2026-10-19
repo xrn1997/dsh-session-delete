@@ -19,6 +19,7 @@
 import { trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
 import type { FsPort } from '../ports/fs-port.js'
+import type { TrashDetailMessageWire, TrashDetailWire } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 import { verbError } from '../verbs/errors.js'
 
@@ -27,30 +28,11 @@ export const PER_MESSAGE_CHAR_CAP = 3_000
 /** 一次回信的正文总量上限（字符）。 */
 export const TOTAL_CHAR_CAP = 500_000
 
-export interface TrashDetailMessage {
-  role: 'user' | 'assistant'
-  time: number
-  text: string
-  truncated: boolean
-}
+/** 详情正文里的一条消息 / 整份详情：**线上形状的家在 `shared/wire.ts`**（ADR-0003）——
+ *  Node 半产出它，浏览器半按同一份类型消费，这里只留旧名做别名。 */
+export type TrashDetailMessage = TrashDetailMessageWire
 
-export interface TrashDetail {
-  entryId: string
-  /** 日志 header 里的原串（**无损**，比从 `projectKey` 反推那一路强，设计稿 §7 组头那条是另一回事）。 */
-  cwd: string
-  createdAt: number
-  lastActivity: number
-  /** 日志内 `session/title` 那条记录；清册标题为空串时客户端拿它兜底。 */
-  logTitle: string
-  models: string[]
-  turnCount: number
-  userMessageCount: number
-  assistantMessageCount: number
-  toolCallCount: number
-  injectedCount: number
-  messages: TrashDetailMessage[]
-  omittedByPayloadCap: number
-}
+export type TrashDetail = TrashDetailWire
 
 export type DetailDeps = { fs: FsPort; manifest: ManifestPort; home: string }
 

@@ -73,6 +73,7 @@ const ROW: TrashEntryLike = {
   deletedAt: 1,
   title: '/code-review',
   sizeBytes: 224 * 1024,
+  releaseBytes: 224 * 1024,
 }
 
 const DETAIL: TrashDetailLike = {
@@ -99,15 +100,20 @@ function okOutcomes(action: ApplyAction, ids: readonly string[]): ApplyOutcome[]
   return ids.map((id) => {
     if (action === 'count') return { id, action, ok: true as const, value: 0 }
     if (action === 'purge') return { id, action, ok: true as const, value: { removed: 1, freedBytes: 224 * 1024 } }
+    if (action === 'orphan-clean') return { id, action, ok: true as const, value: { removed: 1, freedBytes: 224 * 1024 } }
     return { id, action, ok: true as const, value: ROW }
   })
 }
 
-/** 一个**与实现同形**的 `RawSessionDeleteRemote`：五个段名各回一个信封（写动词全走 `apply`）。 */
+/** 一个**与实现同形**的 `RawSessionDeleteRemote`：六个段名各回一个信封（写动词全走 `apply`）。 */
 function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
     ping: async () => ({ ok: true, value: 'pong' }),
+    orphans: async () => ({
+      ok: true,
+      value: { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] },
+    }),
     detail: async () => ({ ok: true, value: DETAIL }),
     apply: async (action, ids) => ({ ok: true, value: okOutcomes(action, ids) }),
     empty: async () => ({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } }),
@@ -117,7 +123,7 @@ function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionD
 
 /**
  * 取数通道的三种状态。
- * - `up`：五个段名按井号回信封（**探测过**）；
+ * - `up`：六个段名按井号回信封（**探测过**）；
  * - `throwing`：`fetch` 直接 reject（路由不在、宿主没起来）——探测不过；
  * - `not-json`：回的是 SPA 的 index.html（前缀路由没注册时落到兜底处理器）——探测也不过。
  */
@@ -138,6 +144,8 @@ function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { c
     [SESSION_DELETE_API_PREFIX + ROUTES.apply]: async (body) =>
       raw.apply(body['action'] as never, body['ids'] as string[]),
     [SESSION_DELETE_API_PREFIX + ROUTES.empty]: async () => raw.empty(),
+    // 残留条那一份纯读报告（清理不在这里，仍是 `/apply` 的第五个动作）
+    [SESSION_DELETE_API_PREFIX + ROUTES.orphans]: async () => raw.orphans(),
   }
   globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
     const path = String(input)

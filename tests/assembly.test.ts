@@ -37,8 +37,11 @@ function makeEnv(over: {
   sessions?: unknown
   /** `ctx.get('sessionController')` 的替身（通告"加回"时取摘要的那一处）。 */
   sessionController?: unknown
-  /** `ctx.get('sessionQuery')` 的替身（数子会话用官方 `filterSessions`，kind 只有 `parent` 这一支）。 */
-  sessionQuery?: { filterSessions: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string } }>> }
+  /** `ctx.get('sessionQuery')` 的替身。`listSessions` 给无主子会话扫描；`filterSessions` 给闭包。 */
+  sessionQuery?: {
+    listSessions?: () => Promise<Array<{ header?: { id?: string; cwd?: string; parentSession?: string; origin?: string } }>>
+    filterSessions: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string } }>>
+  }
   /** `ctx.emit` 的替身（通告走的就是它）。 */
   emit?: (name: string, ...args: unknown[]) => void
 } = {}) {
@@ -88,7 +91,7 @@ function makeEnv(over: {
 }
 
 describe('宿主服务层端口的接线', () => {
-  it('十七个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
+  it('十九个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
     const { ctx } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }], headers: { s1: { cwd: 'C:/p' } } })
     const host = createHostPort(ctx)
     const results = [
@@ -101,8 +104,9 @@ describe('宿主服务层端口的接线', () => {
       host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored('s1'),
       host.restoredSummariesOf(), host.announceRestoredBatch(['s1']),
       host.subagentCounts(['s1']), host.subagentMembers('s1'),
+      host.subagentMembersBatch(['s1']), host.listSessions(),
     ]
-    expect(results.length).toBe(17)
+    expect(results.length).toBe(19)
     for (const r of results) expect(r).toBeInstanceOf(Promise)
     await expect(Promise.all(results)).resolves.toBeDefined()
   })
@@ -141,6 +145,60 @@ describe('宿主服务层端口的接线', () => {
   it('projectDirOf 对未知会话返回 undefined（裸抛的 miss 不算故障）', async () => {
     const { ctx } = makeEnv({ headers: { s1: { cwd: 'C:/p' } } })
     expect(await createHostPort(ctx).projectDirOf('ghost')).toBeUndefined()
+  })
+
+  describe('listSessions（无主子会话扫描的语料）', () => {
+    it('把 header 折成 id/parent/projectDir/subagent；缺 id 的记录跳过', async () => {
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          listSessions: async () => [
+            { header: { id: 'session-root', cwd: 'C:/p', origin: 'subagent', parentSession: 'session-gone' } },
+            { header: { id: 'session-kid', cwd: 'C:/p', parentSession: 'session-root' } },
+            { header: { cwd: 'C:/p' } },
+          ],
+          filterSessions: async () => [],
+        },
+      })
+      expect(await createHostPort(ctx).listSessions()).toEqual([
+        { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--C-p--', subagent: true },
+        { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--C-p--', subagent: false },
+      ])
+    })
+
+    it('sessionQuery 没挂 / 没有 listSessions ⇒ undefined，不冒充空语料', async () => {
+      const { ctx } = makeEnv({})
+      await expect(createHostPort(ctx).listSessions()).resolves.toBeUndefined()
+      const withQuery = makeEnv({ sessionQuery: { filterSessions: async () => [] } })
+      await expect(createHostPort(withQuery.ctx).listSessions()).resolves.toBeUndefined()
+    })
+  })
+
+  describe('subagentMembersBatch（批量点后代）', () => {
+    it('一次 BFS 问多个父，按调用方给的写法交回成员；空清单零调用', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          listSessions: async () => [],
+          filterSessions: async (filters) => {
+            const values = new Set(filters[0]?.values ?? [])
+            asked.push([...values])
+            return [
+              { header: { id: 'session-k1', parentSession: 'session-a' } },
+              { header: { id: 'k2', parentSession: 'b' } },
+            ].filter((r) => values.has(r.header.parentSession))
+          },
+        },
+      })
+      const port = createHostPort(ctx)
+      expect(await port.subagentMembersBatch(['session-a', 'b'])).toEqual({
+        'session-a': [{ sessionId: 'session-k1', projectDir: '_no-cwd' }],
+        b: [{ sessionId: 'k2', projectDir: '_no-cwd' }],
+      })
+      expect(asked).toHaveLength(2) // 第一层 a/b，第二层 k1/k2 问空即停
+      asked.length = 0
+      expect(await port.subagentMembersBatch([])).toEqual({})
+      expect(asked).toHaveLength(0)
+    })
   })
 
   // 数子会话（回收站清单上那个「含 N 个子会话」的只读计数）。走官方 `sessionQuery.filterSessions`

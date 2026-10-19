@@ -1,14 +1,21 @@
-/** 五个码（设计稿 §6 的表）。**唯一定义处**：`remote/map-error.ts` 从这份数组反推它的 `Code`，
- *  免得"加了一个码只在一边加"让两张表各自漂移（漂移的后果是那个码静默降级成 `io`）。 */
-export const VERB_CODES = ['live', 'not-found', 'trash-empty', 'project-missing', 'io'] as const
+/** 五个码 / 三个路由自检码的**家都在 `shared/wire.ts`**（ADR-0003）：浏览器半也要认它们（比如
+ *  `not-found` 在界面上是中性提示而不是失败），所以它们属于两半共同的契约，不属于 Node 半。
+ *  这里只转出旧名，免得调用点全改一遍。 */
+import {
+  ROUTE_CODES as ROUTE_CODE_SUFFIXES,
+  SESSION_DELETE_CODES,
+  SESSION_DELETE_ERROR_DOMAIN,
+  VERB_CODES as VERB_CODE_SUFFIXES,
+  type RouteCode,
+  type VerbCode,
+} from '../shared/wire.js'
 
-export type VerbCode = (typeof VERB_CODES)[number]
+export const VERB_CODES = VERB_CODE_SUFFIXES
+export const ROUTE_CODES = ROUTE_CODE_SUFFIXES
+export type { RouteCode, VerbCode }
 
-/** 路由层的自检（不是五个动词码之一）：**请求本身不对**——方法、路径、body 形状。
- *  它上的是 HTTP 状态那条口（404/405），信封里也带着它，好让只看信封的调用方拿到同一句原文。 */
-export const ROUTE_CODES = ['bad-method', 'not-found-route', 'bad-request'] as const
-
-export type RouteCode = (typeof ROUTE_CODES)[number]
+/** `sessiondelete/` 这个前缀——拆码用它，别在下面几处各写一遍字面量。 */
+const VERB_CODE_PREFIX = `${SESSION_DELETE_ERROR_DOMAIN}/`
 
 /** 一次失败的**结构**：码、上屏原文、可选 cause（`map-error` 沿 cause 链认宿主类型化错误）、
  *  可选的结构化附带物（对齐官方 `rpcErrorSchema` 的第三件 `details`）。 */
@@ -20,7 +27,7 @@ export interface VerbError extends Error {
 
 export function verbError(code: VerbCode, message: string, cause?: unknown, details?: Record<string, unknown>): VerbError {
   const e = new Error(message) as VerbError
-  e.code = `sessiondelete/${code}`
+  e.code = SESSION_DELETE_CODES[code]
   if (cause !== undefined) e.cause = cause
   if (details !== undefined) e.details = details
   return e
@@ -29,7 +36,47 @@ export function verbError(code: VerbCode, message: string, cause?: unknown, deta
 /** 路由自检用的失败：带 HTTP 状态语义，**不**冒充五个动词码。 */
 export function routeError(code: RouteCode, httpStatus: number, message: string): VerbError & { httpStatus: number } {
   const e = verbError('io', message) as VerbError & { httpStatus: number }
-  e.code = `sessiondelete/${code}`
+  e.code = SESSION_DELETE_CODES[code]
   e.httpStatus = httpStatus
   return e
+}
+
+/** 一条回滚步骤失败的**标签句**：label 说的是"这一步在退什么"，原文带出**那一步抛的东西**
+ *  （`Error` 取 message，其余一律 `String()`；对象带 `message` 的差异归 `map-error.messageOf` 管）。
+ *  调用方不许另抄这份格式——那样 details 里的句子会随各处 catch 变形，界面上就变成"同一个失败三个说法"。 */
+export function rollbackReason(label: string, error: unknown): string {
+  return `${label}：${error instanceof Error ? error.message : String(error)}`
+}
+
+/** 内层错误已经挂着的回滚失败（成员自己的就地回滚失败时会有）。组级 catch 再包一次时不能丢。 */
+function carriedRollbackFailures(error: unknown): string[] {
+  const raw = (error as { details?: { rollbackFailures?: unknown } } | undefined)?.details?.rollbackFailures
+  return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : []
+}
+
+/** 原错误保留，回滚失败作为 `details.rollbackFailures` 上线；码仍按原错误的动词码，
+ *  没有可继承的就落 io。**内层的回滚失败要并进来**：一个成员自己退失败、兄弟也退失败时，
+ *  两份失败都得在 details 里，消息也不能出现第二个「回滚未完成」。 */
+export function withRollbackFailures(error: unknown, failures: readonly string[]): VerbError {
+  const raw = (error as { code?: unknown } | undefined)?.code
+  const reason = typeof raw === 'string' && raw.startsWith(VERB_CODE_PREFIX)
+    ? raw.slice(VERB_CODE_PREFIX.length)
+    : undefined
+  const code = reason !== undefined && (VERB_CODES as readonly string[]).includes(reason)
+    ? reason as VerbCode
+    : 'io'
+  const carried = carriedRollbackFailures(error)
+  const merged = [...new Set([...carried, ...failures])]
+  const base = error instanceof Error ? error.message : String(error)
+  // 内层消息已经带过标签时不再重复标签，但外层新出现的失败仍要进原文（不能只进 details）。
+  const extra = failures.filter((failure) => !carried.includes(failure))
+  const message = base.includes('；回滚未完成：')
+    ? (extra.length > 0 ? `${base}；${extra.join('；')}` : base)
+    : `${base}；回滚未完成：${merged.join('；')}`
+  return verbError(
+    code,
+    message,
+    error,
+    { rollbackFailures: merged },
+  )
 }

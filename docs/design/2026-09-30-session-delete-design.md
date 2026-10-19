@@ -1,6 +1,6 @@
 # 会话删除插件 · 设计
 
-状态：**已实现并接通**（Node 半 + 浏览器半，四个动词经宿主 web server 上的插件专属前缀路由，见 §10；边界红检见 §8 门 3）。**真机验收（§8 门 4）2026-09-30 跑了两轮**：第一轮暴露活体会话删后掉进「未分组」（修法见 §4 末触点 ③⑤）；第二轮把 删除 / 恢复 / 彻底删除 三条都走通，又暴露两个新问题并已修——**未分组会话删不掉**（账目改为可选，§4 触点②）与**客户端陈旧行**（宿主不会再列的会话在客户端那一行挂着，直到重连；靠触点 ⑤ 的如实通告解决）。
+状态：**已实现并接通**（Node 半 + 浏览器半，六个段名 / 五个动作经宿主 web server 上的插件专属前缀路由，见 §10；边界红检见 §8 门 3）。**真机验收（§8 门 4）2026-09-30 跑了两轮**：第一轮暴露活体会话删后掉进「未分组」（修法见 §4 末触点 ③⑤）；第二轮把 删除 / 恢复 / 彻底删除 三条都走通，又暴露两个新问题并已修——**未分组会话删不掉**（账目改为可选，§4 触点②）与**客户端陈旧行**（宿主不会再列的会话在客户端那一行挂着，直到重连；靠触点 ⑤ 的如实通告解决）。
 本文件是现状设计（触点 / 边界 / 错误形状 / 验证门）的唯一家；决策与被否决的替代在 §10。
 
 ## 1. 问题与证据
@@ -99,7 +99,7 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 
 > **2026-10-15 形态改版已落地**：状态④ 从"居中一列卡片"改成「清单在左、选中那条的详情在右」，并新增状态⑥（单条详情）。动作**没有**跟着搬进详情——那一版当天按真机反馈回退，「恢复」「彻底删除…」仍在清单行右侧（判据见 10-15 稿 §6）。判据、实测与验收读数在 `2026-10-15-trash-detail-design.md`；本节是现状。
 
-六个状态（**本节就是界面规格**——本仓不另存像素稿，结构与层级以这段为准，皮肤只由官方 token 决定）：① 会话条目「…」菜单里的红色「删除」② 确认框（主按钮是官方 `variant="primary"`——宿主浅色下它是近黑 `bluish-1000`、深色下近白 `bluish-50`，**从来不是蓝**："蓝"是当年手绘稿的占位配色留下的错觉，2026-10-01 真机浅色截图后改正；正文明说可恢复；**目标在盘上带着后代时，那张卡片下面先说「含 N 个子会话，将一起移入回收站。」，再说那句可恢复**——2026-10-16 按 issue #3 补的：那几行宿主的列表里本来就不显示，点之前不说就没人知道少了一整片。N 由**一次计数读**在打开确认框的那一刻现问（当初是第六个端点 `POST /subagent-count`，2026-10-17 起它是 `POST /apply` 的 `action:"count"` 一支——纯读、不进串行链、与级联同一个闭包口径，见第十二批），读不到就整句不出现、也不写「含 0 个」，且**绝不让主按钮点不动**，见 `10-15` §12）③ 删除后即时撤销提示（停留 6 秒；宿主 Toast 默认 3 秒） ④ 回收站清单：**按项目分组的卡片列表，住在左栏 420px 定宽里**（`box-sizing:border-box`，含给滚动条的 10px 右内边距），每条两行（标题 / 「删除于 … · 大小」，绝对时间在 `title`；**组视图另挂两段，各说各的**：跟着父一起进回收站的孩子说「含 N 个子会话」，级联落地前删的那些**还留在盘上**的说「盘上还剩 M 个子会话」——两个数来源不同、不许互相冒充，一个都没有就半句不出（不许拿 0 冒充"没有"），判据与实测见 10-15 稿 §10/§11；**原工作区已被删掉的条目另挂一行**「原工作区已不存在，恢复后归入未分组」——这是这一条的属性、不是某次动作的失败，点之前就要看见，2026-10-17 第十四批），**动作在行右侧**——「恢复」描边、「彻底删除…」安静的红，与 2026-10-01 那版同形；整行还是 `role="option"`（点行=选中看详情，点按钮=动作，两件事不打架），选中态用宿主"active"那一档 token（`--dsw-alias-button-ghost-active-fill` / `-border`）；条数与合计占用住头部，页脚那句必须看得见（不套省略号）⑤ 彻底删除的红色二次确认（单条与清空**共用同一个**确认组件，主按钮都用页脚那款实心红；上面那句「整页唯一一块实心红」说的是面板本体，浮层是另一层；**单条那张卡片的 `{size}` 报的是这一次会释放的字节 = 父 + 折进来的孩子**，与页脚合计共用同一个算式 `releaseBytesOf`——2026-10-16 按 issue #2 定的口径，彻底删除按组走，说"我即将失去多少"就不能只说父那一格。清单行里那个 `{size}` 仍是这条会话自己的，理由见 `10-15` §12③）⑥ **单条详情**（右栏 / 窄档下钻时铺满）：标题行（清册标题优先，空串才回落日志里的 `session/title`；这里**不摆动作**）+ 元信息三组（时间／体量／位置，含日志 header 的**无损 `cwd`**）+ 正文（人与助手的文字按序成列；**助手走 Markdown**（`react-markdown` + GFM，原始 HTML 落不成节点、链接与图片渲成不可点的文本），**用户提问走原话**（`pre-wrap` 字面），不显示推理段与工具调用）。**消息行的皮肤抄宿主自己那两张表**（`MessageItem.module.css` / `AssistantMarkdown.module.css`）：只有用户有气泡（`--dsw-specific-bubble` + `--dsw-radius-xl` + `10px 16px`），助手不铺底不给边框、正文铺满栏，字号一律 `--dsh-content-font-*` 那根轴；正文排版抄 `MarkdownText.module.css` + `CodeBlock.module.css`（见 `src/client/ui/markdown.css` 文件头记的三处有意差异）。四态＝未选中（一句引导）／读数中（一句"正在读" + 骨架）／读数失败（原文 + 重试，只坏这一块）／有内容。**注入条数与截断条数必须上屏**（「另有 N 条宿主注入的上下文未显示」「还有 N 条未显示」）——正文比日志里的 `user/message` 少一大截是过滤的结果，不能让它读起来像"这条会话就这么点内容"。
+六个基础状态（另有下面的批量四态与残留三块；**本节就是界面规格**——本仓不另存像素稿，结构与层级以这段为准，皮肤只由官方 token 决定）：① 会话条目「…」菜单里的红色「删除」② 确认框（主按钮是官方 `variant="primary"`——宿主浅色下它是近黑 `bluish-1000`、深色下近白 `bluish-50`，**从来不是蓝**："蓝"是当年手绘稿的占位配色留下的错觉，2026-10-01 真机浅色截图后改正；正文明说可恢复；**目标在盘上带着后代时，那张卡片下面先说「含 N 个子会话，将一起移入回收站。」，再说那句可恢复**——2026-10-16 按 issue #3 补的：那几行宿主的列表里本来就不显示，点之前不说就没人知道少了一整片。N 由**一次计数读**在打开确认框的那一刻现问（当初是第六个端点 `POST /subagent-count`，2026-10-17 起它是 `POST /apply` 的 `action:"count"` 一支——纯读、不进串行链、与级联同一个闭包口径，见第十二批），读不到就整句不出现、也不写「含 0 个」，且**绝不让主按钮点不动**，见 `10-15` §12）③ 删除后即时撤销提示（停留 6 秒；宿主 Toast 默认 3 秒） ④ 回收站清单：**按项目分组的卡片列表，住在左栏 420px 定宽里**（`box-sizing:border-box`，含给滚动条的 10px 右内边距），每条两行（标题 / 「删除于 … · 大小」，绝对时间在 `title`；**组视图另挂两段，各说各的**：跟着父一起进回收站的孩子说「含 N 个子会话」，级联落地前删的那些**还留在盘上**的说「盘上还剩 M 个子会话」——两个数来源不同、不许互相冒充，一个都没有就半句不出（不许拿 0 冒充"没有"），判据与实测见 10-15 稿 §10/§11；**原工作区已被删掉的条目另挂一行**「原工作区已不存在，恢复后归入未分组」——这是这一条的属性、不是某次动作的失败，点之前就要看见，2026-10-17 第十四批），**动作在行右侧**——「恢复」描边、「彻底删除…」安静的红，与 2026-10-01 那版同形；整行还是 `role="option"`（点行=选中看详情，点按钮=动作，两件事不打架），选中态用宿主"active"那一档 token（`--dsw-alias-button-ghost-active-fill` / `-border`）；条数与合计占用住头部，页脚那句必须看得见（不套省略号）⑤ 彻底删除的红色二次确认（单条与清空**共用同一个**确认组件，主按钮都用页脚那款实心红；上面那句「整页唯一一块实心红」说的是面板本体，浮层是另一层；**单条那张卡片的 `{size}` 报的是这一次会释放的字节 = 父 + 折进来的孩子 + 仍留在盘上的后代（`strandedBytes`）**，与头部合计共用同一个算式 `releaseBytes`（`api/trash-rows.ts` 的 `toWire` 唯一算出）——2026-10-16 按 issue #2 定的口径，彻底删除按组走，说"我即将失去多少"就不能只说父那一格。清单行里那个 `{size}` 仍是这条会话自己的，理由见 `10-15` §12③）⑥ **单条详情**（右栏 / 窄档下钻时铺满）：标题行（清册标题优先，空串才回落日志里的 `session/title`；这里**不摆动作**）+ 元信息三组（时间／体量／位置，含日志 header 的**无损 `cwd`**）+ 正文（人与助手的文字按序成列；**助手走 Markdown**（`react-markdown` + GFM，原始 HTML 落不成节点、链接与图片渲成不可点的文本），**用户提问走原话**（`pre-wrap` 字面），不显示推理段与工具调用）。**消息行的皮肤抄宿主自己那两张表**（`MessageItem.module.css` / `AssistantMarkdown.module.css`）：只有用户有气泡（`--dsw-specific-bubble` + `--dsw-radius-xl` + `10px 16px`），助手不铺底不给边框、正文铺满栏，字号一律 `--dsh-content-font-*` 那根轴；正文排版抄 `MarkdownText.module.css` + `CodeBlock.module.css`（见 `src/client/ui/markdown.css` 文件头记的三处有意差异）。四态＝未选中（一句引导）／读数中（一句"正在读" + 骨架）／读数失败（原文 + 重试，只坏这一块）／有内容。**注入条数与截断条数必须上屏**（「另有 N 条宿主注入的上下文未显示」「还有 N 条未显示」）——正文比日志里的 `user/message` 少一大截是过滤的结果，不能让它读起来像"这条会话就这么点内容"。
 
 - **入口**：菜单项挂 `sidebar.workspaces.session.menu.item`；回收站入口是**一对座位**——`sidebar.panellist` 的一行图标（行本体归宿主：按钮 / 名字 / `aria-current` 选中态 / 折叠 tooltip，我们只交一个 glyph）+ `main` **同字 key** 的中央面板（清单本体）。**两条必须同批注册**：`ctx.layout.selectPanel(id)` 对没在 `main` 里注册的 id 直接抛。为什么不挂底栏，见 §10。
 - **空态与面板自身的状态机**：回收站那一行始终在（面板行的常驻性归宿主）。**不做计数角标**（glyph 座位只有 16/18px，角标只能压到邻行）；条数与合计占用住面板头部；**面板头部不摆任何动作**（那一排动作住在面板体顶端，见下条；曾有的「刷新」按钮 2026-10-16 已删——清单每次读都先对账，见 `10-15` §9/§9.1），头部只剩标题与那行计数。面板本体四态：**读数中**（「正在读回收站…」）／**空**（「回收站是空的」，且底部**不出现**「清空回收站…」）／**读数失败**（宿主原文上屏 +「重试」按钮，绝不吞）／**有条目**（分组卡片列表）。
@@ -112,7 +112,7 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 - **多选（2026-10-15 同日第二批开的口子，2026-10-17 补上批量恢复）**：进多选 ⇒ 行右侧两颗按钮**整排退场**、勾选框出在标题**左侧**（照用户给的参考图那一版布局；勾选框本体用宿主 `Checkbox` 那款原生 `input` + `accent-color`，不自绘圆框）、头部那行换成「已选 N 条」、页脚那颗从「清空回收站…」**换成「恢复 N 条」（描边）+ 「彻底删除 N 条」（实心红）两颗**（实心红仍在最末位——"整页唯一一块实心红"靠不换位置来守），一条没勾时两颗都置灰 + 悬停给原因。**一次点击 = 一次 `POST /apply`**（2026-10-17 第十二批改掉"串行逐条各发一次"：整批一次清册快照、一次宿主会话表预取、一次通告，逐条结果按 id 落回自己那一行；形状与代价见那份 §13 与本稿第十二批），顺序按**清单从上往下**而不是点击顺序，失败原文落回它自己那一行、多选态不退。两件事的"点之前要过框"不同：**彻底删除带确认框（不可逆）**，**批量恢复也带确认框（2026-10-17 用户裁定：一批条目多、去向是各自的旧项目目录，点之前要看一眼有哪些）**——单行的「恢复」仍直接执行，恢复是加法、且那条路一直如此。
 - **键盘**：清单是 `role="listbox"`（单选），行 `role="option"` + `aria-selected`，roving tabindex——**落点那条规则 2026-10-15 复核批改过**：原先只让"选中那行"拿 `0`，而 `listbox` 自己是 `tabIndex:-1`，窄档又从不自动选中 ⇒ 一次没点过时**全行都是 `-1`，键盘根本进不了清单**（这不是"能聚焦但不好用"）。现在落点 = 选中那行，选中不存在或被折叠收起时落到**第一条可见行**，其余 `-1`；↑↓ 在**拍平后的顺序**里环移（未选中时 ArrowDown 落到第一条），Enter/Space 在窄档下钻，下钻中 Esc 退回清单并把焦点交还给那一行（Esc 的监听挂 `document`——下钻时清单不在 DOM 里，挂容器上是死路径）。两处随 2026-10-15 那批跟进：**↑↓ 只走展开的组**（折叠起来的行不在 DOM，让方向键停在一条看不见的行上就是"按了有反应、屏幕上什么也没发生"），因此选中那条被折叠时 `aria-activedescendant` **不设**（指向一个不存在的 id 是假引用）；**多选态下 listbox 加 `aria-multiselectable`、`aria-selected` 改说勾选、Enter/Space 切换当前行的勾选**（↑↓ 仍是移动光标，所以同一行再按一次是取消勾选——切换语义，不是"确认"）。详情块**不加 `aria-live`**：读数中到读完是整块替换，加了会把整篇正文念一遍。
 - **动作与它的原因待在同一行**（2026-10-15 真机反馈后回原形）：「恢复」「彻底删除…」住在清单行右侧，失败原文也回到那一行下面（error 字色 + 警示 glyph）。详情那块只负责看——把动作搬进详情试过，代价是左栏得压到 316 才放得下「光标题」，用户读起来就是「左侧太窄」；两颗按钮回到行右端之后，420 的左栏留给标题 214px、给动作 152px。
-- **失败写在出事的那一块上**（改版后仍是同一口径，只是分了三块）：清单读不到 ⇒ 清单那块原文 + 重试（不是空态）；某条正文读不到 ⇒ 只在详情那块说，清单照常可选；`detail` 端点挂了不影响四个入口出现与否（接通性由探测 `GET /ping` 决定，见下一条）。
+- **失败写在出事的那一块上**（改版后仍是同一口径，只是分了三块）：清单读不到 ⇒ 清单那块原文 + 重试（不是空态）；某条正文读不到 ⇒ 只在详情那块说，清单照常可选；`detail` 端点挂了不影响所有入口出现与否（接通性由探测 `GET /ping` 决定，见下一条）。
 - **组头的项目名**从宿主 `projectKey` 反推：`--…--` 裹边与 `~XXXX` 十六进制转义还原成原字符（还原函数 `unescapeProjectKey` 住在两半共用的 `src/shared/wire.ts`，与 Node 侧的编码镜像配对），**完整原串**交给组头的 `title`（分隔符那一层是有损的、拆不回真实路径，故不作声称）。
 - **运行中**：菜单里「删除」置灰并提示"会话正在运行，先停止再删除"。
 - **未接通态（取数通道缺席）**：客户端半在注册任何入口之前先**探测一次**取数通道（同源 `GET <前缀>/ping`，见 §10；**2026-10-17 第十二批改的**：原先探测拿 `GET /list` 当健康检查，而 `list` = 对账 + 装配 + 两次宿主读数 ⇒ 每次页面加载都跑一遍全盘对账，为的只是问一句"你在不在"）；探测不过 ⇒ **一个槽位贡献都不注册**（连同那一对面板座位）——菜单行也一样：通道不在时点它只会开一个必然失败的确认框，半吊子 UI 比没有 UI 更糟。"不可用"以**入口不出现**表达，不新造禁用态 UI；宿主页面上看不出本插件的存在，但**不会因为本插件而死**。反过来，探测**过了**（哪怕回的是失败信封）就照常注册：那次往返已经证明路由在、依赖接上了、错误映射也生效了，失败该做的是把原文交给用户看。`/ping` 的判据**只可能是这句话**——它不碰清册、不碰盘、不进串行链，所以它答得了"通道在不在"、答不了"此刻有几条"（那是 `/list` 的事，2026-10-17 复核时特意钉在用例里：`ping` 那次读数不许被当成清单读数用）。
@@ -120,6 +120,8 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 - **可见文案一律走 Client locale 服务**（2026-10-02 起）：全部中文/英文字面量收在 `src/client/copy.ts` 的命名空间字典里（`zh` 真源 + `en` 逐键镜像），经 `ctx.get('locale')` **可选读**（服务在就 `register` + `bind`，不在则降级到内置 zh；**不进 `inject`** —— 客户端条目 pending = 宿主进程死）；面板行那一行的名字用 **thunk**（`() => t('trash.title')`，宿主 `resolveSlotLabel` 的 JSDoc 即 "thunks follow the active locale"）。
 
 **批量删除的四个态**（2026-10-17 第十三批）：宿主会话列表上的**多选模式**（「⋯ → 多选」进入；模式内整行点击勾/取消并屏蔽会话切换 + 行首/行尾勾选 + 选中行底色 + 浮条已选清单（同一位置全选↔取消全选，汇总在列表头，0 条也显示模式与退出））、**批量确认框**、**批量撤销横幅**、**部分失败态**（框不关、原文落行、可重试）——结构与文案形状住文末第十三批（同一事实只住一个家）；单删的 ①②③ 不受它影响，两套并存。
+
+**残留维护的三块**（2026-10-19 第十七批）：面板体顶端、那一排开关**之上**按条件多两块，点开再多一个浮层。① **残留条**——只在 `GET /orphans` 报回的条数 > 0 时出现（"检查过了，什么都没有"不是要给用户看的东西，读不到走②，更不是这里）：一句「回收站之外发现 N 个无主子会话」+ 一行合计字节与失踪父条数 + 一颗描边「查看并清理」，警告色 glyph、**不给实心红**（本体那块唯一的实心红仍是页脚「清空回收站…」）。② **检查/清理失败块（与「已不在了」提示）**——扫描本身失败（`sessiondelete/io`）或清理有组没成（「N 组未清理：原文」）时原位上屏 + 「重试」；那是"没能回答有多少残留"，与"没有残留"是两件事，**绝不折成空报告**。清理回执按组：`not-found`（这一组已被别处清掉，或父已回到清册）单列为**「已不在了」中性提示**，不计入未清理；删到一半失败的组在 `error.details` 带 `{removed, freedBytes}`，界面说「已先删掉 X 个会话目录（Y）」，不伪装成整组没动。③ **清理的二次确认框**——按项目分组列出「项目 · 数量 · 字节」，正文说清父已不存在、不可恢复、在跑的会被拒绝，另有一句「本次只清理会话目录，不包含宿主投影缓存和附件」；主按钮「清理」是浮层里那块实心红，与彻底删除同一个规矩。顺序是**先清单后扫描**（判据在第十七批），清理不另开路——它是 `POST /apply` 的第五个动作 `orphan-clean`。整批裁定、存量读数与"为什么不做投影缓存回收"见文末第十七批。
 
 ## 8. 验证门（顺序即优先级）
 
@@ -247,8 +249,8 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 | 删除 = 移入回收站（可恢复）+ 独立的彻底删除 | 一步 `rm` | 误点一次不心疼；代码量与直接 rm 差不多 |
 | 只挂官方声明的槽位、**不 disable 任何官方插件** | disable + 替换 `workspace` / `session-projection-cache`（社区归档插件的做法） | 后者为了 UI 覆盖去换宿主服务；实测 2026-09-30 在 desktop 0.2.0-rc.2 上崩：`ui-deliverables … pending (waiting for service: sessionController)` |
 | 回收站入口 = **全局面板**（`sidebar.panellist` 一行图标 + `main` 同字 key 的中央面板），清单本体就是那块中央面板 | ① 底栏 `sidebar.footer.action`（原方案，实现过一版）；② 侧栏顶部图标 + 角标（更早被否决的替代） | ① 这条座位的**惯用形**（座位目录 + 官方占用者 CSS 读出来的）是「42px 整行 + 图标 + 文字 + 右对齐 12px 计数」：`client-ui-cordis` 的占用者是 `.layer{flex:none;width:100%;height:42px}` + `.badge{width:calc(100% + 4px)}`，而座位容器只有 `.footerActions{display:flex}`（无 gap、无 wrap）——**它自己的占用者就吃满整行且拒绝收缩 ⇒ 这条座位对第二个租户不稳**（按这套 CSS 在对照稿里量：容器 clientWidth 287 / scrollWidth 394，primitives 那条 106.8px 宽、其中 106px 落在侧栏右缘之外）。而我们交的是 primitives 的 `Button ghost/sm` 小药丸 + `Tag` 芯片，与惯用形完全不同形。**⚠ 2026-09-30 隔离活宿主实测更正**：在镜像 desktop 组成的隔离 profile 上，`sidebar.footer.action` 槽**渲染为空**——`ui-cordis` 虽在组成树里（`--dump-config` 可见 `id: ui-cordis`），它的客户端半并没有挂上那条占用者（侧栏 DOM 逐字 `<div data-slot="sidebar.footer.action" style="display: contents;"></div>`，零子节点）。所以旧实现在真机上的问题，更准确的定性是**「不是这条座位的惯用形」**（孤立的小药丸贴底栏，与下方 42px 的「设置」行不同形），而"被第二个租户整条挤出去"只在 Cordis 占用者真挂上时才发生——**这条判据随宿主组成走，不是常量**。宿主自己的文案也把这个位置认领了：`ui-cordis` 的 `"panel.hint": "运行控制在左下角设置上方的 Cordis 面板"`。② 原来否掉「顶部图标」的理由是「太隐蔽」，但那条 `panelList` 现在是**有名字的一等导航层**——官方「插件」与第三方「小说」都在这儿，`label` 由宿主 `resolveSlotLabel(options.label)` 解析后画成 `.panelTitle`、折叠时还有宿主 Tooltip，与当初设想中那个「只有图标 + 角标」的东西不是一回事。**代价明写**：计数角标没了（glyph 座位 16/18px 塞不下；`label` 支持 thunk，但宿主 `syncPanels` 只在槽位条目变化或语言变化时重读，拿它当活计数必然 stale），条数改住面板头部。读数出处：asar 的槽位声明与 `PanelRow` 渲染原文（§9 与上面的 CSS 原文）。逐格画面曾存于一次性对照稿 `session-delete-ui-relocate.html`，2026-10-01 随两份界面稿一起删除——它记的是**取证当时的形态**，判据全在本节与 §9，删了不影响复现。 |
-| 两半之间走**宿主自己的 web server** 上的插件专属前缀路由（`/dsh-session-delete-api`，Node 半四个端点 `GET /list` + `POST /delete|restore|purge`（**2026-10-15 起是五个**：多的那条是 `POST /detail`，用 POST 表达一个读的裁定见那份 §3；**2026-10-16 起是六个**：又多了 `POST /subagent-count`；**2026-10-17 起收成五个段名**——写动词从"一条一段"合成**一段 `POST /apply`**（`{action, ids[]}`，一次 HTTP 带一组 id、逐条回结果，单条就是长度为 1 的批量，仓里不再留第二条执行路径），另加一段**纯探测** `GET /ping`；本条保留各批当时的形状不改写），浏览器半同源 fetch） | ① 官方 typert remote（原方案）；② **不**开通道（只留 Node 半） | ① 原方案的两处硬事实：生成器只认官方仓形（`<root>/packages/<pkg>/` + 源码装饰器 + `src/client.ts` 命名），且浏览器侧没有任何动态发现 ⇒ 第三方只能自挂自（生成物 + `zod` + 搬包布局 + 改客户端逻辑），代价与收益完全不成比例。**2026-10-17 复核补一条被否的**：换宿主 `ctx.connection.admit` / `requestRejection` 当栅栏也**否决**——rc.2 里 `isTrustedApiRequest` 缺 `host` 头**直接 false**、再要浏览器 cookie，而桌面壳转发前把两者都删了 ⇒ 换过去真机全 403（自建栅栏是**必需**，不是债）。② 通道跟着**能力归属**走：本插件没有后端、做的全是编排宿主既有能力，所以**借宿主自己的 HTTP 面**而不是另起一个服务；路由层只搬运，真相/账本/判据全留在宿主那边。**信封刻意与官方 unary 面同形**（`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`），错误码仍是 §6 那五个——所以组件面与既有用例一行都不用改。前缀**必须插件专属**：宿主对重复的 `(kind, path)` 直接抛错，撞了整棵插件树 boot 失败；写口另加**同源栅栏**（回环 ∧ Origin/Referer 与 Host 同源；curl 形态放行），免得任意网页用 simple request 打这条本机写口——栅栏挂在**整条前缀路由**上（读口 `list`、`ping` 也一并拦，客户端探测用的就是被拦的那条读口）。**桌面壳那条路单独放行，且必须有**：壳的 `forwardWebRequest` 转发前删掉 `host`/`origin`/`cookie`/`sec-fetch-site` ⇒ 真机请求没有 `Origin`、只有 `Referer: dsh-app://app/`，判据要按 `protocol` + `host` 比（`dsh-app:` 非 special scheme，`URL.origin` 恒为 `"null"`）——漏了它，真机上四个入口一个都不出现，而 headless 直连 http 的过门读数看不出来。 |
-| Node 半 `inject` 加 `webServer`（`dsh-host-webserver` 的服务名，逐字读实） | 服务名只写进变量、读时再试探 | 前缀路由是**能力本身**不是可选装饰：服务不在就该响亮失败（插件 pending 一眼可见，好过四个入口静默失踪）。"通道在不在"是**浏览器那半边**的事，由它自己探测（见 §7），两侧各答自己那一问。 |
+| 两半之间走**宿主自己的 web server** 上的插件专属前缀路由（`/dsh-session-delete-api`，Node 半四个端点 `GET /list` + `POST /delete|restore|purge`（**2026-10-15 起是五个**：多的那条是 `POST /detail`，用 POST 表达一个读的裁定见那份 §3；**2026-10-16 起是六个**：又多了 `POST /subagent-count`；**2026-10-17 起收成五个段名**——写动词从"一条一段"合成**一段 `POST /apply`**（`{action, ids[]}`，一次 HTTP 带一组 id、逐条回结果，单条就是长度为 1 的批量，仓里不再留第二条执行路径），另加一段**纯探测** `GET /ping`；本条保留各批当时的形状不改写），浏览器半同源 fetch） | ① 官方 typert remote（原方案）；② **不**开通道（只留 Node 半） | ① 原方案的两处硬事实：生成器只认官方仓形（`<root>/packages/<pkg>/` + 源码装饰器 + `src/client.ts` 命名），且浏览器侧没有任何动态发现 ⇒ 第三方只能自挂自（生成物 + `zod` + 搬包布局 + 改客户端逻辑），代价与收益完全不成比例。**2026-10-17 复核补一条被否的**：换宿主 `ctx.connection.admit` / `requestRejection` 当栅栏也**否决**——rc.2 里 `isTrustedApiRequest` 缺 `host` 头**直接 false**、再要浏览器 cookie，而桌面壳转发前把两者都删了 ⇒ 换过去真机全 403（自建栅栏是**必需**，不是债）。② 通道跟着**能力归属**走：本插件没有后端、做的全是编排宿主既有能力，所以**借宿主自己的 HTTP 面**而不是另起一个服务；路由层只搬运，真相/账本/判据全留在宿主那边。**信封刻意与官方 unary 面同形**（`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`），错误码仍是 §6 那五个——所以组件面与既有用例一行都不用改。前缀**必须插件专属**：宿主对重复的 `(kind, path)` 直接抛错，撞了整棵插件树 boot 失败；写口另加**同源栅栏**（回环 ∧ Origin/Referer 与 Host 同源；curl 形态放行），免得任意网页用 simple request 打这条本机写口——栅栏挂在**整条前缀路由**上（读口 `list`、`ping` 也一并拦，客户端探测用的就是被拦的那条读口）。**桌面壳那条路单独放行，且必须有**：壳的 `forwardWebRequest` 转发前删掉 `host`/`origin`/`cookie`/`sec-fetch-site` ⇒ 真机请求没有 `Origin`、只有 `Referer: dsh-app://app/`，判据要按 `protocol` + `host` 比（`dsh-app:` 非 special scheme，`URL.origin` 恒为 `"null"`）——漏了它，真机上所有入口一个都不出现，而 headless 直连 http 的过门读数看不出来。 |
+| Node 半 `inject` 加 `webServer`（`dsh-host-webserver` 的服务名，逐字读实） | 服务名只写进变量、读时再试探 | 前缀路由是**能力本身**不是可选装饰：服务不在就该响亮失败（插件 pending 一眼可见，好过所有入口静默失踪）。"通道在不在"是**浏览器那半边**的事，由它自己探测（见 §7），两侧各答自己那一问。 |
 | 不做自动过期 | 30 天后自动清 | 魔法数字；回收站增长很慢（本机 85 个会话合计 15M） |
 | 不做附件回收 | 引用计数 GC | 需要新索引，属另一件事 |
 | 首版不做 agent 工具面 | 挂插件专属前缀的工具让 AI 也能删 | YAGNI，要加是一句话的事 |
@@ -374,7 +376,7 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 
 - **接口**：`POST /apply` 带 `{action:"delete"|"restore"|"purge"|"count", ids:[…]}`，回 `ApplyOutcome[]`（每条带原始输入 id + `action` + `ok` + `value|error`）。`/delete`、`/restore`、`/purge`、`/subagent-count` 四段名**退役** ⇒ 段名从六个收成五个（`list` / `ping` / `detail` / `apply` / `empty`）。`/empty` 单独留着的理由只有一条：它是**聚合回执**（`{removed,freedBytes}`），不按条回。
 - **单条 = 长度为 1 的批量**：仓里不再留第二条执行路径（这是这条重构的主要收益，不是性能）。
-- **三条批量语义是接口的一部分**（`src/verbs/apply.ts` 文件头）：① 输入去重、保持输入顺序（界面上"清单从上往下"那份读感）；② 一条失败**不传染**下一条，逐条 `try/catch` 后按 `map-error` 那张表折成信封；③「已被同批前一条带走」记**幂等成功**而不是失败——恢复一条已跟着父亲回来的孩子，用户要的结果本来就达成了（`delete`/`restore` 回 `null`；`purge` 本来回的就是聚合数，回 `{removed:0,freedBytes:0}`）。**判据用快照的原始形状，不用当前形状**：原始快照里认得出它（它自己、它的父、或它的孩子任一在）而当前快照里空了 ⇒ 才是同批带走的；后来者本来就不在清册（幽灵 id、对账刚摘掉它）照样响亮报 `trash-empty`，不许被"已被带走"这句话粉饰成成功。
+- **三条批量语义是接口的一部分**（`src/verbs/batch.ts` 文件头；2026-10-19 第十八批由 `apply.ts` 改名）：① 输入去重、保持输入顺序（界面上"清单从上往下"那份读感）；② 一条失败**不传染**下一条，逐条 `try/catch` 后按 `map-error` 那张表折成信封；③「已被同批前一条带走」记**幂等成功**而不是失败——恢复一条已跟着父亲回来的孩子，用户要的结果本来就达成了（`delete`/`restore` 回 `null`；`purge` 本来回的就是聚合数，回 `{removed:0,freedBytes:0}`）。**判据用快照的原始形状，不用当前形状**：原始快照里认得出它（它自己、它的父、或它的孩子任一在）而当前快照里空了 ⇒ 才是同批带走的；后来者本来就不在清册（幽灵 id、对账刚摘掉它）照样响亮报 `trash-empty`，不许被"已被带走"这句话粉饰成成功。
 - **整批只读一次清册、只预取一次宿主会话表、只发一次通告**：`applyRestore` 拿一份快照传进动词（`restoreSession(deps)(id,{snapshot,suppressAnnounce:true})`），批尾 `announceRestoredBatch(ids, summaries)` 一次发。通告名单收的是**整组**（父 + 跟着回来的孩子），不是只有被点那一行——漏了孩子的话，客户端那一行永远还挂着"在回收站"的读感。
 - **重读竞态**（第一批里那条正确性，与性能无关）：`reload()` 带序号（`reloadSeq`），**只有最新一次的响应许落地**。在飞的读不保证按发起顺序回来（对账耗时随盘上条目数摆动），旧形状是后到的旧响应直接把新清单盖回去。
 
@@ -415,7 +417,7 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 1. 多选勾 5–10 条（含至少一条来自别的项目）→「恢复 N 条」→ 确认 → Network 里**只有一条** `POST /apply`；成功的回到各自原项目、清单里消失。
 2. 100 条那一次的手感：应当从"秒级到半分钟级"落到**几秒内**。判据来自上面那本账（两次全表扫描从 N 遍降到 1 遍），但**只有真机能证这一条**。
 3. 故意让一批里有一条失败（先手工移走它的回收站目录，或挑一条原目录已不存在的）→ 失败原文落在**它自己那一行**，其余照常成功，多选态不退。
-4. 打开面板：探测那一次是 `GET /ping` 而不是 `GET /list`（Network 一眼可判）；把前缀路由摘掉应当看到四个入口一个都不出现。
+4. 打开面板：探测那一次是 `GET /ping` 而不是 `GET /list`（Network 一眼可判）；把前缀路由摘掉应当看到所有入口一个都不出现。
 5. 会话正在跑时删除 → 上屏原文之外，**信封第三件 `details` 里带 `sessionId` / `activity`**；另找一条宿主自己拒绝的动作，确认它的官方 code **没被改写成 `sessiondelete/*`**。
 6. 反复重启宿主 3 次：清册读**不许**出现 `domain xrn1997_session_delete_trash is already open`（卸载时 `close()` 没关严才会出这条），宿主日志里也没有卸载期的 unhandled。
 
@@ -582,3 +584,171 @@ DSH 把"归档"做成了一等公民服务，**但没有删除会话的口**。�
 **三道门**（逐个 capture，不接管道）：`npm test` **0**（436 通过 / 28 个文件）、`tsc --noEmit` **0**、`npm run build` **0**。**读数**：Node 半 **94.11 kB / gzip 35.62 kB**、浏览器半 **847.92 kB / gzip 194.98 kB**（两半都未动，只有清单、测试与文档变了）；发布包 **55 文件 / 288.3 kB**（0.2.1 发布包实测；上一批 55 / 288.1）。
 
 **真机门（未跑，交用户）**：只动清单与文档，两半零改动 ⇒ 不需要重启即无行为变化。装/验判据三条：① `dsh plugin add` 在 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2 上不拒；② **发布下一版之后**，商店卡片应显示 `engines.dsh: >=0.1.7-rc.2 <0.3.0-0` 而不是「未声明宿主要求」（商店读 npm `latest`，工作树改了不会变；本机清单缓存 TTL 24h）；③ 将来有 0.3.0-* 宿主时，应被拒装。
+
+### 2026-10-19 收尾批（第十七批）：无主子会话、purge 收尾与回滚失败
+
+**存量读数（只读 `~/.dsh`；同日已按同一判据在盘上复量，逐字对上，见本节末那段成本读数）**：盘面 202 个根 / 221 个闭包会话 / 60.6 MB 日志（202 个根自身是 55.2 MB，19 个后代另 5.4 MB）+ 约 18 MB 投影缓存，31 个父 id 既不在语料也不在清册；客户端对所有 `origin:"subagent"` 隐藏，回收站只列清册行 ⇒ 无任何 UI 路径。另有 68 个归档幽灵 id 与 159 个回收站条目仍留在归档集里。
+
+**裁定**：
+1. **`purgeTrash` 收尾**：用 `subagentMembersBatch` 把父行在盘上还剩的后代纳入目标；盘上后代先 `isLive`（任一在跑整条拒绝）、再 `unarchive`/`detach`、再删目录；`removed` 与 `freedBytes` 都算上它们。清单行新增 `strandedBytes`，与 `releaseBytes`（`api/trash-rows.ts` 的 `toWire` 唯一算式）同源。
+2. **`purge` 顺手摘归档集**：所有目标在删目录前 `unarchive`；宿主 `unarchiveSession` 对未知 id 只 filter（0.2.x 源码实读），所以安全。已有 68 个幽灵不单独立项。
+3. **`GET /orphans` + `POST /apply action:"orphan-clean"`**：扫描走官方 `sessionQuery.listSessions`（live ∪ persisted）；根 = `origin:"subagent"` 且父不在语料/清册；清理按闭包，逐条 live，永久删除（不搬进回收站），逐根 `ApplyOutcome`。`/orphans` 纯读、不进链；`orphan-clean` 进链。段名从五个变六个、`apply` 从四个动作变五个。
+4. **UI**：只在 `totalSessions > 0` 时出现顶部残留条；点开按项目列数量/字节，二次确认后清理；不自动。文案明说“不包含投影缓存和附件”。
+5. **回滚失败**：`withRollbackFailures` 把失败步骤挂进 `details.rollbackFailures`，且目录没退回时不发“已恢复/已移除”。
+6. **`empty` 先对账**：`POST /empty` 先 `reconcileTrash` 再 purge，手工放进来的可识别目录也归“清空”管；认不出的目录仍按 10-15 稿 §9 口径不动。
+7. **手工搬回不是恢复**：下次 `list` 会摘行，但不 attach/unarchive；README FAQ 写清。
+8. **不做**：投影缓存清理（无公开面）、附件 GC（无引用计数）、自动清理、把孤儿搬进回收站。
+
+**三道门**（逐个 capture，不接管道；2026-10-19 在实现提交 `f7b9886` 的树上跑一遍、把这段读数账补进文档后再跑一遍，两遍都是 0/0/0）：`npm test` **0**（466 通过 / 29 个文件）、`npx tsc --noEmit` **0**、`npm run build` **0**（tsdown + tsc 两步，`lib/types/**/*.d.ts` 47 个文件，含新的 `verbs/orphan-subagents.d.ts`）。产物纯度照旧——`grep -oE 'require\("[^"]+"\)' lib/client.js | sort -u` 逐字三条 `react` / `react-dom` / `react/jsx-runtime`，`node:` 只在 JSDoc 里出现 4 次、真 import 零条 ⇒ `tsdown.config.ts` 挂在 `resolveId` 上的 `gateClientImport` 这一趟是过了，不是没跑。
+
+**用例账**：436 → **466**（+30；28 → 29 个文件，`tests/orphan-subagents.test.ts` 6 条自己成一个文件）。逐文件的净增（静态 `it(` 计数与 `vitest run` 的 466 逐文件对得上，不是估的）：`api.test.ts` **+9**（`GET /orphans` 交回闭包数 / 字节 / 项目分组且不删任何东西、语料缺席回 `io` 不冒充空报告、`POST /orphans` 不是写动作 ⇒ 405（标题逐字对齐 `tests/api.test.ts`）、`orphan-clean` 逐根回执、成员在跑 ⇒ `live` 零删、清册里躺着这个父 ⇒ `not-found` 零删、纯读不占链 / 写动作上链、`empty` 先对账带走"只有目录没有行"的条目、栅栏对六个段名一视同仁）；`orphan-subagents.test.ts` **+6**（根 = 父既不在语料也不在清册、带不带前缀算同一个父、`loadOrphanGroups` 量字节与汇总、语料读不到回 `io`、清理的调用序 live → unarchive → detach → 删目录并通告、任一在跑零写）；`purge-trash.test.ts` **+4**（盘上后代跟着一起清且字节条数都算上、后代在跑整条不删、清册已有的孩子不重复删、`unarchive` 失败 ⇒ `io` 且目录与清册行都不动）；`client/trash-panel.test.tsx` **+6**（有残留才出顶部那条、预览后走 `orphan-clean`、没残留不出、扫描失败原位重试、残留扫描排在清单对账之后、清理逐条失败说清几组没成并带原文；另含「头部合计与单条确认都算上 `strandedBytes`」那条，计入净增）；`assembly.test.ts` **+3**（header 折成 id/parent/projectDir/subagent 且缺 id 跳过、批量后代一次问多个父且空清单零调用、方法表 十七 → **十九**；另含「`sessionQuery` 没挂 / 没有 `listSessions` ⇒ `undefined`」那条，计入净增）；`delete-session.test.ts` **+1**、`restore-session.test.ts` **+1**（回滚本身退回失败 ⇒ 原错误保留、`details.rollbackFailures` 上屏，且目录没退回就不发"已移除 / 已恢复"）。另有 **3 条是改写不是新增**：栅栏那条从"第五个端点"改成"六个段名"、方法表那条从"十七个"改成"十九个"、"读失败时重试"改成"点一下把整面重读（清单 + 残留扫描）"。
+
+**读数**：Node 半 **111.71 kB / gzip 40.48 kB**（第十六批 94.11 / 35.62 ⇒ **+17.60 / +4.86**：端口两条新方法、孤儿扫描与清理动词、`/orphans` 路由加 `orphan-clean` 动作、purge 收尾与回滚附带物）；浏览器半 **860.19 kB / gzip 198.23 kB**（第十六批 847.92 / 194.98 ⇒ **+12.27 / +3.25**：顶部残留条 + 预览与确认对话框 + 十个文案键 + remote 那一个新段名）。盘上精确字节 `lib/index.js` 111 706 B、`lib/client.js` 860 193 B。发布包 **56 文件 / 301.1 kB**（上一批 55 / 288.3；多出的那一个文件是 `lib/types/verbs/orphan-subagents.d.ts`，靠 `files` 里 `lib/types/**/*.d.ts` 的通配自己进来的——`npm pack --dry-run` 实测，没有写盘）。`ui.css` / `markdown.css` 一个字没动 ⇒ §8 门 4 那条逐属性比对不必重跑。
+
+**隔离 home 那一趟（§8 门 4 的硬约束）：未跑——原因分两半，别都推给视口**。这批动了浏览器半（`src/client/` 的残留条、预览框与 remote 段名），按 AGENTS.md 那条"改浏览器半后先在带可见浏览器的隔离 home 上验过，再装进任何 live profile"就**还没有过**。下面两件事是本会话实测的，不是引旧记录：
+
+① **隐藏视口只挡住指针链那几条**——Step 4 的第 2、3、4 步（"打开面板看残留条 → 点「查看并清理」→ 取消 → 再清理"）要真命中测试，而会话内浏览器仍没有可视表面（本地一页探针上量到 `window.innerWidth/innerHeight = 0 / 0`、`document.visibilityState === "hidden"`，与 2026-10-02／10-15 两批记的 `NATIVE_BROWSER_VIEWPORT_UNAVAILABLE … viewport=0x0` 同一个形状）。
+
+② **激活与控制台零 error/warn 不在被挡的那几条里**：那半要的只是**一台跑起来的隔离 home 台架**——§9 那条探法（`DSH_HOME=<临时目录> dsh --profile <名> --from-default-profile web --no-open --port 0`，第十六批那张地板探针表走的就是它）把页面加载起来就够了，槽位注册、资源加载与 `web boot` 自检都会在控制台如实报（真崩了是宿主进程死，`web boot: N entry did not activate`），**一次点击都不需要**。本会话**没有把这台台架搭起来**：临时目录里只剩另一个项目留下的 `dsh-home-probe/profiles/novelcompat`（不是本插件、也没镜像 live 的插件组成），本插件那份要从零建（`plugin add link:` + 起宿主 + 造孤儿夹具；第 1 步的夹具与第 5 步"在跑的子会话"同样得在那台架上才造得出），而 live profile 按约束不许装。**所以那半的原因是"台架没搭"，不是"视口看不见"**。
+
+⇒ Step 4 那六条读数**一条都没有**，包括第 6 步"控制台零 error/warn"——**构建绿与 466 绿只证形状与逻辑，不证激活**（headless 直连 http 的过门读数看不见 `web boot` 那一类崩溃）。第 2 步那条时间判据（打开面板 → 残留条出现 ≤300ms）里不靠台架就能量的那一半已经量了（见下面那段成本读数），宿主 `sessionQuery.listSessions()` 那一半与整条链路的端到端读数仍留给台架或真机。
+
+**`GET /orphans` 的成本读数：文件系统那一半已量（2026-10-19，只读 `~/.dsh`，全程零写）**。量法就是生产那圈代码：盘上 `sessions/**` 逐个 `pickSessionLog` + `readSessionHeader`（身份只认 `header.id`）折成语料、`session-trash/**` 的 header 折成清册那一侧的已知父（对账后与清册同集合，10-15 稿 §9），分组交给生产那个纯函数 `orphanGroupsOf`，字节交给 `loadOrphanGroups`（内部就是 `fs.exists` + `createFsPort().sizeOfDir`）。**形状**：11 个项目目录 / 239 条可读语料（另 6 个目录读不出 header）/ 其中 221 条 `origin:"subagent"` ⇒ **202 组根 / 221 个闭包成员 / 31 个失踪父 / 60 607 817 B**（根自身 55 191 712 B + 19 个后代 5 416 105 B）。**这一份与本节开头那条存量读数逐字对上**（202 / 221 / 31 / 60.6 MB / 55.2 + 5.4 MB），那份从此不是"沿用 brief 给定值"，而是盘上可复量的读数。**成本**：五个全新进程、每进程内再复跑一遍。首趟 `exists` + `sizeOfDir` 落在 **39 / 48 / 49 / 57 ms** 四档，进程内复跑落在 **49 / 49 / 51 / 54 ms**；第五趟是 **498 ms**（复跑 445 ms），同一趟里 header 扫也从其余四趟的 365–833 ms 跳到 1890 ms ⇒ 那趟是这台盘的 I/O 被别的东西压着，不是这段代码的形状。221 个目录一个不落，`bytes === 0`（目录不存在）零条。**三条口径限定**：① 这几趟都是**热页缓存**——同一趟前面刚把同一批文件的 header 读过一遍，真冷缓存要清系统文件缓存，本会话不做；② 语料是**盘上口**（只有 persisted），本会话没有可问的**隔离**宿主 ⇒ live 那一半缺席（live 桌面宿主此刻在跑、也在写盘，但按约束不往它上面装、也不调它的服务），而 live 只会往 `known` 里加父、让孤儿**变少不会变多**，所以这份形状是那一半的上界；③ **另一半（宿主 `sessionQuery.listSessions()` 的延迟）没量**，而那才是 ≤300ms 那道闸的未知数——本会话没有跑着的隔离宿主可问。**这几趟不是安静机器上的读数**：跑的那几分钟里 `~/.dsh/session-trash/` 正在新增条目（14:04–14:10 那几条）、`storages/session_projcache/` 正在被重写，同一块盘被 live 宿主压着 ⇒ 那 498 ms 的一趟与"245/435 这两个数是移动靶上的快照"都由此而来。**结论**：文件系统那一半在正常档（≈50 ms）不逼着拆"先数条数、点开预览再量字节"，但坏档（≈500 ms）自己就越过了 300 ms ⇒ 那道判据只能由端到端实测说话，不能由这几趟说话。顺带一条**不进预算**的读数：盘上自扫 680 个目录（245 sessions + 435 trash）的 header 读法 365–1890 ms，那是这几趟自己的替身成本，生产不走它。
+
+**真机门（未跑，交用户，桌面版 0.2.x；本计划不代签）**：
+1. 打开回收站面板，顶部残留条出现（若盘面仍有残留）且数字与 `~/.dsh/sessions` 下"父缺失的 `origin:"subagent"` 子树"一致；
+2. 点「查看并清理」→ 预览按项目列出数量与字节、合计与上面那份存量读数同量级；**取消之后目录数量不变**；
+3. 再点清理 → 那些目录被删、残留条消失；
+4. 挑一条正在跑的子会话清理 → 报「会话正在运行」且目录不动（单测钉在 `tests/orphan-subagents.test.ts` / `tests/api.test.ts`，真机这一条要亲眼）；
+5. 对一条盘上还有后代的回收站父行点「彻底删除」→ 后代目录一起消失，且归档集里不再有那些 id（宿主归档页或自己的只读探针核对）；
+6. 从打开面板到残留条出现 ≤300ms（超了就回来立项拆扫描；**端到端里能不靠台架量的那一半已经量过，见上面那段成本读数**——真机这一条要的是端到端那一拍）；
+7. 控制台零 error/warn（尤其没有 `web boot: … did not activate` 与 `slot entry crashed`）。
+
+**生成的仓库知识库（`.qoder/repowiki`）状态：过期，仓内没有再生成它的路径**。那份是 tracked 的（唯一一次提交 `3fed028`，2026-10-02），入库之后一次没动过——第十二批把写动词收成 `/apply`、第十七批又加 `/orphans`，都没进它：`zh/content/API 参考/HTTP API.md` 仍写「四个端点：`GET /list`、`POST /delete`、`POST /restore`、`POST /purge`」（"四个端点"那一串在该页出现 **3 次**），`zh/content/架构概览/架构概览.md` 的组件图里也写「同源 fetch 四个端点」（**1 次**）；两页对 `/apply`、`/ping`、`/detail`、`/empty`、`/orphans`、`/count` **各 0 次**（`grep -o … | wc -l` 逐页点过）。`zh/meta/repowiki-metadata.json` 里同一串只出现 **1 次**（不是两处）：它住在 `wiki_catalogs` 中 "HTTP API" 那一条目录的 `prompt` 字段里（19 条目录中的这一条），原文钉着"覆盖四个端点：GET /list、POST /delete、POST /restore、POST /purge"——**这份元数据不随代码换代**，所以即便重生成一次，那一页也会被这句 prompt 重新写回四个。**仓内没有再生成它的命令**：`package.json` 没有相关脚本、没有 `scripts/` 目录、没有 `wiki_plan.yaml`；`repowiki` 这个词在 README 与 AGENTS.md 里不出现，全仓 markdown 唯一提到它的就是本节这条状态记录本身——**要说的口径是"仓里没有再生成路径"，不是"仓里没人提过它"**（后者已经被这句话自己证伪）。生成动作住在 Qoder Knowledge Center 那一侧，不是仓库命令。按约束**不手改生成物**，只把状态记在这里：它是**过期产物**、不在三道门之内、与代码冲突时以代码为准（真相住在 `src/shared/wire.ts` 的六个段名，闸住在 `tests/api.test.ts` / `tests/skeleton.test.ts`）。要更新就在产品侧对 `.qoder/repowiki` 重生成一次再提交，别改单页。
+
+### 2026-10-19 评审修正批（第十七批收尾）
+
+**触发**：第十七批的三路评审（Node / 浏览器 / 文档）在实现提交 `f7b9886` 上逐条复核后，确认核心判据成立；本批只修评审发现的顺序/并发、回执形状、破坏性路径与镜像陈述，不改孤儿判据本身。
+
+**只读探盘（`~/.dsh`，2026-10-19，全程零写）**：`sessions/` **245 个目录 / 239 个可读 / 6 个 header 读不出**；可读语料里 **221 个 `origin:"subagent"`，其中 0 个缺 `parentSession`**；可读会话的父匹配那 6 个读不出目录名的 **0 个**；`session-trash/` **438/438 全部可读**、316 个 subagent、0 个缺父。⇒ 两类边界（无 `parentSession` 的 subagent、父目录在读不出 header 但仍在盘上）在本机都没有触发：**判据不改**，只把文案从「父已删除/不存在」收准成「父不在语料或清册里」。
+
+**修正**：
+1. **客户端先清单后扫描**：`reload()` 交回是否落地；`/list` 没读成就**不扫** `/orphans`，并清掉上一拍的残留报告；残留失败块的「重试」走整面 `refresh()`（清单 + 扫描）。挂载、失效通告、动作成功后的重读都同一条路。
+2. **清理后的 `busy` 覆盖 `refresh()`**：顶部「查看并清理」在飞行中禁用；确认框的取消/关闭也按 `busy` 拦住。恢复、彻底删除、清空三条动作同样把 `busy` 保持到刷新结束，堵住「旧清单一拍里再点一次」的同类窗口。
+3. **`not-found` 单列**：`orphan-clean` 回 `sessiondelete/not-found` 时，界面显示「有 N 组已不在了（可能已被别处清理，或父会话已恢复）」，**不计入「N 组未清理」**；服务端契约不变。
+4. **部分删除回执**：`cleanOrphanGroup` 删到一半失败时，把 `{removed, freedBytes, failedSessionId}` 挂进 `error.details`；界面追加「已先删掉 X 个会话目录（Y）」。已删目录不回滚，但不再只说「整组没清完」。
+5. **回滚失败合并**：`withRollbackFailures` 先并入内层 `details.rollbackFailures`、去重，并在消息已带「；回滚未完成：」时不再追加第二个后缀。
+6. **破坏性路径单段校验**：`sessionDirOf` / `trashDirOf` 拒绝 `.`、`..`、`/`、`\`、NUL 与空的非项目根段；`restore` 取项目根用的空 `sessionDirName` 是唯一例外。`purge` 的盘上后代与 `orphan-clean` 的删除都走这道闸，坏 id 响亮失败、不递归删除。
+7. **口径收拢**：`orphan-clean` 的根 id 两边去 `session-` 前缀匹配；清单装配里的 `strandedSubagents` 只数**目录真在盘上**的成员（count 与 bytes 同一条存在性判据）；目录度量抽成 `measureMemberDir`，清单装配与 purge 共用。
+8. **文档/注释**：§7 状态⑤的释放公式、README 的「头部合计」与三条永久删除路径、旧稿 §10/§11/§12 的注记、`202f6ce` 改成本实现提交 `f7b9886`、文案键计数 6→10、计划稿的「已实现」头注与旧代码片段，均已同步。
+
+**三道门（2026-10-19 本工作树，逐个 capture）**：`npm test` **0**（**485 通过 / 30 个文件**；第十七批 466/29 ⇒ +19/1）、`npx tsc --noEmit` **0**、`npm run build` **0**（`lib/types/**/*.d.ts` 47 个）。**产物**：Node 半 **114.50 kB / gzip 41.46 kB**（第十七批 111.71 / 40.48 ⇒ +2.79 / +0.98），浏览器半 **864.80 kB / gzip 199.32 kB**（860.19 / 198.23 ⇒ +4.61 / +1.09）；盘上精确字节 `lib/index.js` **114 501 B**、`lib/client.js` **864 799 B**；发布包 **56 文件 / 304 033 B**（第十七批 56 / 301 040；文件数不变）。纯度照旧：`grep -oE 'require\("[^"]+"\)' lib/client.js | sort -u` 逐字三条 `react` / `react-dom` / `react/jsx-runtime`。`ui.css` / `markdown.css` 未动 ⇒ §8 门 4 的逐属性比对不必重跑。
+
+**真机门（仍未跑，交用户）**：第十七批那七条不变；本批又动了浏览器半（扫描门控、`busy`、`已不在了`/部分计数提示、确认框禁用）⇒ 按 AGENTS.md 先在**有可见浏览器的隔离 home** 上过激活冒烟（页面加载、槽位注册、控制台零 error/warn），再装进任何 live profile。**构建绿与 485 绿只证形状与逻辑，不证激活。**
+
+### 2026-10-19 架构深化批（第十八批）
+
+**触发**：一次全仓架构复核（`/improve-codebase-architecture`）把八处 shallow 重复与泄漏摆成候选，用户裁定「**全部做，按依赖顺序，用架构解决而不是打补丁**」。顺序：`4 → 7 → 1 → 2 → 5 → 6 → 3 → 8`；术语与裁决先落 `CONTEXT.md` 与 `docs/adr/0001..0004`（提交 `ce8c842`），代码逐条落、每条一个可独立回滚的 commit。
+
+**本批（候选 4 · 线上形状的家）——ADR-0003**：
+
+1. **`shared/wire.ts` 拥有线上形状**：新增 `TrashRowWire`（`TrashEntryWire` + 六个现算现给的读数；其中必填的 `releaseBytes` 由候选 8 加）、`TrashDetailWire` / `TrashDetailMessageWire`；`PurgeStatsWire` 保持原处。它们此前在 4 个文件里各写一遍，其中 `TrashEntryWire` / `PurgeStatsWire` 在 `wire.ts` 之外**零引用**（声明了没人实现的形状 ⇒「唯一一份家」是假信心）。
+2. **显式投影**：`api/dispatch.ts` 的 `toWire(row, readouts)` 用**显式字面量**而不是 `...row`——线上形状多一个必填字段就编译不过。原 `assembleTrashRows` 的 `...row` 已被它整条替换。
+3. **浏览器半只留别名**：`remote.ts` 的 `TrashEntryLike` / `PurgeResultLike` / `TrashDetailLike` / `TrashDetailMessageLike` 改成 wire 的**类型别名**，`trash/detail.ts` 的 `TrashDetail` / `TrashDetailMessage` 同理；两半不再各写一份字段。
+4. **失败码与那个目录名过线**：`VERB_CODES` / `ROUTE_CODES` / `SESSION_DELETE_CODES`（`Record<后缀, 完整码>`，少一个就编译不过）/ `SESSION_DELETE_ERROR_DOMAIN` / `TRASH_DIR_NAME` / `TRASH_DIR_LABEL` 迁到 `wire.ts`；`verbs/errors.ts` 与 `remote/map-error.ts` 改为取用，浏览器半**不再出现** `'sessiondelete/not-found'` 与 `'session-trash/'` 两个字面量。
+5. **运行期必填清单搬回** `trash/entry.ts`（`REQUIRED_ENTRY_FIELDS`），紧贴 `TrashEntry`；`index.ts` 的域校验器改为取用它。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**494 通过 / 31 个文件**；第十七批收尾时 485/30 ⇒ +9/1，全是新增的 `tests/wire-shape.test.ts`）、`pnpm build` **0**、`npm pack --dry-run` 实测 **56 文件**（`files` 清单不用改：新产物只有 `lib/types/**/*.d.ts` 的通配覆盖面）。**产物**：Node 半 **116.27 kB / gzip 42.09 kB**（上批 114.50 / 41.46 ⇒ +1.77 / +0.63：码表与线上形状的形状声明进了 Node 半），浏览器半 **865.47 kB / gzip 199.57 kB**（864.80 / 199.32 ⇒ +0.67 / +0.25）。`ui.css` / `markdown.css` 未动 ⇒ §8 门 4 的逐属性比对不必重跑。浏览器半改动**只跑测试、不上真机**（本批的裁决：八条候选全程不动 live profile；激活冒烟留给后续单独一趟）。
+
+**候选 7 · `HostPort` 的第二个 adapter（`tests/support/fake-deps.ts`）**：ports & adapters 那条判据说"一个 adapter 只是假设的 seam，两个才是真的"。此前五个测试文件各拿对象字面量凑一个 12–19 个方法的宿主端口，凑不齐就 `as never` / `as unknown as DeleteDeps` 强转过去——那正是"这个 interface 没被验证"的定义。
+
+- **一个假件**：`createFakeHost`（19 个方法全实现，逐方法 `vi.fn`，成员可写以便"翻一格"）、`createFakeFs`（8 个方法）、`createFakeDeps`（装配出 `DeleteDeps`）。世界由参数描述（`workspaceOf` / `projectDirOf` / `live` / `archived` / `members` / `counts` / `corpus` / `seed` / `fs.*`），不再逐行描述调用。
+- **调用日志按需**：只有调用方点名的 `logMethods` 往 `log` 里写，默认格式是方法名，要参数就自己给 `format`——于是 purge / orphan / restore 各自的历史日志格式（`evictLive(a)`、`detach(id,ws)`、`announceRestoredBatch(3)`）逐字保住，**断言一条没改**。
+- **强转清零**：`api.test.ts`、`delete-session.test.ts`、`restore-session.test.ts`、`purge-trash.test.ts`、`orphan-subagents.test.ts` 里 `as never` / `as unknown as` **0 处**（`Select-String` 逐文件量过）；`restore-session` 那条 `(d as never as …)` 改成 `d.host.attach` 这类真断言，`world()` 也换成 `createFakeDeps`。
+- **量尺**：假件的 19 个方法一段没少，但整份文件比 `host-port.ts` 短——说明那 19 个方法里没有藏第二个概念；哪天它长得比端口还复杂，该拆的是端口（身份与可见性 / 通告 / 语料读取），不是这份假件（记在文件头注里）。
+
+**候选 1 · 组语义只有一个家（`src/trash/groups.ts`）——ADR-0001**：这是八条里唯一一条**已经算出两个不同答案**的重复。
+
+- **判据**：接得住孩子的只有**组根**（自己不记 `parentEntryId` 的那一行）。此前它在四处各写一遍：`api/dispatch.ts` 的行装配、`verbs/apply.ts` 的 `groupOf` / `takenByEarlierInBatch`、`verbs/restore-session.ts`、`verbs/purge-trash.ts`。前三处一致，第四处（`id === x || parentEntryId === x`）不认根行 ⇒ **嵌套组上彻底删除会连带删掉不属于这一组的孙代**（不可恢复）。
+- **interface 三个纯函数**：`visibleGroups(rows)`（露面的一行 = 组根，连它接住的孩子）、`groupOf(rows, id)`、`takenByEarlierInBatch(original, current, id)`。都吃快照参数（`/apply` 会在同一批里多次重问、快照会被就地收缩，收缩时机仍归调用方）。
+- **行为变化**：`purgeTrash` 改用同一条判据；`tests/purge-trash.test.ts` 加一条嵌套组回归（只清它自己，`top` / `leaf` 都留着）。
+- **可观察语义不变**：父 + 孩子、父行不在（孩子自己占一行）、孩子的 id 单独操作，三种形状逐条与旧实现一致（`tests/groups.test.ts` 12 条钉住）。
+- **测试落点前移**：从"整块渲染 / 整条路由"提前到纯函数，一条用例覆盖一种形状。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**507 通过 / 32 个文件**；候选 7 之后 494/31 ⇒ +13/1：`tests/groups.test.ts` 12 条 + 嵌套组回归 1 条）、`pnpm build` **0**、`npm pack --dry-run` **57 文件**（多出的一个是 `lib/types/trash/groups.d.ts`，靠 `lib/types/**/*.d.ts` 通配自己进来的，`files` 不用改）。**产物**：Node 半 **117 177 B**（候选 7 之后 116 270 B）、浏览器半 **865 471 B**（未变，这条候选不碰浏览器半）。
+
+**候选 2 · 「这一批」与「一次移动」各有自己的 module——ADR-0002**（本条把原定"回滚语义留到以后"的做法**撤销**了：重复的根因不是"回滚值得自己的候选"，而是三个动词各自手写了一条正反动作对）。
+
+- **`src/verbs/batch.ts`（原 `apply.ts` 改名）拥有「这一批」**：去重保序、清册快照、「已被同批前一条带走」的账本、逐条信封、**一批一次通告**。三个动词的 interface 回到「一个 id 进、一条结果出」。
+- **三个批量专用参数消失**：`deleteSession` 的 `onMembers` 回调（带走名单改由**结果**推出：清册里 `parentEntryId` 指向父那一行）、`restoreSession` 的 `suppressAnnounce`（通告搬到批量层）、`purgeTrash` 的"动词就地 `splice` 调用方数组"契约（收缩改由批量层自己那份副本做）。
+- **一个参数保留，理由写进 ADR**：`restoreSession` / `purgeTrash` 仍收**只读** `snapshot`，那是"整批只读一次清册"的性能契约（`tests/batch.test.ts` 钉着 `manifest.list` 只读一次），不是批量语义——动词只读、绝不改。
+- **`src/verbs/member-journal.ts` 拥有「一次移动」**：步骤自带反向动作，journal 独占相反顺序退化、失败收集、`details.rollbackFailures` 合并、以及 `undoOnFailure`（"取消归档可能半做完，自己失败时也要先藏回去"这一档）。三个动词各自只声明"这次要做哪几步、每步怎么退"；`rollbackReason(` 从 22 处降到 1 处（`attempt` 内），`withRollbackFailures(` 从 8 处降到 2 处（journal 内 + 组级回滚 `rollbackJournals`）。
+- **两处顺序承重写进步骤**：删除的"目录 + 清册行"合成一步（行必须在目录搬进回收站之后写；反向是"先搬回目录、再摘行"，搬不回就留着行）；
+- **可观察语义不变**：上屏原文（`<label>：<String(error)>`）、回滚顺序、被否掉的替代全部照旧；`tests/api.test.ts` 66 条一条没改就跑绿。
+- **覆盖搬家没缩减**：恢复的通告断言从动词搬到 `tests/batch.test.ts`（新增 9 条：去重保序、失败不传染、`count` 一批一次、幂等三态、一批一次通告带整组 id、幽灵 id 照样响亮、清册只读一次）。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**516 通过 / 33 个文件**；候选 1 之后 507/32 ⇒ +9/1）、`pnpm build` **0**、`npm pack --dry-run` **58 文件**（`lib/types/verbs/batch.d.ts` 与 `lib/types/verbs/member-journal.d.ts` 靠通配进来，`files` 不用改）。**产物**：Node 半 **118.70 kB / gzip 44.24 kB**（候选 1 之后 117.18 / 43.4x），浏览器半未变。
+
+**候选 5 · 路由表是一条记录——ADR-0004**：`dispatch()` 与 `purityOf()` 此前各自列了一遍六个段名（方法 / 纯度 / 要不要预读 body），靠注释维持一致；`APPLY_ACTIONS` 还是 `ApplyAction` 联合的运行期手抄副本。
+
+- **`src/api/route-table.ts`**：每个段名一行 `{ method, body, purity, run }`；`purity` 允许是函数（`/apply` 的 `count` 是纯读，其余四个动作进链）。六键与 `ROUTES` 同一个 `Record` 类型 ⇒ 加段名漏声明编译不过。
+- **`APPLY_ACTIONS` 由类型派生**：`satisfies Record<ApplyAction, true>` 再 `Object.keys`，少一个动作编译不过。
+- **`src/api/dispatch.ts` 只剩传输**（栅栏 → 查表 → 信封），行装配搬到新的 `src/api/trash-rows.ts`（`toWire` 与 `assembleTrashRows`）；`tests/wire-shape.test.ts` 的 import 跟着改。
+- **一处顺序变好**：方法不对时先回 405、**不再先读 body**（旧形状是先过 `purityOf` 读体再判方法）。信封与状态码逐条不变，`tests/api.test.ts` 66 条一条没改。
+- **新增 `tests/route-table.test.ts`（8 条）**：段名逐键对齐、三 GET 三 POST、body 分类、`list`/`empty` 必进链、探测/扫描/详情不进链、`apply` 只有 count 纯、认不得的动作也进链、`APPLY_ACTIONS` 与类型联合逐项一致。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**524 通过 / 34 个文件**；候选 2 之后 516/33 ⇒ +8/1）、`pnpm build` **0**、`npm pack --dry-run` **60 文件**（新增 `lib/types/api/route-table.d.ts` 与 `lib/types/api/trash-rows.d.ts`，靠通配进来，`files` 不用改）。**产物**：Node 半 **119.55 kB / gzip 44.60 kB**，浏览器半未变。
+
+**候选 6 · 浏览器半的取数面收回到六段——一个动作只有一条路**：注入面（`SessionDeleteRemote`）此前 9 个方法、线上只有 6 个段，多出来的三个（`delete` / `restore` / `countSubagents`）只是 `apply` 的 N=1 写法；后果是回收站面板的 deps 里同时躺着 `applyOutcomes` 与 `restore`，同一个动作在一个 module 里有两条路。
+
+- **interface 从 9 收到 5**：`list` / `scanOrphans` / `detail` / `applyOutcomes` / `emptyTrash`（`ping` 只给探测用，留在 raw 层）。三个便捷方法收成**自由函数** `applyOne(deps, action, id)`——按发出去的那个 id 取结果、一条没回算通道错、`ok:false` 就地 throw。
+- **组件侧只改调用点**：`delete-confirm`（删除 + 计数）、`undo-toast`（撤销）、`trash-panel`（行内恢复）改调 `applyOne`；`UndoToastDeps` / `DeleteConfirmDeps` 都收成 `OneShotDeps = Pick<…,'applyOutcomes'>`。
+- **类型层的闸**：`tests/client/remote.test.ts` 新增两条——`'restore' extends keyof SessionDeleteRemote ? true : false = false`（把便捷方法加回 interface 就编译不过），以及"`applyOne` 取的是发出去的那个 id 的结果"。
+- **用例侧**：新增 `tests/client/support/fake-apply.ts`（把单条假实现包成 `applyOutcomes(action, ids)` 的形状），菜单项 / 撤销提示 / 面板的假 deps 改用它；断言从 `deps.restore('a')` 变成 `deps.applyOutcomes('restore', ['a'])`（覆盖面不减，判据更贴线）。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**526 通过 / 34 个文件**；候选 5 之后 524/34 ⇒ +2）、`pnpm build` **0**（纯度门过：`lib/client.js` 里仍只有 `react` / `react-dom` / `react/jsx-runtime` 三条 require）、`npm pack --dry-run` **60 文件**。**产物**：浏览器半 **865 266 B**（候选 5 之后 865 471 ⇒ −205 B：三个便捷方法换成一处 `applyOne`），Node 半未变。
+
+**候选 8 · 浏览器半不再知道只有 Node 半该知道的事**（失败码与目录名的那两条已在候选 4 落地；本条收剩下的一条）。
+
+- **`releaseBytes` 过线**：「这一次彻底删除会释放多少」= 本行 + 跟着进来的孩子 + 盘上还留着的后代。它是**存储侧的事实**（彻底删除删的正是这三样），此前浏览器半自己算一遍，还带一条写在注释里的已知偏差（同一后代可能被两行都算到 ⇒ 头部合计重复计数）。现在 `TrashRowWire.releaseBytes` 是**必填**、由 `api/trash-rows.ts` 的 `toWire` 算一次；面板的头部合计与单条确认框都念它，客户端那一套算式与那条偏差一起删掉。
+- **`data-row-key` 那条路不动**：AGENTS.md 实测宿主没有"别切会话"的官方面，读宿主 DOM 是唯一路径；`rowInfo` 旁路表与 DOM 查询本来就同住 `batch-select.tsx`（一个 module 的私有状态），这一轮只把这条边界记在这里，不再往别处摊。
+- **测试**：`tests/wire-shape.test.ts` 多一条"`releaseBytes` 是唯一算式"；`tests/api.test.ts` 的行形状断言跟着认下这一格（`releaseBytes` 必填、没孩子时等于 `sizeBytes`）；面板夹具补上这一格。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**527 通过 / 34 个文件**；候选 6 之后 526 ⇒ +1）、`pnpm build` **0**、`npm pack --dry-run` **60 文件**。**产物**：Node 半 **119 649 B**、浏览器半 **864 125 B**（候选 6 之后 865 266 ⇒ −1 141 B：删掉客户端那套求和与偏差注释）。
+
+**候选 3 · 给回收站面板开内部 seam（第一刀）**：`trash-panel.tsx` 是本季最大热区（2710 行改动），一个函数体（975 行）同时装着清册读数 + 孤儿扫描编排、多选与折叠、两栏布局与拖栏、三张确认框。这一刀只做**没有行为变化**的那一半：
+
+- **`src/client/trash-view.ts`**：界面词汇（`CARD` / `CARD_SELECTED` / `BULK_DANGER` / `projectLabel`）从面板里拆出来——面板与确认框都要用这几样，拆之前它们只能靠"同一个文件里的常量"共享。
+- **`src/client/trash-confirm.tsx`**：`TrashConfirm` 与 `OrphanConfirm` 搬成同级 module（面板只负责"什么时候开哪一张"），`PendingAction` 类型跟着走。两张框**不共壳**的理由原样保留在文件头注；两张共用的两条规矩（计数一律照念、`busy` 期间取消与关闭都拦住）也写在那里。顺带把两处重复的"卡片列表"样式收成 `CARD_LIST`。
+- **`trash-panel.tsx` 1452 → 1189 行**，`Modal` 与 `unescapeProjectKey` 的 import 随之消失。
+- **85 条面板用例一条没改就跑绿**：这一刀确实只是搬家（不是"顺带改了点别的"）。
+
+**还没做的那一半（下一刀）**：两个状态 hook——`useTrashQuery`（清册读数 + `reload` / `scanOrphans` / `refresh` + 两个到达序号闸 + "先清单后扫描"那条顺序规则）与 `useTrashSelection`（多选 / 折叠 / 勾选的三态与 `checkedIds` / `ordered`）。**为什么没在这一刀里做完**：孤儿清理那一条动作（`confirmOrphans` 与 `orphanFailure` / `orphanNotice` 的落地）与扫描共用同一份状态，只把"读"抽走而把"写"留在面板，会让那条 `busy` / 重读顺序的判据分成两半——它该整块搬，那是**带行为**的一刀，值得自己一次提交与一次复核。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**527 通过 / 34 个文件**）、`pnpm build` **0**、`npm pack --dry-run` **62 文件**（新增 `lib/types/client/trash-view.d.ts` 与 `lib/types/client/trash-confirm.d.ts`，靠通配进来）。**产物**：浏览器半 **863 602 B**（候选 8 之后 864 125 ⇒ −523 B），Node 半未变。
+
+**候选 3 · 第二刀：两个状态 hook**（上一刀末尾写着"还没做的那一半"，这里收掉）。
+
+- **`src/client/use-trash-query.ts`**：清册读数与孤儿扫描的编排整块搬出来，连同三条承重规矩——**到达序号**（在飞的 `list` / `orphans` 不保证按发起顺序落地，后到的旧响应不许盖掉新状态）、**先清单后扫描**（`/orphans` 判"父没了"吃的是对账后的清册）、**读不到就说读不到**（`io` 不许折成"零条残留"）。**清理那一条写动作也住这里**：它与扫描共用同一份报告与同一组提示，只抽"读"会让 `busy` 与重读顺序那条判据劈成两半。`busy` 不归它管——那是面板的一枚全局闸，经 `around` 传进来。
+- **`src/client/use-trash-selection.ts`**：多选态、折叠组、勾选集合与三样只读（`checkedIds` / `ordered` / 三态判定）。三条规矩跟着搬：勾选顺序 = 清单从上往下、折叠的条目不算进键盘的 `ordered` 但照算在勾选里、清单换了就剔掉已经不在的勾选。
+- **`src/client/trash-view.ts` 再收两样**：`ProjectGroup` 与 `groupByProject`（面板与选择一侧都要用）。
+- **`trash-panel.tsx` 1241 → 964 行**（当刀；本批评审修正后 1011 行）：剩下的都是它自己的事——布局（可拖分栏 / 断点）、详情选中与键盘、`pending` 那三种确认、逐行失败原文。`restore` / `confirmApply` 改走 `around(...)`，`confirmPurge` 的清空支改走 `query.emptyTrash()`，`confirmOrphans` 退成一句 `query.cleanOrphans()`。
+- **15 条新用例直接测 hook**（`use-trash-query.test.tsx` 8 条、`use-trash-selection.test.tsx` 7 条）：到达序号、先清单后扫描、扫描读不到、清理的 `not-found` / `io` 分流、勾选顺序、三态、折叠与 `ordered`、清单换了剔勾选——这些判据此前只能"整块渲染面板 + 造远程假件"才够得着。85 条面板用例一条没改就跑绿。
+
+**门（2026-10-19 本工作树）**：`pnpm typecheck` **0**、`pnpm test` **0**（**542 通过 / 36 个文件**；第一刀之后 527/34 ⇒ +15/2）、`pnpm build` **0**、`npm pack --dry-run` **64 文件**（新增四个 `.d.ts`：`trash-view` / `trash-confirm` / `use-trash-query` / `use-trash-selection`）。**产物**：浏览器半 **863 778 B**（第一刀之后 863 602 ⇒ +176 B），Node 半未变。
+
+### 2026-10-19 第十八批评审修正
+
+**触发**：对第十八批的未提交工作树做标准 / 规格 / 文档三路复核，确认候选边界成立；本批只修可观察缺陷与文档漂移，不改候选结构。
+
+**修正**：
+
+1. **删除组回滚补"已恢复"通告**：`verbs/delete-session.ts` 的成员 journal 记 `movedBack` / `workspaceBack` / `visibleBack`，三件写都真正退回后补发 `api-session/added`——整组回滚的成员此前已经收过 `api-session/removed`，旧实现由 `undoOneIn` 发，journal 重构时丢了；目录没退回则不发（同恢复侧 `movedBack` 的判据）。用例钉住成功回滚的父与孩子、仍钉住失败回滚不发。
+2. **`session-trash` 只有一个家**：`trash/entry.ts`、`trash/reconcile.ts`、`verbs/delete-session.ts` 改取 `wire.ts` 的 `TRASH_DIR_NAME`，不再各写一份字面量。
+3. **重复收拢**：`verbs/member-journal.ts` 新增 `rollbackJournals`（相反顺序 + `details.rollbackFailures` 合并），删除 / 恢复两个组级 catch 共用；`verbs/orphan-subagents.ts` 新增 `planMemberRemovals`，`purge` 的盘上后代与 `orphan-clean` 的整组共用；`batch.ts` 的删除"带走名单"改读 `groups.ts` 的 `groupOf`。
+4. **`releaseBytes` 与 `purge` 同口径**：清单装配跳过已经在同一组清册里的孩子，避免与 `strandedBytes` 重复计入；`empty` 直接用 reconcile 交回的快照，不再多读一次清册；批量 restore / purge 把**当前视图**递给动词（前一条已处理的行不再出现在后一条的组里），"先点孩子再点父"不会拿旧组重放或误报。
+5. **文档/注释**：清掉 `releaseBytesOf` / `verbs/apply.ts` 的现行引用，`TrashRowWire` 的读数改为六个（含必填 `releaseBytes`），路由表记录形状补 `body`，`purge` 的部分回执只归 `orphan-clean`。
+
+**门（2026-10-19 本工作树，逐个 capture）**：`pnpm typecheck` **0**、`pnpm test` **0**（**544 通过 / 36 个文件**）、`pnpm build` **0**（`lib/types/**/*.d.ts` **55** 个）。**产物**：Node 半 **121 982 B / gzip 45.52 kB**（上一批 119 649 B），浏览器半 **863 804 B / gzip 199.03 kB**（上一批 863 778 B）；发布包 **64 文件 / 313 456 B**（`npm pack --dry-run` 实测）。`ui.css` / `markdown.css` 未动 ⇒ §8 门 4 的逐属性比对不必重跑。
+
+**真机门（仍未跑，交用户）**：本批动了浏览器半（`busy` 时行内「彻底删除…」也禁用）⇒ 按 AGENTS 先在**有可见浏览器的隔离 home** 上过页面加载 / 槽位注册 / 控制台零 error/warn，再装进任何 live profile；构建绿与 544 绿只证形状与逻辑，不证激活。

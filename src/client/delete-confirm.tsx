@@ -24,7 +24,7 @@
  */
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
-import { callRemote, type DeleteConfirmDeps } from './remote.js'
+import { applyOne, callRemote, type DeleteConfirmDeps } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
@@ -129,7 +129,7 @@ function ConfirmDialog({
   useEffect(() => {
     let alive = true
     void (async () => {
-      const outcome = await callRemote(() => deps.countSubagents(current.sessionId))
+      const outcome = await callRemote(() => applyOne(deps, 'count', current.sessionId).then((item) => item.value))
       // 读不到就**不说那半句**（0 也是"没说"）：它是加法，一次取数失败不许锁死删除按钮，
       // 也不许把"读不出"写成"它没有子会话"那种假话。
       if (alive) setSubagents(outcome.ok ? outcome.value : 0)
@@ -140,7 +140,7 @@ function ConfirmDialog({
   const confirm = async (): Promise<void> => {
     setBusy(true)
     setFailure(null)
-    const outcome = await callRemote(() => deps.delete(current.sessionId))
+    const outcome = await callRemote(() => applyOne(deps, 'delete', current.sessionId).then((item) => item.value))
     setBusy(false)
     if (!outcome.ok) {
       setFailure(outcome.failure.message)

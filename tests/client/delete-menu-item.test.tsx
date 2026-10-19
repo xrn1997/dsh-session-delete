@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { DeleteConfirmHost, clearDeleteRequest } from '../../src/client/delete-confirm.js'
 import { DeleteMenuItem, type DeleteMenuItemProps } from '../../src/client/delete-menu-item.js'
 import type { DeleteConfirmDeps } from '../../src/client/remote.js'
+import { fakeApply } from './support/fake-apply.js'
 import { UndoToast, clearUndoNotice } from '../../src/client/undo-toast.js'
 
 beforeEach(() => {
@@ -37,7 +38,7 @@ function renderScene(
 describe('菜单项', () => {
   it('未确认前不调用删除；确认后才调一次', async () => {
     const del = vi.fn(async () => ({}))
-    renderScene({ sessionId: 'session-abc', title: '/code-review' }, { delete: del } as never)
+    renderScene({ sessionId: 'session-abc', title: '/code-review' }, { applyOutcomes: fakeApply({ delete: del }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     expect(del).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
@@ -47,7 +48,7 @@ describe('菜单项', () => {
 
   it('会话在跑时菜单项置灰且点不动', () => {
     const del = vi.fn(async () => ({}))
-    renderScene({ sessionId: 's', title: 't', live: true }, { delete: del } as never)
+    renderScene({ sessionId: 's', title: 't', live: true }, { applyOutcomes: fakeApply({ delete: del }) } as never)
     expect(screen.getByRole('menuitem', { name: '删除' })).toBeDisabled()
   })
 
@@ -55,7 +56,7 @@ describe('菜单项', () => {
     const del = vi.fn(async () => {
       throw Object.assign(new Error('会话正在运行'), { code: 'sessiondelete/live' })
     })
-    renderScene({ sessionId: 's', title: 't' }, { delete: del } as never)
+    renderScene({ sessionId: 's', title: 't' }, { applyOutcomes: fakeApply({ delete: del }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
     expect(await screen.findByText(/会话正在运行/)).toBeInTheDocument()
@@ -65,7 +66,7 @@ describe('菜单项', () => {
 describe('确认框', () => {
   it('点「取消」一个字节都不动，确认框收起', () => {
     const del = vi.fn(async () => ({}))
-    renderScene({ sessionId: 's', title: 't' }, { delete: del } as never)
+    renderScene({ sessionId: 's', title: 't' }, { applyOutcomes: fakeApply({ delete: del }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(del).not.toHaveBeenCalled()
@@ -73,7 +74,7 @@ describe('确认框', () => {
   })
 
   it('确认框正文明说可恢复，主按钮不是红色的动作名', () => {
-    renderScene({ sessionId: 's', title: 't' }, { delete: vi.fn() } as never)
+    renderScene({ sessionId: 's', title: 't' }, { applyOutcomes: fakeApply({ delete: vi.fn() }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     expect(screen.getByRole('dialog', { name: '删除这个会话？' })).toBeInTheDocument()
     expect(screen.getByText(/可以随时恢复/)).toBeInTheDocument()
@@ -84,7 +85,7 @@ describe('确认框', () => {
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error('磁盘炸了'), { code: 'sessiondelete/io' }))
       .mockResolvedValueOnce({ id: 'e1' })
-    renderScene({ sessionId: 's', title: 't' }, { delete: del } as never)
+    renderScene({ sessionId: 's', title: 't' }, { applyOutcomes: fakeApply({ delete: del }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
     expect(await screen.findByText(/磁盘炸了/)).toBeInTheDocument()
@@ -97,7 +98,7 @@ describe('确认框', () => {
   // 所以那句话必须摆在**点之前**（issue #3）：数只能删除前现问一次（那一刻它还没进回收站，清单里没有它）。
   it('目标在盘上有后代 ⇒ 确认框点之前就说清有多少个一起移入回收站', async () => {
     const countSubagents = vi.fn(async () => 3)
-    renderScene({ sessionId: 'session-parent', title: '父会话' }, { delete: vi.fn(async () => ({ id: 'e1' })), countSubagents } as never)
+    renderScene({ sessionId: 'session-parent', title: '父会话' }, { applyOutcomes: fakeApply({ delete: async () => ({ id: 'e1' }), count: countSubagents }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     expect(countSubagents).toHaveBeenCalledWith('session-parent')
     expect(await screen.findByText(/含 3 个子会话/)).toBeInTheDocument()
@@ -105,7 +106,7 @@ describe('确认框', () => {
 
   it('没有后代 ⇒ 那半句一个字都不出现（不许写「含 0 个」冒充说了话）', async () => {
     const countSubagents = vi.fn(async () => 0)
-    renderScene({ sessionId: 's', title: 't' }, { delete: vi.fn(async () => ({ id: 'e1' })), countSubagents } as never)
+    renderScene({ sessionId: 's', title: 't' }, { applyOutcomes: fakeApply({ delete: async () => ({ id: 'e1' }), count: countSubagents }) } as never)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     const dialog = await screen.findByRole('dialog')
     await waitFor(() => expect(countSubagents).toHaveBeenCalled())
@@ -118,7 +119,7 @@ describe('确认框', () => {
     const del = vi.fn(async () => ({ id: 'e1' }))
     renderScene(
       { sessionId: 's', title: 't' },
-      { delete: del, countSubagents: vi.fn(async () => { throw new Error('通道断了') }) } as never,
+      { applyOutcomes: fakeApply({ delete: del, count: async () => { throw new Error('通道断了') } }) } as never,
     )
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     await screen.findByRole('dialog')
@@ -147,8 +148,8 @@ describe('撤销提示', () => {
     const restore = vi.fn(async () => ({}))
     renderScene(
       { sessionId: 'session-abc', title: '/code-review' },
-      { delete: vi.fn(async () => ({ id: 'entry-1' })) } as never,
-      <UndoToast deps={{ restore } as never} />,
+      { applyOutcomes: fakeApply({ delete: async () => ({ id: 'entry-1' }) }) } as never,
+      <UndoToast deps={{ applyOutcomes: fakeApply({ restore }) } as never} />,
     )
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
@@ -163,8 +164,8 @@ describe('撤销提示', () => {
     })
     renderScene(
       { sessionId: 'session-abc', title: '/code-review' },
-      { delete: vi.fn(async () => ({ id: 'entry-1' })) } as never,
-      <UndoToast deps={{ restore } as never} />,
+      { applyOutcomes: fakeApply({ delete: async () => ({ id: 'entry-1' }) }) } as never,
+      <UndoToast deps={{ applyOutcomes: fakeApply({ restore }) } as never} />,
     )
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))

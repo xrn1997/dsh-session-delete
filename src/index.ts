@@ -11,6 +11,7 @@ import {
   type StorageDomainLike,
 } from './trash/manifest.js'
 import type { TrashEntry } from './trash/entry.js'
+import { REQUIRED_ENTRY_FIELDS } from './trash/entry.js'
 import type { DeleteDeps } from './verbs/delete-session.js'
 import { SESSION_DELETE_API_PREFIX } from './shared/wire.js'
 
@@ -23,12 +24,13 @@ export const name = '@xrn1997/dsh-session-delete'
  * 三项都是在隔离数据根上实测注入成功、且本插件真正用到的宿主服务。三个**故意不写**的：
  * - `remote`：那是**浏览器半**的服务（asar `dsh-api-gateway/lib/client.js`：`super(ctx, "remote")`），
  *   Node 半挂的是 `ctx.typertGateway`。把它写进 Node 半的 inject 会让插件永远 pending（同 `slots` 那次的形状）。
- * - `sessions` / `sessionProjectionCache`：前者本实现不用（活跃判据走 waterfall，见设计稿 §5）；后者是**可选**服务，
- *   官方消费方也按可选读（`ctx.get('sessionProjectionCache')?.…`），inject 一个可能没挂的服务 = 整个插件 pending。
+ * - `sessions` / `sessionProjectionCache`：两者都按 `ctx.get(...)` **可选读**——`sessions` 只给 `evictLive`
+ *   用（活跃判据走 waterfall，见设计稿 §5；服务缺席回 `unknown`），`sessionProjectionCache` 是标题的尽力读面。
+ *   inject 一个可能没挂的服务 = 整个插件 pending。
  *   它取不到时 `titleOf` 返回空串，正是契约允许的降级。
  *
  * `webServer` 是**浏览器半取数通道的承载者**（那条薄线）：插件用它注册 `/dsh-session-delete-api`
- * 前缀路由，浏览器半同源 fetch 那五个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
+ * 前缀路由，浏览器半同源 fetch 那六个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
  * `super(ctx, "webServer")`），服务名与 `register({kind:'prefix', path, handler})` 的形状按
  * `dsh-host-webserver/lib/index.js` 与 `README.md` 原文读实，不是猜的。
  */
@@ -86,17 +88,12 @@ function defineDomain<T extends DomainSpecLike>(spec: T): T {
   return spec
 }
 
-/** `TrashEntry` 里**每条记录都必须有**的那几格（`src/trash/entry.ts` 接口的非可选字段）。
- *  **可选字段不在这里**：`parentEntryId`（级联那批加的）缺席是合法的——老行没有它，缺了就是"没有父"；
- *  校验器只管这几格的类型，其余键**原样带走**（`parse` 交回的就是 `raw` 本身）⇒ 新字段照旧存得住。 */
-const TRASH_ENTRY_FIELDS = {
-  id: 'string', sessionId: 'string', projectDir: 'string', workspaceId: 'string',
-  wasArchived: 'boolean', deletedAt: 'number', title: 'string', sizeBytes: 'number',
-} as const
-
 /**
  * 记录校验器：**域要的那种 schema** 只有一个方法会被域调用——`open()` 里对每条已存记录
  * `tableSpec.valueSchema.parse(raw)`（官方实现：`parseRecord(spec.name, table, key, () => tableSpec.valueSchema.parse(raw))`）。
+ *
+ * 必填那几格的清单**不在这里**，它住在 `src/trash/entry.ts` 紧贴 `TrashEntry` 接口（ADR-0003）：既是
+ * 域校验器的输入，也是"文件里真有的事实"那一份声明。抄一份在这里，运行期校验就看不见接口的变更了。
  *
  * 官方配方里记录 schema 是 **zod**（`dsh-storage-domain/src/spec.ts` 的 JSDoc 原文："Record schemas are zod"）。
  * 本仓硬约束不许新增依赖，而 `zod` 既不在依赖里、也解析不到（`ERR_MODULE_NOT_FOUND`）⇒ 这里按域要求的**那一个方法**
@@ -108,7 +105,7 @@ const trashEntrySchema = {
     if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw new TypeError('session trash entry record must be a plain object')
     }
-    for (const [field, kind] of Object.entries(TRASH_ENTRY_FIELDS)) {
+    for (const [field, kind] of Object.entries(REQUIRED_ENTRY_FIELDS)) {
       if (typeof (raw as Record<string, unknown>)[field] !== kind) {
         throw new TypeError(`session trash entry record field "${field}" must be a ${kind}`)
       }

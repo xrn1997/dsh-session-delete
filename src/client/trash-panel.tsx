@@ -33,7 +33,9 @@
  * - **空态**：`回收站是空的`，且底部**不出现**「清空回收站…」（没有东西可清）。
  * - **失败写在出事的那一块上**：清单读不到 ⇒ 单独一块摆原文 + 重试（不是空态，"读不到"与"空的"是
  *   两件事）；某条会话的正文读不到 ⇒ 只在详情那块说，清单照常可选；恢复/彻底删除失败 ⇒ 原因留在
- *   详情（按条目 id 存，切走再回来还在）。两块都标 `role="status"`——但**插入即播报并不保证**
+ *   **清单那一行**（按条目 id 存，切走再回来还在）；无主子会话的检查/清理读不到 ⇒ 面板顶端那块摆原文 + 重试
+ *   （那是"没能回答有多少残留"，与"没有残留"是两件事，不许折成空报告）；清理发现"这一组已经不在了" ⇒
+ *   单独一条中性提示，不计入失败。这些失败块都标 `role="status"`——但**插入即播报并不保证**
  *   （`aria-live` 看的是"已在场的区域发生了变更"），要稳得常驻一个只给读屏看的播报台，本机没有 AT
  *   可验，所以留在这里当已知边界，不写成已经做到。
  * - **危险层级**：整页只有一块实心红（页脚「清空回收站…」，确认框里那块是它的后续）；行与详情里的
@@ -59,9 +61,9 @@ import {
   useRef,
   useState,
 } from 'react'
-import { unescapeProjectKey } from '../shared/wire.js'
+import { TRASH_DIR_LABEL } from '../shared/wire.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
-import { callRemote, type ApplyOutcome, type SessionDeleteRemote, type TrashDetailLike, type TrashEntryLike } from './remote.js'
+import { applyOne, callRemote, type ApplyOutcome, type SessionDeleteRemote, type TrashDetailLike, type TrashEntryLike } from './remote.js'
 import { useTrashRevision } from './trash-store.js'
 import { TrashDetail, type TrashDetailState } from './trash-detail.js'
 import { useColumnResize } from './use-column-resize.js'
@@ -76,12 +78,20 @@ import {
   IconTrashOutlineRegular,
   IconWarningOutlineRegular,
 } from './ui/icons.js'
-import { Modal } from './ui/Modal.js'
 import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
+import { OrphanConfirm, TrashConfirm, type PendingAction } from './trash-confirm.js'
+import { useTrashQuery } from './use-trash-query.js'
+import { useTrashSelection } from './use-trash-selection.js'
+import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
 
-/** 批量重构（2026-10-17）后这份依赖面：两个读 + 一个批量口 + 清空 + 单条恢复的便捷包装。 */
-export type TrashPanelDeps = Pick<SessionDeleteRemote, 'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'restore'>
+/** 面板的依赖面：三个读（`list` / `detail` / `scanOrphans`）+ **一段 `apply`** + 清空。
+ *  **没有第二条路**（架构复核候选 6）：「恢复一条」也走 `apply`（N=1），面板不再同时吃
+ *  `applyOutcomes` 与一个便捷的 `restore`。 `scanOrphans` 是回收站之外那批无主子会话的纯读报告。 */
+export type TrashPanelDeps = Pick<
+  SessionDeleteRemote,
+  'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'scanOrphans'
+>
 
 export interface TrashPanelProps {
   deps: TrashPanelDeps
@@ -89,25 +99,9 @@ export interface TrashPanelProps {
   t?: Translate
 }
 
-/** 待确认的动作：一条记录、整个回收站、或多选挑出来的一批（`ids` 已按清单顺序排好）。
- *  `purge` 与 `restore` 的确认框共用这一个壳——两者都是"点之前先说清这一批有哪些、要去哪"。 */
-type PendingAction =
-  | { kind: 'entry'; entry: TrashEntryLike }
-  | { kind: 'all' }
-  | { kind: 'entries'; ids: readonly string[] }
-  | { kind: 'restore'; ids: readonly string[] }
-
-/**
- * 整页那唯一一块实心红：`variant="primary"` + 在元素上覆盖 primary 那对填充 token。
- * 宿主插件管理页的 danger 按钮就是这个写法（asar @21658274），所以 hover 仍走 `.primary:hover` 类。
- */
-const BULK_DANGER = {
-  '--dsw-alias-button-primary-fill': 'var(--dsw-alias-state-error-primary)',
-  '--dsw-alias-button-primary-hover': 'var(--dsw-alias-state-error-primary)',
-} as CSSProperties
-
-/** 回收站相对宿主**数据根**的位置。**不写 `~/.dsh/`**：数据根可以是 `$DSH_HOME` 指的别处。 */
-const TRASH_DIR = 'session-trash/'
+/** 回收站相对宿主**数据根**的位置。**不写 `~/.dsh/`**：数据根可以是 `$DSH_HOME` 指的别处。
+ *  字面量住 `shared/wire.ts`（`TRASH_DIR_LABEL`）——Node 半拼的就是同一个名字（ADR-0003）。 */
+const TRASH_DIR = TRASH_DIR_LABEL
 
 /**
  * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（设计稿 2026-10-15 §2.1，2026-10-15 真机后定值）。
@@ -224,25 +218,6 @@ const TOOLBAR: CSSProperties = {
   paddingBottom: 8,
 }
 
-/** 卡片配方：宿主设置面的 fill/stroke 底层 token + 官方 `lg` 圆角。 */
-const CARD: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 14,
-  minWidth: 0,
-  padding: '9px 14px',
-  background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--dsw-alias-border-l4)',
-  borderRadius: 'var(--dsw-radius-lg)',
-}
-
-/** 选中行：底色与描边都换成宿主"选中"那一档（见头注那两枚 token 与实测取值）。 */
-const CARD_SELECTED: CSSProperties = {
-  ...CARD,
-  background: 'var(--dsw-alias-button-ghost-active-fill)',
-  border: '0.5px solid var(--dsw-alias-button-ghost-active-border)',
-}
-
 /**
  * 行那句「删除于 3小时前」：整句模板住在字典里（两种语言各自钉语序），单位词与绝对串走 `copy.ts`
  * 那一处——详情那格要的是同一份，别抄成两本账。`now` 桶不套模板："删除于 刚刚前"不是话。
@@ -254,75 +229,37 @@ function deletedAgo(at: number, now: number, t: Translate): string {
     : t('trash.row.deletedAgo', { n, unit: unitWord(unit, t) })
 }
 
-/**
- * 宿主的 `projectKey` 把 cwd 里的 `/`、`\`、`:` 全折成**一个** `-` ⇒ 分隔符那部分有损、拆不回真实路径；
- * 但**非分隔符那部分可逆**（`~XXXX` 十六进制码元，字面 `~` 编成 `~007E`）。摘掉 `--…--` 裹边、还原这些
- * 转义，剩下的原样摆出来，完整串交给组头 `title`。字母表只有一份：还原走 `shared/wire.ts`。
- */
-function projectLabel(projectDir: string, t: Translate): string {
-  const bare = unescapeProjectKey(projectDir.replace(/^--/, '').replace(/--$/, ''))
-  return bare === '' || bare === '_no-cwd' ? t('trash.project.unknown') : bare
-}
-
-interface ProjectGroup {
-  projectDir: string
-  label: string
-  /** 组内最新一条的删除时间——组间排序的键。 */
-  latest: number
-  entries: readonly TrashEntryLike[]
-}
-
-/** 按项目分组：组内按删除时间倒序，组间按各组最新一条倒序（刚删掉的那个项目排在最上面）。 */
-function groupByProject(entries: readonly TrashEntryLike[], t: Translate): ProjectGroup[] {
-  const byProject = new Map<string, TrashEntryLike[]>()
-  for (const entry of [...entries].sort((a, b) => b.deletedAt - a.deletedAt)) {
-    const list = byProject.get(entry.projectDir)
-    if (list === undefined) byProject.set(entry.projectDir, [entry])
-    else list.push(entry)
-  }
-  return [...byProject]
-    // 进这条循环前整体按 `deletedAt` 倒序排过 ⇒ 每组的第一条就是该组最新的一条，组必非空。
-    .map(([projectDir, list]) => ({
-      projectDir,
-      label: projectLabel(projectDir, t),
-      latest: list[0]!.deletedAt,
-      entries: list,
-    }))
-    .sort((a, b) => b.latest - a.latest)
-}
-
-/**
- * 「这一次彻底删除会释放多少」：那一格连着**折进来的孩子**一起算——彻底删除按组走（10-15 稿 §11），
- * 点下去页脚合计掉的就是整组。页脚合计与单条确认卡片共用这一个算式，同一屏不许有两套口径（issue #2）。
- */
-function releaseBytesOf(entry: TrashEntryLike): number {
-  return entry.sizeBytes + (entry.subagentBytes ?? 0)
-}
+/* 「这一次彻底删除会释放多少」**不在这里算**（架构复核候选 8）：它是存储侧的事实（本行 + 跟着进来的孩子
+ * + 盘上还留着的后代，彻底删除删的正是这三样），由 Node 半算一次、`releaseBytes` 过线。浏览器半照单念——
+ * 头部合计与单条确认卡片都读它，于是同一屏不可能有两套口径，也就不再有"两行都算到同一个后代"那种偏差。 */
 
 export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
-  const [entries, setEntries] = useState<readonly TrashEntryLike[] | null>(null)
-  const [listFailure, setListFailure] = useState<string | null>(null)
+  /** 一枚全局闸：写动作在飞时按住这一排按钮（清单行那颗按 `busy` 置灰），并挡住"旧清单那一拍再点一次"。 */
+  const [busy, setBusy] = useState(false)
+  const around = useCallback(async <T,>(task: () => Promise<T>): Promise<T> => {
+    setBusy(true)
+    try {
+      return await task()
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`（候选 3 的第二道 seam）。
+  const query = useTrashQuery({ deps, t, around })
+  const {
+    entries, listFailure,
+    orphanReport, orphanFailure, orphanNotice, orphanConfirm, setOrphanConfirm,
+    refresh,
+  } = query
+
   /** 恢复/彻底删除 的失败原文，按条目 id 存：切走再回来还在，不是一次性的。 */
   const [actionFailure, setActionFailure] = useState<Readonly<Record<string, string>>>({})
   const [pending, setPending] = useState<PendingAction | null>(null)
-  const [busy, setBusy] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [loadingId, setLoadingId] = useState<string | null>(null)
   const [detailFailure, setDetailFailure] = useState<{ entryId: string; message: string } | null>(null)
   const [drilled, setDrilled] = useState(false)
-  /**
-   * 折叠起来的组（键 = `projectDir`，也就是组头那一份身份）。**只活在面板这次打开**：
-   * 这是一层视图偏好，为它开一条 Node 半的读写通道不值，而宿主 webview 的 origin 是不透明的
-   * `null`（AGENTS.md 实测），`localStorage` 那条路在真机上大概率直接抛。
-   */
-  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set())
-  /**
-   * 多选态与勾选集合（2026-10-15 开的口子先只配了**批量彻底删除**；2026-10-17 补上**批量恢复**）。
-   * 勾选住 `Set<entryId>`，渲染顺序不跟点击顺序——页脚两颗按**清单从上往下**执行，
-   * "我先后点了哪几条"不该影响一批动作的执行顺序读感。
-   */
-  const [selectMode, setSelectMode] = useState(false)
-  const [checked, setChecked] = useState<ReadonlySet<string>>(new Set())
   /** 面板存活期内每条只读一次（本机量级：最大一条 135ms，125 条全读 2.0s ⇒ 不预读、也不重复读）。 */
   const detailCache = useRef(new Map<string, TrashDetailLike>())
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -347,35 +284,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍就把清单重读一遍。
   const revision = useTrashRevision()
 
-  /**
-   * 重读带**到达序号**：在飞的 `list` 不保证按发起顺序落地（对账耗时随盘上条目数摆动），
-   * 后到的旧响应不许盖掉刚发生的动作带来的新状态。只应用序号最大的一份。
-   */
-  const reloadSeq = useRef(0)
-  const reload = useCallback(async (): Promise<void> => {
-    const seq = ++reloadSeq.current
-    const outcome = await callRemote(() => deps.list())
-    if (seq !== reloadSeq.current) return
-    if (!outcome.ok) {
-      setListFailure(outcome.failure.message)
-      setEntries(null)
-      return
-    }
-    setListFailure(null)
-    setEntries(outcome.value)
-    // 别处（侧栏菜单、撤销提示）动过清单 ⇒ 勾着的那条可能已经不存在了。不剔掉的话，页脚那颗
-    // 会带着一个"看不见的勾选"去删一条已经不在的东西。
-    setChecked((current) => {
-      if (current.size === 0) return current
-      const alive = new Set(outcome.value.map((entry) => entry.id))
-      const next = new Set([...current].filter((id) => alive.has(id)))
-      return next.size === current.size ? current : next
-    })
-  }, [deps])
-
   useEffect(() => {
-    void reload()
-  }, [reload, revision])
+    void refresh()
+  }, [refresh, revision])
 
   /**
    * 选一条：命中缓存就直接摆，没命中才去读那条会话自己的日志。
@@ -401,68 +312,13 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   )
 
   const groups = useMemo(() => groupByProject(entries ?? [], t), [entries, t])
-  const isCollapsed = (projectDir: string): boolean => collapsedGroups.has(projectDir)
-  const toggleGroup = (projectDir: string): void => {
-    setCollapsedGroups((current) => {
-      const next = new Set(current)
-      if (next.delete(projectDir)) return next
-      next.add(projectDir)
-      return next
-    })
-  }
-  const allCollapsed = groups.length > 0 && groups.every((group) => isCollapsed(group.projectDir))
-  const toggleAllGroups = (): void => {
-    setCollapsedGroups(allCollapsed ? new Set() : new Set(groups.map((group) => group.projectDir)))
-  }
-  /** 按**清单从上往下**排好的勾选 id（页脚两颗与批量执行都读这一份）。
-   *  顺序必须走 `groups`（组间按各组最新一条、组内按删除时间），不能用扁平 `entries`：后者是
-   *  全局 `deletedAt` 序，跨项目多选时与屏幕上的分组顺序不同。折叠组里的条目照样算在内。 */
-  const checkedIds = groups
-    .flatMap((group) => group.entries)
-    .filter((entry) => checked.has(entry.id))
-    .map((entry) => entry.id)
-  const toggleCheck = (entryId: string): void => {
-    setChecked((current) => {
-      const next = new Set(current)
-      if (next.delete(entryId)) return next
-      next.add(entryId)
-      return next
-    })
-  }
-  const exitSelect = (): void => {
-    setSelectMode(false)
-    setChecked(new Set())
-  }
-  /**
-   * 组头那颗勾选框：说的是"**这个项目的全部会话**"，所以判据走 `group.entries`——**折叠起来的条目
-   * 也算在内**（折叠只是不收它们进 DOM 而已，不是它们不存在）。三态里"半选"用原生
-   * `indeterminate`，勾满再点 = 整组取消，而不是取消到半选。
-   */
-  const groupFullyChecked = (group: { entries: readonly TrashEntryLike[] }): boolean =>
-    group.entries.length > 0 && group.entries.every((entry) => checked.has(entry.id))
-  const groupPartiallyChecked = (group: { entries: readonly TrashEntryLike[] }): boolean =>
-    !groupFullyChecked(group) && group.entries.some((entry) => checked.has(entry.id))
-  const toggleGroupCheck = (group: { entries: readonly TrashEntryLike[] }): void => {
-    const ids = group.entries.map((entry) => entry.id)
-    const clear = groupFullyChecked(group)
-    setChecked((current) => {
-      const next = new Set(current)
-      for (const id of ids) {
-        if (clear) next.delete(id)
-        else next.add(id)
-      }
-      return next
-    })
-  }
-  /**
-   * 键盘 ↑↓ 走的是这个顺序（分组只是视觉上的分段，别让它把跨组的相邻关系改乱），
-   * 且**只走展开的组**：折叠起来的行不在 DOM 里，让方向键停在一条看不见的行上，
-   * 就是"按了有反应、屏幕上什么都没发生"。
-   */
-  const ordered = useMemo(
-    () => groups.filter((group) => !isCollapsed(group.projectDir)).flatMap((group) => group.entries as readonly TrashEntryLike[]),
-    [groups, collapsedGroups],
-  )
+  // 选择面（多选 / 折叠 / 勾选与它们派生的三样只读）整块住在 `use-trash-selection.ts`（候选 3 的第三道 seam）。
+  const selection = useTrashSelection({ entries, groups })
+  const {
+    selectMode, checked, checkedIds, ordered, allCollapsed,
+    isCollapsed, enterSelect, exitSelect, toggleGroup, toggleAllGroups,
+    toggleCheck, toggleGroupCheck, groupFullyChecked, groupPartiallyChecked,
+  } = selection
 
   // 清单换了（别处删了一条、恢复成功、彻底删除成功）：选中那条已经不在了就让位，并把它的缓存丢掉。
   useEffect(() => {
@@ -541,16 +397,16 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       delete next[entry.id]
       return next
     })
-    // 与彻底删除同一条规矩：写操作在飞时按住这一排的动作按钮（清单行那颗就按 `busy` 置灰）
-    setBusy(true)
-    const outcome = await callRemote(() => deps.restore(entry.id))
-    setBusy(false)
-    if (!outcome.ok) {
-      failRow(entry.id, outcome.failure.message)
-      return
-    }
-    detailCache.current.delete(entry.id)
-    await reload()
+    await around(async () => {
+      const outcome = await callRemote(() => applyOne(deps, 'restore', entry.id).then((item) => item.value))
+      if (!outcome.ok) {
+        failRow(entry.id, outcome.failure.message)
+        return
+      }
+      detailCache.current.delete(entry.id)
+      // `around` 把 `busy` 保持到 refresh 结束：否则这一拍旧清单还在屏上，同一个动作能被再点一次。
+      await refresh()
+    })
   }
 
   /** 一段批量 → 组件状态：成功的丢详情缓存，失败的原文落回它自己那一行。整批一次上屏、一次重读。 */
@@ -574,18 +430,17 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
    * 逐条成败住在 `ApplyOutcome` 里 ⇒ 组件不再自己拼循环、也不再"每条一次全量重读"。
    */
   const confirmApply = async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
-    setBusy(true)
-    const outcome = await callRemote(() => deps.applyOutcomes(action, ids))
-    setBusy(false)
-    setPending(null)
-    if (!outcome.ok) {
-      // 整次调用没办成（路由自检 / 通道断）：这批一条都没落地 ⇒ 原文摆到每一行，别让清单看起来"删成功了"
-      for (const id of ids) failRow(id, outcome.failure.message)
-      await reload()
-      return
-    }
-    settleOutcomes(outcome.value)
-    await reload()
+    await around(async () => {
+      const outcome = await callRemote(() => deps.applyOutcomes(action, ids))
+      setPending(null)
+      if (!outcome.ok) {
+        // 整次调用没办成（路由自检 / 通道断）：这批一条都没落地 ⇒ 原文摆到每一行，别让清单看起来"删成功了"
+        for (const id of ids) failRow(id, outcome.failure.message)
+      } else {
+        settleOutcomes(outcome.value)
+      }
+      await refresh()
+    })
   }
 
   const confirmPurge = async (): Promise<void> => {
@@ -594,19 +449,18 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     if (target.kind === 'entries') return confirmApply('purge', target.ids)
     if (target.kind === 'restore') return confirmApply('restore', target.ids)
     if (target.kind === 'entry') return confirmApply('purge', [target.entry.id])
-    // 清空：聚合回执、不按条回，所以它不走 `apply`（形状不同，不是偷懒）
-    setBusy(true)
-    const outcome = await callRemote(() => deps.emptyTrash())
-    setBusy(false)
+    // 清空：聚合回执、不按条回，所以它不走 `apply`（形状不同，不是偷懒）。
+    // 失败落在"清单读不到"那一格、成功就把详情缓存清空——两件都由 `useTrashQuery.emptyTrash` 之外的这里定。
+    const emptied = await query.emptyTrash()
     setPending(null)
-    if (!outcome.ok) {
-      setListFailure(outcome.failure.message)
-      return
-    }
-    detailCache.current.clear()
-    await reload()
+    if (emptied) detailCache.current.clear()
   }
 
+  /** 清理那批无主子会话：整块住在 `useTrashQuery.cleanOrphans`（扫描的报告、两种失败的分流、先刷新后落提示
+   *  都在那一条里）；这里只负责把确认框收起来。 */
+  const confirmOrphans = async (): Promise<void> => {
+    await query.cleanOrphans()
+  }
   /**
    * 详细信息那块的选中集合：确认框要把"这一批有哪些、要去哪"摆出来，靠的全量条目是从勾选 id 反查
    * （顺序已经是"清单从上往下"）——清单里找不到的 id 是别的窗口刚动过，滤掉不等于丢动作
@@ -617,8 +471,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     ? pending.ids.map((id) => byIdEntries.get(id)).filter((entry): entry is TrashEntryLike => entry !== undefined)
     : []
 
-  // 头部合计要把组里孩子的字节算上：孩子不单独列行，只加父那一格就会少报（少报的就是那 74.6 MB 那一类）
-  const totalBytes = (entries ?? []).reduce((sum, entry) => sum + releaseBytesOf(entry), 0)
+  // 头部合计要把组里孩子与盘上后代的字节都算上：它们不单独列行，只加父那一格就会少报（少报的就是那 74.6 MB 那一类）
+  const totalBytes = (entries ?? []).reduce((sum, entry) => sum + entry.releaseBytes, 0)
   // 分桶在**每次渲染**时按当前时刻算，但本面板**没有计时器**：一条"59分钟"可以挂到下次重读、
   // 交互或失效通告为止（桶最细到分钟，而回收站不是盯着看的界面）。这是取舍，不是"不会停在旧读数"。
   const now = Date.now()
@@ -683,7 +537,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
               {listFailure}
             </div>
           </div>
-          <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void reload()}>
+          <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void refresh()}>
             {t('common.retry')}
           </Button>
         </div>
@@ -883,6 +737,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         size="sm"
                         style={QUIET_DANGER}
                         icon={<IconTrashOutlineRegular size={13} />}
+                        disabled={busy}
                         onClick={() => setPending({ kind: 'entry', entry })}
                       >
                         {t('trash.row.purge')}
@@ -938,7 +793,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         aria-pressed={selectMode}
         onClick={() => {
           if (selectMode) exitSelect()
-          else setSelectMode(true)
+          else enterSelect()
         }}
       >
         {selectMode ? t('trash.toolbar.selectExit') : t('trash.toolbar.select')}
@@ -971,6 +826,76 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           ) : null}
         </div>
       </div>
+
+      {/* 回收站之外的无主子会话（2026-10-19）。**只在报告非空时出现**——"检查过了，什么都没有"不是
+          要给用户看的东西，而那份报告读不到时走下面那块失败（不是这里，更不是"零条"）。
+          层级沿用页面上那一条：警告色的图标 + 一句话 + 一颗描边动作，实心红仍然只归「清空回收站…」
+          （确认框里那块是它的后续，与彻底删除同一个规矩）。 */}
+      {orphanReport !== null && orphanReport.totalSessions > 0 ? (
+        <div
+          data-dsh-session-delete="orphan-banner"
+          style={{ ...CARD, alignItems: 'flex-start', gap: 12, marginBottom: 10 }}
+        >
+          <span style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--dsw-alias-state-warn-primary)' }} aria-hidden="true">
+            <IconWarningOutlineRegular size={16} />
+          </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 auto', minWidth: 0 }}>
+            <div style={{ fontSize: 13, lineHeight: '19px' }}>
+              {t('trash.orphans.banner', { count: orphanReport.totalSessions })}
+            </div>
+            <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+              {t('trash.orphans.meta', {
+                size: fileSizeText(orphanReport.totalBytes),
+                parents: orphanReport.missingParents,
+              })}
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            style={{ flex: 'none' }}
+            disabled={busy}
+            onClick={() => {
+              if (busy) return
+              query.openOrphanPreview()
+            }}
+          >
+            {t('trash.orphans.open')}
+          </Button>
+        </div>
+      ) : null}
+
+      {/* 检查/清理自己失败：这是"我们没能回答有多少残留"，与"没有残留"是两件事 ⇒ 原位上屏 + 重试，
+          绝不静默折成一条都不出现（Task 4 交下来的那条判据）。 */}
+      {orphanFailure !== null ? (
+        <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}>
+          <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-state-error-primary)' }} aria-hidden="true">
+            <IconWarningOutlineRegular size={15} />
+          </span>
+          <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-state-error-primary)' }}>
+            {orphanFailure}
+          </span>
+          <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={busy} onClick={() => void refresh()}>
+            {t('common.retry')}
+          </Button>
+        </div>
+      ) : null}
+
+      {/* 「已经不在」不是失败：别处清掉或父已回到清册。中性一条，下次扫描/刷新时自然消失。 */}
+      {orphanNotice !== null ? (
+        <div
+          data-dsh-session-delete="orphan-notice"
+          role="status"
+          style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}
+        >
+          <span style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--dsw-alias-label-tertiary)' }} aria-hidden="true">
+            <IconWarningOutlineRegular size={15} />
+          </span>
+          <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-secondary)' }}>
+            {orphanNotice}
+          </span>
+        </div>
+      ) : null}
 
       {toolbar}
 
@@ -1050,6 +975,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                 size="sm"
                 style={BULK_DANGER}
                 icon={<IconTrashOutlineRegular size={13} />}
+                disabled={busy}
                 onClick={() => setPending({ kind: 'all' })}
               >
                 {t('trash.emptyAll')}
@@ -1070,139 +996,16 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           onConfirmRestore={(ids) => void confirmApply('restore', ids)}
         />
       )}
-    </div>
-  )
-}
 
-/**
- * 两种批量动作共用这一个确认框壳：`purge`（不可恢复）与 `restore`（加法，但一批条目多、去向是
- * 各自的旧项目目录，点之前也要过一道）。标题、正文、确认键的措辞各处一套；批量恢复把选中条目
- * 列成卡片（标题 + 项目名——恢复的去向是**每条各自的**旧项目目录，逐条列出来是这句话的正文）；
- * 批量彻底删除只给条数——那批的"去哪"没有可说的，而"不可恢复"那句警告才是要读的。
- */
-function TrashConfirm({
-  pending,
-  restoreEntries,
-  busy,
-  t,
-  onCancel,
-  onConfirmPurge,
-  onConfirmRestore,
-}: {
-  pending: PendingAction
-  restoreEntries: readonly TrashEntryLike[]
-  busy: boolean
-  t: Translate
-  onCancel: () => void
-  onConfirmPurge: () => void
-  onConfirmRestore: (ids: readonly string[]) => void
-}) {
-  if (pending.kind === 'restore') {
-    return (
-      <Modal
-        open
-        onClose={onCancel}
-        title={t('trash.confirm.restore', { count: pending.ids.length })}
-        closeLabel={t('common.close')}
-        footer={
-          <>
-            <Button variant="outline" onClick={onCancel}>
-              {t('common.cancel')}
-            </Button>
-            <Button variant="primary" disabled={busy} onClick={() => onConfirmRestore(pending.ids)}>
-              {t('trash.confirm.restoreNow')}
-            </Button>
-          </>
-        }
-      >
-        {restoreEntries.length === 0 ? null : (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-              maxHeight: 280,
-              overflow: 'auto',
-              marginBlockEnd: 10,
-            }}
-          >
-            {restoreEntries.map((entry) => (
-              <div key={entry.id} style={{ ...CARD, flexDirection: 'column', alignItems: 'stretch', gap: 2, padding: '9px 12px' }}>
-                <div style={{ ...ELLIPSIS, fontSize: 13.5, lineHeight: '19px' }}>
-                  {entry.title === '' ? t('common.untitled') : entry.title}
-                </div>
-                <div style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
-                  {projectLabel(entry.projectDir, t)}
-                </div>
-                {/* 逐条说清去向：这一条的原工作区不存在，回去后会在「未分组」（与行上同一句）。 */}
-                {entry.workspaceMissing === true ? (
-                  <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
-                    {t('trash.row.workspaceGone')}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-        <p>{t('trash.confirm.restore.body')}</p>
-      </Modal>
-    )
-  }
-
-  const title =
-    pending.kind === 'all' ? t('trash.confirm.all')
-    : pending.kind === 'entries' ? t('trash.confirm.bulk', { count: pending.ids.length })
-    : t('trash.confirm.one')
-  const strong = t('trash.confirm.body.strong')
-  const body = splitOn(t('trash.confirm.body', { strong }), strong)
-  return (
-    <Modal
-      open
-      onClose={onCancel}
-      title={title}
-      closeLabel={t('common.close')}
-      footer={
-        <>
-          <Button variant="outline" onClick={onCancel}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirmPurge}>
-            {t('trash.confirm.purge')}
-          </Button>
-        </>
-      }
-    >
-      {pending.kind === 'entry' ? (
-        <div
-          style={{
-            ...CARD,
-            flexDirection: 'column',
-            alignItems: 'stretch',
-            gap: 2,
-            padding: '10px 12px',
-            marginBlockEnd: 10,
-          }}
-        >
-          <div style={{ ...ELLIPSIS, fontSize: 13.5, lineHeight: '19px' }}>
-            {pending.entry.title === '' ? t('common.untitled') : pending.entry.title}
-          </div>
-          <div
-            style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}
-          >
-            {t('trash.confirm.one.meta', {
-              project: projectLabel(pending.entry.projectDir, t),
-              at: absoluteText(pending.entry.deletedAt),
-              // 「我即将失去多少」= 整组，与页脚同一个算式（确认框点下去摘掉的是父加孩子那一组目录）
-              size: fileSizeText(releaseBytesOf(pending.entry)),
-            })}
-          </div>
-        </div>
+      {orphanConfirm && orphanReport !== null ? (
+        <OrphanConfirm
+          report={orphanReport}
+          busy={busy}
+          t={t}
+          onCancel={() => setOrphanConfirm(false)}
+          onConfirm={() => void confirmOrphans()}
+        />
       ) : null}
-      <p>
-        {body[0]}
-        <b style={{ color: 'var(--dsw-alias-state-error-primary)' }}>{body[1]}</b>
-        {body[2]}
-      </p>
-    </Modal>
+    </div>
   )
 }
