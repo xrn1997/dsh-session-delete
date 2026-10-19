@@ -1,4 +1,5 @@
 import { parseEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
+import { isWorkspaceMissingError, type HostPort } from '../ports/host-port.js'
 import type { DeleteDeps } from './delete-session.js'
 import { verbError } from './errors.js'
 
@@ -14,7 +15,7 @@ type Undo = () => Promise<void>
  *    （回收站目录不在 = `trash-empty`；原项目目录不在 = `project-missing`，且绝不静默建目录）。
  *    预检在写之前，是为了不让"父已经回到 `sessions/`、孩子因为项目目录没了而回不去"这种半组留在外面。
  *    **工作区账本不在这条硬前提里**：宿主的「删除工作区」只删注册、保留日志，记下的工作区没了就按
- *    「未分组」收（见 `restoreOne`），照旧回盘——恢复是加法，不该因为一个可选的账目而失败。
+ *    「未分组」收（判据在 {@link attachableWorkspaceId}），照旧回盘——恢复是加法，不该因为一个可选的账目而失败。
  * ② **逐个恢复**，顺序与删除相反：文件先回来 → 挂账本 → 还原可见性 → 摘清册行 → 通告回来。
  * ③ 中途失败把这个成员自己退回回收站（就地回滚），并把**已经恢复完的**兄弟按相反顺序一起退回，失败照抛。
  */
@@ -70,19 +71,37 @@ function restoreTargetDir(deps: DeleteDeps, entry: TrashEntry): string {
   return sessionDirOf(entry.projectDir, parseEntryId(entry.id).sessionDirName, deps.home)
 }
 
+/**
+ * 这一次恢复**到底挂不挂账本**：交出能挂的那个 `workspaceId`，挂不了就 `undefined`。
+ *
+ * 两种缺席是同一件事：空串 = 删除时它就没有账目（「未分组」的会话）；非空但账本里已经没它 =
+ * 宿主的「删除工作区」只删注册、保留目录与每一份日志，那些会话之后本来就在「未分组」下。
+ * 恢复不该为了挂一个不存在的账本把整条退回回收站。
+ *
+ * 判据**只有这一处**：`restoreOne` 拿它决定挂不挂，`GET /list` 拿它决定行上那句「原工作区已不存在，
+ * 恢复后归入未分组」说不说。两边各问一遍就会有一天一个说、一个不挂。
+ */
+export async function attachableWorkspaceId(host: Pick<HostPort, 'workspaceExists'>, entry: TrashEntry): Promise<string | undefined> {
+  if (entry.workspaceId === '') return undefined
+  return await host.workspaceExists(entry.workspaceId) ? entry.workspaceId : undefined
+}
+
+/** 这一条记着的工作区**是不是已经没了**（区别于"删除时它就没有账目"的空串）——清单行据此决定
+ *  要不要在点之前说那句「原工作区已不存在，恢复后归入未分组」。由 {@link attachableWorkspaceId}
+ *  派生，不另起一份判据：那样会有一天一个说、一个不挂。 */
+export async function isWorkspaceMissing(host: Pick<HostPort, 'workspaceExists'>, entry: TrashEntry): Promise<boolean> {
+  return entry.workspaceId !== '' && (await attachableWorkspaceId(host, entry)) === undefined
+}
+
 /** 恢复一个成员，交回它的反向动作。 */
 async function restoreOne(deps: DeleteDeps, entry: TrashEntry): Promise<Undo> {
   const trashDir = trashDirOf(entry.id, deps.home)
   const sessionDir = restoreTargetDir(deps, entry)
 
-  // 账本归属是**可选的反向动作**，两种缺席是同一件事：空串 = 删除时它就没有账目（「未分组」的会话）；
-  // 非空但工作区已被删掉 = 宿主的「删除工作区」只删注册、保留目录与每一份日志（`HostPort.workspaceExists`），
-  // 那些会话之后本来就在「未分组」下。恢复不该为了挂一个不存在的账本而把整条退回回收站。
-  const workspaceId = entry.workspaceId !== '' && (await deps.host.workspaceExists(entry.workspaceId))
-    ? entry.workspaceId
-    : undefined
-  /** 真的挂上了账本才为 true——回滚里"摘账本"那一步只对挂过的成员存在。 */
-  let attached = false
+  // 账本归属是**可选的反向动作**，判据见 {@link attachableWorkspaceId}。
+  const workspaceId = await attachableWorkspaceId(deps.host, entry)
+  /** 真挂上了账本才记下那个 id——回滚里"摘账本"那一步只对挂过的成员存在。 */
+  let attachedTo: string | undefined
 
   // ① 文件先回来
   await deps.fs.rename(trashDir, sessionDir).catch((error) => {
@@ -92,11 +111,12 @@ async function restoreOne(deps: DeleteDeps, entry: TrashEntry): Promise<Undo> {
   if (workspaceId !== undefined) {
     try {
       await deps.host.attach(entry.sessionId, workspaceId)
-      attached = true
+      attachedTo = workspaceId
     } catch (error) {
-      // 查过之后、挂之前账本被删掉（宿主的「删除工作区」与这次恢复撞上）：与上面同一件事，按未分组收；
-      // 工作区仍在就是真故障，照旧把目录退回去并抛原文。
-      if (await deps.host.workspaceExists(workspaceId)) {
+      // 查过之后、挂之前账本被删掉（宿主的「删除工作区」与这次恢复撞上）：端口那时抛的就是它自己
+      // 那句"账本里没这个工作区"——与上面同一件事，按未分组收。**别的**失败（哪怕工作区刚好也没了）
+      // 是真故障，照旧把目录退回去并抛原文，不给它静默改归属的机会。
+      if (!isWorkspaceMissingError(error) || await deps.host.workspaceExists(workspaceId)) {
         await deps.fs.rename(sessionDir, trashDir).catch(() => {})
         throw verbError('io', `挂回账本失败：${String(error)}`, error)
       }
@@ -110,7 +130,7 @@ async function restoreOne(deps: DeleteDeps, entry: TrashEntry): Promise<Undo> {
     } catch (error) {
       // 失败同样要回到"东西还在回收站"：先藏回去（重新归档）、再摘账本、最后把目录放回回收站。
       await deps.host.archive(entry.sessionId, workspaceId ?? undefined).catch(() => {})
-      if (attached && workspaceId !== undefined) await deps.host.detach(entry.sessionId, workspaceId).catch(() => {})
+      if (attachedTo !== undefined) await deps.host.detach(entry.sessionId, attachedTo).catch(() => {})
       await deps.fs.rename(sessionDir, trashDir).catch(() => {})
       throw verbError('io', `取消归档失败：${String(error)}`, error)
     }
@@ -121,7 +141,7 @@ async function restoreOne(deps: DeleteDeps, entry: TrashEntry): Promise<Undo> {
     await deps.manifest.remove(entry.id)
   } catch (error) {
     if (!entry.wasArchived) await deps.host.archive(entry.sessionId, workspaceId ?? undefined).catch(() => {})
-    if (attached && workspaceId !== undefined) await deps.host.detach(entry.sessionId, workspaceId).catch(() => {})
+    if (attachedTo !== undefined) await deps.host.detach(entry.sessionId, attachedTo).catch(() => {})
     await deps.fs.rename(sessionDir, trashDir).catch(() => {})
     throw verbError('io', `摘回收站条目失败：${String(error)}`, error)
   }
@@ -131,7 +151,7 @@ async function restoreOne(deps: DeleteDeps, entry: TrashEntry): Promise<Undo> {
   return async () => {
     await deps.manifest.add(entry).catch(() => {})
     if (!entry.wasArchived) await deps.host.archive(entry.sessionId, workspaceId ?? undefined).catch(() => {})
-    if (attached && workspaceId !== undefined) await deps.host.detach(entry.sessionId, workspaceId).catch(() => {})
+    if (attachedTo !== undefined) await deps.host.detach(entry.sessionId, attachedTo).catch(() => {})
     await deps.fs.rename(sessionDir, trashDir).catch(() => {})
     const eviction = await deps.host.evictLive(entry.sessionId).catch(() => 'unknown' as const)
     if (eviction !== 'unknown') await deps.host.announceRemoved(entry.sessionId).catch(() => {})

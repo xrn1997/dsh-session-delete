@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { restoreSession } from '../src/verbs/restore-session.js'
+import { attachableWorkspaceId, isWorkspaceMissing, restoreSession } from '../src/verbs/restore-session.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 
@@ -89,7 +89,7 @@ describe('恢复动词', () => {
   })
 
   // 「查过之后、挂之前」账本被删（宿主的删除工作区与这次恢复撞上）与上面是同一件事；
-  // 只有工作区仍在、attach 真失败才是 io。
+  // 但只认端口自己抛的那句"账本里没这个工作区"——别的失败哪怕撞上同一刻也不许静默改归属。
   it('attach 时工作区刚好被删掉 ⇒ 按未分组收，不回滚', async () => {
     const { d, calls } = deps()
     const host = (d as never as { host: { attach: ReturnType<typeof vi.fn>; workspaceExists: ReturnType<typeof vi.fn> } }).host
@@ -99,6 +99,32 @@ describe('恢复动词', () => {
     await restoreSession(d)(entry.id)
     expect(calls).toEqual(['rename', 'announceRestoredBatch(1)'])
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir]])
+  })
+
+  // 兜底认的是**那一句**，不是"attach 出错了"：工作区刚好也没了 + 另一个原因的失败，仍是真故障，
+  // 照旧把目录退回回收站并报 io（吞掉它就等于把一次存储故障伪装成"归入未分组"）。
+  it('attach 抛的不是"账本没这个工作区" ⇒ 工作区刚好也没了也回滚报 io', async () => {
+    const { d, calls } = deps()
+    const host = (d as never as { host: { attach: ReturnType<typeof vi.fn>; workspaceExists: ReturnType<typeof vi.fn> } }).host
+    host.workspaceExists = vi.fn(async () => true).mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    host.attach = vi.fn(async () => { throw new Error('storage table write failed') })
+    const rename = (d as never as { fs: { rename: ReturnType<typeof vi.fn> } }).fs.rename
+    await expect(restoreSession(d)(entry.id)).rejects.toThrow(/挂回账本失败/)
+    expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
+    expect(calls).toEqual(['rename', 'rename'])
+  })
+
+  // 行上那句与"到底挂不挂账本"必须是同一条判据（`isWorkspaceMissing` 由 `attachableWorkspaceId` 派生）：
+  // 三种输入三个结论，尤其不许拿"删除时就没有账目"冒充"工作区没了"。
+  it('挂账本的判据与清单那句同源：还在 / 没了 / 从来就没有', async () => {
+    const host = (id: boolean) => ({ workspaceExists: vi.fn(async () => id) }) as never
+    expect(await attachableWorkspaceId(host(true), entry)).toBe('ws-1')
+    expect(await isWorkspaceMissing(host(true), entry)).toBe(false)
+    expect(await attachableWorkspaceId(host(false), entry)).toBeUndefined()
+    expect(await isWorkspaceMissing(host(false), entry)).toBe(true)
+    const ungrouped = { ...entry, workspaceId: '' }
+    expect(await attachableWorkspaceId(host(true), ungrouped)).toBeUndefined()
+    expect(await isWorkspaceMissing(host(true), ungrouped)).toBe(false)
   })
 
   it('未分组 + 取消归档失败：回滚里没有摘账本那一步', async () => {

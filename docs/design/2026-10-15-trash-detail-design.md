@@ -351,7 +351,7 @@ interface TrashDetail {
 
 **清册只多一件事实**：`TrashEntry.parentEntryId?`（`src/trash/entry.ts`）。孩子那一行记父那一行的 `id`。**目录布局一点没动**——每个孩子仍是 `session-trash/<它自己的条目 id>` 这样一格，与存量那 127 条同形，所以 §9 的对账不需要新概念。文件侧没有 `parentEntryId` 的副本，所以清册被清后由目录重建出来的行**不带分组**、各占一行；那是"分组信息随清册一起没了"的如实结果，不假装知道（与 `workspaceId`/`wasArchived`/`title` 同一类降级，§9 第③条）。
 
-**清单的装配**（`src/api/dispatch.ts` 的 `assembleTrashRows`）：只列父行，孩子折进去，并分三个只读数交出去——`subagentCount` / `subagentBytes`（组内一起进来的，来源是清册）与 `strandedSubagents`（**盘上还留着没被带走的**，来源是 §10 那条 `subagentCounts`）。三道防线：
+**清单的装配**（`src/api/dispatch.ts` 的 `assembleTrashRows`）：只列父行，孩子折进去，并另加只读的派生值交出去——这一批加的是 `subagentCount` / `subagentBytes`（组内一起进来的，来源是清册）与 `strandedSubagents`（**盘上还留着没被带走的**，来源是 §10 那条 `subagentCounts`）。**派生值的总数不钉在这里**（后来者见现状稿第十四批；钉一个数就是下一条会漂的陈述）。三道防线：
 - **两个数不许互相冒充**：界面上分别说「含 N 个子会话」和「盘上还剩 M 个子会话」。级联落地前删的那些存量只会亮后者——说成"含"就是假话，用户会以为恢复能把它捞回来。
 - **隐形防护**：折进父行的前提是**父行在**。父行不见了（手工摘的、清册半损的），孩子自己站出来占一行——否则那一条既看不见也清不掉，正是本仓一直在躲的"点不到的行"。
 - **合计要算得上孩子**：`sizeBytes` 仍是那一条会话自己的（详情里对得上），头部合计另加 `subagentBytes`。只加父那一格就会少报。

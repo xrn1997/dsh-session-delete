@@ -43,6 +43,7 @@ import { readTrashDetail } from '../trash/detail.js'
 import { reconcileTrash } from '../trash/reconcile.js'
 import { applyActions } from '../verbs/apply.js'
 import { purgeTrash } from '../verbs/purge-trash.js'
+import { isWorkspaceMissing } from '../verbs/restore-session.js'
 import { routeError } from '../verbs/errors.js'
 import type { DeleteDeps } from '../verbs/delete-session.js'
 
@@ -208,8 +209,8 @@ export interface TrashRow extends TrashEntry {
 /**
  * 把清册的全部行装配成「一行 = 一组」：孩子折进父那一行、不单独列（宿主的客户端本来就藏孩子，
  * 我们若单列就会冒出一堆点不到的行）；父行不在时孩子自己站出来占一行，否则它既看不见也清不掉。
- * 四个只读数只加在这次回信上，**不落清册**——清册该记的是
- * 文件里真有的事实，而"还剩几个孩子""工作区还在不在"是随盘上随时变的一个数。取数失败照抛（响亮失败，不端一份
+ * 这些派生值只加在这次回信上，**不落清册**——清册该记的是
+ * 文件里真有的事实，而"还剩几个孩子""工作区还在不在"是随盘上随时变的读数。取数失败照抛（响亮失败，不端一份
  * 少了这栏的清单当没事发生）。
  */
 async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]): Promise<TrashRow[]> {
@@ -231,16 +232,17 @@ async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]):
 
   const visible = rows.filter(row => !foldedInto.has(row.id))
   // 两个取数面各管各的：`subagentCounts` 是宿主 `sessionQuery` 的批量口（一处调用），
-  // `workspaceExists` 是账本 Map 的逐行只读判别（空串是「未分组」，没有工作区可问）。
-  const [stranded, workspaceMissing] = await Promise.all([
+  // `isWorkspaceMissing` 是账本的逐行只读判别（空串是「未分组」，没有工作区可问）。
+  // 按 `entry.id` 键控，不靠两个 `Promise.all` 的下标对齐。
+  const [stranded, missingByRowId] = await Promise.all([
     deps.host.subagentCounts(visible.map(row => row.sessionId)),
-    Promise.all(visible.map(async row =>
-      row.workspaceId === '' ? false : !(await deps.host.workspaceExists(row.workspaceId)))),
+    Promise.all(visible.map(async (row) => [row.id, await isWorkspaceMissing(deps.host, row)] as const)),
   ])
-  return visible.map((row, index) => {
+  const gone = new Map(missingByRowId)
+  return visible.map((row) => {
     const kids = kidsByParent.get(row.id)
     const left = stranded[row.sessionId]
-    const missing = workspaceMissing[index] === true
+    const missing = gone.get(row.id) === true
     if (kids === undefined && left === undefined && !missing) return row
     return {
       ...row,

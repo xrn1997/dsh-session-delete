@@ -330,6 +330,16 @@ async function controllerItems(host: HostCtxLike): Promise<readonly unknown[]> {
   }
 }
 
+/** 账本里没有那个工作区时 {@link HostPort.attach} / {@link HostPort.detach} 抛的原话开头。
+ *  **原话与判据同住这里**：抛它的是这个端口，认它的也是端口给的那句，调用方不许另抄一份字符串。 */
+const WORKSPACE_MISSING_MESSAGE = 'workspace not found'
+
+/** 这次失败是不是"账本里没那个工作区"（而不是另有故障）。恢复侧靠它把两种失败分开：
+ *  前者按「未分组」收，后者照旧回滚报 `io`——不给真故障静默改归属的机会。 */
+export function isWorkspaceMissingError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith(WORKSPACE_MISSING_MESSAGE)
+}
+
 /**
  * 宿主服务层的**真实绑定**：各方法把动词层的问题翻成宿主官方服务的调用。
  *
@@ -523,14 +533,14 @@ export function createHostPort(ctx: unknown): HostPort {
     /** 摘账本：实体方法 `detachSession`（顶层没有）；未知工作区**响亮失败**，不静默当成功。 */
     async detach(sessionId, workspaceId) {
       const workspace = registry.get(workspaceId)
-      if (workspace === undefined) throw new Error(`workspace not found (detach): ${workspaceId}`)
+      if (workspace === undefined) throw new Error(`${WORKSPACE_MISSING_MESSAGE} (detach): ${workspaceId}`)
       await workspace.detachSession(sessionId)
     },
 
     /** 挂账本：实体方法 `attachSession`（顶层没有）。 */
     async attach(sessionId, workspaceId) {
       const workspace = registry.get(workspaceId)
-      if (workspace === undefined) throw new Error(`workspace not found (attach): ${workspaceId}`)
+      if (workspace === undefined) throw new Error(`${WORKSPACE_MISSING_MESSAGE} (attach): ${workspaceId}`)
       await workspace.attachSession(sessionId)
     },
 
