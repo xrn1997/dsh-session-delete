@@ -1,9 +1,9 @@
 # 知识卡导出索引文件
 schema_version: 1
 locale: zh-CN
-commit: 9585876fae4e17b0ec28569fbe87cb1a6a4921a9
+commit: 6010dffe8a8ddf1ec6226f58634922f8497117cd
 branch: main
-exported_at: "2026-10-02T05:00:13Z"
+exported_at: "2026-10-19T13:36:46Z"
 modules:
     root:
         dir_name: DeepSeek Harness 会话删除插件（根包）
