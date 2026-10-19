@@ -136,7 +136,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 
 改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
 
-设计住在 [`docs/design/2026-09-30-session-delete-design.md`](docs/design/2026-09-30-session-delete-design.md)；回收站两栏、详情与批量动作另见 [`docs/design/2026-10-15-trash-detail-design.md`](docs/design/2026-10-15-trash-detail-design.md)（界面规格在其中 §7）。README 不复述。
+架构地图见 [`docs/architecture.md`](docs/architecture.md)（唯一主人清单、双半形态、数据与生命周期），裁决见 [`docs/adr/`](docs/adr/README.md)；回收站两栏、详情与批量动作的判据账在 [`docs/design/2026-09-30-session-delete-design.md`](docs/design/2026-09-30-session-delete-design.md)（界面规格在其 §7）与 [`docs/design/2026-10-15-trash-detail-design.md`](docs/design/2026-10-15-trash-detail-design.md)；构建、门控与发版流程见 [`docs/developing.md`](docs/developing.md)。README 不复述。
 
 ## 贡献
 

@@ -1,7 +1,8 @@
 # CONTEXT.md — dsh-session-delete
 
 一个 DeepSeek Harness（DSH）插件的**领域词表**。这里只放「这个词在本仓指什么」与「哪条事实只住哪个家」；
-判据与实测读数住在 `docs/design/`，跨批次的裁决住在 `docs/adr/`。
+架构形状与模块归属住 `docs/architecture.md`，跨批次的裁决住在 `docs/adr/`，
+按批次的判据账与真机读数住在 `docs/design/` 两份日志（与代码冲突时以代码为准）。
 
 探索代码前先读这一份：代码里的命名以它为准；要引入一个这里没有的词，先想清楚是不是在发明本仓不用的语言。
 
@@ -60,7 +61,8 @@
 
 **薄线**
 插件专属的宿主前缀路由 `/dsh-session-delete-api`。为什么不用官方 `remote.<namespace>`：见
-`docs/design/2026-09-30-session-delete-design.md` 第十二批（第三方拿不到动态发现的挂载点）。
+`docs/design/2026-09-30-session-delete-design.md` 第十二批（第三方拿不到动态发现的挂载点）；
+现行形状（六个段名、栅栏、状态语义）住 `docs/architecture.md` §1。
 
 ---
 
