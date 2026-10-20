@@ -1,7 +1,7 @@
 # ADR-0003 — 线上形状的家是 `src/shared/wire.ts`，投影显式写一遍
 
 - **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（wire / 行投影）；设计稿 2026-09-30 第十二批；架构复核候选 4 与 8
+- **相关**：`CONTEXT.md`（wire / 行投影）；`src/shared/wire.ts`、`src/api/trash-rows.ts`
 
 ## 背景
 

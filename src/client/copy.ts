@@ -100,7 +100,7 @@ const ZH = {
   'trash.confirm.restoreNow': '恢复',
 
   // 回收站之外的无主子会话（2026-10-19 那条维护入口）。父会话既不在宿主语料也不在清册里，它的孩子
-  // 就没人再列、也没人能删——宿主客户端把 `origin:"subagent"` 整排藏掉了（10-15 稿 §10），所以这一格
+  // 就没人再列、也没人能删——宿主客户端把 `origin:"subagent"` 整排藏掉了，所以这一格
   // 只能由我们报出来。**清理走 `/apply` 的 `orphan-clean`**，回执按组：`not-found` 单列「已不在了」，
   // 真失败可能带部分回执（已删目录数/字节）；这里不写"整组已清完"这种服务端没说的话。
   'trash.orphans.banner': '回收站之外发现 {count} 个无主子会话',
@@ -116,7 +116,7 @@ const ZH = {
   'trash.orphans.cleanPartial': '已先删掉 {removed} 个会话目录（{size}）',
   'trash.orphans.cleanGone': '有 {count} 组已不在了（可能已被别处清理，或父会话已恢复）',
 
-  // 详情那一层（设计稿 2026-10-15 §2.3）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
+  // 详情那一层（docs/architecture.md §3.1）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
   'detail.notSelected': '选中一条会话，看它讲了什么',
   'detail.loading': '正在读这条会话…',
   'detail.readFailed': '这条会话的正文读不出来',
@@ -154,7 +154,7 @@ const ZH = {
   'dialog.hint': '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。',
   'dialog.confirm': '移入回收站',
 
-  // 宿主列表批量删除（第十三批）。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
+  // 宿主列表批量删除（2026-10-17）。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
   // `dialog.subagents`（汇总），n=1 的标题复用 `dialog.title`，运行中原因复用 `menu.live`，
   // 「多选/退出多选」复用回收站工具栏的 `trash.toolbar.select` / `selectExit`——不造第二句。
   'batch.row.pick': '勾选「{title}」以批量删除',

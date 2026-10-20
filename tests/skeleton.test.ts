@@ -148,7 +148,7 @@ describe('宿主要求声明与浏览器半声明', () => {
   // `types: "lib/types/index.d.ts"`、`exports["."].types: "./lib/types/index.d.ts"`、
   // `exports["."].default: "./lib/index.js"`，并且**不发布** `src`、声明映射、JS map、陈旧的根声明文件）。
   // `./client` 那两件的形状不是推的——宿主 `dsh-client-connection` 的 `package.json` 原文就写着
-  // `{ "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" }`（asar 实读，见现状稿 §9）。
+  // `{ "types": "./lib/types/client/index.d.ts", "default": "./lib/client.js" }`（asar 实读）。
   it('包形不变式：main / types / 两个出口的 types+default 都在 lib/ 与 lib/types/ 下', () => {
     expect(manifest.main).toBe('lib/index.js')
     expect(manifest.types).toBe('lib/types/index.d.ts')
@@ -217,14 +217,14 @@ describe('浏览器半平台模块表', () => {
   })
 })
 
-describe('抄本表点名的自造差异（§8 门 4：除这五条外一律与官方明文逐属性一致）', () => {
+describe('抄本表点名的自造差异（界面保真复核门：除 ui.css 文件头点名的那些外一律与官方明文逐属性一致）', () => {
   const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
 
   it('文件头点名的五条自造规则真在表里（声明与实现对上）', () => {
     expect(css).toContain('.sd-resizing {')
     // 2026-10-16 补的第二条：清单行是 role="option" 的可聚焦 div，键盘焦点必须有可见描边
     expect(css).toContain('[data-dsh-session-delete="trash-row"]:focus-visible {')
-    // 2026-10-17 第十三批补的第三条：官方那颗 iconButton 只有常态与 hover，勾选开关要按下/禁用两档
+    // 2026-10-17 补的第三条：官方那颗 iconButton 只有常态与 hover，勾选开关要按下/禁用两档
     expect(css).toContain(".sd-rowaction-button[aria-pressed='true'] {")
     // 第四条：宿主没有"浮条"这件控件
     expect(css).toContain('.sd-batch-bar {')
@@ -251,7 +251,7 @@ describe('抄本表点名的自造差异（§8 门 4：除这五条外一律与�
     expect(zIndexOf('.sd-batch-bar')).toBeLessThan(zIndexOf('.sd-modal-root'))
   })
 
-  it('行那条描边复用选中态那枚 token，不新造颜色（设计稿 2026-10-15 §1.3）', () => {
+  it('行那条描边复用选中态那枚 token，不新造颜色（2026-10-15 实测）', () => {
     // 不按字面多行比：仓库里 CSS 是 CRLF，钉"选择器 + 那条 outline 用的 token"这一件事就够
     expect(css).toMatch(
       /\[data-dsh-session-delete="trash-row"\]:focus-visible\s*\{\s*outline:\s*0\.5px solid var\(--dsw-alias-button-ghost-active-border\)/,

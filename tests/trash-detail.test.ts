@@ -1,4 +1,4 @@
-// 回收站单条详情的策略层（设计稿 2026-10-15 §3）
+// 回收站单条详情的策略层（`src/trash/detail.ts` 的三条硬口径，逐条钉在这里）
 import zlib from 'node:zlib'
 import { expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
@@ -171,14 +171,14 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
   expect(detail.lastActivity).toBe(16)
 })
 
-it('生产的两个闸就是设计稿里那两位数字（改它必须是有意的，别让它悄悄漂）', () => {
+it('生产的两个闸就是那两位数字（改它必须是有意的，别让它悄悄漂）', () => {
   expect(PER_MESSAGE_CHAR_CAP).toBe(3000)
   expect(TOTAL_CHAR_CAP).toBe(500_000)
 })
 
 it('单条超上限就截断并标 truncated；累计超上限就停，余下的记进 omitted', async () => {
   // 闸值这里给小的：验的是**策略**（截断、停止、计数），与帧形态和量级无关；
-  // 真值（3000 / 50 万）由上一条用例钉住，本机量级见设计稿 §1（最大那条 ≈ 27 万字符，触发不了）
+  // 真值（3000 / 50 万）由上一条用例钉住，本机量级见 src/trash/detail.ts 的载荷闸注释
   const many = Array.from({ length: 12 }, (_unused, i) => asstLine(i, [{ type: 'text', text: `回复${i}——内容略长` }]))
   const { deps } = makeDeps(body(...many))
   const detail = await readTrashDetail(deps, { perMessageChars: 6, totalChars: 20 })(id)

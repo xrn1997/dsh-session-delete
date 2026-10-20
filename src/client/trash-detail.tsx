@@ -1,5 +1,5 @@
 /**
- * 回收站的**详情块**（设计稿 2026-10-15 §2.3 的四态）。
+ * 回收站的**详情块**（docs/architecture.md §3.1 的四态）。
  *
  * 它**不自己取数**：选中、缓存、失败与重读全在 `TrashPanel` 手里，这里只把一个状态画出来——
  * 所以它能被单独测穿（喂四种状态，断四张形状）。
@@ -254,7 +254,7 @@ function Meta({ label, title, children }: { label: string; title?: string; child
  * 后者被 `injectedCount` 单独说清，页面上不出现两本对不上的账。
  */
 function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashDetailLike; t: Translate }) {
-  // 回收站的目录名就是条目 id（设计稿 §3），转义那部分不承载额外信息 ⇒ 原样摆，完整串交给 title。
+  // 回收站的目录名就是条目 id（CONTEXT.md 的「条目」条），转义那部分不承载额外信息 ⇒ 原样摆，完整串交给 title。
   const folder = entry.id
   const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
   return (
@@ -263,7 +263,7 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
         <Meta label={t('detail.field.created')}>{timeText(detail.createdAt)}</Meta>
         <Meta label={t('detail.field.lastActivity')}>{timeText(detail.lastActivity)}</Meta>
         <Meta label={t('detail.field.span')}>{spanText(detail.createdAt, detail.lastActivity, t) ?? '—'}</Meta>
-        {/* 「删除于」两样都要（设计稿 2026-10-15 §2.3.4①）：相对那句好读，绝对那句好核对。 */}
+        {/* 「删除于」两样都要（docs/architecture.md §3.1 状态⑥）：相对那句好读，绝对那句好核对。 */}
         <Meta label={t('detail.field.deletedAt')}>
           {`${agoText(entry.deletedAt, Date.now(), t)}（${absoluteText(entry.deletedAt)}）`}
         </Meta>

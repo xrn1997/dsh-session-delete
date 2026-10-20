@@ -1,6 +1,6 @@
 // **错误映射**（`src/remote/map-error.ts`）
 //
-// 这张表是插件唯一的错误词汇（设计稿 §6 的五个码），产出的是**线上信封那三件**
+// 这张表是插件唯一的错误词汇（src/shared/wire.ts 的五个码），产出的是**线上信封那三件**
 // （`{code, message, details?}`）——消费者是 `src/api/dispatch.ts`（路由层把结果原样塞进失败信封）。
 import { describe, expect, it } from 'vitest'
 import { toRemoteFailure } from '../src/remote/map-error.js'
@@ -37,7 +37,7 @@ describe('错误映射', () => {
     expect(toRemoteFailure(once)).toEqual(once)
   })
 
-  // 设计稿 §6 的两行映射：宿主类型化错误 → 我们的码。动词把宿主错误包成 `io` 并把原始错误挂在 cause 上
+  // src/remote/map-error.ts 的两行映射：宿主类型化错误 → 我们的码。动词把宿主错误包成 `io` 并把原始错误挂在 cause 上
   // （`src/verbs/delete-session.ts` / `restore-session.ts` 的 `verbError('io', …, error)`），
   // 所以映射必须看得进 cause 链，否则这两行永远到不了客户端。
   it('动词包成 io 的宿主类型化错误，按 cause 映射回 live / not-found', () => {
@@ -88,7 +88,7 @@ describe('错误映射', () => {
     expect(mapped.message).toBe('原项目目录已不存在：/x')
   })
 
-  // ── 2026-10-17 错误面对齐（第三批）──────────────────────────────
+  // ── 2026-10-17 错误面对齐──────────────────────────────
   // 官方 `rpcErrorSchema` 是 `{code, message, details}` 三件；动词的结构化附带物不该在桥上被丢掉。
   it('动词错误带 details ⇒ 原样过桥（宿主把 activity/sessionId 塞在错误自己身上的那种）', () => {
     const e = Object.assign(verbError('live', '会话正在运行：session-a'), { sessionId: 'session-a', activity: [{ kind: 'turn' }] })

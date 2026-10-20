@@ -1,4 +1,4 @@
-// 批量撤销横幅（第十三批②）：「N 条会话已移入回收站 · 撤销」，撤销 = 一次批量 restore。
+// 批量撤销横幅（2026-10-17）：「N 条会话已移入回收站 · 撤销」，撤销 = 一次批量 restore。
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApplyOutcome } from '../../src/client/remote.js'

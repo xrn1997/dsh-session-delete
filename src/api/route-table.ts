@@ -132,7 +132,7 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     purity: 'pure',
     // 读单条详情也走 POST：`requireString`、同源栅栏、错误映射这一整套都挂在同一张路由表上
     // （`body:'json'` 决定它在处理前预读一次请求体）；改成 GET query 只是把同一道栅栏再写一遍
-    // （裁决见 2026-10-15 设计稿 §3）。
+    // （栅栏只写一遍——段名的方法 / 纯度 / body 就住这张表，ADR-0004）。
     run: async (deps, body) => readTrashDetail(deps)(requireString(body, PARAMS.entryId)),
   },
 }

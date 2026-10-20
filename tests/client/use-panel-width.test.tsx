@@ -1,4 +1,4 @@
-// 面板宽度观测（回收站两栏/下钻那条断点的数据来源，设计稿 2026-10-15 §2.1）
+// 面板宽度观测（回收站两栏/下钻那条断点的数据来源，docs/architecture.md §3.1）
 import { act, render, screen } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'

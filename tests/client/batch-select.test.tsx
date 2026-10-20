@@ -1,4 +1,4 @@
-// 选中集 store + 行首常驻勾选 + 行尾兜底（第十三批①）
+// 选中集 store + 行首常驻勾选 + 行尾兜底（2026-10-17）
 // store 是模块级现场（跨用例存活）：每个用例前清一次。
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it } from 'vitest'

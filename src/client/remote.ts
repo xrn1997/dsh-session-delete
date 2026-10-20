@@ -131,7 +131,7 @@ export async function callRemote<T>(run: () => Promise<T>): Promise<RemoteOutcom
   }
 }
 
-/** 本插件前缀路由那套**响应信封**的窄镜像（不是宿主服务 `ctx.remote.*`——那条 typert 通道见 §10）：
+/** 本插件前缀路由那套**响应信封**的窄镜像（不是宿主服务 `ctx.remote.*`——那条 typert 通道为什么用不了，见 `AGENTS.md` 的 `remote.<namespace>` 那条）：
  *  每个方法 resolve 成 `RemoteResult<T>`。
  *
  * 2026-10-17 批量重构：写动词收成**一个 `apply`**（一段管所有动作、一组 id 进、逐条结果出），
@@ -201,9 +201,9 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
  *
  * 判据是**「拿到信封」而不是「操作成功」**：`{ok:false, error}` 也是一次成功的往返（路由在、依赖接上了、
  * 错误映射也生效了），那时该做的是把入口显示出来、让原文上屏；只有往返本身失败才算通道缺席 ⇒
- * 一个槽位贡献都不注册（设计稿 §7「未接通态」）。
+ * 一个槽位贡献都不注册（docs/architecture.md §3「通道探测决定入口出现与否」）。
  *
- * 2026-10-17 第四批：探测从"读一遍清单"改成这一问——**每次页面加载都跑全表对账**是白付的钱，
+ * 2026-10-17：探测从"读一遍清单"改成这一问——**每次页面加载都跑全表对账**是白付的钱，
  * 而"信封到不到"这件事一次零成本的 GET 就答得出来。
  */
 export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean> {
@@ -224,7 +224,7 @@ export type ApplySuccess<A extends ApplyAction> = Extract<ApplyOutcome, { action
 /**
  * 注入面（`deps`）的 interface：**与六个段名一一对应的五个方法**（`ping` 只给探测用，留在 raw 层）。
  *
- * **不再有 N=1 的便捷方法**（ADR 复核候选 6）：`delete` / `restore` / `countSubagents` 曾是同一段
+ * **不再有 N=1 的便捷方法**：`delete` / `restore` / `countSubagents` 曾是同一段
  * `/apply` 的三种写法，于是一个 `module` 里同一个动作有两条路（回收站面板的 deps 同时躺着
  * `applyOutcomes` 与 `restore`）。现在它们收成一个自由函数 {@link applyOne}——要旧形状就显式调它，
  * 而不是让 interface 多背三个方法。

@@ -48,7 +48,7 @@ describe('清册的落地形状与线上形状', () => {
 
   it('投影只发线上形状里那几格：清册八格 + releaseBytes，可选的那几格缺席就是缺席', () => {
     const wire = toWire(ENTRY)
-    // 清册那八格 + `releaseBytes`（必填：存储侧的"这一次会释放多少"，见 ADR-0003 与架构复核候选 8）
+    // 清册那八格 + `releaseBytes`（必填：存储侧的"这一次会释放多少"，见 ADR-0003）
     expect(Object.keys(wire).sort()).toEqual([...Object.keys(ENTRY), 'releaseBytes'].sort())
     expect(wire.releaseBytes).toBe(ENTRY.sizeBytes) // 没有孩子、没有盘上后代 ⇒ 就是它自己那一格
     // 其余只读数一格都不出现：缺席 ≠ 0，界面上不许拿 0 冒充"没有"

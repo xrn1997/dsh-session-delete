@@ -1,4 +1,4 @@
-// 多帧 zstd 的帧边界（设计稿 2026-10-15 §1.1）。
+// 多帧 zstd 的帧边界（2026-10-15 实测）。
 // 判据来自本机实测：125 个文件 / 36 904 帧与「扫 magic」逐帧一致、每片都解得开。
 // 为什么要有这一层：Node 的 `zstdDecompressSync` 与 `createZstdDecompress()` **都只给第一帧**，
 // 而回收站里的会话日志是一次次 append 出来的帧序列。
@@ -78,7 +78,7 @@ describe('frameRanges · 一帧多块（真实产物里每帧 1～120 块都有�
   })
 })
 
-describe('frameRanges · 块类型按各自的块体长度走（设计稿 §4.1 门 1）', () => {
+describe('frameRanges · 块类型按各自的块体长度走', () => {
   /** 块头：bit0 last，bit1-2 type，bit3-23 size。 */
   const header = (type: number, size: number, last: number) => {
     const v = last | (type << 1) | (size << 3)

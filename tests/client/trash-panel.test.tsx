@@ -104,7 +104,7 @@ describe('回收站面板', () => {
     expect(listBox.style.flex).toBe('1 1 auto')
   })
 
-  // 动作住在行右侧（2026-10-15 真机反馈后回到 2026-10-01 的形状，设计稿 §7），所以这条直接点行内那颗。
+  // 动作住在行右侧（2026-10-15 真机反馈后回到 2026-10-01 的形状，docs/architecture.md §3.1），所以这条直接点行内那颗。
   it('行右侧的「恢复」调 restore 并带上条目 id（动作住在行内，2026-10-15 真机反馈后回归原形）', async () => {
     const deps = makeDeps()
     renderWide(deps)
@@ -361,7 +361,7 @@ describe('回收站面板 · 其余行为', () => {
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('purge', ['a']))
   })
 
-  // 彻底删除按组走（10-15 稿 §11）⇒ 点下去页脚合计掉的是「父 + 全部孩子」。确认框那一格说的是
+  // 彻底删除按组走（组语义见 src/trash/groups.ts）⇒ 点下去页脚合计掉的是「父 + 全部孩子」。确认框那一格说的是
   // "我即将失去多少"，所以它必须是同一个口径，不能只报父自己那一格（issue #2）。
   it('单条彻底删除的确认卡片报的是整组要释放的字节（父 + 孩子）', async () => {
     const group = [{ ...rows[0]!, sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]
@@ -801,7 +801,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   it('部分失败：删掉的走、没删掉的把原文留在它自己那一行，多选态不退', async () => {
     const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
       outcomesOf('purge', ids, { b: '该会话正被占用' }))
-    // 注意 `mockResolvedValue` 调两次是**替换**实现、不是排队（踩过：首屏就直接拿到第二批数据），
+    // 注意 `mockResolvedValue` 调两次是**替换**实现、不是排队（踩过：首屏就直接拿到第二份数据），
     // 要"先给全量、重读后给少一条"必须用 `mockResolvedValueOnce` 起头。
     const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[1], three[2]])
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
@@ -960,7 +960,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 })
 
-describe('回收站面板 · 工具排常驻与组勾选（2026-10-15 同日第三批）', () => {
+describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () => {
   const grouped = [
     { ...rows[0], id: 'a', projectDir: '--P-one--', title: '第一条', deletedAt: 300 },
     { ...rows[0], id: 'b', projectDir: '--P-one--', title: '第二条', deletedAt: 200 },
@@ -1038,7 +1038,7 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15 同日第�
   })
 })
 
-describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点（2026-10-15 复核批）', () => {
+describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点（2026-10-15）', () => {
   const threeRows = [
     { ...rows[0]!, id: 'a', title: '甲组第一条', projectDir: '--P-one--' },
     { ...rows[0]!, id: 'b', title: '乙组第一条', projectDir: '--P-two--' },
@@ -1068,7 +1068,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeNull()
   })
 
-  // 设计稿 2026-10-15 §2.3 第 1 条：清单为空或读数失败时右栏不出现——那一栏没有可选项也没有动作。
+  // docs/architecture.md §3.1：清单为空或读数失败时右栏不出现——那一栏没有可选项也没有动作。
   it('空回收站即便盒子够宽也不出右栏（也没把手可拖）', async () => {
     const { container } = renderAt(1100, makeDeps({ list: vi.fn(async () => []) }))
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()

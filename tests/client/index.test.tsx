@@ -376,7 +376,7 @@ describe('apply 的装配面', () => {
     ])
   })
 
-  // 第十三批：宿主列表批量删除的端到端形状。「⋯ → 多选」进入模式 → 行首勾选 → 浮条 → 批量确认框
+  // 2026-10-17：宿主列表批量删除的端到端形状。「⋯ → 多选」进入模式 → 行首勾选 → 浮条 → 批量确认框
   // 都是注册出来的真组件。
   it('⋯ 多选 → 行首勾选 → 浮条 → 批量确认 → 一次 delete → 批量撤销横幅 → 撤销发一次批量 restore', async () => {
     const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
@@ -422,7 +422,7 @@ describe('apply 的装配面', () => {
       </>,
     )
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
-    // 一次：面板挂载那一次（探测走 `/ping`，不再读清单——2026-10-17 第四批）
+    // 一次：面板挂载那一次（探测走 `/ping`，不再读清单——2026-10-17）
     expect(list).toHaveBeenCalledTimes(1)
 
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))

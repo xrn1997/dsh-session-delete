@@ -3,8 +3,8 @@
  * 随包发布的明文产物 `lib/index.js`；出处与改写规则见 `ui.css` 头注）。
  *
  * 只留本插件用到的：垃圾桶（删除动作 / 回收站）、警示（失败面）、打开的项目文件夹、
- * 关闭叉（对话框）、圆圈对勾（撤销提示的 success 档）、对勾（行尾兜底勾选开关，2026-10-17
- * 第十三批加；行首主勾选走原生 Checkbox）、下折与右折 chevron（清单的分组折叠头，
+ * 关闭叉（对话框）、圆圈对勾（撤销提示的 success 档）、对勾（行尾兜底勾选开关，2026-10-17 加；
+ * 行首主勾选走原生 Checkbox）、下折与右折 chevron（清单的分组折叠头，
  * 2026-10-15 加：`DisclosureRow` 那套折叠行的两态 glyph）。「刷新」那枚随按钮一起删了
  * （2026-10-16，见 `trash-panel.tsx` 工具排的注释）——本文件不留无人消费的几何。
  * **几何、`viewBox`、`strokeWidth` 逐字不动**——它们是官方图标集的形状，改了就不再与宿主同屏同形。
@@ -109,7 +109,7 @@ export function IconCheckCircleOutlineRegular({ size }: IconProps): ReactElement
   )
 }
 
-/** 行尾兜底「勾选开关」那枚对勾（状态点/归档行；官方 `IconCheckOutlineRegular`，`viewBox`/`d` 逐字；2026-10-17 第十三批加）。 */
+/** 行尾兜底「勾选开关」那枚对勾（状态点/归档行；官方 `IconCheckOutlineRegular`，`viewBox`/`d` 逐字；2026-10-17 加）。 */
 export function IconCheckOutlineRegular({ size }: IconProps): ReactElement {
   return (
     <IconFrame size={size}>

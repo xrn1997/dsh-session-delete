@@ -1,4 +1,4 @@
-// 批量删除浮条（第十三批①）：多选模式、计数、已选清单、行点击选择与确认框。
+// 批量删除浮条（2026-10-17）：多选模式、计数、已选清单、行点击选择与确认框。
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {

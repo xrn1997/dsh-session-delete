@@ -383,7 +383,7 @@ describe('宿主服务层端口的接线', () => {
   })
 
   // 端到端：未知会话走删除动词。修复前 projectDirOf 裸抛 ⇒ 动词的 not-found 分支够不到，
-  // 客户端拿到的是 `sessiondelete/io`；现在必须是 `sessiondelete/not-found`（设计稿 §6）。
+  // 客户端拿到的是 `sessiondelete/io`；现在必须是 `sessiondelete/not-found`（src/shared/wire.ts）。
   // 顺带钉住「零副作用」：not-found 在**任何** fs 动作之前就抛出。
   it('未知会话走删除动词 ⇒ sessiondelete/not-found（不是 io），且没碰文件系统', async () => {
     const { ctx } = makeEnv({})

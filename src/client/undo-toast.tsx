@@ -1,5 +1,5 @@
 /**
- * 撤销提示（设计稿 §7 状态 ③）：删除成功后一条可撤销的横幅。
+ * 撤销提示（docs/architecture.md §3.1 状态 ③）：删除成功后一条可撤销的横幅。
  *
  * 为什么是**独立组件 + 模块级通知台**，而不是死在菜单行里：宿主的菜单行随菜单**一起卸载**
  * （真产物 Menu 的注释原文 "the rows unmount with the list"），而提示要在菜单关掉之后还活着。
@@ -22,7 +22,7 @@ import { Toast } from './ui/Toast.js'
 export type UndoToastDeps = OneShotDeps
 
 /**
- * 一次待撤销的事。两形（第十三批②起）：单条删除（主语是会话名）／批量删除（主语是条数）。
+ * 一次待撤销的事。两形（2026-10-17 起）：单条删除（主语是会话名）／批量删除（主语是条数）。
  * 同一个 Toast 宿主、同一停留时长；撤销动作按形走——单条 `restore`，批量**一次** `applyOutcomes`。
  */
 export type UndoNotice = {
@@ -61,7 +61,7 @@ export function publishUndoNotice(input: { entryId: string; title: string }): vo
   emit()
 }
 
-/** 批量删除成功后发布一条撤销提示（第十三批②）：覆盖上一条，只报这一次移走的条数。 */
+/** 批量删除成功后发布一条撤销提示（2026-10-17）：覆盖上一条，只报这一次移走的条数。 */
 export function publishUndoBatchNotice(input: { entryIds: readonly string[]; n: number }): void {
   notice = { seq: (nextSeq += 1), kind: 'batch', entryIds: input.entryIds, n: input.n }
   emit()
@@ -90,7 +90,7 @@ export function useUndoNotice(): UndoNotice | null {
   return useSyncExternalStore(subscribe, getUndoNotice, getUndoNotice)
 }
 
-/** 提示停留时长。设计稿 §7 定死：**6 秒**（Toast 自己的默认是 3 秒）。 */
+/** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/architecture.md` §3.1 只指到这里，不抄这个数。 */
 export const UNDO_HOLD_MS = 6000
 
 /** 撤销：单条 `restore(entryId)`、批量**一次** `applyOutcomes('restore', entryIds)`；失败就把原因换到同一条横幅上，不静默。 */

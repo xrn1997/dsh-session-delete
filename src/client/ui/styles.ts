@@ -33,7 +33,7 @@ function install(): void {
   const element = document.createElement('style')
   element.setAttribute('data-dsh-session-delete', STYLE_MARKER)
   // `markdown.css` 与控件那份**分开写、一起装**：前者是我们给会话正文排的字阶（吃宿主 markdown
-  // token），后者是照官方明文逐字抄的那份表（核对口径见设计稿 §8 门 4：按文件头那张来源表逐属性
+  // token），后者是照官方明文逐字抄的那份表（核对口径见 docs/developing.md 的界面保真复核门：按文件头那张来源表逐属性
   // 零差异，条数不钉在这里）——两份的来源与核对方式不同，装运可以同一趟。
   element.textContent = `${css}\n${markdownCss}`
   head.appendChild(element)

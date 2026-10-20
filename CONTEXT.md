@@ -1,8 +1,8 @@
 # CONTEXT.md — dsh-session-delete
 
 一个 DeepSeek Harness（DSH）插件的**领域词表**。这里只放「这个词在本仓指什么」与「哪条事实只住哪个家」；
-架构形状与模块归属住 `docs/architecture.md`，跨批次的裁决住在 `docs/adr/`，
-按批次的判据账与真机读数住在 `docs/design/` 两份日志（与代码冲突时以代码为准）。
+架构形状、模块归属与界面规格住 `docs/architecture.md`（界面规格在 §3.1），跨批次的裁决住在 `docs/adr/`，
+代码与测试是最终真相；批次账与实测证据不再另存日志，历史留在 git。
 
 探索代码前先读这一份：代码里的命名以它为准；要引入一个这里没有的词，先想清楚是不是在发明本仓不用的语言。
 
@@ -60,9 +60,9 @@
 冷会话没有活体可摘，通告照样必须发。
 
 **薄线**
-插件专属的宿主前缀路由 `/dsh-session-delete-api`。为什么不用官方 `remote.<namespace>`：见
-`docs/design/2026-09-30-session-delete-design.md` 第十二批（第三方拿不到动态发现的挂载点）；
-现行形状（六个段名、栅栏、状态语义）住 `docs/architecture.md` §1。
+插件专属的宿主前缀路由 `/dsh-session-delete-api`。为什么不用官方 `remote.<namespace>`：第三方拿不到
+Typert 描述符的动态发现挂载点；现行形状（六个段名、同源栅栏）住 `docs/architecture.md` §1，
+状态语义（请求不对用它自己的 4xx、操作失败回 200 + 信封）住 `src/api/dispatch.ts`。
 
 ---
 
@@ -105,6 +105,7 @@
 | 组语义（根行才接得住孩子、闭包） | `src/trash/groups.ts` |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` |
 | 清册与目录的对账 | `src/trash/reconcile.ts` |
+| 详情正文给谁看、给多少（`source.kind` 过滤与载荷闸） | `src/trash/detail.ts` |
 | 回滚失败的措辞与合并（码本身住 `wire.ts`） | `src/verbs/errors.ts` |
 | 「这一批」 | `src/verbs/batch.ts` |
 | 宿主能力的唯一适配 | `src/ports/host-port.ts` |

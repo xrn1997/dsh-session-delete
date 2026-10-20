@@ -62,7 +62,7 @@ export function restoreSession(deps: DeleteDeps) {
   }
 }
 
-/** 放回哪儿：用**删除时记进 entryId 的那段原目录名**，不从 `sessionId` 现推（设计稿 §3）——
+/** 放回哪儿：用**删除时记进 entryId 的那段原目录名**，不从 `sessionId` 现推（CONTEXT.md 的「条目」条）——
  *  因此不依赖宿主当时的目录命名约定（v3 无前缀 / v4 带 `session-` 前缀）。 */
 function restoreTargetDir(deps: DeleteDeps, entry: TrashEntry): string {
   return sessionDirOf(entry.projectDir, parseEntryId(entry.id).sessionDirName, deps.home)
@@ -138,7 +138,7 @@ async function memberRestore(
         : []),
     }]),
     // ③ 可见性按 `wasArchived` 反推：删除时"原本未归档"的会话是我们把它归档才藏起来的 ⇒ 现在放回树里；
-    //    "原本已归档"的删前删后都在归档集里 ⇒ 一个字节都不动（§8 边界红检）。
+    //    "原本已归档"的删前删后都在归档集里 ⇒ 一个字节都不动（用例钉在 `tests/restore-session.test.ts` 的归档那组）。
     //    `undoOnFailure`：取消归档可能已经半做完，所以它自己失败时也要先把会话藏回去。
     ...(entry.wasArchived ? [] : [{
       label: '取消归档失败',

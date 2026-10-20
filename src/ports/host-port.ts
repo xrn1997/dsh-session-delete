@@ -392,7 +392,7 @@ export function isWorkspaceMissingError(error: unknown): boolean {
  *
  * 每个方法的依据（服务 / 方法 / 入参）与原文切片见各自的实现处注释。
  * 出错一律**原样抛**（不在这里裹动词码）：动词层把原始错误挂在 `cause` 上，
- * `toRemoteFailure` 再按 `name` 把它映射回 `sessiondelete/<码>`（设计稿 §6 的两行映射）。
+ * `toRemoteFailure` 再按 `name` 把它映射回 `sessiondelete/<码>`（src/remote/map-error.ts 的两行映射）。
  */
 export function createHostPort(ctx: unknown): HostPort {
   const host = ctx as HostCtxLike
@@ -415,7 +415,7 @@ export function createHostPort(ctx: unknown): HostPort {
      *
      * 「账本里没有这个会话」= **未命中**，回 `undefined`（不是抛）：这正是本方法声明的类型，
      * 也是 `delete-session.ts` 已经写好的那条分支 `if (!projectDir) throw
-     * verbError('not-found', …)` 的入口。若让它裸抛，那句话永远为假 ⇒ 设计稿 §6 的 `not-found`
+     * verbError('not-found', …)` 的入口。若让它裸抛，那句话永远为假 ⇒ src/shared/wire.ts 的 `not-found`
      * （「会话目录或账本条目不存在」）在这条最自然的路径上拿不到码，客户端只会看到 `sessiondelete/io`。
      *
      * **只吞这一种**：其余错误（真存储故障）照抛，让 `toRemoteFailure` 兜成 `io` 而不是假 `not-found`。
@@ -450,7 +450,7 @@ export function createHostPort(ctx: unknown): HostPort {
     },
 
     /**
-     * 活跃判据 = 宿主官方那一条（设计稿 §5）：`workspace/session-activity` waterfall 问一次，
+     * 活跃判据 = 宿主官方那一条（本文件）：`workspace/session-activity` waterfall 问一次，
      * **空数组 = 无活动**；与宿主自己的 `archiveSession` 准入同源，不自创第二套。
      * asar 原文：`const activity = await this.ctx.waterfall('workspace/session-activity', { sessionId }, () => Promise.resolve([]));
      * if (activity.length > 0) throw new WorkspaceActiveSessionError(sessionId, activity);`
@@ -473,10 +473,10 @@ export function createHostPort(ctx: unknown): HostPort {
      * 从 `ctx.sessions`（live store）里摘掉一个会话。
      *
      * **为什么需要**：会话列表读面是并集——`sessionQuery.listSessions()` = 磁盘上的持久化 ∪ `ctx.sessions` 里的活体
-     * （见设计稿 §4 末）。搬走文件只清掉一侧；本机运行期打开过的会话是活体，列表照样把它交出来，
+     * （见本文件的「通告」一段）。搬走文件只清掉一侧；本机运行期打开过的会话是活体，列表照样把它交出来，
      * 于是"删了还在"（真机实测：文件已进回收站、账本已摘，侧栏仍留着那一行）。
      *
-     * **这是未声明为契约的内部入口**（设计稿 §4 末记了这次偏离）：`liveEntryFor` / `entry.detach()` 是 store
+     * **这是未声明为契约的内部入口**（本文件的「通告」一段记了这次偏离）：`liveEntryFor` / `entry.detach()` 是 store
      * 给**会话 owner**（agent 的 effect 链）用的，宿主自己的控制器 `createOrAdopt` 只取 `agents.create()`
      * 返回的 `.agent`、把带 `dispose` 的 handle 丢掉了，`ctx.agents` 也没有 `liveEntryFor` 那样的入口
      * （会话 store 有、agent store 没有，逐成员面核过）⇒ 只能摘到"会话"这一层，上面那具 agent 摘不到，
@@ -595,7 +595,7 @@ export function createHostPort(ctx: unknown): HostPort {
     /** 确保归档：官方 `archiveSession(sessionId)`。归档是 registry **全局**的，与工作区账目无关
      *  （JSDoc 原文 "its workspace accounting — or lack of one — is irrelevant"），所以 `workspaceId` 不用
      *  ——未分组的会话没有工作区可传，签名里它是可选的。
-     *  不带 `stopActivity` ⇒ 有活动即抛 `WorkspaceActiveSessionError`（→ `sessiondelete/live`，设计稿 §6）。 */
+     *  不带 `stopActivity` ⇒ 有活动即抛 `WorkspaceActiveSessionError`（→ `sessiondelete/live`，src/shared/wire.ts）。 */
     async archive(sessionId) {
       await registry.archiveSession(sessionId)
     },

@@ -1,4 +1,4 @@
-// 批量删除确认框（第十三批②）：数说清自己的、失败原文落行、重试只发失败 id。
+// 批量删除确认框（2026-10-17）：数说清自己的、失败原文落行、重试只发失败 id。
 // 假 adapter 驱动真组件（与 delete-menu-item.test.tsx 同款）：现场是模块级的，每个用例前清一次。
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'

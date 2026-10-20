@@ -81,8 +81,9 @@ export async function attempt(label: string, run: () => Promise<unknown>): Promi
 
 /**
  * **组级回滚**：把已经做成的成员按相反顺序退回；某一步退不干净时把失败并进原错误的
- * `details.rollbackFailures`，绝不让原错误独走（设计稿第十七批）。删除与恢复两个按组走的动词
- * 共用这一处——"相反顺序 + 失败合并"不再各写一遍。
+ * `details.rollbackFailures`，绝不让原错误独走（2026-10-19 `f2a7757`；那些失败句子的合并与措辞住
+ * `src/verbs/errors.ts`，这里只是唯一的调用方）。删除与恢复两个按组走的动词共用这一处，
+ * "相反顺序 + 失败合并"不再各写一遍。
  */
 export async function rollbackJournals(journals: readonly Journal[], error: unknown): Promise<never> {
   const failures: string[] = []

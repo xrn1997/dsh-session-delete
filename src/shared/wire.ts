@@ -28,7 +28,7 @@ export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
  *  一次 HTTP 带一组 id、逐条回结果；单条就是长度为 1 的批量，仓里不再留第二条执行路径。
  *  - `GET /list`：**对账并读**清单（`session-trash/` 里的目录是准）。
  *  - `GET /ping`：最便宜的在/不在（不碰清册、不碰盘、不进链）——客户端探测用它，不用一次全表读。
- *  - `POST /detail`：单条详情（用 POST 表达一个读：见设计稿 2026-10-15 §3）。
+ *  - `POST /detail`：单条详情（用 POST 表达一个读：判据就写在 `src/api/route-table.ts` 那一行的上方）。
  *  - `POST /apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean`），逐条回 `ApplyOutcome`。
  *  - `POST /empty`：清空回收站（聚合回执，**不**按条回）。
  *  - `GET /orphans`：无主子会话的扫描报告（纯读，2026-10-19）。**清理不在这里**——它是 `/apply` 的
@@ -121,7 +121,7 @@ export interface TrashDetailMessageWire {
 /** 回收站单条详情的线上形状（`POST /detail`）。 */
 export interface TrashDetailWire {
   entryId: string
-  /** 日志 header 里的原串（**无损**，比从 `projectKey` 反推那一路强，设计稿 §7 组头那条是另一回事）。 */
+  /** 日志 header 里的原串（**无损**，比从 `projectKey` 反推那一路强；组头怎么念项目名见 `src/client/trash-view.ts` 的 `projectLabel`，那是另一回事）。 */
   cwd: string
   createdAt: number
   lastActivity: number
@@ -174,7 +174,7 @@ export const PARAMS = {
 } as const
 
 /**
- * 失败信封的**线上形状**（设计稿 §6）：`code` 是判别依据、`message` 是上屏原文、
+ * 失败信封的**线上形状**（本文件）：`code` 是判别依据、`message` 是上屏原文、
  * `details` 是**可选的结构化附带物**——对齐官方 `rpcErrorSchema` 那三件
  * （`dsh-client-connection` 原文：`z.object({ code, message, details: z.record(z.string(), z.unknown()) })`）。
  * 来历两类：宿主类型化错误自己身上的字段（`WorkspaceActiveSessionError` 的 `sessionId` / `activity`…），
@@ -208,10 +208,10 @@ export function isDSHRemoteError(value: unknown): value is RemoteFailure {
  * 浏览器半要认 `not-found`（「这一组已经不在了」是中性提示、不是失败），也要在页脚念出回收站在哪；
  * Node 半要产出同一批码、拼同一个路径。两边各写一个字面量，就是两本账。 */
 
-/** 失败码的域。与宿主官方域（`workspace/*`、`session/*`…）不重名，见设计稿 §6。 */
+/** 失败码的域。与宿主官方域（`workspace/*`、`session/*`…）不重名，见本文件。 */
 export const SESSION_DELETE_ERROR_DOMAIN = 'sessiondelete'
 
-/** 五个**动词码**（设计稿 §6 那张表）。`io` 是唯一兜底。 */
+/** 五个**动词码**（本文件那张表）。`io` 是唯一兜底。 */
 export const VERB_CODES = ['live', 'not-found', 'trash-empty', 'project-missing', 'io'] as const
 export type VerbCode = (typeof VERB_CODES)[number]
 

@@ -1,4 +1,4 @@
-// ⋯ 菜单里的「多选」入口（第十三批①改版：常驻勾选被用户打回，改成显式模式）
+// ⋯ 菜单里的「多选」入口（2026-10-17 改版：常驻勾选被用户打回，改成显式模式）
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchSelectMenuItem } from '../../src/client/batch-menu-item.js'

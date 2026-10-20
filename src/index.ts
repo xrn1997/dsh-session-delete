@@ -25,7 +25,7 @@ export const name = '@xrn1997/dsh-session-delete'
  * - `remote`：那是**浏览器半**的服务（asar `dsh-api-gateway/lib/client.js`：`super(ctx, "remote")`），
  *   Node 半挂的是 `ctx.typertGateway`。把它写进 Node 半的 inject 会让插件永远 pending（同 `slots` 那次的形状）。
  * - `sessions` / `sessionProjectionCache`：两者都按 `ctx.get(...)` **可选读**——`sessions` 只给 `evictLive`
- *   用（活跃判据走 waterfall，见设计稿 §5；服务缺席回 `unknown`），`sessionProjectionCache` 是标题的尽力读面。
+ *   用（活跃判据走 waterfall，见 src/ports/host-port.ts；服务缺席回 `unknown`），`sessionProjectionCache` 是标题的尽力读面。
  *   inject 一个可能没挂的服务 = 整个插件 pending。
  *   它取不到时 `titleOf` 返回空串，正是契约允许的降级。
  *
@@ -40,7 +40,7 @@ export const inject = ['workspaceRegistry', 'storageDomain', 'webServer']
  * 清单：宿主 storage domain 的绑定
  * ------------------------------------------------------------------ */
 
-/** 本插件自己的域（设计稿 §3：介质落在 `~/.dsh/storages/`）。
+/** 本插件自己的域（CONTEXT.md 的「清册」条：介质落在 `~/.dsh/storages/`）。
  *
  *  **名字必须带插件专属前缀**：domain 名是 `storageDomain` facility 里的**全局键**，而**一个名字在
  *  一个 facility 里只能 `open()` 一次**（句柄归调用方所有）——别人先占了同名域，本插件会**在激活时**
@@ -198,7 +198,7 @@ export function createStorageManifest(ctx: Context): ManifestPort {
  *  ② `ctx.profileContext` 按 launcher 原文只装「profile 位置 / 启动 bundle 名 / 调用覆盖 / 遥测开关」，
  *     里面没有数据根；
  *  ③ 宿主自己的服务也不是"问出来"的——它们各自声明 `Config.dshHome`，由**装配那一行的人**填。
- * ⇒ 后果与边界（设计稿 §5）：显式配置过的 profile 上我们算出的根与宿主不一致 ⇒ 文件探测落空 ⇒
+ * ⇒ 后果与边界（src/ports/host-port.ts）：显式配置过的 profile 上我们算出的根与宿主不一致 ⇒ 文件探测落空 ⇒
  * 删除/恢复以 `not-found` **响亮拒绝、零副作用**；**不会**动到别的树（sessions 与回收站同源 ⇒ 同卷）。
  * 本机两条路径都因此对得上：桌面版走 `~/.dsh`（实测 profile 在其下），隔离探针靠 `$DSH_HOME`。
  */

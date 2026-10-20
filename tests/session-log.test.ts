@@ -1,4 +1,4 @@
-// 会话日志的逐帧读法：帧 → 明文 → 一行一条 JSON 记录（设计稿 2026-10-15 §1.1 / §3）
+// 会话日志的逐帧读法：帧 → 明文 → 一行一条 JSON 记录（src/log/zstd-frames.ts）
 import zlib from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { pickSessionLog, readSessionHeader, walkSessionLog, type SessionRecord } from '../src/log/session-log.js'

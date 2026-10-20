@@ -35,7 +35,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 
 /**
  * 六个段名的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身
- * （`tests/support/fake-deps.ts` 里那第二个 adapter，ADR 之外的架构复核候选 7）。
+ * （`tests/support/fake-deps.ts` 里那第二个 adapter）。
  * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
  * `listDirs` 按种子（`over.seed`）给：`list` 现在**先对账再读**（`reconcileTrash`），
@@ -105,7 +105,7 @@ async function call(base: string, path: string, init: CallInit = {}): Promise<{ 
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
 }
 
-/** 失败的形状（设计稿 §6 的五个码）：`{ok:false, error:{code, message}}`。 */
+/** 失败的形状（src/shared/wire.ts 的五个码）：`{ok:false, error:{code, message}}`。 */
 async function failureOf(base: string, path: string, init: CallInit = {}): Promise<{ status: number; code: string; message: string }> {
   const { status, body } = await call(base, path, init)
   expect(body.ok).toBe(false)
@@ -717,7 +717,7 @@ describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作�
   })
 })
 
-// 批量通道（2026-10-17 重构批）：写动词从「一条一段」收成 `POST /apply`——一次 HTTP 带一组 id，
+// 批量通道（2026-10-17）：写动词从「一条一段」收成 `POST /apply`——一次 HTTP 带一组 id，
 // 逐条回 `ApplyOutcome`。钉的是契约：整批只读一次清单、只预取一次宿主会话表；重复 id 去重；
 // 「已被同批前一条带走」是幂等成功不是失败；一条失败不传染下一条。
 describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => {
@@ -882,7 +882,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
   })
 })
 
-// 无主子会话维护（2026-10-19 第十七批）：父被彻底删掉之后，它的 subagent 孩子还留在 `sessions/` 里，
+// 无主子会话维护（2026-10-19）：父被彻底删掉之后，它的 subagent 孩子还留在 `sessions/` 里，
 // 而宿主的客户端把 `origin:"subagent"` 整排藏了 ⇒ 这一坨字节既看不见也清不掉。
 // 扫描是**纯读**（不占到达序链、一个字都不动），清理是**写动作**（上链，且点之前先对账）。
 describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2026-10-19）', () => {

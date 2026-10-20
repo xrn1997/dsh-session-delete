@@ -45,7 +45,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 装完**重启宿主**（Node 半不走 HMR）。卸载只移除插件，`~/.dsh/session-trash/` 下已有的目录不会被自动清理。
 
-也可以离线分发：`pnpm pack` 出 tarball 后 `dsh plugin add ./dsh-session-delete-<版本>.tgz`。包里带预构建产物（`prepack` 会替你跑 `build`），这条路不需要为构建脚本授权。
+也可以离线分发：`pnpm pack` 出 tarball 后 `dsh plugin add ./xrn1997-dsh-session-delete-<版本>.tgz`（scoped 包的文件名带作者段）。包里带预构建产物（`prepack` 会替你跑 `build`），这条路不需要为构建脚本授权。
 
 **兼容性分两层，别混**：
 
@@ -136,7 +136,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 
 改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
 
-架构地图见 [`docs/architecture.md`](docs/architecture.md)（唯一主人清单、双半形态、数据与生命周期），裁决见 [`docs/adr/`](docs/adr/README.md)；回收站两栏、详情与批量动作的判据账在 [`docs/design/2026-09-30-session-delete-design.md`](docs/design/2026-09-30-session-delete-design.md)（界面规格在其 §7）与 [`docs/design/2026-10-15-trash-detail-design.md`](docs/design/2026-10-15-trash-detail-design.md)；构建、门控与发版流程见 [`docs/developing.md`](docs/developing.md)。README 不复述。
+架构地图与**现行界面规格**见 [`docs/architecture.md`](docs/architecture.md)（唯一主人清单、双半形态、界面规格 §3.1、数据与生命周期），裁决见 [`docs/adr/`](docs/adr/README.md)；构建、门控与发版流程见 [`docs/developing.md`](docs/developing.md)。历史取舍在 git 历史里。README 不复述。
 
 ## 贡献
 

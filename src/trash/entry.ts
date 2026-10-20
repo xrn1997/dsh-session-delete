@@ -1,7 +1,7 @@
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 
 /** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<原目录名>`）——**它不是随手起的键**：
- *  回收站目录名就是它，恢复也按它反推出原目录名放回（设计稿 §3），所以 id 的形状有契约意义。
+ *  回收站目录名就是它，恢复也按它反推出原目录名放回（CONTEXT.md 的「条目」条），所以 id 的形状有契约意义。
  *  其余字段在删除那一刻就地取。 */
 export interface TrashEntry {
   id: string
@@ -23,7 +23,7 @@ export interface TrashEntry {
    *  缺席 = 这一行是父（或它自己就是被单独删掉的）。清单据此把孩子折进父行、不单独列。
    *  老代留底 / 清册被清后由目录重建出来的行**没有这个字段**（文件侧没有它的副本，与
    *  `workspaceId`/`wasArchived`/`title` 同一类降级），那一趟它们会各占一行——那是"分组信息随清册一起没了"
-   *  的如实结果，不假装知道（设计稿 2026-10-15 §10）。 */
+   *  的如实结果，不假装知道（CONTEXT.md 的「无主子会话」条）。 */
   parentEntryId?: string
 }
 

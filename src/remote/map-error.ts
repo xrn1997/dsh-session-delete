@@ -6,14 +6,14 @@ import {
   type VerbCode,
 } from '../shared/wire.js'
 
-/** 插件专属远程域名（设计稿 §6）：与宿主官方域（`workspace/*`、`session/*`、`gateway/*`…）不重名。
+/** 插件专属远程域名（src/shared/wire.ts）：与宿主官方域（`workspace/*`、`session/*`、`gateway/*`…）不重名。
  *  字面量的家在 `shared/wire.ts`（ADR-0003）——浏览器半也按同一个域认码。 */
 const DOMAIN = SESSION_DELETE_ERROR_DOMAIN
 
 /** 五个码的家同样在 `shared/wire.ts`（`io` 是唯一兜底）——这里只是取来用，不再抄第二份。 */
 type Code = VerbCode
 
-/** 宿主两条类型化错误 → 我们的码（设计稿 §6 的两行映射）。
+/** 宿主两条类型化错误 → 我们的码（本文件的两行映射）。
  *  类不可 import（跨插件值 import 是红线；且宿主包与运行中的宿主不同代）⇒ 按官方构造器写死的 `this.name` 认。
  *  证据：asar `dsh/node_modules/@deepseek-ai/dsh-workspace/lib/index.js` 原文
  *  `var WorkspaceUnknownSessionError = class extends Error { …; this.name = "WorkspaceUnknownSessionError"; }`
@@ -39,7 +39,7 @@ function hostErrorOf(error: unknown): (Error & { name: string }) | undefined {
 }
 
 /** 上屏原文：`Error` 取 `.message`；**带 `message` 字符串的非 Error 抛出物也照取**（否则会退化成
- *  `[object Object]`，把设计稿 §6「`message` 是上屏的原文」这条许诺落空）；其余一律 `String()`。 */
+ *  `[object Object]`，把 src/shared/wire.ts「`message` 是上屏的原文」这条许诺落空）；其余一律 `String()`。 */
 function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'object' && error !== null) {
@@ -84,7 +84,7 @@ function detailsOf(error: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * 把任意抛出物折成失败信封里的**那三件**（设计稿 §6 唯一那张映射表）。
+ * 把任意抛出物折成失败信封里的**那三件**（本文件唯一那张映射表）。
  *
  * - 已经是远程失败（`isDSHRemoteError` 认得的结构标记）⇒ 原样带出它自己的 `code` / `message`，
  *   挂着的 `details` 一起过桥，不再包一层。
@@ -92,7 +92,7 @@ function detailsOf(error: unknown): Record<string, unknown> | undefined {
  *   把它们折成 `sessiondelete/io` 就是把宿主的判断抹成我们的，客户端拿到的 code 从此不能说真话。
  * - 宿主类型化错误（自身或 `cause` 链上，见 {@link hostErrorOf}）⇒ 映射成 `live` / `not-found`，
  *   并把它自己身上的结构化字段带成 `details`。这一条排在动词码之前：动词会把宿主错误包成笼统的 `io`
- *   并把原错误挂在 cause 上（`verbError('io', …, cause)`），不看进 cause 链，§6 那两行映射永远到不了客户端。
+ *   并把原错误挂在 cause 上（`verbError('io', …, cause)`），不看进 cause 链，本文件那两行映射永远到不了客户端。
  * - 动词的 `sessiondelete/<五个码>` ⇒ 原样过桥（`details` 同样带着）。
  * - 其余（别域的怪 code、前缀外的因、非 Error 抛出物）⇒ `io`，message 保留原文。
  *

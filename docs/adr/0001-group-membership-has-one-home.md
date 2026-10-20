@@ -1,7 +1,7 @@
 # ADR-0001 — 组语义只有一个家：`src/trash/groups.ts`
 
 - **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（组 / 组根 / 盘上后代）；设计稿 2026-10-15 §11；架构复核候选 1
+- **相关**：`CONTEXT.md`（组 / 组根 / 盘上后代）；`src/trash/groups.ts`
 
 ## 背景
 
@@ -10,7 +10,7 @@
 | 位置 | 当时的规则 |
 | --- | --- |
 | `src/api/dispatch.ts` `assembleTrashRows` | 只认根行（父自己也是孩子 ⇒ 不折） |
-| `src/verbs/apply.ts` `groupOf` | 父不是根 ⇒ 只回自己 |
+| `src/verbs/apply.ts` `groupOf`（现名 `src/verbs/batch.ts`，改名记在 ADR-0002） | 父不是根 ⇒ 只回自己 |
 | `src/verbs/restore-session.ts` `restoreSession` | 与 `groupOf` 同规则（抄了一份） |
 | `src/verbs/purge-trash.ts` `purgeTrash` | `id === x \|\| parentEntryId === x`——**不认根行** |
 

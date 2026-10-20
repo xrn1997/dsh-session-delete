@@ -1,11 +1,11 @@
 # ADR-0002 — 「这一批」与「一次移动」各有自己的 module
 
 - **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（批量层 / journal）；设计稿 2026-09-30 第十二批、2026-10-15 §11；架构复核候选 2
+- **相关**：`CONTEXT.md`（批量层 / journal）；`src/verbs/batch.ts`、`src/verbs/member-journal.ts`
 
 ## 背景
 
-`POST /apply` 已经是「一段管所有动作、一组 id 进、逐条结果出」（第十二批），但那条判据只落在**路由层**；
+`POST /apply` 已经是「一段管所有动作、一组 id 进、逐条结果出」（2026-10-17 `c66f082`），但那条判据只落在**路由层**；
 再往下，批量的性质长在了**三个动词的 interface** 上：
 
 | 动词 | 批量塞进 interface 的东西 |
@@ -47,8 +47,10 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 
 - 一次成员的搬入或搬出 = 一串**步骤**，每步自带反向动作与一个标签（标签就是原来那些
   `rollbackReason('摘账本失败', e)` 里的那个词）；
-- journal 独占：**相反顺序**退化、逐条失败收集、`details.rollbackFailures` 的合并、以及
-  「某一步退不干净时不许让原错误独走」这条语义；
+- journal 独占：**相反顺序**退化、逐条失败收集、以及「某一步退不干净时不许让原错误独走」这条语义；
+  `details.rollbackFailures` 的**合并与措辞**住在 `src/verbs/errors.ts` 的 `withRollbackFailures`，
+  journal 是它唯一的调用方（**2026-10-20 就地订正**：本行原文把"合并"也记在 journal 名下，与代码、
+  `member-journal.ts` 头注③ 和 `docs/architecture.md` §4 都不同源——按本仓口径，翻案个别条目就地补括注）；
 - 三个动词变成三条**策略**：各自只声明「这个成员要按什么顺序做哪几步」，
   不再各自手写嵌套 `try/catch` 与 `failures` 数组。
 
@@ -67,11 +69,11 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
   （`journalFailure` 与组级 `rollbackJournals` 各一处）。
 - 测试落点前移：**步骤顺序**与**回滚顺序**可以拿一个假 journal 直接断言（现有测试已经在用
   `calls.push(...)` 记顺序，形态不用改），不必每次都跑完整动词。
-- 验收断言（写在候选 6 的测试里）：回收站面板的依赖面里不再同时出现 `applyOutcomes` 与 `restore`。
+- 验收断言（`tests/client/remote.test.ts` 的「注入面 · 一个动作只有一条路」）：回收站面板的依赖面里不再同时出现 `applyOutcomes` 与 `restore`。
 
 ## 被否掉的替代
 
 - **只把 `apply.ts` 三个循环抽成 `runBatch`**：解决了第 1 层，第 2、3 层原样——正是这次要拆的东西。
 - **把回滚语义留到下一轮**：等于承认「同一条正反动作对写两遍」长期合法。
 - **让浏览器半也用批量 module**：浏览器半不需要「这一批」的账本，它只要 N=1 的便捷支
-  （见架构复核候选 6）。
+  （N=1 也走同一段，口径在 `src/shared/wire.ts` 的段名那本账）。

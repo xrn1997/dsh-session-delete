@@ -15,7 +15,7 @@
  *    仍住这里，因为它们是**传输**的事。
  *
  * 信封（口径 ②）：`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`。
- * `error.code` 走 `src/remote/map-error.ts` 的**同一张表**（设计稿 §6 的五个码），原文进
+ * `error.code` 走 `src/remote/map-error.ts` 的**同一张表**（src/shared/wire.ts 的五个码），原文进
  * `error.message`，结构化附带物进可选的 `error.details`。
  *
  * HTTP 状态不是第二套语义（口径 ③）：**操作失败**时状态一律 200（含 `ok:false`）——我们与浏览器半之间的
@@ -88,7 +88,7 @@ function writeOk(res: ServerResponse, value: unknown): void {
  *  未知路由 404、栅栏拒 403（它们不是"一次办成的操作"，是"这条请求不归我办/你没资格办"）。
  *  **操作失败**仍回 200 + 信封。浏览器半先解信封再看状态，所以 4xx 上带的信封照样读得出原文；
  *  `code` 一律折成 `sessiondelete/io`，那三个路由标签（`bad-request` / `bad-method` / `not-found-route`）
- *  是**抛出处给读代码的人看的站点名**，不许冒充 §6 的五个动词码上客户端。 */
+ *  是**抛出处给读代码的人看的站点名**，不许冒充 `src/shared/wire.ts` 的五个动词码上客户端。 */
 function writeFailure(res: ServerResponse, error: unknown, status?: number): void {
   const carried = (error as { httpStatus?: unknown })?.httpStatus
   writeJson(res, status ?? (typeof carried === 'number' ? carried : 200), { ok: false, error: toRemoteFailure(error) })

@@ -218,7 +218,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
   })
 })
 
-describe('注入面 · 一个动作只有一条路（架构复核候选 6）', () => {
+describe('注入面 · 一个动作只有一条路', () => {
   it('注入面与面板的 deps 里都没有单条便捷方法：N=1 走 `applyOne`', () => {
     // 这两行是**类型层**的闸：谁把 `restore` / `delete` / `countSubagents` 加回 interface，
     // 它们立刻编译不过（同一个动作在一个 module 里有两条路，正是这一条候选要拆掉的形状）。

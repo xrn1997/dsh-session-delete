@@ -12,7 +12,7 @@ import { planMemberRemovals, type MemberRemovalPlan } from './orphan-subagents.j
  * 与另外两个动词的关系（ADR-0002）：它的 interface 只有"一个条目 id（或缺席 = 清空）"，
  * 批量的快照与"已被同批前一条带走"的判据不在这里（归 `verbs/batch.ts`）。
  *
- * **这条动词不做回滚**：目录删掉就没有"退回去"这回事（设计稿第十七批：删到一半失败时已删目录不回滚；
+ * **这条动词不做回滚**：目录删掉就没有"退回去"这回事（2026-10-19 `f2a7757`：删到一半失败时已删目录不回滚；
  * 带部分计数的 `details` 回执只属于 `orphan-clean`，purge 的 `removed` / `freedBytes` 仍只在成功回执里给）。
  * 所以它的 journal 只有正向步骤、没有 `undo`——顺序仍由 journal 统一表达，不再是手写的四段 `try/catch`。
  */
@@ -29,7 +29,7 @@ export function purgeTrash(deps: DeleteDeps) {
     const targets: readonly TrashEntry[] = entryId === undefined ? all : groupOf(all, entryId)
     if (entryId !== undefined && targets.length === 0) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
 
-    // 级联落地前删掉的父：孩子在盘上还剩着（10-15 稿 §10 那个「盘上还剩 M 个」）。彻底删除是这条存量
+    // 级联落地前删掉的父：孩子在盘上还剩着（界面上那个「盘上还剩 M 个」）。彻底删除是这条存量
     // 唯一的收尾路——不连带它们，用户"彻底删除"之后盘上就真留下一堆点不到的目录。
     // 去重两边都去 `session-` 前缀（同一个会话在两代宿主里写法不同，见 `bareSessionId` 的来历）：
     // 清册里已有的行（跟着父一起进来的孩子）不按"盘上后代"再删一遍；一个父多层时也只计划一次。

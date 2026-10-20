@@ -7,7 +7,7 @@ import { defineConfig } from 'tsdown'
 const PKG_NAME = '@xrn1997/dsh-session-delete'
 
 /** 浏览器半允许表 = **本插件真正 require 的宿主冻结平台模块**（宿主外壳里 `staticModules` 的实参，
- *  隔离数据根上实测过原文，见设计稿 §9）。
+ *  在隔离数据根上实测过；那份原文不住本仓，来历留在 git 历史）。
  *
  *  **2026-10-02 收窄**：上一版是那张表的全部 9 个键（含 `@deepseek-ai/dsh-client-ui-primitives` 与
  *  `-ui-slots` / `-store` / `-dockkit` / `@deepseek-ai/cordis`）。现在本插件**不再 require 任何

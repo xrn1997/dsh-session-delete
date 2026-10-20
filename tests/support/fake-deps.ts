@@ -1,5 +1,5 @@
 /**
- * 测试用的**第二个 adapter**（架构复核候选 7）。
+ * 测试用的**第二个 adapter**。
  *
  * `ports/host-port.ts` 与 `ports/fs-port.ts` 是 seam，生产那边各有一个 adapter（`createHostPort` /
  * `createFsPort`，要起宿主、要真盘）。**一个 adapter 只是假设的 seam，两个才是真的**：这里补齐内存里的

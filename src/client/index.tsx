@@ -1,12 +1,12 @@
 /**
  * 浏览器半入口（CJS 单文件闭包工厂的 `factory` 体，构建契约见 tsdown.config.ts）。
  *
- * 共交付**十个**槽位贡献（第十三批起，批量删除再加五件），分四类：
+ * 共交付**十个**槽位贡献（2026-10-17 起，批量删除再加五件），分四类：
  *
  * - `sidebar.workspaces.session.menu.item` —— 两行：「多选」入口（`BatchSelectMenuItem`，order 850）
  *   与「删除」菜单行（`DeleteMenuItem`，order 900）。多选入口按下后进入多选模式（再按一次退出）
  *   并收菜单；删除行**只发请求**（把 `{sessionId, title}` 写进 `delete-confirm.tsx` 的模块级现场）。
- * - `sidebar.session.row.leading` —— 行首 16px 格的勾选框（`BatchPickCheckbox`，第十三批①）。
+ * - `sidebar.session.row.leading` —— 行首 16px 格的勾选框（`BatchPickCheckbox`，2026-10-17）。
  *   **只在多选模式内渲染**（入口在「⋯ → 多选」，不常驻）。宿主在「有状态点（运行中/待确认/未读完成）」
  *   与归档行不渲染这一格 ⇒ 那些行由下面行尾那颗兜底；槽位只投 `sessionId`，标题
  *   （`displayTitle`）从 root hook 的 `byId[id].title` 读。
@@ -29,7 +29,7 @@
  *   !this.hasMainPanel(panelId)) throw new Error(...)`（asar @21199710）——只有行、没有面板时，
  *   用户点一下就是运行期抛错；反过来先有面板也没有入口。
  *
- * **为什么不是底栏（2026-09-30 实测裁决，设计稿 §10）**：`sidebar.footer.action` 的**惯用形**是
+ * **为什么不是底栏（2026-09-30 实测裁决，判据全在下面三行）**：`sidebar.footer.action` 的**惯用形**是
  * 「42px 整行 + 图标 + 文字 + 右对齐 12px 计数」——官方 `client-ui-cordis` 的占用者 CSS 是
  * `.layer{flex:none;width:100%;height:42px}`，而座位容器只有 `.footerActions{display:flex}`
  * （无 gap、无 wrap）⇒ 我们交的 `Button ghost/sm` 小药丸贴底栏，与下方 42px 的「设置」行不同形。
@@ -149,7 +149,7 @@ function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState, t }
   const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
   const live = select((state) => state?.byId?.[sessionId]?.running === true)
   // 菜单收不收是 owner（本槽位的宿主菜单）的决定，我们只消费它给的这对状态：按下这一行时先发请求、
-  // 再让 owner 收菜单——确认框不叠在菜单上（设计稿 §7 状态 ②；官方 README 的示例同序）。
+  // 再让 owner 收菜单——确认框不叠在菜单上（docs/architecture.md §3.1 状态 ②；官方 README 的示例同序）。
   const useMenuState = typeof useMenuOpenState === 'function' ? useMenuOpenState : NEVER_MENU_OPEN_STATE
   const [, setMenuOpen] = useMenuState()
   return (
@@ -229,7 +229,7 @@ function TrashPanelIconSlot({ size }: { size?: number }) {
  * **探测 → 注册**：取数通道在不在，只有真发一次请求才知道。
  *
  * - 探测不过（打不通 / 回的不是信封）⇒ **早返回**：一个槽位贡献都不注册。页面上的表现是"本插件
- *   不存在"，而不是点下去必然失败的入口——半吊子 UI 比没有 UI 更糟（设计稿 §7「未接通态」）。
+ *   不存在"，而不是点下去必然失败的入口——半吊子 UI 比没有 UI 更糟（docs/architecture.md §3「通道探测决定入口出现与否」）。
  * - 探测过（哪怕 `ping` 回的是 `{ok:false,error}`）⇒ 注册：那次往返证明路由在、依赖接上了、
  *   错误映射也生效了，失败该做的是把原文交给用户看。
  *
@@ -262,7 +262,7 @@ async function activate(client: ClientContextLike): Promise<void> {
     ),
   )
 
-  // ①' 行首勾选框：多选模式内的主勾选（第十三批①）。宿主只在没有状态点、非归档的行渲染这一格；
+  // ①' 行首勾选框：多选模式内的主勾选（2026-10-17）。宿主只在没有状态点、非归档的行渲染这一格；
   // 槽位只投 sessionId，标题由 root hook 补。勾选是原生 Checkbox，自己挡住冒泡（不误开会话）。
   client.slots.inject(LEADING_SLOT, () =>
     client.slots.register(
@@ -297,7 +297,7 @@ async function activate(client: ClientContextLike): Promise<void> {
     ),
   )
 
-  // ②'' 批量删除的两件浮层（第十三批）：浮条与批量确认框。与单删那两件同理，各一次 `inject`、
+  // ②'' 批量删除的两件浮层（2026-10-17）：浮条与批量确认框。与单删那两件同理，各一次 `inject`、
   // 都住在 overlay 上——浮条要跟着每行的勾选开关重绘，确认框必须脱离行子树的生命周期。
   client.slots.inject(OVERLAY_SLOT, () =>
     client.slots.register(
@@ -317,7 +317,7 @@ async function activate(client: ClientContextLike): Promise<void> {
   // order 落在官方两个面板行（plugins 0 / schedules）与第三方「小说」（20）之后。
   // **名字走 thunk**：宿主 `resolveSlotLabel` 在每次重读时才求值，并在语言变化时重读
   // （`ctx.locale.subscribe(syncPanels)`）⇒ 切换语言这一行跟着走。**别改成活计数**：它只在
-  // 条目变化或语言变化时重读，拿它当计数必然 stale（设计稿 §7）。
+  // 条目变化或语言变化时重读，拿它当计数必然 stale（docs/architecture.md §3.1）。
   client.slots.inject(PANEL_SLOT, () =>
     client.slots.register(
       { name: PANEL_SLOT, id: PANEL_ID, order: 900, label: () => t('trash.title') },

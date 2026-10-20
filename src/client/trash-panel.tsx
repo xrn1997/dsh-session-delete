@@ -1,14 +1,13 @@
 /**
- * 回收站清单面板（设计稿 §7 状态 ④⑤ + 2026-10-15 §2 的两栏形态）——**中央面板的本体**（`main` 槽的占用者）。
+ * 回收站清单面板（界面规格 §3.1 的状态 ④⑤ + 两栏形态）——**中央面板的本体**（`main` 槽的占用者）。
  *
  * 面板自带页面骨架（标题 / 条数与合计 / 工具排 / 内容区 / 页脚），因为宿主给中央列的那个盒子
  * （`AppFrame` 的 `.centerCol`）只有背景与圆角，**没有 padding、也不是滚动容器**——asar 里那条
  * `.BynINW_centerCol{background:var(--dsw-alias-bg-base);border-radius:…;corner-shape:round}` 逐字
  * 如此。回收站可以很长（本机 125 个会话合计 85M），不自己收滚动就会把整列顶长。
  *
- * **2026-10-15 形态改版：居中一列 → 清单在左、单条详情在右。**三条决定摆在这里（判据全在
- * `docs/design/2026-10-15-trash-detail-design.md` §6，本节只记结论；**现行界面规格住 `docs/design/
- * 2026-09-30-session-delete-design.md` §7**——那份是批次日志，§7 之后各批会改写它）：
+ * **2026-10-15 形态改版：居中一列 → 清单在左、单条详情在右。**三条决定摆在这里（现行界面规格住
+ * `docs/architecture.md` §3.1，本文件只记这三条与实现约束）：
  * ① 动机：一条只有一个标题，判断不了该恢复还是该彻底删除 ⇒ 详情要摆出这条会话自己日志里的元信息
  *   与正文，而详情只能我们自己画（宿主读不到回收站目录里的文件）；
  * ② 断点 900px（盒子宽，不是窗口宽）：中央列宽由 `usePanelWidth`（ResizeObserver）观测，**只听
@@ -46,12 +45,13 @@
  *   + 就地覆盖 `--dsw-alias-button-primary-fill` / `-hover`）照抄宿主插件管理页 @21658274。
  *
  * 布局只用**结构**内联样式，**配色与圆角一律走 token**，**字号是字面量 px**（宿主同类面也这么写）。
- * 结构与层级归设计稿 §7 与 2026-10-15 §2，皮肤只由 token 决定。控件样式住在 `src/client/ui/ui.css`，
+ * 结构与层级归 docs/architecture.md §3.1，皮肤只由 token 决定。控件样式住在 `src/client/ui/ui.css`，
  * 由 `ui/styles.ts` 在浏览器半模块物化时挂成一个 `<style>`——这是宿主给客户端插件的一等公民通道。
  *
  * **浅色主题已在真机看过（2026-10-01）**：浅色下 `bg-base` 与 `bg-layer-2` 同值（都是 `bluish-00`）
  * ⇒ 卡片只剩一根 `border-l4` 描边与页面分隔，分组靠组头 + 间距站住。**选中态在两档下都要另量**
- * （浅 `#fff` → `#ebeef2`、深 `#2c2c2e` → `#43454a`），量法见 2026-10-15 §4 第 5 条。
+ * （浅 `#fff` → `#ebeef2`、深 `#2c2c2e` → `#43454a`，2026-10-01/10-15 真机量的）；那两档取自同一个
+ * token，来源表见 `src/client/ui/ui.css` 文件头。
  */
 import {
   type CSSProperties,
@@ -87,7 +87,7 @@ import { useTrashSelection } from './use-trash-selection.js'
 import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
 
 /** 面板的依赖面：三个读（`list` / `detail` / `scanOrphans`）+ **一段 `apply`** + 清空。
- *  **没有第二条路**（架构复核候选 6）：「恢复一条」也走 `apply`（N=1），面板不再同时吃
+ *  **没有第二条路**：「恢复一条」也走 `apply`（N=1），面板不再同时吃
  *  `applyOutcomes` 与一个便捷的 `restore`。 `scanOrphans` 是回收站之外那批无主子会话的纯读报告。 */
 export type TrashPanelDeps = Pick<
   SessionDeleteRemote,
@@ -105,7 +105,7 @@ export interface TrashPanelProps {
 const TRASH_DIR = TRASH_DIR_LABEL
 
 /**
- * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（设计稿 2026-10-15 §2.1，2026-10-15 真机后定值）。
+ * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（docs/architecture.md §3.1，2026-10-15 真机后定值）。
  *
  * 为什么是 900 而不是当初那个 760：760 是从"正文列限宽"那条关心得搬来的，**不是两栏所需宽度**。
  * 两栏要成立，详情那一栏得真的读得下去：那一格固定要吃掉 90（两道 gap 32 + 把手 10 + 页内边距 48），
@@ -230,7 +230,7 @@ function deletedAgo(at: number, now: number, t: Translate): string {
     : t('trash.row.deletedAgo', { n, unit: unitWord(unit, t) })
 }
 
-/* 「这一次彻底删除会释放多少」**不在这里算**（架构复核候选 8）：它是存储侧的事实（本行 + 跟着进来的孩子
+/* 「这一次彻底删除会释放多少」**不在这里算**：它是存储侧的事实（本行 + 跟着进来的孩子
  * + 盘上还留着的后代，彻底删除删的正是这三样），由 Node 半算一次、`releaseBytes` 过线。浏览器半照单念——
  * 头部合计与单条确认卡片都读它，于是同一屏不可能有两套口径，也就不再有"两行都算到同一个后代"那种偏差。 */
 
@@ -246,7 +246,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     }
   }, [])
 
-  // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`（候选 3 的第二道 seam）。
+  // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`。
   const query = useTrashQuery({ deps, t, around })
   const {
     entries, listFailure,
@@ -269,7 +269,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const wide = width >= SPLIT_MIN_WIDTH
   /**
    * 真走两栏的条件：盒子够宽 **且清单里有东西可看**。空态与读数失败时右栏不出现——那一栏既没有
-   * 可选项也没有动作，白占一半宽度（设计稿 2026-10-15 §2.3 第 1 条）。失败那块自己的「重试」
+   * 可选项也没有动作，白占一半宽度（docs/architecture.md §3.1）。失败那块自己的「重试」
    * 负责把清单读回来，读回来之后右栏跟着回来。
    */
   const split = wide && entries !== null && entries.length > 0
@@ -313,7 +313,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   )
 
   const groups = useMemo(() => groupByProject(entries ?? [], t), [entries, t])
-  // 选择面（多选 / 折叠 / 勾选与它们派生的三样只读）整块住在 `use-trash-selection.ts`（候选 3 的第三道 seam）。
+  // 选择面（多选 / 折叠 / 勾选与它们派生的三样只读）整块住在 `use-trash-selection.ts`。
   const selection = useTrashSelection({ entries, groups })
   const {
     selectMode, checked, checkedIds, ordered, allCollapsed,
@@ -341,7 +341,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   }, [])
 
   /**
-   * 下钻里按 Esc 退回清单（设计稿 2026-10-15 §2.4）。
+   * 下钻里按 Esc 退回清单（docs/architecture.md §3.1）。
    *
    * 监听挂在 `document` 而不是清单容器：窄档下钻时清单**不在 DOM 里**，挂在容器上的 Esc 是一条
    * 永远收不到的死路径。退回后焦点交还给选中的那一行（行还没进 DOM，所以记一笔等这一拍渲染完再做）。
@@ -660,7 +660,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   style={isSelected ? CARD_SELECTED : CARD}
                   onClick={() => {
                     // 多选态下点行说的是"勾上/取消这一条"，不再切换详情：两套语义同时活在一次点击里
-                    // 一定有一套是错的（设计稿 §7 状态④）。
+                    // 一定有一套是错的（docs/architecture.md §3.1 状态④）。
                     if (selectMode) {
                       toggleCheck(entry.id)
                       return
@@ -705,7 +705,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       </div>
                     ) : null}
                     {/* 恢复/彻底删除 的失败原文留在这条记录上（2026-10-15 真机反馈：动作回到行内，
-                        失败也就跟着回行内——"动作与它的原因在同一行"这条从 §7 沿下来，没换地方）。 */}
+                        失败也就跟着回行内——"动作与它的原因在同一行"这条住 docs/architecture.md §3.1「失败落点」，没换地方）。 */}
                     {actionFailure[entry.id] === undefined ? null : (
                       <div
                         role="status"
@@ -775,7 +775,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
    * 那一排**常驻面板体顶端**，不住清单列里：它原先在滚动容器内，长清单滚到底会把开关滚走。
    * 宽度上限跟着清单列走，所以它在视觉上仍然"属于清单"。
    *
-   * 这里曾有一颗「刷新」图标（2026-10-15 第三批收进那一排、第四批降级成图标，**2026-10-16
+   * 这里曾有一颗「刷新」图标（2026-10-15 收进那一排、同日降级成图标，**2026-10-16
    * 按用户裁定删除**）：清单现在是"每次读都对账"（见 `reconcile.ts`），开面板、切走再切回、
    * 重启——任何一次读都会先同步，那颗按钮不再承担别人替代不了的活。
    */
@@ -938,7 +938,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           <span style={{ marginLeft: 'auto', flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
             {/* 多选态下这里住两颗：**恢复 N 条**（描边款，无确认框的单行「恢复」的批量版——它带确认框，
                 因为一批条目多、去向是各自的旧项目目录）与**彻底删除 N 条**（实心红）。危险那颗位置不换：
-                §7 那句"整页唯一一块实心红"靠"它永远是这一排的最后一个"来守。
+                docs/architecture.md §3.1「危险层级」那句"整页唯一一块实心红"靠"它永远是这一排的最后一个"来守。
                 一条没勾时两颗都置灰，原因走 Tooltip——置灰的按钮自己不吃 hover，anchor 用一层 span，
                 与 `delete-menu-item` 那处运行中置灰是同一个路子。 */}
             {selectMode ? (

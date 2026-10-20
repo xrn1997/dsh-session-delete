@@ -31,13 +31,18 @@
  * 它的把手由 JS 侧的 pointer capture 承担；② `[data-dsh-session-delete="trash-row"]:focus-visible`
  * （清单那一行的键盘焦点描边，复用选中态那枚 `ghost-active-border`）——宿主那套表里行不是可聚焦
  * div，我们这一行是 `role="option"` 且要吃 ↑↓，而这一代 `--dsw-focus-ring-color` 是 `transparent`；
- * ③ `.sd-rowaction-button` 的 `[aria-pressed='true']` 与 `:disabled` 两档（2026-10-17 第十三批）——
+ * ③ `.sd-rowaction-button` 的 `[aria-pressed='true']` 与 `:disabled` 两档（2026-10-17）——
  * 官方那颗 `iconButton` 只有常态与 hover，勾选开关要有"按下"和"这条删不动"两档，token 与回收站
- * 选中行同源（`--dsw-alias-button-ghost-active-*`）；④ `.sd-batch-bar`（同日同批）——宿主没有"浮条"
+ * 选中行同源（`--dsw-alias-button-ghost-active-*`）；④ `.sd-batch-bar`（同日）——宿主没有"浮条"
  * 这件控件，四件 token 自拼；⑤ 宿主行的批量选中底色与兜底隐藏（同日改版）——宿主的行选中态不归
  * 第三方，整行可见性靠 `data-row-key` + `:has`，token 与回收站选中行同源；行首格在场时行尾兜底退场。
  * 整张表里就这五条是我们自造的，标在这里，
  * 下次做「与官方逐条比对」时它属于**已知差异**，不是漂移。
+ *
+ * **另有一处已知差异不住在本文件**：回收站组头那颗按钮的 `text-align: start`。宿主 `DisclosureRow` 那份
+ * 是 `div`，没有这个坑；我们这行要做成可点的 `<button>`，UA 样式表的 `text-align:center` 会渗进里面的
+ * 文字（真机上就是项目名整条居中，2026-10-15 截图）。它写在 `src/client/trash-panel.tsx` 组头那一行的
+ * inline 样式上——**所以「与官方逐条比对」时本表仍然只数上面那五条**，这条不算进抄本差异。
  */
 
 /* ────────────────────────── Button ────────────────────────── */
@@ -641,7 +646,7 @@ button.sd-disclosure-leading {
 }
 
 /* 本插件自造的第二条（不是抄本，见文件头点名）：清单行是 `role="option"` 的可聚焦 div，而这一代
-   `--dsw-focus-ring-color` 逐字是 `transparent`（设计稿 2026-10-15 §1.3）——不自己描一条，键盘走
+   `--dsw-focus-ring-color` 逐字是 `transparent`（2026-10-15 实测）——不自己描一条，键盘走
    ↑↓ 选会话时就没有任何焦点可见性。描边**复用选中态那枚** `ghost-active-border`，不新造颜色；
    0.5px 与 `outline-offset: 1px` 是行的描边宽度与一档外移，不动布局（outline 不进滚动区）。 */
 [data-dsh-session-delete="trash-row"]:focus-visible {
@@ -683,7 +688,7 @@ button.sd-disclosure-leading {
   cursor: not-allowed;
 }
 
-/* 行首 16px 格里的勾选框（第十三批①改版，**只在多选模式内渲染**）。格本身由宿主居中（16×20），
+/* 行首 16px 格里的勾选框（2026-10-17 改版，**只在多选模式内渲染**）。格本身由宿主居中（16×20），
    这里只把包装层压成同样大小；勾选框本体是回收站多选同款原生 input（`.sd-checkbox`，见上）。 */
 .sd-batch-pick-leading {
   display: inline-flex;
