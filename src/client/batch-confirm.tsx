@@ -9,11 +9,13 @@
  * 现场是模块级的（同 `delete-confirm.tsx` / `undo-toast.tsx`）：请求从浮条那颗按钮发来，确认框住在
  * `shell.overlay` 上——它必须活在行开关那棵子树之外（槽位行随宿主重排而卸载，见 `delete-confirm.tsx` 头注）。
  */
-import { useEffect, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
+import { fetchCounts } from './batch-select.js'
 import { TARGET_CARD } from './delete-confirm.js'
-import { fetchCounts, getPicks, shrinkPicksToFailures, type PickItem } from './batch-select.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
+import { getPicks, shrinkPicksToFailures, type PickItem } from './batch-selection-store.js'
+import { createStore } from './store.js'
 import { invalidateTrash } from './trash-store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
@@ -26,49 +28,35 @@ export interface BatchDeleteRequest {
   items: readonly PickItem[]
 }
 
-let request: BatchDeleteRequest | null = null
-let nextSeq = 0
-const listeners = new Set<() => void>()
-
-const emit = (): void => {
-  for (const listener of listeners) listener()
-}
+const requestStore = createStore<BatchDeleteRequest | null>(null)
 
 /** 浮条那颗按钮调用：请求确认这一批（缺省 = 当前选中集）。空名单不发框。 */
 export function requestDeleteBatch(items: readonly PickItem[] = getPicks()): void {
   if (items.length === 0) return
-  request = { seq: (nextSeq += 1), items: [...items] }
-  emit()
+  requestStore.publish((seq) => ({ seq, items: [...items] }))
 }
 
 export function clearDeleteBatchRequest(): void {
-  if (request === null) return
-  request = null
-  emit()
+  requestStore.set(null)
 }
 
 /** 重试轮之后把现场收缩到失败名单（框里只剩还没办成的那几条）。 */
 function shrinkRequestToFailures(failedSessionIds: readonly string[]): void {
-  if (request === null) return
-  const keep = new Set(failedSessionIds)
-  request = { ...request, items: request.items.filter((item) => keep.has(item.sessionId)) }
-  emit()
-}
-
-function getBatchRequest(): BatchDeleteRequest | null {
-  return request
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
+  requestStore.update((current) => {
+    if (current === null) return current
+    const keep = new Set(failedSessionIds)
+    return { ...current, items: current.items.filter((item) => keep.has(item.sessionId)) }
+  })
 }
 
 /** 供浮条与装配面订阅。 */
 export function useDeleteBatchRequest(): BatchDeleteRequest | null {
-  return useSyncExternalStore(subscribe, getBatchRequest, getBatchRequest)
+  return requestStore.use()
+}
+
+/** 测试专用：现场与 seq 归零，用例之间互不串味。 */
+export function resetBatchConfirm(): void {
+  requestStore.reset()
 }
 
 export type BatchConfirmDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>

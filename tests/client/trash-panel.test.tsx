@@ -5,13 +5,18 @@
 // （`renderWide` / `renderNarrow`，替身见 support/observe-width.ts）。jsdom 没有真实布局，
 // `clientWidth` 恒 0 ⇒ 不装替身就是窄档，正好也是"读不到就当窄"那条默认。
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
-import { invalidateTrash } from '../../src/client/trash-store.js'
+import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
 import type { TrashDetailLike } from '../../src/client/remote.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
 import { firePointer } from './support/pointer.js'
+
+// 修订号是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
+beforeEach(() => {
+  resetTrashStore()
+})
 
 const rows = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 224 * 1024, releaseBytes: 224 * 1024, title: '/code-review' },
@@ -202,22 +207,6 @@ describe('回收站面板 · 两栏与下钻', () => {
     expect(screen.getByRole('option', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
   })
 
-  it('一条会话只读一次：切走再切回来不重发 detail', async () => {
-    const deps = makeDeps()
-    const two = [
-      { ...rows[0], id: 'a', title: '第一条' },
-      { ...rows[0], id: 'b', title: '第二条' },
-    ]
-    deps.list = vi.fn(async () => two)
-    renderWide(deps)
-    fireEvent.click(await screen.findByRole('option', { name: /第二条/ }))
-    await waitFor(() => expect(deps.detail).toHaveBeenCalledWith('b'))
-    fireEvent.click(screen.getByRole('option', { name: /第一条/ }))
-    await waitFor(() => expect(deps.detail).toHaveBeenCalledTimes(2))
-    fireEvent.click(screen.getByRole('option', { name: /第二条/ }))
-    await waitFor(() => expect(deps.detail).toHaveBeenCalledTimes(2))
-  })
-
   it('详情读失败只坏详情那一块：清单仍可选、行内动作仍可点', async () => {
     const deps = makeDeps({
       detail: vi.fn(async () => {
@@ -329,25 +318,6 @@ describe('回收站面板 · 其余行为', () => {
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
     expect(screen.queryByText('先看改动')).not.toBeInTheDocument()
     expect(deps.list).toHaveBeenCalledTimes(2)
-  })
-
-  it('失败的行留着，恢复按钮可以再点（不是一次失败就没了）', async () => {
-    const deps = makeDeps({
-      applyOutcomes: vi.fn()
-        .mockImplementationOnce(async (action: string, ids: readonly string[]) => ids.map((id) => ({
-          id, action, ok: false as const,
-          error: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' },
-        })))
-        .mockImplementationOnce(async (action: string, ids: readonly string[]) => ids.map((id) => ({
-          id, action, ok: true as const, value: { id: 'e1' } as never,
-        }))),
-    })
-    renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
-    expect(await screen.findByRole('status')).toHaveTextContent(/原项目目录已不存在/)
-    fireEvent.click(within(screen.getByRole('option', { name: /code-review/ })).getByRole('button', { name: '恢复' }))
-    await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledTimes(2))
   })
 
   it('行里的「彻底删除…」也要先确认，确认后走一次 purge（N=1 的批量）', async () => {

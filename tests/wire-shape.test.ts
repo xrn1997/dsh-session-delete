@@ -47,23 +47,37 @@ describe('清册的落地形状与线上形状', () => {
   })
 
   it('投影只发线上形状里那几格：清册八格 + releaseBytes，可选的那几格缺席就是缺席', () => {
-    const wire = toWire(ENTRY)
-    // 清册那八格 + `releaseBytes`（必填：存储侧的"这一次会释放多少"，见 ADR-0003）
+    const wire = toWire(ENTRY, { releaseBytes: 4096 })
+    // 清册那八格 + `releaseBytes`（必填：计划实测的"这一次会释放多少"，见 ADR-0003）
     expect(Object.keys(wire).sort()).toEqual([...Object.keys(ENTRY), 'releaseBytes'].sort())
-    expect(wire.releaseBytes).toBe(ENTRY.sizeBytes) // 没有孩子、没有盘上后代 ⇒ 就是它自己那一格
+    expect(wire.releaseBytes).toBe(4096) // 原样带走：算式住计划，不在这里
     // 其余只读数一格都不出现：缺席 ≠ 0，界面上不许拿 0 冒充"没有"
     expect(Object.keys(wire)).not.toContain('subagentCount')
     expect(Object.keys(wire)).not.toContain('strandedBytes')
     expect(wire).not.toHaveProperty('parentEntryId')
   })
 
-  it('`releaseBytes` 是唯一算式：本行 + 孩子 + 盘上后代（浏览器半不再各算一遍）', () => {
-    const wire = toWire(ENTRY, { subagentCount: 2, subagentBytes: 4096, strandedSubagents: 1, strandedBytes: 1024 })
-    expect(wire.releaseBytes).toBe(ENTRY.sizeBytes + 4096 + 1024)
+  it('`releaseBytes` 是必填读数列、原样带走：toWire 不再自己算式（口径只住计划）', () => {
+    const wire = toWire(ENTRY, {
+      releaseBytes: 12_345,
+      subagentCount: 2,
+      subagentBytes: 4096,
+      strandedSubagents: 1,
+      strandedBytes: 1024,
+    })
+    // 不是 `sizeBytes + 4096 + 1024`：实测口径（含目录存在性）住 `planVisibleTrash`，投影只搬运。
+    expect(wire.releaseBytes).toBe(12_345)
+  })
+
+  it('`releaseBytes` 在 readouts 里是必填：不传编译不过（没有 0 缺省）', () => {
+    // @ts-expect-error releaseBytes 是计划算好的那一格：缺席 = 没算过，不许拿 0 冒充
+    const missing: Parameters<typeof toWire>[1] = {}
+    expect(missing).toEqual({})
   })
 
   it('只读数与 `parentEntryId` 在场时才过线，值原样带走', () => {
     const wire = toWire({ ...ENTRY, parentEntryId: 'root-id' }, {
+      releaseBytes: 2048,
       subagentCount: 2,
       subagentBytes: 4096,
       strandedSubagents: 1,
@@ -72,6 +86,7 @@ describe('清册的落地形状与线上形状', () => {
     })
     expect(wire).toMatchObject({
       parentEntryId: 'root-id',
+      releaseBytes: 2048,
       subagentCount: 2,
       subagentBytes: 4096,
       strandedSubagents: 1,
@@ -81,7 +96,7 @@ describe('清册的落地形状与线上形状', () => {
   })
 
   it('投影的产物就是 `TrashRowWire`（类型层，加字段时编译不过）', () => {
-    const wire: TrashRowWire = toWire(ENTRY)
+    const wire: TrashRowWire = toWire(ENTRY, { releaseBytes: ENTRY.sizeBytes })
     // 反向也要成立：`TrashRowWire` 的每一格都是投影会填的（或可选缺席的）
     const back: Parameters<typeof toWire>[0] = ENTRY
     expect(wire.id).toBe(back.id)

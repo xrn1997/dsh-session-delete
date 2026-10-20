@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { purgeTrash } from '../src/verbs/purge-trash.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
@@ -100,21 +103,38 @@ describe('彻底删除', () => {
   // 级联落地前删掉的父：孩子在盘上还剩着，purge 必须收尾把它们一起清掉——先 unarchive（盘上后代
   // 本来没被删过，账本也可能是挂着的），再删目录；`removed` 与 `freedBytes` 都算上这些目录。
   it('盘上还剩的后代跟着一起清：先 unarchive，再删目录，字节与条数都算上', async () => {
-    const { d, fs, host } = deps([e('p')])
-    host.subagentMembersBatch = vi.fn(async () => ({
-      p: [{ sessionId: 'session-kid', projectDir: '--p--' }],
+    const { d, fs, host, calls } = deps([e('p')])
+    host.subagentMembersOf = vi.fn(async () => ({
+      available: true as const,
+      value: { p: [{ sessionId: 'session-kid', projectDir: '--p--' }] },
     }))
     const r = await purgeTrash(d)('p')
     expect(r).toEqual({ removed: 2, freedBytes: 1024 })
     expect(host.unarchive).toHaveBeenCalledWith('p')
     expect(host.unarchive).toHaveBeenCalledWith('session-kid')
     expect(fs.removeDir).toHaveBeenCalledWith(sessionDirOf('--p--', 'session-kid', HOME))
+    expect(calls).toEqual([
+      'evictLive(p)', 'announceRemoved(p)',
+      'evictLive(session-kid)', 'announceRemoved(session-kid)',
+    ])
+  })
+
+  // 语料看不见不是失败：这次只清清册里的那部分，盘上残留留给 `GET /orphans` 兜底（与 delete 的降级一致）。
+  it('语料看不见（available:false）⇒ 静默降级，只清清册里的那一部分', async () => {
+    const { d, fs, host } = deps([e('p')])
+    host.subagentMembersOf = vi.fn(async () => ({ available: false as const }))
+    const r = await purgeTrash(d)('p')
+    expect(r).toEqual({ removed: 1, freedBytes: 512 })
+    expect(fs.removeDir).toHaveBeenCalledTimes(1)
+    expect(host.unarchive).toHaveBeenCalledWith('p')
+    expect(host.subagentMembersOf).toHaveBeenCalledTimes(1)
   })
 
   it('盘上后代在跑 ⇒ live，整个条目一条目录都不删，归档/账本/清册也零副作用', async () => {
     const { d, fs, host } = deps([e('p')])
-    host.subagentMembersBatch = vi.fn(async () => ({
-      p: [{ sessionId: 'session-kid', projectDir: '--p--' }],
+    host.subagentMembersOf = vi.fn(async () => ({
+      available: true as const,
+      value: { p: [{ sessionId: 'session-kid', projectDir: '--p--' }] },
     }))
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')
     await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
@@ -124,10 +144,23 @@ describe('彻底删除', () => {
     expect(await d.manifest.list()).toHaveLength(1)
   })
 
+  // 迁移前后有意接受的差异（ADR-0006 行为差异第 1 条）：过去 purge 只查盘上后代，target 自己在跑也照删；
+  // 现在计划先查 targets、再查后代，任一在跑整条拒绝。
+  it('target 自己在跑 ⇒ live，同样零副作用（目标不再能绕过活体准入）', async () => {
+    const { d, fs, host } = deps([e('p')])
+    host.isLive = vi.fn(async (id: string) => id === 'p')
+    await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    expect(fs.removeDir).not.toHaveBeenCalled()
+    expect(host.unarchive).not.toHaveBeenCalled()
+    expect(host.detach).not.toHaveBeenCalled()
+    expect(await d.manifest.list()).toHaveLength(1)
+  })
+
   it('盘上后代的 session id 非单段 ⇒ 响亮失败，不删任何目录', async () => {
     const { d, fs, host } = deps([e('p')])
-    host.subagentMembersBatch = vi.fn(async () => ({
-      p: [{ sessionId: '../escape', projectDir: '--p--' }],
+    host.subagentMembersOf = vi.fn(async () => ({
+      available: true as const,
+      value: { p: [{ sessionId: '../escape', projectDir: '--p--' }] },
     }))
     await expect(purgeTrash(d)('p')).rejects.toThrow(/不是单段路径/)
     expect(fs.removeDir).not.toHaveBeenCalled()
@@ -138,8 +171,9 @@ describe('彻底删除', () => {
     const parent = e('p')
     const kid = { ...e('k'), parentEntryId: 'p' }
     const { d, fs, host } = deps([parent, kid])
-    host.subagentMembersBatch = vi.fn(async () => ({
-      p: [{ sessionId: 'k', projectDir: '--p--' }],
+    host.subagentMembersOf = vi.fn(async () => ({
+      available: true as const,
+      value: { p: [{ sessionId: 'k', projectDir: '--p--' }] },
     }))
     await purgeTrash(d)('p')
     expect(fs.removeDir).toHaveBeenCalledTimes(2) // p 与 k 的回收站目录，不是 3
@@ -165,5 +199,29 @@ describe('彻底删除', () => {
     await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/io' })
     expect(fs.removeDir).not.toHaveBeenCalled()
     expect(await d.manifest.list()).toHaveLength(1)
+  })
+})
+
+const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
+const VERB = 'src/verbs/purge-trash.ts'
+
+/**
+ * 源码断言：这条动词只剩"选目标 + 拿计划交给执行器"。步骤顺序、量目录、删目录与通告都归
+ * `verbs/permanent-removal.ts`——在这里再长出一段手写 journal 或自己调 `removeDir`，
+ * 就等于同一个顺序又有第二个家（ADR-0002 那条"一次移动只有一个家"的延长线）。
+ */
+describe('purge 的实现面：删除顺序归执行器', () => {
+  const source = () => readFileSync(join(ROOT, VERB), 'utf8')
+
+  it('不再 import createJournal，也不自己调 deps.fs.removeDir', () => {
+    const text = source()
+    expect(text).not.toContain('createJournal')
+    expect(text).not.toContain('deps.fs.removeDir')
+  })
+
+  it('选完目标之后直接接上计划与执行器', () => {
+    const text = source()
+    expect(text).toContain('planTrashRemoval(')
+    expect(text).toContain('executeRemoval(')
   })
 })

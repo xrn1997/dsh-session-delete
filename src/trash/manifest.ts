@@ -18,7 +18,8 @@ export function createMemoryManifest(seed: TrashEntry[] = []): ManifestPort {
 
 /** 宿主 storage domain 的最小面。这是**接缝**，不是对宿主 API 的断言：
  *  探针只枚举到 `ctx.storageDomain` 有 `open` / `get` / `domains` / `reserved` 等成员，
- *  **没有**枚举 `open()` 返回的 domain 句柄面 ⇒ 真实绑定由 `createStorageManifest` 写一层薄适配
+ *  **没有**枚举 `open()` 返回的 domain 句柄面 ⇒ 真实绑定由 `src/trash/storage-manifest.ts` 的
+ *  `createHostStorageManifest` 写一层薄适配
  *  （官方读面若只有迭代器/快照，就把迭代器折成 `readAll()`，不在动词层引入第二种读法）。 */
 export interface StorageDomainLike {
   readAll(): Promise<TrashEntry[]>

@@ -5,19 +5,30 @@
 // 菜单行随菜单一起卸载（真产物 `Menu` 是 `open && jsxs(MenuSurface, { … children: [items.map(renderEntry),
 // children] })`），住在行里的确认框会被连坐卸载，所以它搬到了 `shell.overlay` 上的宿主里
 // （`delete-confirm.tsx`；宿主与行在真实装配里是分开挂的，见 `index.test.tsx` 的门回归用例）。
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { type ReactElement } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { DeleteConfirmHost, clearDeleteRequest } from '../../src/client/delete-confirm.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  DeleteConfirmHost,
+  requestDelete,
+  resetDeleteRequest,
+  useDeleteRequest,
+} from '../../src/client/delete-confirm.js'
 import { DeleteMenuItem, type DeleteMenuItemProps } from '../../src/client/delete-menu-item.js'
 import type { DeleteConfirmDeps } from '../../src/client/remote.js'
 import { fakeApply } from './support/fake-apply.js'
-import { UndoToast, clearUndoNotice } from '../../src/client/undo-toast.js'
+import { UndoToast, resetUndoNotice } from '../../src/client/undo-toast.js'
 
 beforeEach(() => {
-  // 撤销提示与删除请求都是**模块级现场**（跨用例存活）：每个用例前清一次，用例之间互不串味。
-  clearUndoNotice()
-  clearDeleteRequest()
+  // 撤销提示与删除请求都是**模块级现场**（跨用例存活）：每个用例前复位，用例之间互不串味。
+  resetUndoNotice()
+  resetDeleteRequest()
+})
+
+afterEach(() => {
+  // 收场也复位：用例中途失败时，下一份文件/下一轮不从上一轮的现场接着跑。
+  resetUndoNotice()
+  resetDeleteRequest()
 })
 
 /** 行 + 确认框宿主（缺省再挂上撤销提示的宿主），也就是真机上同屏的那几样。 */
@@ -126,6 +137,20 @@ describe('确认框', () => {
     fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
     await waitFor(() => expect(del).toHaveBeenCalledTimes(1))
     expect(screen.queryByText(/子会话/)).not.toBeInTheDocument()
+  })
+})
+
+describe('模块级现场', () => {
+  it('每发一条删除请求 seq 递增（确认框靠它重挂载，busy / 失败面不带记忆）', () => {
+    const { result } = renderHook(() => useDeleteRequest())
+    act(() => {
+      requestDelete({ sessionId: 'a', title: 'A' })
+    })
+    expect(result.current).toMatchObject({ seq: 1, sessionId: 'a', title: 'A' })
+    act(() => {
+      requestDelete({ sessionId: 'b', title: 'B' })
+    })
+    expect(result.current).toMatchObject({ seq: 2, sessionId: 'b', title: 'B' })
   })
 })
 

@@ -16,7 +16,7 @@ import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiHandler } from '../src/api/dispatch.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyOutcome } from '../src/shared/wire.js'
-import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
+import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import type { DeleteDeps } from '../src/verbs/delete-session.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createFakeDeps } from './support/fake-deps.js'
@@ -48,13 +48,16 @@ function makeDeps(over: {
   subagents?: Record<string, number>
   members?: Record<string, Array<{ sessionId: string; projectDir: string }>>
   workspaceExists?: boolean
+  /** 按**完整路径**给盘上目录的实测字节；给了就以此为唯一来源（没列到的目录是 0），
+   *  不再用缺省的 224 KiB——"清册记的"与"盘上实测的"要在同一个世界里对得出来。 */
+  sizes?: Record<string, number>
 } = {}) {
   const seed = over.seed ?? []
   const made = createFakeDeps({
     seed,
     now: NOW,
     live: over.live ?? false,
-    // 计数与"盘上后代"两个口共用 `members`：给了 `subagents` 就按它回，否则按成员数推（与宿主同口径）。
+    // 计数与"盘上后代"两个口共用 `members`：给了 `subagents` 就按它构造等长成员，否则按成员数推（与宿主同口径）。
     counts: over.subagents,
     members: over.members ?? {},
     workspaceExists: over.workspaceExists ?? true,
@@ -73,6 +76,12 @@ function makeDeps(over: {
         )),
     },
   })
+  // 显式给了尺寸表就整条换掉：没列到的目录量到 0，而不是缺省的 224 KiB——
+  // 需要区分"清册记的 sizeBytes"与"盘上实测"的用例，这两半边必须各说各的数。
+  if (over.sizes !== undefined) {
+    const sizes = over.sizes
+    made.fs.sizeOfDir.mockImplementation(async (path: string) => sizes[path] ?? 0)
+  }
   return { deps: made.deps, fs: made.fs, host: made.host, manifest: made.manifest }
 }
 
@@ -183,6 +192,14 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     ]
     const { deps, host } = makeDeps({
       seed: [parent, ...kids],
+      // 孩子清册里记的是 700 / 300，盘上实测是 500 / 300：读数必须念实测的那一组。
+      sizes: {
+        [trashDirOf(parent.id, HOME)]: 4096,
+        [trashDirOf(kids[0]!.id, HOME)]: 500,
+        [trashDirOf(kids[1]!.id, HOME)]: 300,
+        [sessionDirOf('--p--', 'session-grandkidA', HOME)]: 200,
+        [sessionDirOf('--p--', 'session-grandkidB', HOME)]: 100,
+      },
       members: {
         'session-parent': [
           { sessionId: 'session-kidA', projectDir: '--p--' },
@@ -199,12 +216,96 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number; strandedSubagents?: number; strandedBytes?: number; releaseBytes?: number }>
     expect(rows.map(r => r.sessionId)).toEqual(['session-parent'])
     expect(rows[0]).toMatchObject({
-      subagentCount: 2, subagentBytes: 1000,
-      strandedSubagents: 2, strandedBytes: 448 * 1024,
-      // 唯一算式：本行（0）+ 折进来的 1000 + 盘上孙代 448KB；清册里已有的两个孩子不重复算。
-      releaseBytes: 1000 + 448 * 1024,
+      // 孩子折进父行：条数是 kids 的长度，字节是孩子**回收站目录**的实测值（500 + 300），不是清册的 700 + 300。
+      subagentCount: 2, subagentBytes: 800,
+      strandedSubagents: 2, strandedBytes: 300,
+      // 计划量的是盘上目录：本行 4096 + 孩子 800 + 盘上孙代 300；清册里已有的孩子不重复算。
+      releaseBytes: 4096 + 800 + 300,
     })
-    expect(host.subagentMembersBatch).toHaveBeenCalledTimes(1)
+    expect(host.subagentMembersOf).toHaveBeenCalledTimes(1)
+  })
+
+  // 释放量的唯一口径是盘上实测（与 purge 同一条），不是清册里删除那一刻记的 sizeBytes。
+  it('/list 的 releaseBytes 读盘上实测目录，不是清册里记的 sizeBytes', async () => {
+    const parent = entry('session-parent', { sizeBytes: 111 })
+    const kid = entry('session-kidA', { parentEntryId: parent.id, sizeBytes: 222 })
+    const { deps } = makeDeps({
+      seed: [parent, kid],
+      sizes: {
+        [trashDirOf(parent.id, HOME)]: 4096,
+        [trashDirOf(kid.id, HOME)]: 512,
+      },
+    })
+    const base = await start(deps)
+    const rows = (await call(base, ROUTES.list)).body.value as Array<TrashEntry & { subagentBytes?: number; releaseBytes: number }>
+    expect(rows[0]).toMatchObject({
+      sizeBytes: 111, // 清册那一格原样发（它记的是删除那一刻）
+      subagentBytes: 512,
+      releaseBytes: 4096 + 512,
+    })
+  })
+
+  // 「这一行会释放多少」与「彻底删除它实际释放了多少」必须是同一个数：量的是同一批目录。
+  it('同一行 /list.releaseBytes 等于对它 purge 的 freedBytes（同一 fake fs 世界）', async () => {
+    const parent = entry('session-parent')
+    const kid = entry('session-kidA', { parentEntryId: parent.id })
+    const { deps } = makeDeps({
+      seed: [parent, kid],
+      sizes: {
+        [trashDirOf(parent.id, HOME)]: 4096,
+        [trashDirOf(kid.id, HOME)]: 512,
+        [sessionDirOf('--p--', 'session-x', HOME)]: 128,
+      },
+      members: { 'session-parent': [{ sessionId: 'session-x', projectDir: '--p--' }] },
+    })
+    const base = await start(deps)
+    const rows = (await call(base, ROUTES.list)).body.value as Array<{ releaseBytes: number }>
+    expect(rows).toHaveLength(1)
+    const { body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [parent.id] },
+    })
+    const outcome = (body.value as Array<{ ok: true; value: { removed: number; freedBytes: number } }>)[0]!
+    // 删掉的三份目录：父 + 孩子 + 盘上后代；释放量与清单那一行同一个数。
+    expect(outcome.value).toEqual({ removed: 3, freedBytes: rows[0]!.releaseBytes })
+  })
+
+  // 页脚合计（可见行之和）与「清空」的回执也必须对得上：两处量的同一组目录。
+  it('全部可见行 releaseBytes 之和 = /empty 的 freedBytes（同一世界）', async () => {
+    const p1 = entry('session-p1')
+    const k1 = entry('session-k1', { parentEntryId: p1.id })
+    const p2 = entry('session-p2')
+    const { deps } = makeDeps({
+      seed: [p1, k1, p2],
+      sizes: {
+        [trashDirOf(p1.id, HOME)]: 1000,
+        [trashDirOf(k1.id, HOME)]: 200,
+        [trashDirOf(p2.id, HOME)]: 3000,
+        [sessionDirOf('--p--', 'session-x1', HOME)]: 40,
+        [sessionDirOf('--p--', 'session-x2', HOME)]: 60,
+      },
+      members: {
+        [p1.sessionId]: [{ sessionId: 'session-x1', projectDir: '--p--' }],
+        [p2.sessionId]: [{ sessionId: 'session-x2', projectDir: '--p--' }],
+      },
+    })
+    const base = await start(deps)
+    const rows = (await call(base, ROUTES.list)).body.value as Array<{ releaseBytes: number }>
+    const listedTotal = rows.reduce((total, row) => total + row.releaseBytes, 0)
+    const { body } = await call(base, ROUTES.empty, { method: 'POST', body: {} })
+    // 三份回收站目录 + 两个盘上后代；合计字节与可见行之和同一个数。
+    expect(body).toMatchObject({ ok: true, value: { removed: 5, freedBytes: listedTotal } })
+  })
+
+  // 清单是纯读：活体准入只属于写动词，`/list` 一次都不问。
+  it('/list 不判活体（isLive 零调用）', async () => {
+    const parent = entry('session-parent')
+    const { deps, host } = makeDeps({
+      seed: [parent],
+      members: { 'session-parent': [{ sessionId: 'session-x', projectDir: '--p--' }] },
+    })
+    const base = await start(deps)
+    await call(base, ROUTES.list)
+    expect(host.isLive).not.toHaveBeenCalled()
   })
 
   it('盘上没有剩 ⇒ 不出现 strandedSubagents（界面上那半句也不该有）', async () => {
@@ -228,18 +329,38 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const base = await start(deps)
     const { body } = await call(base, ROUTES.list)
     const rows = body.value as Array<TrashEntry & { strandedSubagents?: number; strandedBytes?: number }>
-    expect(host.subagentMembersBatch).toHaveBeenCalled()
+    expect(host.subagentMembersOf).toHaveBeenCalled()
     expect(rows[0]!.strandedSubagents).toBeUndefined()
     expect(rows[0]!.strandedBytes).toBeUndefined()
   })
 
-  it('普通行（没孩子）只多一格 `releaseBytes`（= 它自己那一格），三个可选读数都不出现', async () => {
-    const { deps } = makeDeps({ seed: [entry('a')] })
+  // ADR-0006 第六处行为差异：`releaseBytes` 改念盘上实测之后，某条可见行的目录读不了（非 ENOENT）
+  // 会让整个清单读失败——迁移前这一格只念清册、不碰盘，那些世界照样列得出清单。回执形状钉在信封上。
+  it('/list 某条行目录读不了（EACCES）⇒ 200 + io，不拿 0 冒充「它会释放多少」', async () => {
+    const row = entry('a')
+    const { deps, fs } = makeDeps({ seed: [row] })
+    const dir = trashDirOf(row.id, HOME)
+    fs.sizeOfDir.mockImplementation(async (path: string) => {
+      if (path === dir) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      return 0
+    })
+    const base = await start(deps)
+    const failure = await failureOf(base, ROUTES.list)
+    expect(failure.status).toBe(200)
+    expect(failure.code).toBe('sessiondelete/io')
+    expect(failure.message).toContain('EACCES')
+  })
+
+  it('普通行（没孩子）只多一格 `releaseBytes`（盘上实测），三个可选读数都不出现', async () => {
+    const { deps } = makeDeps({
+      seed: [entry('a')],
+      sizes: { [trashDirOf(entryIdOf('a'), HOME)]: 4096 },
+    })
     const base = await start(deps)
     const { body } = await call(base, ROUTES.list)
     const rows = body.value as TrashEntry[]
-    // `releaseBytes` 是存储侧必填的那一格（本行 + 孩子 + 盘上后代）；没孩子没后代 ⇒ 等于 sizeBytes
-    expect(JSON.parse(JSON.stringify(rows[0]))).toEqual({ ...JSON.parse(JSON.stringify(entry('a'))), releaseBytes: 0 })
+    // `releaseBytes` 是存储侧必填的那一格：没孩子没后代 ⇒ 就是这条回收站目录的实测字节（清册的 sizeBytes 是 0）。
+    expect(JSON.parse(JSON.stringify(rows[0]))).toEqual({ ...JSON.parse(JSON.stringify(entry('a'))), releaseBytes: 4096 })
   })
 
   // 宿主的「删除工作区」只删注册、保留日志 ⇒ 回收站里可能躺着"工作区已经没了"的条目。
@@ -313,7 +434,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     })
     expect(status).toBe(200)
     expect(body).toEqual({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 3 }] })
-    expect(host.subagentCounts).toHaveBeenCalledWith(['session-parent'])
+    expect(host.subagentMembersOf).toHaveBeenCalledWith(['session-parent'])
   })
 
   // 没挂 `sessionQuery`（或这条确实没后代）⇒ 0。0 不是"不知道"，界面上那一栏在 n===0 时整句不出现，
@@ -710,7 +831,7 @@ describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作�
     const hostHeader = { ...json, host: new URL(base).host }
     const evil = await rawCall(base, ROUTES.apply, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
     expect(evil.status).toBe(403)
-    expect(host.subagentCounts).not.toHaveBeenCalled()
+    expect(host.subagentMembersOf).not.toHaveBeenCalled()
     const shell = await rawCall(base, ROUTES.apply, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
     expect(shell.status).toBe(200)
     expect(JSON.parse(shell.text)).toMatchObject({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 1 }] })
@@ -798,7 +919,15 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
 
   it('count 一组会话 id ⇒ 每条一个数，拿不到的回 0（不报错）', async () => {
     const { deps, host } = makeDeps()
-    host.subagentCounts.mockResolvedValue({ 'session-parent': 2 })
+    host.subagentMembersOf.mockResolvedValue({
+      available: true,
+      value: {
+        'session-parent': [
+          { sessionId: 'session-parent-1', projectDir: '--p--' },
+          { sessionId: 'session-parent-2', projectDir: '--p--' },
+        ],
+      },
+    })
     const base = await start(deps)
     const { body } = await call(base, ROUTES.apply, {
       method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent', 'session-none'] },
@@ -826,11 +955,9 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
   // 批量删除里父先走、孩子跟着搬进回收站 ⇒ 后到的孩子 id 是一次幂等 no-op，不是 not-found。
   // 单条删除（N=1）不会命中这台分支。
   it('delete 同批父先走：跟着父亲被带走的子会话返回幂等 null', async () => {
-    const { deps, manifest, host } = makeDeps()
-    host.subagentMembers.mockImplementation(async (sessionId: string) =>
-      sessionId === 'session-parent'
-        ? [{ sessionId: 'session-child', projectDir: '--p--' }]
-        : [])
+    const { deps, manifest, host } = makeDeps({
+      members: { 'session-parent': [{ sessionId: 'session-child', projectDir: '--p--' }] },
+    })
     // 孩子如果真被单独走一遍会在这里拿到 undefined；幂等支根本不该进动词。
     host.projectDirOf.mockImplementation(async (sessionId: string) =>
       (sessionId === 'session-child' ? undefined : '--p--'))
@@ -893,7 +1020,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
 
   it('GET /orphans 是纯读：交回闭包总数、字节、项目分组；不删任何东西', async () => {
     const { deps, fs, host, manifest } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     const base = await start(deps)
     const { status, body } = await call(base, ROUTES.orphans)
     expect(status).toBe(200)
@@ -929,7 +1056,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
 
   it('POST /apply orphan-clean：按根清闭包，回逐根字节与条数', async () => {
     const { deps, host, fs } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     const base = await start(deps)
     const { body } = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] } })
     expect(body.ok).toBe(true)
@@ -941,7 +1068,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
 
   it('POST /apply orphan-clean：根 id 去前缀后仍匹配（session-root 与 root 都认）', async () => {
     const { deps, host } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     const base = await start(deps)
     const { body } = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['root'] } })
     expect((body.value as ApplyOutcome[])[0]).toMatchObject({
@@ -961,7 +1088,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
 
   it('POST /apply orphan-clean：删到一半失败 ⇒ failure.error.details 带部分回执', async () => {
     const { deps, host, fs } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     fs.removeDir.mockImplementation(async (...args: unknown[]) => {
       if (String(args[0]).endsWith('session-kid')) throw new Error('boom')
     })
@@ -979,7 +1106,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
 
   it('POST /apply orphan-clean：成员在跑 ⇒ live，零删', async () => {
     const { deps, host, fs } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')
     const base = await start(deps)
     const failure = await failureOfOutcome(base, ROUTES.apply, {
@@ -993,7 +1120,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   // 判据）：刚手工搬进回收站的那一格目录要能被认成"父还在回收站里等着"（stranded，不该被当孤儿删掉）。
   it('POST /apply orphan-clean 是写动作：清册里躺着这个父 ⇒ 不再是孤儿，报 not-found 且零删', async () => {
     const { deps, host, fs, manifest } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     // 手工搬进来的父目录：清册里还没有这一行，只有目录 ⇒ 先对账把它重建出来，父从此是"已知的"（stranded，
     // 该跟着父恢复或彻底删除，不是这里能替用户决定的）。不先对账的话这一条会被当成孤儿**直接删掉**。
     fs.listDirs = vi.fn(async () => [entryIdOf('session-gone')])
@@ -1013,7 +1140,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   // 不该排在一次 100 条的恢复/对账后面（与 `ping`、`detail`、`apply/count` 同一条豁免）。
   it('链被对账占住时 GET /orphans 照样立刻回（纯读不占链）', async () => {
     const { deps, fs, host } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     let first = true
@@ -1036,7 +1163,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   // 写的那一半必须在链上：`orphan-clean` 自己要先读清单再动文件，与对账交错跑就会互相踩。
   it('链被对账占住时 orphan-clean 的副作用不发生（写动作一律上链）', async () => {
     const { deps, fs, host } = makeDeps()
-    host.listSessions = vi.fn(async () => corpus())
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     let first = true

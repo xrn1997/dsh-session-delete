@@ -1,57 +1,23 @@
-// 选中集 store + 行首常驻勾选 + 行尾兜底（2026-10-17）
-// store 是模块级现场（跨用例存活）：每个用例前清一次。
+// 控件面：行首常驻勾选 + 行尾兜底（2026-10-17；2026-10-20 选中集与模式语义拆去
+// `batch-selection-store.test.ts`，这里只钉"控件渲染与翻转"这一半）。
+// 两个现场都是模块级（跨用例存活）：每个用例前清一次。
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
-import {
-  BatchPickButton,
-  BatchPickCheckbox,
-  clearPicks,
-  enterSelection,
-  exitSelection,
-  getPicks,
-  isSelecting,
-  shrinkPicksToFailures,
-  togglePick,
-} from '../../src/client/batch-select.js'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { BatchPickButton, BatchPickCheckbox } from '../../src/client/batch-select.js'
+import { readVisibleSelectableRows, resetHostRows } from '../../src/client/host-rows.js'
+import { enterSelection, getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
 
 beforeEach(() => {
-  exitSelection()
-  clearPicks()
+  resetSelection()
+  resetHostRows()
 })
 
-describe('选中集', () => {
-  it('按勾选顺序记；对已勾的再勾一次是取消，不出现重复', () => {
-    togglePick({ sessionId: 'a', title: 'A' })
-    togglePick({ sessionId: 'b', title: 'B' })
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['a', 'b'])
-    togglePick({ sessionId: 'a', title: 'A' })
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['b'])
-    togglePick({ sessionId: 'a', title: 'A' })
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['b', 'a'])
-  })
-
-  it('shrinkPicksToFailures 只留失败名单；空名单 = 全清', () => {
-    togglePick({ sessionId: 'a', title: 'A' })
-    togglePick({ sessionId: 'b', title: 'B' })
-    togglePick({ sessionId: 'c', title: 'C' })
-    shrinkPicksToFailures(['c'])
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['c'])
-    shrinkPicksToFailures([])
-    expect(getPicks()).toEqual([])
-  })
+afterEach(() => {
+  resetSelection()
+  resetHostRows()
 })
 
-describe('多选模式', () => {
-  it('进入/退出；退出把选中集一起清掉', () => {
-    expect(isSelecting()).toBe(false)
-    enterSelection()
-    expect(isSelecting()).toBe(true)
-    togglePick({ sessionId: 'a', title: 'A' })
-    exitSelection()
-    expect(isSelecting()).toBe(false)
-    expect(getPicks()).toEqual([])
-  })
-
+describe('多选态的渲染门', () => {
   it('不在模式内时两颗勾选开关都不渲染（入口只在「⋯ → 多选」）', () => {
     const { container } = render(
       <>
@@ -60,6 +26,20 @@ describe('多选模式', () => {
       </>,
     )
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('行信息登记（守卫读的那张表）', () => {
+  it('模式外也登记：进入模式的那一帧守卫就有标题，不必等这一行重挂载', () => {
+    const row = document.createElement('div')
+    row.setAttribute('data-row-key', 'session:s1')
+    document.body.appendChild(row)
+    try {
+      render(<BatchPickButton sessionId="s1" title="行尾登记的名字" />)
+      expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行尾登记的名字' }])
+    } finally {
+      row.remove()
+    }
   })
 })
 

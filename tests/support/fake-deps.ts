@@ -14,7 +14,13 @@
  */
 import { vi, type Mock } from 'vitest'
 import type { FsPort } from '../../src/ports/fs-port.js'
-import type { EvictionOutcome, HostPort, SessionIdentity, SubagentMember } from '../../src/ports/host-port.js'
+import type {
+  CorpusRead,
+  EvictionOutcome,
+  HostPort,
+  SessionIdentity,
+  SubagentMember,
+} from '../../src/ports/host-port.js'
 import type { TrashEntry } from '../../src/trash/entry.js'
 import { createMemoryManifest, type ManifestPort } from '../../src/trash/manifest.js'
 import type { DeleteDeps } from '../../src/verbs/delete-session.js'
@@ -58,10 +64,14 @@ export interface FakeHostOptions extends CallLog {
   archived?: boolean
   evicted?: EvictionOutcome
   workspaceExists?: boolean
-  /** 父 → 盘上后代（`subagentMembers` 与 `subagentMembersBatch` 共用这一份）。 */
+  /** 父 → 盘上后代（`subagentMembersOf` 的值；缺席的父回空表，与真实 adapter 同形）。 */
   members?: Record<string, readonly SubagentMember[] | undefined>
-  /** 父 → 后代条数（缺省按 `members` 推；两处都缺就不出现在结果里，即 0 条）。 */
+  /** 父 → 后代条数：给了就**造等长的合成盘上成员**（`sessionId` 是 `${父}-member-${i}`、项目目录 `--p--`），
+   *  **优先于 `members`**（同一个父两处都写时以这一格为准）。 */
   counts?: Record<string, number>
+  /** 语料读面可见吗：`false` = `sessionQuery` 服务缺席（`subagentMembersOf` 回 `{ available:false }`）；
+   *  缺省可见（「最安静的成功」，现有调用方不用每条都声明这一格）。 */
+  membersAvailable?: boolean
   /** 整个语料（live ∪ persisted）；`undefined` = `sessionQuery` 没挂——扫描必须响亮失败。 */
   corpus?: readonly SessionIdentity[] | undefined
   /** 通告预取用的摘要表。 */
@@ -69,7 +79,7 @@ export interface FakeHostOptions extends CallLog {
 }
 
 /**
- * 内存里的 `HostPort`：19 个方法全部实现。
+ * 内存里的 `HostPort`：17 个方法全部实现。
  *
  * **声明式的只读数**（`workspaceOf` / `projectDirOf` / `title` / `live` / `archived` / `members` …）
  * 是这一份 adapter 的 interface：用例说"这个世界长什么样"，而不是"第几行会被调到"。
@@ -82,13 +92,18 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
     typeof over.workspaceOf === 'function' ? over.workspaceOf(sessionId) : over.workspaceOf ?? 'ws-1'
   const isLive = (sessionId: string): boolean =>
     typeof over.live === 'function' ? over.live(sessionId) : over.live ?? false
-  const membersOf = (parentId: string): readonly SubagentMember[] => over.members?.[parentId] ?? []
-  const countsFor = (parentIds: readonly string[]): Record<string, number> => {
-    const out: Record<string, number> = {}
+  /** `subagentMembersOf` 的值：`counts` 是"只关心条数"的语法糖（造等长的占位成员，身份不会上盘）。
+   *  空 id 与重复 id 的处置与真实 `membersFor` 同一口径：丢掉空 id、重复 id 只算第一次（保序）。 */
+  const membersOf = (parentIds: readonly string[]): Record<string, readonly SubagentMember[]> => {
+    const out: Record<string, readonly SubagentMember[]> = {}
+    const seen = new Set<string>()
     for (const id of parentIds) {
-      const fromMembers = membersOf(id).length
-      const count = over.counts?.[id] ?? fromMembers
-      if (count > 0) out[id] = count
+      if (id.length === 0 || seen.has(id)) continue
+      seen.add(id)
+      const count = over.counts?.[id]
+      out[id] = count === undefined
+        ? over.members?.[id] ?? []
+        : Array.from({ length: count }, (_, index) => ({ sessionId: `${id}-member-${index}`, projectDir: '--p--' }))
     }
     return out
   }
@@ -114,17 +129,16 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
     detach: vi.fn(async (sessionId: string, workspaceId: string) => { record('detach', [sessionId, workspaceId]) }),
     attach: vi.fn(async (sessionId: string, workspaceId: string) => { record('attach', [sessionId, workspaceId]) }),
     archive: vi.fn(async (sessionId: string, _workspaceId?: string) => { record('archive', [sessionId]) }),
-    listSessions: vi.fn(async () => over.corpus),
-    subagentMembersBatch: vi.fn(async (parentIds: readonly string[]) => {
-      const out: Record<string, readonly SubagentMember[]> = {}
-      for (const id of parentIds) {
-        const members = over.members?.[id]
-        if (members !== undefined) out[id] = members
-      }
-      return out
-    }),
-    subagentCounts: vi.fn(async (parentIds: readonly string[]) => countsFor(parentIds)),
-    subagentMembers: vi.fn(async (sessionId: string) => membersOf(sessionId)),
+    listSessions: vi.fn(async (): Promise<CorpusRead<readonly SessionIdentity[]>> =>
+      (over.corpus === undefined
+        ? { available: false }
+        : { available: true, value: over.corpus })),
+    /** 缺席显式化版的 `members` 读：`membersAvailable:false` 表达"这一趟看不见语料"，
+     *  其余情况按「看得见」作答（缺席的父回空表，与真实 adapter 同形）。 */
+    subagentMembersOf: vi.fn(async (parentIds: readonly string[]): Promise<CorpusRead<Record<string, readonly SubagentMember[]>>> =>
+      (over.membersAvailable === false
+        ? { available: false }
+        : { available: true, value: membersOf(parentIds) })),
   }
   return host
 }
@@ -190,8 +204,9 @@ export type FakeDeps = Omit<DeleteDeps, 'fs' | 'host'> & {
 /**
  * 一次装配出 `{ deps, host, fs, manifest }`：**返回值就是 `DeleteDeps`，没有强转**。
  *
- * 这也是"端口窄到可以假"的量尺：这份文件比 `host-port.ts` 的 19 个方法短，说明那 19 个方法没有藏
- * 第二个概念。哪天它长得比端口还复杂，该拆的是端口（身份与可见性 / 通告 / 语料读取），不是这份假件。
+ * 这也是"端口窄到可以假"的量尺：这份文件比 `host-port.ts` 的 17 个方法短，说明那 17 个方法没有藏
+ * 第二个概念。三个角色切面已就位（`HostIdentityPort` / `HostPresencePort` / `HostCorpusPort`，ADR-0007），
+ * 这份假件仍实现复合面——因为它们共用一颗 adapter，用例也只交一个 `deps`。
  */
 export function createFakeDeps(over: FakeDepsOptions = {}): {
   deps: FakeDeps

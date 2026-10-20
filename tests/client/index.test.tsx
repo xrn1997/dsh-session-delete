@@ -17,23 +17,32 @@
 //    这棵子树，否则按下「删除」的那一帧它就被连坐卸载——真机上「移入回收站」永远点不到。
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { type ComponentType, type ReactElement, useState } from 'react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearDeleteBatchRequest } from '../../src/client/batch-confirm.js'
-import { clearPicks, enterSelection, exitSelection } from '../../src/client/batch-select.js'
-import { clearDeleteRequest } from '../../src/client/delete-confirm.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resetBatchConfirm } from '../../src/client/batch-confirm.js'
+import { resetDeleteRequest } from '../../src/client/delete-confirm.js'
+import { resetHostRows } from '../../src/client/host-rows.js'
 import { apply, inject } from '../../src/client/index.js'
 import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
-import { clearUndoNotice } from '../../src/client/undo-toast.js'
+import { enterSelection, resetSelection } from '../../src/client/batch-selection-store.js'
+import { resetUndoNotice } from '../../src/client/undo-toast.js'
 import { ROUTES, SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
 
-// 撤销提示与删除请求都是模块级现场（跨用例存活）：每个用例前清一次，用例之间互不串味。
+// 撤销提示与删除请求都是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
 beforeEach(() => {
-  clearUndoNotice()
-  clearDeleteRequest()
-  // 批量删除的三份模块级现场同样跨用例存活（多选模式、选中集、批量确认框的请求）
-  exitSelection()
-  clearPicks()
-  clearDeleteBatchRequest()
+  resetUndoNotice()
+  resetDeleteRequest()
+  // 批量删除的两份模块级现场同样跨用例存活（多选模式 + 选中集、行信息登记）
+  resetSelection()
+  resetHostRows()
+  resetBatchConfirm()
+})
+
+afterEach(() => {
+  resetUndoNotice()
+  resetDeleteRequest()
+  resetSelection()
+  resetHostRows()
+  resetBatchConfirm()
 })
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'

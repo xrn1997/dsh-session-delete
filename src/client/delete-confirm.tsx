@@ -20,11 +20,13 @@
  *   整条链路都在菜单子树之外，菜单关不关都不影响它。
  *
  * 现场是**模块级**的（本仓既有的客户端模式：视图内路由与跨卸载的现场都住在模块级 store，
- * 见 `undo-toast.tsx`），状态源用 React 自带的 `useSyncExternalStore`——不为此引新的状态库。
+ * 见 `undo-toast.tsx`），状态源是 `store.ts` 的 `createStore`（内部用 React 自带的
+ * `useSyncExternalStore`）——不为此引新的状态库。
  */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
 import { applyOne, callRemote, type DeleteConfirmDeps } from './remote.js'
+import { createStore } from './store.js'
 import { invalidateTrash } from './trash-store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
@@ -54,41 +56,26 @@ export interface DeleteRequest {
   title: string
 }
 
-let request: DeleteRequest | null = null
-let nextSeq = 0
-const listeners = new Set<() => void>()
-
-const emit = (): void => {
-  for (const listener of listeners) listener()
-}
+const requestStore = createStore<DeleteRequest | null>(null)
 
 /** 菜单行调用：请求删除这个会话（确认框由 overlay 上的宿主渲染）。 */
 export function requestDelete(input: { sessionId: string; title: string }): void {
-  request = { seq: (nextSeq += 1), sessionId: input.sessionId, title: input.title }
-  emit()
+  requestStore.publish((seq) => ({ seq, sessionId: input.sessionId, title: input.title }))
 }
 
 /** 收起确认框（用户点「取消」/「关闭」、或删除成功后收工）。 */
 export function clearDeleteRequest(): void {
-  if (request === null) return
-  request = null
-  emit()
-}
-
-function getDeleteRequest(): DeleteRequest | null {
-  return request
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
+  requestStore.set(null)
 }
 
 /** 供宿主组件订阅。 */
 export function useDeleteRequest(): DeleteRequest | null {
-  return useSyncExternalStore(subscribe, getDeleteRequest, getDeleteRequest)
+  return requestStore.use()
+}
+
+/** 测试专用：现场与 seq 归零，用例之间互不串味。 */
+export function resetDeleteRequest(): void {
+  requestStore.reset()
 }
 
 /**

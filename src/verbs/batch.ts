@@ -137,12 +137,13 @@ async function applyPurge(deps: DeleteDeps, ids: readonly string[]): Promise<App
   })
 }
 
-/** 删除确认框那句「含 N 个子会话」：一次问完整批（`subagentCounts` 本来就是批量口）。
- *  宿主口缺席时它回 `{}`（这里折成 0）；真读失败则整次调用失败，浏览器半按"读不到"把整句不说。 */
+/** 删除确认框那句「含 N 个子会话」：一次问完整批（`subagentMembersOf` 本来就是批量口）。
+ *  宿主口缺席（`available:false`）时按 0（这里不再有"空表"这一步）；真读失败则整次调用失败，
+ *  浏览器半按"读不到"把整句不说。 */
 async function applyCount(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const wanted = unique(ids)
-  const counts = await deps.host.subagentCounts(wanted)
-  return wanted.map(id => success(id, 'count', counts[id] ?? 0))
+  const read = await deps.host.subagentMembersOf(wanted)
+  return wanted.map(id => success(id, 'count', read.available ? (read.value[id]?.length ?? 0) : 0))
 }
 
 /**

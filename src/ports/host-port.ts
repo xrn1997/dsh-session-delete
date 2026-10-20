@@ -2,7 +2,14 @@
  *  `unknown` 意味着读不到或摘不掉，**不能**据此通告客户端（发了就是假话，重连后那一行会自己长回来）。 */
 export type EvictionOutcome = 'evicted' | 'not-live' | 'unknown'
 
-export interface HostPort {
+/**
+ * 角色一：**身份与归属**——会话是谁、落在哪个项目/工作区、活不活/归档没有，以及账本与归档的写面。
+ *
+ * 为什么拆成角色：宿主能力的端口按角色切成三块，而不是一个什么都有的接口。调用方要的是
+ * "一句话能说清的那一组能力"，而一个什么都有的端口让每条用例都得凑齐不相干的成员。
+ * 这里只切**类型**，adapter 仍是同一颗对象。
+ */
+export interface HostIdentityPort {
   workspaceOf(sessionId: string): Promise<string | undefined>
   /** 账本里还有这个工作区吗。**只读的判别**（`registry.get(id) !== undefined`），不抛。
    *
@@ -21,8 +28,23 @@ export interface HostPort {
   titleOf(sessionId: string): Promise<string>
   isLive(sessionId: string): Promise<boolean>
   isArchived(sessionId: string): Promise<boolean>
+  unarchive(sessionId: string): Promise<void>
+  detach(sessionId: string, workspaceId: string): Promise<void>
+  attach(sessionId: string, workspaceId: string): Promise<void>
+  /** 归档是 registry **全局**的，与工作区账目无关 ⇒ `workspaceId` 只是调用点对称用的可选入参
+   *  （未分组的会话没有工作区可传）。 */
+  archive(sessionId: string, workspaceId?: string): Promise<void>
+}
+
+/**
+ * 角色二：**在场通告**——摘掉宿主内存里的活体，并如实通告客户端"这个会话没了 / 回来了"。
+ *
+ * 这一组的方法按契约**不抛**（`evictLive` 三态、`announce*` 内部吞异常）：它们是删除/恢复的收尾，
+ * 收尾失败不把已经完成的那件事翻成失败。
+ */
+export interface HostPresencePort {
   /** 尽力把会话从宿主**内存里的 live store** 摘掉；三态见 {@link EvictionOutcome}。
-   *  **这是本仓走宿主内部入口的两处之一**（另一处是 {@link HostPort.announceRemoved} 发的转发事件，
+   *  **这是本仓走宿主内部入口的两处之一**（另一处是 {@link HostPresencePort.announceRemoved} 发的转发事件，
    *  理由与代价见实现处的注释）：删除的两半里，"磁盘上的持久化"我们搬得走，
    *  "内存里 attach 着的活体"只有这一条路能请掉。 */
   evictLive(sessionId: string): Promise<EvictionOutcome>
@@ -30,7 +52,7 @@ export interface HostPort {
    *  冷会话没有活体可摘，但同样需要这一条——否则那一行要等到重连（`handleConnected` → 重列）才消失。 */
   announceRemoved(sessionId: string): Promise<void>
   /** **如实通告**客户端"这个会话回来了"：摘要取自宿主自己的会话列表，发 `api-session/added`。
-   *  正常恢复走 {@link HostPort.announceRestoredBatch}（整批一次预取）；这一条单条路是**删除组回滚**
+   *  正常恢复走 {@link HostPresencePort.announceRestoredBatch}（整批一次预取）；这一条单条路是**删除组回滚**
    *  用的（成员已经收过"已移除"、退回原处后补发）。取不到摘要就不发。 */
   announceRestored(sessionId: string): Promise<void>
   /** 宿主会话表的一次预取：`[{ sessionId, summary }]`，`summary` 是宿主**原样**那一条。
@@ -43,26 +65,38 @@ export interface HostPort {
     ids: readonly string[],
     known?: readonly { readonly sessionId: string; readonly summary: unknown }[],
   ): Promise<void>
-  unarchive(sessionId: string): Promise<void>
-  detach(sessionId: string, workspaceId: string): Promise<void>
-  attach(sessionId: string, workspaceId: string): Promise<void>
-  /** 归档是 registry **全局**的，与工作区账目无关 ⇒ `workspaceId` 只是调用点对称用的可选入参
-   *  （未分组的会话没有工作区可传）。 */
-  archive(sessionId: string, workspaceId?: string): Promise<void>
-  /** 整个会话语料（live ∪ persisted）的只读身份表。**服务缺席回 `undefined`**，不拿空数组冒充
-   *  “这个家没有会话”；扫描方必须把缺席当失败。 */
-  listSessions(): Promise<readonly SessionIdentity[] | undefined>
-  /** 一次 BFS 点出多个父的全部后代；键按调用方传进来的写法回。
-   *  `sessionQuery` 缺席时回 `{}`（与 delete 的降级一致）——写侧不能把这当成"盘上没有后代"，
-   *  只能当成"这一趟看不见"，残留留给 `GET /orphans` 兜底。 */
-  subagentMembersBatch(parentIds: readonly string[]): Promise<Record<string, readonly SubagentMember[]>>
-  /** 数一组父会话在盘上的**后代**条数（孩子与孙代都算——回收站清单上那个只读计数，宿主客户端把
-   *  `origin:"subagent"` 的行藏掉了 ⇒ 不说就没人知道删了父还剩多少）。键按**传进来的那个写法**回；
-   *  没有后代的不表现在结果里（缺省即 0）；`sessionQuery` 没挂回 `{}`，不抛。 */
-  subagentCounts(parentIds: readonly string[]): Promise<Record<string, number>>
-  /** 列出这个父会话**在盘上的全部后代**（删除时一起带走）。来历与缺席行为见实现处：服务没挂回 `[]`。 */
-  subagentMembers(sessionId: string): Promise<readonly { readonly sessionId: string; readonly projectDir: string }[]>
 }
+
+/**
+ * 一次语料读的结果：**缺席显式化**——`available: false` 说的是"这一趟看不见语料"（`sessionQuery` 没挂，
+ * 或它的读面方法缺席 / 不是函数），与"读到了、里面是空的"是两件事，调用方对两者的策略不同（前者只许
+ * 降级或响亮失败，后者是可以行动的事实）。**不带原因串**：调用点的策略已经决定了怎么处理，带一个字
+ * 就会有人去断言那个字；将来真要区分"没挂"与"方法缺席"，再加一个显式字段。
+ */
+export type CorpusRead<T> =
+  | { readonly available: true; readonly value: T }
+  | { readonly available: false }
+
+/**
+ * 角色三：**会话语料**——整表身份与子会话闭包。
+ *
+ * 两个读面都把"这一趟看不见语料"写成显式的 {@link CorpusRead}：`{ available: false }` 与
+ * "看见了、里面是空的"是两件事。**缺席之后怎么办归调用方，清单见 `CONTEXT.md` 的「语料缺席」**。
+ */
+export interface HostCorpusPort {
+  /** 整个会话语料（live ∪ persisted）的只读身份表。**服务缺席是显式的**：`sessionQuery` 没挂，或它的
+   *  `listSessions` 缺席 / 不是函数 ⇒ `{ available: false }`，不拿空数组冒充“这个家没有会话”。 */
+  listSessions(): Promise<CorpusRead<readonly SessionIdentity[]>>
+  /** 一次 BFS 点出多个父的全部后代（传递闭包）。
+   *  **缺席是显式的，且优先于空入参**：`sessionQuery` 没挂，或它的 `filterSessions` 缺席 / 不是函数 ⇒
+   *  `{ available: false }`，不拿空表冒充"盘上没有后代"；入参是不是空的都不改变这一条。
+   *  服务在场时，空入参 ⇒ `{ available: true, value: {} }`，一次宿主调用都不发。
+   *  键按调用方传进来的写法回（同一个父的 `session-x` / `x` 两种写法是同一个根，见 `membersFor`）。 */
+  subagentMembersOf(parentIds: readonly string[]): Promise<CorpusRead<Record<string, readonly SubagentMember[]>>>
+}
+
+/** 复合别名：adapter（`createHostPort`）与调用方把这 17 个方法当一个端口用；三个角色是它的切面。 */
+export type HostPort = HostIdentityPort & HostPresencePort & HostCorpusPort
 
 /* ------------------------------------------------------------------ *
  * 宿主服务的**窄镜像**：只声明本端口用到的成员（AGENTS.md：不装宿主类型包、不做 declare module）。
@@ -195,7 +229,7 @@ export interface SubagentMember {
  *
  * 停下来的条件与代价：**层数**决定宿主调用次数，行数不参与（一层一次，问空即停）。同一条记录只收一次
  * （`seen` 连着根一起记），所以数据里真出现环时结果是"少数一条"，不是把清单读挂死。
- * 交回的 id 没有 `header.id` 的记录**整条跳过**——身份冒充不起（同 {@link HostPort.subagentMembers} 那条），
+ * 交回的 id 没有 `header.id` 的记录**整条跳过**——身份冒充不起（同 {@link HostCorpusPort.subagentMembersOf} 那条），
  * 而且没有身份就没法往下问，硬数进去只会让它将来被重复计。
  */
 async function descendantsByParent(
@@ -258,7 +292,7 @@ function toMember(d: Descendant): SubagentMember {
   return { sessionId: d.id, projectDir: d.projectDir }
 }
 
-/** `subagentCounts` / `subagentMembers` / `subagentMembersBatch` 共用的一次 BFS。
+/** {@link HostCorpusPort.subagentMembersOf} 的那一次 BFS。
  *  空清单在调用宿主之前就返回（不为一张空表扫全库）。 */
 async function membersFor(
   sessionQuery: SessionQueryLike,
@@ -351,7 +385,7 @@ function isUnknownSession(error: unknown): boolean {
   return error instanceof Error && error.message.includes(NO_SUCH_SESSION)
 }
 
-/** 会话 id 去掉 `session-` 前缀后的形状（同一个父在两代里写法不同，见 {@link HostPort.subagentCounts}）。 */
+/** 会话 id 去掉 `session-` 前缀后的形状（同一个父在两代里写法不同，见 {@link HostCorpusPort.subagentMembersOf}）。 */
 export function bareSessionId(id: string): string {
   return id.startsWith('session-') ? id.slice('session-'.length) : id
 }
@@ -602,7 +636,7 @@ export function createHostPort(ctx: unknown): HostPort {
 
     async listSessions() {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
-      if (typeof sessionQuery?.listSessions !== 'function') return undefined
+      if (typeof sessionQuery?.listSessions !== 'function') return { available: false }
       const records = await sessionQuery.listSessions()
       const out: SessionIdentity[] = []
       for (const record of records) {
@@ -617,7 +651,7 @@ export function createHostPort(ctx: unknown): HostPort {
           subagent: record.header?.origin === 'subagent',
         })
       }
-      return out
+      return { available: true, value: out }
     },
 
     /**
@@ -631,37 +665,26 @@ export function createHostPort(ctx: unknown): HostPort {
      * （`session-ac07f2bb-…`）、它的子会话写的 `parentSession` 也带，但 v3 那一代的 id 不带 ⇒
      * 同一个父有两种写法。所以问的时候把一个 id 的两种形状都塞进 `values`，回来按去前缀后的形状归堆，
      * 最后按**调用方给的那个写法**把键交回去（调用方拿 `entry.sessionId` 直接查得到）。
-     */
-    async subagentCounts(parentIds) {
-      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
-      if (typeof sessionQuery?.filterSessions !== 'function') return {}
-      const members = await membersFor(sessionQuery, parentIds)
-      const counts: Record<string, number> = {}
-      for (const [id, list] of Object.entries(members)) if (list.length > 0) counts[id] = list.length
-      return counts
-    },
-
-    /**
+     *
      * 删除要一起带走**整个组**，先得把他们点出来：身份取宿主自己记录里的 `header.id`，项目目录由
      * `header.cwd` 走同一个 `projectKey`（与 {@link HostPort.projectDirOf} 同一根算法，不另起一套）。
      * 交回的是**全部后代**——孙代跟着父一起进回收站（issue #1），顺序是逐层往下问出来的（近的先）。
      * `header.id` 缺席的后代直接跳过——不拿目录名冒充身份（冒充了会把一个来路不明的目录搬进回收站）。
-     * 服务没挂回 `[]` ⇒ 删除照旧只管父，不因此失败（父的删除本来就已经是完整的一件事）。
+     *
+     * **缺席显式化**（见 {@link CorpusRead}）：`sessionQuery` 没挂，或它的 `filterSessions` 缺席 / 不是函数
+     * ⇒ `{ available: false }`，不拿空表冒充"盘上没有后代"——写侧据此决定降级还是响亮失败，不再靠"空表"
+     * 兼表两种意思。
+     * **先判服务、再判空入参**：语料本来就看不见时，"没有后代"这句话不该被说出口（哪怕入参是空的）；
+     * 服务在场时空入参由 `membersFor` 的短路保证零宿主调用。
      */
-    async subagentMembers(sessionId) {
+    async subagentMembersOf(parentIds) {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
-      if (typeof sessionQuery?.filterSessions !== 'function') return []
-      const members = await membersFor(sessionQuery, [sessionId])
-      return (members[sessionId] ?? []).map(toMember)
-    },
-
-    async subagentMembersBatch(parentIds) {
-      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
-      if (typeof sessionQuery?.filterSessions !== 'function') return {}
+      if (typeof sessionQuery?.filterSessions !== 'function') return { available: false }
       const members = await membersFor(sessionQuery, parentIds)
-      return Object.fromEntries(
-        Object.entries(members).map(([id, list]) => [id, list.map(toMember)]),
-      )
+      return {
+        available: true,
+        value: Object.fromEntries(Object.entries(members).map(([id, list]) => [id, list.map(toMember)])),
+      }
     },
   }
 }

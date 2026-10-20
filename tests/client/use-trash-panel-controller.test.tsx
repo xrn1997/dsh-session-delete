@@ -1,0 +1,824 @@
+/**
+ * 面板控制器（`use-trash-panel-controller.ts`）的状态机。
+ *
+ * 这一份直接测 hook，不经过面板：闸（`useTrashPanelGate`）、选中/详情缓存、清场/自动选中/
+ * 失效重读、下钻/Esc 与写动作派发这几组判据此前只能"整块渲染面板 + 造一个远程假件"才够得着，
+ * 现在它们是这个 module 的 interface。替身只有三样：假的 query（entries + refresh 计数 +
+ * emptyTrash）、假的闸、可控落地的 deferred。
+ *
+ * 行为口径与 `trash-panel.tsx` 现有的函数体逐条对齐：命中缓存不重读、失败不缓存、清单换版时
+ * 选中不见才让位、自动选中只认 `selectedId === null`、失效通告只戳一次重读、动作成功丢详情缓存、
+ * 失败原文按条目留。
+ */
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type {
+  ApplyOutcome,
+  SessionDeleteRemote,
+  TrashDetailLike,
+  TrashEntryLike,
+} from '../../src/client/remote.js'
+import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
+import {
+  useTrashPanelController,
+  useTrashPanelGate,
+  type TrashPanelControllerInput,
+  type TrashPanelGate,
+} from '../../src/client/use-trash-panel-controller.js'
+
+// 修订号是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
+beforeEach(() => {
+  resetTrashStore()
+})
+
+const A: TrashEntryLike = {
+  id: 'a',
+  sessionId: 'session-a',
+  projectDir: '--p--',
+  workspaceId: 'ws',
+  wasArchived: false,
+  deletedAt: 1,
+  sizeBytes: 10,
+  releaseBytes: 10,
+  title: 'A',
+}
+
+const B: TrashEntryLike = {
+  ...A,
+  id: 'b',
+  sessionId: 'session-b',
+  deletedAt: 2,
+  title: 'B',
+}
+
+function detailOf(id: string): TrashDetailLike {
+  return {
+    entryId: id,
+    cwd: '',
+    createdAt: 0,
+    lastActivity: 0,
+    logTitle: '',
+    models: [],
+    turnCount: 0,
+    userMessageCount: 0,
+    assistantMessageCount: 0,
+    toolCallCount: 0,
+    injectedCount: 0,
+    omittedByPayloadCap: 0,
+    messages: [],
+  }
+}
+
+/** `/apply` 的逐条结果（形状按 `shared/wire.ts` 的判别联合：动作 + 成败各一支）。 */
+function restoreOk(id: string): ApplyOutcome {
+  return { id, action: 'restore', ok: true, value: null }
+}
+
+function restoreFailed(id: string, message: string): ApplyOutcome {
+  return { id, action: 'restore', ok: false, error: { code: 'sessiondelete/io', message } }
+}
+
+function purgeOk(id: string): ApplyOutcome {
+  return { id, action: 'purge', ok: true, value: { removed: 1, freedBytes: 10 } }
+}
+
+function purgeFailed(id: string, message: string): ApplyOutcome {
+  return { id, action: 'purge', ok: false, error: { code: 'sessiondelete/io', message } }
+}
+
+/** 一段可以手动决定何时落地的 promise（测 loading 与到达顺序用）。 */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
+  let resolve!: (value: T) => void
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((inResolve, inReject) => {
+    resolve = inResolve
+    reject = inReject
+  })
+  return { promise, resolve, reject }
+}
+
+/** 面板那枚闸的替身：放行、不占 busy（控制器用例不关心渲染期的禁用）。 */
+const openGate: TrashPanelGate = {
+  busy: false,
+  around: <T,>(task: () => Promise<T>): Promise<T> => task(),
+}
+
+interface Over {
+  entries?: readonly TrashEntryLike[] | null
+  ordered?: readonly TrashEntryLike[]
+  canAutoSelect?: boolean
+  busy?: boolean
+  /** 需要观察 `around` / 真实 busy 时换一枚自己的闸（缺省放行）。 */
+  gate?: TrashPanelGate
+}
+
+function harness() {
+  const deps = {
+    detail: vi.fn(async (id: string) => detailOf(id)),
+    applyOutcomes: vi.fn(async () => [] as ApplyOutcome[]),
+  }
+  const refresh = vi.fn(async (): Promise<void> => {})
+  // `TrashQuery.emptyTrash` 交回的是"这一趟是否落地"，不是聚合回执（回执在 use-trash-query 里）。
+  // 真实实现自己会套 `around` + `refresh`，所以控制器对 `kind:'all'` 不再补第二层。
+  const emptyTrash = vi.fn(async (): Promise<boolean> => true)
+  const focusRow = vi.fn()
+  const input = (over: Over = {}): TrashPanelControllerInput => ({
+    // 控制器只读这两条：`detail` 给读详情，`applyOutcomes` 给恢复/批量的那一段 `/apply`。
+    deps: deps as unknown as Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>,
+    gate: over.gate ?? (over.busy === true ? { ...openGate, busy: true } : openGate),
+    query: { entries: over.entries ?? null, refresh, emptyTrash },
+    ordered: over.ordered ?? [],
+    canAutoSelect: over.canAutoSelect ?? false,
+    focusRow,
+  })
+  return { deps, refresh, emptyTrash, focusRow, input }
+}
+
+function mount(over: Over = {}) {
+  const h = harness()
+  const view = renderHook(
+    (props: TrashPanelControllerInput) => useTrashPanelController(props),
+    { initialProps: h.input(over) },
+  )
+  const update = (next: Over): void => {
+    view.rerender(h.input(next))
+  }
+  return { ...h, ...view, update }
+}
+
+describe('useTrashPanelGate', () => {
+  it('任务在飞时 busy 为 true，落地后回到 false', async () => {
+    const { result } = renderHook(() => useTrashPanelGate())
+    const pending = deferred<string>()
+    let task!: Promise<string>
+    act(() => {
+      task = result.current.around(() => pending.promise)
+    })
+    expect(result.current.busy).toBe(true)
+
+    await act(async () => {
+      pending.resolve('done')
+      await task
+    })
+    expect(await task).toBe('done')
+    expect(result.current.busy).toBe(false)
+  })
+
+  it('任务抛错也把 busy 放回 false，错误继续抛给调用方', async () => {
+    const { result } = renderHook(() => useTrashPanelGate())
+    let task!: Promise<never>
+    act(() => {
+      task = result.current.around(async () => {
+        throw new Error('写动作失败')
+      })
+    })
+    expect(result.current.busy).toBe(true)
+
+    await act(async () => {
+      await expect(task).rejects.toThrow('写动作失败')
+    })
+    expect(result.current.busy).toBe(false)
+  })
+})
+
+describe('面板控制器 · 选中与详情缓存', () => {
+  it('busy 跟着面板那枚闸走', () => {
+    const m = mount({ entries: [A], busy: true })
+    expect(m.result.current.busy).toBe(true)
+  })
+
+  it('清单还没读到（entries=null）时详情是 idle，不假装选中', () => {
+    const m = mount({ entries: null })
+    expect(m.result.current.detail).toEqual({ kind: 'idle' })
+    expect(m.result.current.selected).toBeNull()
+    expect(m.result.current.selectedId).toBeNull()
+    expect(m.deps.detail).not.toHaveBeenCalled()
+  })
+
+  it('未命中缓存：先 loading，读到后 ready，按条目 id 读一次', async () => {
+    const detailA = detailOf('a')
+    const pending = deferred<TrashDetailLike>()
+    const m = mount({ entries: [A, B] })
+    m.deps.detail.mockImplementationOnce(() => pending.promise)
+
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledWith('a')
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.selected).toEqual(A)
+    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+
+    await act(async () => {
+      pending.resolve(detailA)
+    })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailA })
+  })
+
+  it('命中缓存：切走再切回不重读，也不经过 loading', async () => {
+    const m = mount({ entries: [A, B] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+  })
+
+  it('A 的读数晚到不盖掉 B（成功支也不抢）', async () => {
+    const m = mount({ entries: [A, B] })
+    const slowA = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => slowA.promise)
+    let readA!: Promise<void>
+    act(() => {
+      readA = m.result.current.select(A)
+    })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+
+    await act(async () => {
+      slowA.resolve(detailOf('a'))
+      await readA
+    })
+    expect(m.result.current.selectedId).toBe('b')
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+  })
+
+  it('A 的读数晚到失败也不把 B 按成 failed', async () => {
+    const m = mount({ entries: [A, B] })
+    const slowA = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => slowA.promise)
+    let readA!: Promise<void>
+    act(() => {
+      readA = m.result.current.select(A)
+    })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+
+    await act(async () => {
+      slowA.reject(new Error('A 的日志读失败'))
+      await readA
+    })
+    expect(m.result.current.selectedId).toBe('b')
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+  })
+
+  it('命中缓存再下钻：直接进 drilled，不重读也不经过 loading', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    act(() => {
+      void m.result.current.select(A, { drill: true })
+    })
+    expect(m.result.current.drilled).toBe(true)
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+  })
+
+  it('读失败：原文进 failed；失败不缓存，切走再回来会重读', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.detail.mockRejectedValueOnce(new Error('读会话日志失败：第 2 帧解压失败'))
+
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    expect(m.result.current.detail).toEqual({
+      kind: 'failed',
+      entry: A,
+      message: '读会话日志失败：第 2 帧解压失败',
+    })
+
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(3)
+    expect(m.result.current.detail.kind).toBe('ready')
+  })
+
+  it('retry 只重读这一条：不动清单，失败态先回 loading', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockRejectedValueOnce(new Error('第 2 帧解压失败'))
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    expect(m.result.current.detail.kind).toBe('failed')
+    const refreshBefore = m.refresh.mock.calls.length
+
+    const pending = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => pending.promise)
+    act(() => {
+      m.result.current.retry()
+    })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore)
+
+    await act(async () => {
+      pending.resolve(detailOf('a'))
+    })
+    expect(m.result.current.detail.kind).toBe('ready')
+  })
+
+  it('back 退出下钻：选中与详情都留着，不交还焦点', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A, { drill: true })
+    })
+    expect(m.result.current.drilled).toBe(true)
+
+    act(() => {
+      m.result.current.back()
+    })
+    expect(m.result.current.drilled).toBe(false)
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.detail.kind).toBe('ready')
+    expect(m.focusRow).not.toHaveBeenCalled()
+  })
+})
+
+describe('面板控制器 · 清单换版后的清场', () => {
+  it('选中那条从清单消失：清掉缓存、选中与下钻；再回来要重读', async () => {
+    const m = mount({ entries: [A, B] })
+    await act(async () => {
+      await m.result.current.select(A, { drill: true })
+    })
+    expect(m.result.current.detail.kind).toBe('ready')
+
+    act(() => {
+      m.update({ entries: [B], ordered: [B] })
+    })
+    expect(m.result.current.selectedId).toBeNull()
+    expect(m.result.current.selected).toBeNull()
+    expect(m.result.current.drilled).toBe(false)
+    expect(m.result.current.detail).toEqual({ kind: 'idle' })
+
+    act(() => {
+      m.update({ entries: [A, B], ordered: [A, B] })
+    })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+  })
+
+  it('清单换了一版但选中那条还在：选中、下钻与详情都不动', async () => {
+    const m = mount({ entries: [A, B] })
+    await act(async () => {
+      await m.result.current.select(A, { drill: true })
+    })
+    const freshA = { ...A, title: 'A 改过' }
+
+    act(() => {
+      m.update({ entries: [freshA], ordered: [freshA] })
+    })
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.drilled).toBe(true)
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: freshA, detail: detailOf('a') })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+  })
+
+  it('清单读不到（entries=null）不算"选中没了"：选中 id 留着，详情回 idle', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    act(() => {
+      m.update({ entries: null })
+    })
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.detail).toEqual({ kind: 'idle' })
+  })
+
+  it('清单读不到再回来：已读缓存还在，选中不重读', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    act(() => {
+      m.update({ entries: null })
+    })
+    act(() => {
+      m.update({ entries: [A] })
+    })
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+  })
+})
+
+describe('面板控制器 · 自动选中', () => {
+  it('canAutoSelect 且还没有选中：读 ordered 的第一条', async () => {
+    const m = mount({ entries: [A, B], ordered: [A, B], canAutoSelect: true })
+    await waitFor(() => expect(m.result.current.detail.kind).toBe('ready'))
+    expect(m.deps.detail).toHaveBeenCalledWith('a')
+    expect(m.result.current.selectedId).toBe('a')
+  })
+
+  it('canAutoSelect 为假（窄档）时一条都不自动读', async () => {
+    const m = mount({ entries: [A, B], ordered: [A, B], canAutoSelect: false })
+    await act(async () => {})
+    expect(m.deps.detail).not.toHaveBeenCalled()
+    expect(m.result.current.selectedId).toBeNull()
+  })
+
+  it('已经有选中：自动选中不抢走它', async () => {
+    const m = mount({ entries: [A, B], ordered: [A, B] })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+
+    m.update({ entries: [A, B], ordered: [A, B], canAutoSelect: true })
+    await act(async () => {})
+    expect(m.result.current.selectedId).toBe('b')
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.deps.detail).toHaveBeenCalledWith('b')
+  })
+
+  it('清单里没有可走的第一条（全部折叠）时不读', async () => {
+    const m = mount({ entries: [A], ordered: [], canAutoSelect: true })
+    await act(async () => {})
+    expect(m.deps.detail).not.toHaveBeenCalled()
+  })
+
+  it('选中的那条被清掉后，下一拍自动接住新清单第一条（自动选中只认 selectedId === null）', async () => {
+    const m = mount({ entries: [A, B], ordered: [A, B], canAutoSelect: true })
+    await waitFor(() => expect(m.result.current.detail.kind).toBe('ready'))
+    expect(m.result.current.selectedId).toBe('a')
+
+    act(() => {
+      m.update({ entries: [B], ordered: [B], canAutoSelect: true })
+    })
+    await waitFor(() => expect(m.result.current.selectedId).toBe('b'))
+    expect(m.deps.detail).toHaveBeenCalledWith('b')
+    expect(m.result.current.drilled).toBe(false)
+  })
+})
+
+describe('面板控制器 · 下钻与 Esc', () => {
+  it('Esc 退出下钻：选中不变、详情不重读、焦点交还给那一行', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A, { drill: true })
+    })
+    expect(m.result.current.drilled).toBe(true)
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(m.result.current.drilled).toBe(false)
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.focusRow).toHaveBeenCalledTimes(1)
+    expect(m.focusRow).toHaveBeenCalledWith('a')
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+  })
+
+  it('焦点只交还一次：Esc 落地后再按 Esc 不再调用 focusRow', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A, { drill: true })
+    })
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(m.focusRow).toHaveBeenCalledTimes(1)
+  })
+
+  it('未下钻时 Esc 不动焦点，也不改状态', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    })
+    expect(m.result.current.drilled).toBe(false)
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.focusRow).not.toHaveBeenCalled()
+  })
+})
+
+describe('面板控制器 · 恢复与确认动作', () => {
+  it('restore 失败：原文落在这条的行上，清单不重读', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '恢复失败：项目目录不存在')])
+    const refreshBefore = m.refresh.mock.calls.length
+
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+    expect(m.deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a'])
+    expect(m.result.current.actionFailure).toEqual({ a: '恢复失败：项目目录不存在' })
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore)
+  })
+
+  it('restore 再点一次先清旧失败：成功后就该没有那一行', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '第一次失败')])
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+    expect(m.result.current.actionFailure).toEqual({ a: '第一次失败' })
+
+    m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    const refreshBefore = m.refresh.mock.calls.length
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+    expect(m.result.current.actionFailure).toEqual({})
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+  })
+
+  it('restore 成功丢缓存：同一条再被删回来要重读，不摆旧详情', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    expect(m.result.current.detail.kind).toBe('ready')
+
+    m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+
+    const fresh = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => fresh.promise)
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+
+    await act(async () => {
+      fresh.resolve({ ...detailOf('a'), turnCount: 7 })
+    })
+    expect(m.result.current.detail).toEqual({
+      kind: 'ready',
+      entry: A,
+      detail: { ...detailOf('a'), turnCount: 7 },
+    })
+  })
+
+  it('confirmApply 成功：成功条目丢缓存、失败留行、pending 收起、清单只重读一次', async () => {
+    const m = mount({ entries: [A, B] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    act(() => {
+      m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+    })
+    expect(m.result.current.pending).toEqual({ kind: 'entries', ids: ['a', 'b'] })
+
+    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeFailed('b', '第二条删不掉')])
+    const refreshBefore = m.refresh.mock.calls.length
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a', 'b'])
+    })
+    expect(m.deps.applyOutcomes).toHaveBeenCalledWith('purge', ['a', 'b'])
+    expect(m.result.current.pending).toBeNull()
+    expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+
+    // 成功的那条缓存已丢：再选它必须重读，否则会摆着已经被删掉的那一世的详情。
+    const fresh = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => fresh.promise)
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+  })
+
+  it('confirmApply 顶层失败：每个 id 落同一句原文，pending 收起，清单照样重读', async () => {
+    const m = mount({ entries: [A, B] })
+    act(() => {
+      m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+    })
+    m.deps.applyOutcomes.mockRejectedValueOnce(new Error('路由自检失败'))
+    const refreshBefore = m.refresh.mock.calls.length
+
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a', 'b'])
+    })
+    expect(m.result.current.actionFailure).toEqual({ a: '路由自检失败', b: '路由自检失败' })
+    expect(m.result.current.pending).toBeNull()
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+  })
+
+  it('失败原文按条目留着：切走再回来还在，别条的成败不串台', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeFailed('b', '第二条删不掉')])
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a', 'b'])
+    })
+
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
+    expect(m.result.current.detail.kind).toBe('ready')
+  })
+
+  it('confirmPurge 按条目标：单条 / 多选 / 批量恢复都委托 confirmApply', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes
+      .mockResolvedValueOnce([purgeOk('a')])
+      .mockResolvedValueOnce([purgeOk('a'), purgeOk('b')])
+      .mockResolvedValueOnce([restoreOk('b')])
+
+    act(() => {
+      m.result.current.setPending({ kind: 'entry', entry: A })
+    })
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.deps.applyOutcomes).toHaveBeenLastCalledWith('purge', ['a'])
+    expect(m.result.current.pending).toBeNull()
+
+    act(() => {
+      m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+    })
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.deps.applyOutcomes).toHaveBeenLastCalledWith('purge', ['a', 'b'])
+    expect(m.result.current.pending).toBeNull()
+
+    act(() => {
+      m.result.current.setPending({ kind: 'restore', ids: ['b'] })
+    })
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.deps.applyOutcomes).toHaveBeenLastCalledWith('restore', ['b'])
+    expect(m.result.current.pending).toBeNull()
+    expect(m.emptyTrash).not.toHaveBeenCalled()
+  })
+
+  it('confirmPurge 清空：走 emptyTrash、不套第二层 around，成功清掉全部详情缓存', async () => {
+    /** 只数"套了几层闸"：清空自己已经包了同一枚闸，控制器不该再套第二层。 */
+    const aroundCalls: Array<() => Promise<unknown>> = []
+    const around = <T,>(task: () => Promise<T>): Promise<T> => {
+      aroundCalls.push(task)
+      return task()
+    }
+    const m = mount({ entries: [A], gate: { busy: false, around } })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    act(() => {
+      m.result.current.setPending({ kind: 'all' })
+    })
+    const refreshBefore = m.refresh.mock.calls.length
+
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.emptyTrash).toHaveBeenCalledTimes(1)
+    expect(m.deps.applyOutcomes).not.toHaveBeenCalled()
+    // 清空自己已经包了同一枚闸与重读，控制器再套一层会让外层 busy 提前落下。
+    expect(aroundCalls).toHaveLength(0)
+    expect(m.result.current.pending).toBeNull()
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore)
+
+    const fresh = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => fresh.promise)
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+  })
+
+  it('confirmPurge 清空失败：pending 照样收起，缓存保留', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    m.emptyTrash.mockResolvedValueOnce(false)
+    act(() => {
+      m.result.current.setPending({ kind: 'all' })
+    })
+
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.result.current.pending).toBeNull()
+    expect(m.result.current.actionFailure).toEqual({})
+    // 没清成 ⇒ 那条详情的“仍在盘上”这一事实没变，缓存照用。
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail.kind).toBe('ready')
+  })
+
+  it('没有 pending 时 confirmPurge 什么都不做', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.deps.applyOutcomes).not.toHaveBeenCalled()
+    expect(m.emptyTrash).not.toHaveBeenCalled()
+    expect(m.result.current.pending).toBeNull()
+  })
+})
+
+describe('面板控制器 · 动作期间 busy', () => {
+  it('busy 罩到清单重读落地：恢复的 around 在 refresh 完成前不落', async () => {
+    const h = harness()
+    const view = renderHook(() => {
+      const gate = useTrashPanelGate()
+      return useTrashPanelController({ ...h.input({ entries: [A] }), gate })
+    })
+    await act(async () => {})
+
+    h.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    const refreshSettles = deferred<void>()
+    h.refresh.mockImplementationOnce(() => refreshSettles.promise)
+
+    let task!: Promise<void>
+    act(() => {
+      task = view.result.current.restore(A)
+    })
+    await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(2))
+    expect(view.result.current.busy).toBe(true)
+
+    await act(async () => {
+      refreshSettles.resolve()
+      await task
+    })
+    expect(view.result.current.busy).toBe(false)
+  })
+
+  it('busy 罩到清单重读落地：批量的 around 在 refresh 完成前不落', async () => {
+    const h = harness()
+    const view = renderHook(() => {
+      const gate = useTrashPanelGate()
+      return useTrashPanelController({ ...h.input({ entries: [A, B] }), gate })
+    })
+    await act(async () => {})
+
+    h.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeOk('b')])
+    const refreshSettles = deferred<void>()
+    h.refresh.mockImplementationOnce(() => refreshSettles.promise)
+
+    act(() => {
+      view.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+    })
+    let task!: Promise<void>
+    act(() => {
+      task = view.result.current.confirmApply('purge', ['a', 'b'])
+    })
+    await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(2))
+    expect(view.result.current.busy).toBe(true)
+    expect(view.result.current.pending).toBeNull()
+
+    await act(async () => {
+      refreshSettles.resolve()
+      await task
+    })
+    expect(view.result.current.busy).toBe(false)
+  })
+})
+
+describe('面板控制器 · 失效通告', () => {
+  it('回收站失效戳一次：重读清单，选中与已读详情都不打断', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    const refreshBefore = m.refresh.mock.calls.length
+
+    act(() => {
+      invalidateTrash()
+    })
+    await waitFor(() => expect(m.refresh.mock.calls.length).toBe(refreshBefore + 1))
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.detail.kind).toBe('ready')
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+  })
+})

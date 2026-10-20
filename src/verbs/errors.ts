@@ -17,6 +17,14 @@ export type { RouteCode, VerbCode }
 /** `sessiondelete/` 这个前缀——拆码用它，别在下面几处各写一遍字面量。 */
 const VERB_CODE_PREFIX = `${SESSION_DELETE_ERROR_DOMAIN}/`
 
+/** `error.code` 是不是本仓的动词码（`sessiondelete/<码>`）。**唯一判据**：`journalFailure` 与永久删除
+ *  执行器要"已经是动词码就原样抛"时都问这一句。同文件的 `withRollbackFailures` 还要码的后缀，所以它
+ *  就地 `slice` 一次——前缀仍只住 `VERB_CODE_PREFIX` 这一处，别在调用点另写一份字面量。 */
+export function isVerbCodeError(error: unknown): boolean {
+  const raw = (error as { code?: unknown } | undefined)?.code
+  return typeof raw === 'string' && raw.startsWith(VERB_CODE_PREFIX)
+}
+
 /** 一次失败的**结构**：码、上屏原文、可选 cause（`map-error` 沿 cause 链认宿主类型化错误）、
  *  可选的结构化附带物（对齐官方 `rpcErrorSchema` 的第三件 `details`）。 */
 export interface VerbError extends Error {

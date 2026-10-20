@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import {
   cleanOrphanGroup,
@@ -71,9 +74,9 @@ describe('扫描报告与清理', () => {
     })
   })
 
-  it('sessionQuery 没挂 ⇒ io，不拿空语料冒充没有孤儿', async () => {
+  it('sessionQuery 没挂 ⇒ { available:false } ⇒ io，不拿空语料冒充没有孤儿', async () => {
     const { d } = deps([])
-    d.host.listSessions = vi.fn(async () => undefined)
+    d.host.listSessions = vi.fn(async () => ({ available: false as const }))
     await expect(loadOrphanGroups(d)).rejects.toMatchObject({ code: 'sessiondelete/io' })
   })
 
@@ -143,5 +146,30 @@ describe('扫描报告与清理', () => {
     await expect(cleanOrphanGroup(d, group as OrphanGroup)).rejects.toMatchObject({ code: 'sessiondelete/live' })
     expect(host.unarchive).not.toHaveBeenCalled()
     expect(fs.removeDir).not.toHaveBeenCalled()
+  })
+})
+
+const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
+const VERB = 'src/verbs/orphan-subagents.ts'
+
+/**
+ * 源码断言：这条动词只剩"扫出一组 + 拿计划交给执行器"。量目录、退归档集、摘账本、删目录与通告都归
+ * `verbs/permanent-removal.ts`——在这里再长一段手写 preflight/循环，就等于同一个顺序又有第二个家
+ * （与 purge 的源码护栏同一条规矩）。
+ */
+describe('orphan-clean 的实现面：删除顺序归执行器', () => {
+  const source = () => readFileSync(join(ROOT, VERB), 'utf8')
+
+  it('不再自己调 deps.fs.removeDir / deps.host.unarchive / deps.host.detach', () => {
+    const text = source()
+    expect(text).not.toContain('deps.fs.removeDir')
+    expect(text).not.toContain('deps.host.unarchive')
+    expect(text).not.toContain('deps.host.detach')
+  })
+
+  it('扫出一组之后直接接上计划与执行器', () => {
+    const text = source()
+    expect(text).toContain('planOrphanRemoval(')
+    expect(text).toContain('executeRemoval(')
   })
 })

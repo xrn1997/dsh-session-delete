@@ -1,26 +1,35 @@
 // 批量删除浮条（2026-10-17）：多选模式、计数、已选清单、行点击选择与确认框。
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BatchPickButton } from '../../src/client/batch-select.js'
+import { BatchBar } from '../../src/client/batch-bar.js'
+import { BatchConfirmHost, resetBatchConfirm } from '../../src/client/batch-confirm.js'
+import { resetHostRows } from '../../src/client/host-rows.js'
+import type { ApplyOutcome } from '../../src/client/remote.js'
+import { resetTrashStore } from '../../src/client/trash-store.js'
+import { resetUndoNotice } from '../../src/client/undo-toast.js'
 import {
-  BatchPickButton,
-  clearPicks,
   enterSelection,
-  exitSelection,
   getPicks,
   isSelecting,
+  resetSelection,
   togglePick,
-} from '../../src/client/batch-select.js'
-import { BatchBar } from '../../src/client/batch-bar.js'
-import { BatchConfirmHost, clearDeleteBatchRequest } from '../../src/client/batch-confirm.js'
-import type { ApplyOutcome } from '../../src/client/remote.js'
+} from '../../src/client/batch-selection-store.js'
 
 beforeEach(() => {
-  exitSelection()
-  clearPicks()
-  clearDeleteBatchRequest()
+  resetSelection()
+  resetHostRows()
+  resetBatchConfirm()
+  resetUndoNotice()
+  resetTrashStore()
 })
 
 afterEach(() => {
+  resetSelection()
+  resetHostRows()
+  resetBatchConfirm()
+  resetUndoNotice()
+  resetTrashStore()
   document.body.replaceChildren()
 })
 
@@ -73,6 +82,33 @@ describe('浮条', () => {
     fireEvent.click(screen.getByRole('button', { name: '退出多选' }))
     expect(isSelecting()).toBe(false)
     expect(screen.queryByText('点击会话行选择')).not.toBeInTheDocument()
+  })
+
+  it('「全选」把可见行追加进名单：登记 effect 与全选的组合，切换口随即翻成「取消全选」', () => {
+    enterSelection()
+    fakeRow('s1')
+    fakeRow('s2')
+    // 不手动 registerHostRowInfo：标题与"可不可选"只能来自 BatchPickButton 的登记 effect。
+    render(
+      <>
+        <BatchBar deps={{ applyOutcomes: vi.fn() } as never} />
+        <BatchPickButton sessionId="s1" title="A" />
+        <BatchPickButton sessionId="s2" title="B" />
+      </>,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '全选' }))
+    expect(getPicks()).toEqual([
+      { sessionId: 's1', title: 'A' },
+      { sessionId: 's2', title: 'B' },
+    ])
+    expect(screen.getByRole('button', { name: '取消全选' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '全选' })).not.toBeInTheDocument()
+
+    // 同一个切换口反向：点「取消全选」只清名单、仍留在多选态
+    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
+    expect(getPicks()).toEqual([])
+    expect(screen.getByRole('button', { name: '全选' })).toBeInTheDocument()
   })
 
   it('主行不再放汇总；条数与子会话数在「查看已选」列表头', async () => {
@@ -184,118 +220,6 @@ describe('浮条', () => {
     fireEvent.click(title)
     expect(getPicks()).toEqual([])
     expect(opened()).toBe(0)
-  })
-
-  it('守卫挡得住 React 行自己的 onClick（真宿主用的就是合成事件）', () => {
-    enterSelection()
-    const { applyOutcomes } = countOnly()
-    const onOpen = vi.fn()
-    render(
-      <>
-        <BatchBar deps={{ applyOutcomes } as never} />
-        <BatchPickButton sessionId="s1" title="A" />
-        <div data-row-key="session:s1" onClick={onOpen}>
-          <span data-testid="react-row-title">A</span>
-        </div>
-      </>,
-    )
-    fireEvent.click(screen.getByTestId('react-row-title'))
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
-    expect(onOpen).not.toHaveBeenCalled()
-  })
-
-  it('行里的按钮/输入不被守卫拦截；二次点击不把刚选上的又反掉', () => {
-    enterSelection()
-    const { applyOutcomes } = countOnly()
-    render(
-      <>
-        <BatchBar deps={{ applyOutcomes } as never} />
-        <BatchPickButton sessionId="s1" title="A" />
-      </>,
-    )
-    const { row, title } = fakeRow('s1')
-
-    const action = document.createElement('button')
-    row.appendChild(action)
-    let actionClicks = 0
-    action.addEventListener('click', () => { actionClicks += 1 })
-    fireEvent.click(action)
-    expect(actionClicks).toBe(1)
-    expect(getPicks()).toEqual([])
-
-    fireEvent.click(title, { detail: 1 })
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
-    // 双击的第二下与 dblclick 都不能把刚选上的反掉（也别打开宿主的重命名）
-    fireEvent.click(title, { detail: 2 })
-    fireEvent.dblClick(title)
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['s1'])
-  })
-
-  it('运行中的行点整行不选中（与置灰的勾选框同口径）', () => {
-    enterSelection()
-    const { applyOutcomes } = countOnly()
-    render(
-      <>
-        <BatchBar deps={{ applyOutcomes } as never} />
-        <BatchPickButton sessionId="s1" title="A" live />
-      </>,
-    )
-    const { title, opened } = fakeRow('s1')
-    fireEvent.click(title)
-    expect(getPicks()).toEqual([])
-    expect(opened()).toBe(0)
-  })
-
-  it('全选只收当前 DOM 里、已登记且不在跑的行（按侧栏顺序）；取消全选清空但留在模式内', () => {
-    enterSelection()
-    const { applyOutcomes } = countOnly()
-    render(
-      <>
-        <BatchBar deps={{ applyOutcomes } as never} />
-        <BatchPickButton sessionId="a" title="A" />
-        <BatchPickButton sessionId="b" title="B" />
-        <BatchPickButton sessionId="run" title="Running" live />
-        <BatchPickButton sessionId="hidden" title="Hidden" />
-      </>,
-    )
-    // 侧栏可见顺序 b → a → run；hidden 已登记但不在 DOM 里（折叠/过滤掉的替身）
-    fakeRow('b', 'B')
-    fakeRow('a', 'A')
-    fakeRow('run', 'Running')
-
-    fireEvent.click(screen.getByRole('button', { name: '全选' }))
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['b', 'a'])
-    expect(getPicks().map((p) => p.title)).toEqual(['B', 'A'])
-    // 同一位置切换成「取消全选」，两个按钮不同屏
-    expect(screen.getByRole('button', { name: '取消全选' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '全选' })).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
-    expect(getPicks()).toEqual([])
-    expect(isSelecting()).toBe(true)
-    expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '全选' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '取消全选' })).not.toBeInTheDocument()
-  })
-
-  it('已有选中保持在前；全选后同一位置切回取消全选', () => {
-    enterSelection()
-    const { applyOutcomes } = countOnly()
-    render(
-      <>
-        <BatchBar deps={{ applyOutcomes } as never} />
-        <BatchPickButton sessionId="a" title="A" />
-        <BatchPickButton sessionId="b" title="B" />
-      </>,
-    )
-    fakeRow('b', 'B')
-    fakeRow('a', 'A')
-
-    togglePick({ sessionId: 'a', title: 'A' })
-    fireEvent.click(screen.getByRole('button', { name: '全选' }))
-    expect(getPicks().map((p) => p.sessionId)).toEqual(['a', 'b'])
-    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
-    expect(getPicks()).toEqual([])
   })
 
   it('点「移入回收站 N 条」进确认框；取消后取消全选、退出多选', async () => {

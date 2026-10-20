@@ -1,9 +1,10 @@
 import { parseEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import { groupOf } from '../trash/groups.js'
-import { isWorkspaceMissingError, type HostPort } from '../ports/host-port.js'
+import { isWorkspaceMissingError, type HostIdentityPort } from '../ports/host-port.js'
 import type { DeleteDeps } from './delete-session.js'
 import { verbError } from './errors.js'
 import { attempt, createJournal, rollbackJournals, type Journal, type JournalStep } from './member-journal.js'
+import { createMemberPresence, type MemberPresence } from './member-presence.js'
 
 /**
  * 恢复 = 把删除那次**按原路退回**，而且按组走：当年是按组一起搬进来的（父 + 它在盘上的孩子），
@@ -23,6 +24,7 @@ import { attempt, createJournal, rollbackJournals, type Journal, type JournalSte
  * "一个条目 id 进、回收站那一行出"，没有批量专用的开关。
  */
 export function restoreSession(deps: DeleteDeps) {
+  const presence = createMemberPresence(deps.host)
   return async function restoreSession(
     entryId: string,
     /** **只读**清册快照：批量层已经读过一次就递下来，整批因此只读一次（ADR-0002）。
@@ -49,7 +51,7 @@ export function restoreSession(deps: DeleteDeps) {
     const done: Journal[] = []
     try {
       for (const entry of group) {
-        const move = await memberRestore(deps, entry)
+        const move = await memberRestore(deps, presence, entry)
         await move.journal.run()
         done.push(move.journal)
       }
@@ -78,7 +80,7 @@ function restoreTargetDir(deps: DeleteDeps, entry: TrashEntry): string {
  * 判据**只有这一处**：`memberRestore` 拿它决定挂不挂，`GET /list` 拿它决定行上那句「原工作区已不存在，
  * 恢复后归入未分组」说不说。两边各问一遍就会有一天一个说、一个不挂。
  */
-export async function attachableWorkspaceId(host: Pick<HostPort, 'workspaceExists'>, entry: TrashEntry): Promise<string | undefined> {
+export async function attachableWorkspaceId(host: Pick<HostIdentityPort, 'workspaceExists'>, entry: TrashEntry): Promise<string | undefined> {
   if (entry.workspaceId === '') return undefined
   return await host.workspaceExists(entry.workspaceId) ? entry.workspaceId : undefined
 }
@@ -86,7 +88,7 @@ export async function attachableWorkspaceId(host: Pick<HostPort, 'workspaceExist
 /** 这一条记着的工作区**是不是已经没了**（区别于"删除时它就没有账目"的空串）——清单行据此决定
  *  要不要在点之前说那句「原工作区已不存在，恢复后归入未分组」。由 {@link attachableWorkspaceId}
  *  派生，不另起一份判据：那样会有一天一个说、一个不挂。 */
-export async function isWorkspaceMissing(host: Pick<HostPort, 'workspaceExists'>, entry: TrashEntry): Promise<boolean> {
+export async function isWorkspaceMissing(host: Pick<HostIdentityPort, 'workspaceExists'>, entry: TrashEntry): Promise<boolean> {
   return entry.workspaceId !== '' && (await attachableWorkspaceId(host, entry)) === undefined
 }
 
@@ -98,6 +100,7 @@ export async function isWorkspaceMissing(host: Pick<HostPort, 'workspaceExists'>
  */
 async function memberRestore(
   deps: DeleteDeps,
+  presence: MemberPresence,
   entry: TrashEntry,
 ): Promise<{ journal: Journal }> {
   const trashDir = trashDirOf(entry.id, deps.home)
@@ -107,7 +110,7 @@ async function memberRestore(
   const workspaceId = await attachableWorkspaceId(deps.host, entry)
   /** 真挂上了账本才记下那个 id——回滚里"摘账本"那一步只对挂过的成员存在。 */
   let attached = false
-  /** 组级回滚时，目录真的退回回收站了才通告「已移除」（否则那条通告会骗客户端删掉一行还在盘上的会话）。 */
+  /** 组级回滚时，目录是否真的退回回收站——作为事实交给成员在场 module 判「已移除」通告。 */
   let movedBack = false
 
   const steps: JournalStep[] = [
@@ -159,13 +162,10 @@ async function memberRestore(
   return {
     journal: {
       run: () => journal.run(),
-      // 组级回滚：先把步骤按相反顺序退回，再（只在目录真回到回收站时）摘活体并如实通告"已移除"。
+      // 组级回滚：先把步骤按相反顺序退回，再交给成员在场 module 判「目录真的回到回收站了吗」。
       async undo() {
         const failures = await journal.undo()
-        if (movedBack) {
-          const eviction = await deps.host.evictLive(entry.sessionId).catch(() => 'unknown' as const)
-          if (eviction !== 'unknown') await deps.host.announceRemoved(entry.sessionId).catch(() => {})
-        }
+        await presence.memberGone(entry.sessionId, { backInTrash: movedBack })
         return failures
       },
     },

@@ -1,20 +1,28 @@
 // 批量删除确认框（2026-10-17）：数说清自己的、失败原文落行、重试只发失败 id。
 // 假 adapter 驱动真组件（与 delete-menu-item.test.tsx 同款）：现场是模块级的，每个用例前清一次。
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { clearPicks, getPicks, togglePick } from '../../src/client/batch-select.js'
+import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   BatchConfirmHost,
   clearDeleteBatchRequest,
   requestDeleteBatch,
+  resetBatchConfirm,
+  useDeleteBatchRequest,
 } from '../../src/client/batch-confirm.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
-import { UndoToast, clearUndoNotice } from '../../src/client/undo-toast.js'
+import { getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
+import { UndoToast, resetUndoNotice } from '../../src/client/undo-toast.js'
 
 beforeEach(() => {
-  clearDeleteBatchRequest()
-  clearPicks()
-  clearUndoNotice()
+  resetBatchConfirm()
+  resetSelection()
+  resetUndoNotice()
+})
+
+afterEach(() => {
+  resetBatchConfirm()
+  resetSelection()
+  resetUndoNotice()
 })
 
 function countOutcomes(ids: readonly string[], kids: Record<string, number> = {}): ApplyOutcome[] {
@@ -35,6 +43,40 @@ function deleteOutcomes(ids: readonly string[], failIds: readonly string[] = [])
       : ({ id, action: 'delete', ok: true, value: { id: `entry-${id}` } } as ApplyOutcome),
   )
 }
+
+describe('模块级现场', () => {
+  it('每发一批请求 seq 递增（确认框靠它重挂载）；空名单不发框也不占 seq', () => {
+    const { result } = renderHook(() => useDeleteBatchRequest())
+    requestDeleteBatch([])
+    expect(result.current).toBeNull()
+    act(() => {
+      requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
+    })
+    expect(result.current).toMatchObject({ seq: 1, items: [{ sessionId: 'a', title: 'A' }] })
+    act(() => {
+      requestDeleteBatch([{ sessionId: 'b', title: 'B' }])
+    })
+    expect(result.current).toMatchObject({ seq: 2, items: [{ sessionId: 'b', title: 'B' }] })
+  })
+
+  it('重试轮收缩失败名单不改 seq（框不重挂载，逐条失败原文留在框里）', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b']),
+    )
+    togglePick({ sessionId: 'a', title: 'A' })
+    togglePick({ sessionId: 'b', title: 'B' })
+    requestDeleteBatch()
+    const view = renderHook(() => useDeleteBatchRequest())
+    render(<BatchConfirmHost deps={{ applyOutcomes } as never} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
+    await waitFor(() =>
+      expect(view.result.current?.items.map((item) => item.sessionId)).toEqual(['b']),
+    )
+    expect(view.result.current?.seq).toBe(1)
+    // 收缩只动请求现场的 items：seq 没变 ⇒ 框不重挂载，框内本地失败面（原文）还在。
+    expect(screen.getByText('会话目录不在盘上')).toBeInTheDocument()
+  })
+})
 
 describe('批量确认框', () => {
   it('标题随条数：1 条是单删那句，多条是「删除这些 N 个会话？」', async () => {

@@ -13,7 +13,7 @@
  * - `sidebar.workspaces.session.row.action` —— 行尾悬停排的**兜底勾选开关**（`BatchPickButton`）。
  *   座位原文："一行一颗图标按钮（动作不适用于这一行时可以不渲染）、动作归自己"，且**排内点击不误开
  *   会话** ⇒ 兜底开关不需要处理事件传播。两条与前一条不会同时出现（`ui.css` 的 `:has` 隐藏规则）。
- *   它还负责把每行的标题／运行态登记给模式内的整行点击守卫（`batch-select.tsx`）。
+ *   它还负责把每行的标题／运行态登记给模式内的整行点击守卫（`host-rows.ts`）。
  *   与 overlay 上的**浮条**（`BatchBar`）、**批量确认框**（`BatchConfirmHost`）合起来才是批量删除那一套。
  *   模式内点整行会拦截宿主的会话切换（document 捕获守卫）；执行仍走 `POST /apply`，单删那三件一律不动。
  * - `shell.overlay` —— 菜单之外的**四个**常驻宿主（各一次 `slots.inject`，与宿主自己对

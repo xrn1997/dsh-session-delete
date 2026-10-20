@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createHostPort } from '../src/ports/host-port.js'
-import { createStorageManifest } from '../src/index.js'
+import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
 import { unescapeProjectKey } from '../src/shared/wire.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import type { DeleteDeps } from '../src/verbs/delete-session.js'
@@ -9,11 +9,11 @@ import type { TrashEntry } from '../src/trash/entry.js'
 /**
  * 两个「接线用例」的共用夹具：**默认的窄镜像 ctx**、不是宿主模拟器。
  *
- * `createHostPort` / `createStorageManifest` 的真实绑定要起宿主才验得了（本轮不起宿主），
+ * `createHostPort` / `createHostStorageManifest` 的真实绑定要起宿主才验得了（本轮不起宿主），
  * 这两组用例钉的是**接线形状**：
  *  - 宿主成员被调到（哪个服务、哪个方法、什么入参、什么顺序），
  *  - 纯算法（projectKey / 兜底 / 排序 / key 映射）的行为。
- * 夹具只声明被接线代码真正声明的东西（`host-port.ts` 的 `HostCtxLike`、`index.ts` 的 `StorageDomainCtxLike`），
+ * 夹具只声明被接线代码真正声明的东西（`host-port.ts` 的 `HostCtxLike`、`trash/storage-manifest.ts` 的 `StorageDomainCtxLike`），
  * 所以它不会替实现兜住一个不存在的宿主成员——写错的成员名会让用例红而不是被夹具喂绿。
  */
 
@@ -37,10 +37,11 @@ function makeEnv(over: {
   sessions?: unknown
   /** `ctx.get('sessionController')` 的替身（通告"加回"时取摘要的那一处）。 */
   sessionController?: unknown
-  /** `ctx.get('sessionQuery')` 的替身。`listSessions` 给无主子会话扫描；`filterSessions` 给闭包。 */
+  /** `ctx.get('sessionQuery')` 的替身。`listSessions` 给无主子会话扫描；`filterSessions` 给闭包。
+   *  `filterSessions` 可缺席：用例要钉「服务在场、方法不在」那一支的缺席（不是空表）。 */
   sessionQuery?: {
     listSessions?: () => Promise<Array<{ header?: { id?: string; cwd?: string; parentSession?: string; origin?: string } }>>
-    filterSessions: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string } }>>
+    filterSessions?: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string } }>>
   }
   /** `ctx.emit` 的替身（通告走的就是它）。 */
   emit?: (name: string, ...args: unknown[]) => void
@@ -91,7 +92,7 @@ function makeEnv(over: {
 }
 
 describe('宿主服务层端口的接线', () => {
-  it('十九个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
+  it('十七个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
     const { ctx } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }], headers: { s1: { cwd: 'C:/p' } } })
     const host = createHostPort(ctx)
     const results = [
@@ -103,10 +104,9 @@ describe('宿主服务层端口的接线', () => {
       // 契约都是"不抛"
       host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored('s1'),
       host.restoredSummariesOf(), host.announceRestoredBatch(['s1']),
-      host.subagentCounts(['s1']), host.subagentMembers('s1'),
-      host.subagentMembersBatch(['s1']), host.listSessions(),
+      host.subagentMembersOf(['s1']), host.listSessions(),
     ]
-    expect(results.length).toBe(19)
+    expect(results.length).toBe(17)
     for (const r of results) expect(r).toBeInstanceOf(Promise)
     await expect(Promise.all(results)).resolves.toBeDefined()
   })
@@ -159,21 +159,29 @@ describe('宿主服务层端口的接线', () => {
           filterSessions: async () => [],
         },
       })
-      expect(await createHostPort(ctx).listSessions()).toEqual([
-        { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--C-p--', subagent: true },
-        { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--C-p--', subagent: false },
-      ])
+      expect(await createHostPort(ctx).listSessions()).toEqual({
+        available: true,
+        value: [
+          { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--C-p--', subagent: true },
+          { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--C-p--', subagent: false },
+        ],
+      })
     })
 
-    it('sessionQuery 没挂 / 没有 listSessions ⇒ undefined，不冒充空语料', async () => {
+    it('sessionQuery 没挂 / 没有 listSessions ⇒ { available:false }，不冒充空语料', async () => {
       const { ctx } = makeEnv({})
-      await expect(createHostPort(ctx).listSessions()).resolves.toBeUndefined()
+      await expect(createHostPort(ctx).listSessions()).resolves.toEqual({ available: false })
       const withQuery = makeEnv({ sessionQuery: { filterSessions: async () => [] } })
-      await expect(createHostPort(withQuery.ctx).listSessions()).resolves.toBeUndefined()
+      await expect(createHostPort(withQuery.ctx).listSessions()).resolves.toEqual({ available: false })
     })
   })
 
-  describe('subagentMembersBatch（批量点后代）', () => {
+  // 盘上后代的两个调用点（删除带走的孩子 / 清单与 purge 的盘上残留）共用这一份读面：
+  // 走官方 `sessionQuery.filterSessions` 的 `kind:'parent'` 一支（宿主判据逐字是
+  // `filter.values.includes(record.header.parentSession ?? null)`），不自扫 `~/.dsh/sessions`。
+  // 归堆必须**按去掉 `session-` 前缀后的 id** 算：本机实测父会话自己的 header id
+  // 带前缀（`session-ac07f2bb-…`）、它的子会话写的 `parentSession` 也带前缀，而 v3 代的老 id 不带 ⇒ 两种写法是同一个父。
+  describe('subagentMembersOf（批量点后代）', () => {
     it('一次 BFS 问多个父，按调用方给的写法交回成员；空清单零调用', async () => {
       const asked: string[][] = []
       const { ctx } = makeEnv({
@@ -190,30 +198,27 @@ describe('宿主服务层端口的接线', () => {
         },
       })
       const port = createHostPort(ctx)
-      expect(await port.subagentMembersBatch(['session-a', 'b'])).toEqual({
-        'session-a': [{ sessionId: 'session-k1', projectDir: '_no-cwd' }],
-        b: [{ sessionId: 'k2', projectDir: '_no-cwd' }],
+      expect(await port.subagentMembersOf(['session-a', 'b'])).toEqual({
+        available: true,
+        value: {
+          'session-a': [{ sessionId: 'session-k1', projectDir: '_no-cwd' }],
+          b: [{ sessionId: 'k2', projectDir: '_no-cwd' }],
+        },
       })
       expect(asked).toHaveLength(2) // 第一层 a/b，第二层 k1/k2 问空即停
       asked.length = 0
-      expect(await port.subagentMembersBatch([])).toEqual({})
+      expect(await port.subagentMembersOf([])).toEqual({ available: true, value: {} })
       expect(asked).toHaveLength(0)
     })
-  })
 
-  // 数子会话（回收站清单上那个「含 N 个子会话」的只读计数）。走官方 `sessionQuery.filterSessions`
-  // 的 `kind:'parent'` 一支（宿主判据逐字是 `filter.values.includes(record.header.parentSession ?? null)`），
-  // 不自扫 `~/.dsh/sessions`。归堆必须**按去掉 `session-` 前缀后的 id** 算：本机实测父会话自己的 header id
-  // 带前缀（`session-ac07f2bb-…`）、它的子会话写的 `parentSession` 也带前缀，而 v3 代的老 id 不带 ⇒ 两种写法是同一个父。
-  describe('subagentCounts（清单的只读子会话计数）', () => {
-    it('调官方 filterSessions 的 kind:"parent"，两种前缀写法归到同一个父', async () => {
+    it('调官方 filterSessions 的 kind:"parent"，两种前缀写法归到同一个父（清单的计数就是成员长度）', async () => {
       const seen: Array<Array<{ kind: string; values: string[] }>> = []
       const { ctx } = makeEnv({
         sessionQuery: {
           filterSessions: async (filters) => {
             seen.push(filters)
             // 每条都带 `header.id`——那是宿主记录本来就有的一件（闭包靠它去重与往下问，
-            // 缺 id 的记录整条跳过，见 subagentMembers 那条用例）
+            // 缺 id 的记录整条跳过，见下面那条用例）
             return [
               { header: { id: 'session-k1', parentSession: 'session-a' } },
               { header: { id: 'session-k2', parentSession: 'session-a' } },
@@ -223,25 +228,35 @@ describe('宿主服务层端口的接线', () => {
           },
         },
       })
-      const counts = await createHostPort(ctx).subagentCounts(['session-a', 'b'])
+      const read = await createHostPort(ctx).subagentMembersOf(['session-a', 'b'])
       // 只钉"问了什么"，不钉顺序：宿主那一支的判据是 `values.includes(...)`，顺序对它无意义
       expect(seen[0]).toEqual([{ kind: 'parent', values: ['session-a', 'a', 'session-b', 'b'].sort() }])
-      expect(counts).toEqual({ 'session-a': 3 })
+      expect(read.available).toBe(true)
+      if (!read.available) throw new Error('sessionQuery 在场时不该缺席')
+      expect(Object.fromEntries(Object.entries(read.value).map(([id, list]) => [id, list.length]))).toEqual({
+        'session-a': 3,
+        b: 0,
+      })
     })
 
-    it('sessionQuery 没挂（可选服务缺席）⇒ 空计数，不抛', async () => {
+    it('sessionQuery 没挂（可选服务缺席）⇒ { available:false }，不拿空表冒充"没有后代"', async () => {
       const { ctx } = makeEnv({}) // get('sessionQuery') 回 undefined
-      await expect(createHostPort(ctx).subagentCounts(['session-a'])).resolves.toEqual({})
+      await expect(createHostPort(ctx).subagentMembersOf(['session-a'])).resolves.toEqual({ available: false })
     })
 
-    it('入参为空 ⇒ 一次宿主调用都不发（别为一张空清单去扫全库）', async () => {
+    it('sessionQuery 在场但 filterSessions 缺席（不是函数）⇒ { available:false }，同样不冒充"没有后代"', async () => {
+      const { ctx } = makeEnv({ sessionQuery: { listSessions: async () => [] } })
+      await expect(createHostPort(ctx).subagentMembersOf(['p'])).resolves.toEqual({ available: false })
+    })
+
+    it('入参为空 ⇒ { available:true, value:{} }，一次宿主调用都不发（别为一张空清单去扫全库）', async () => {
       let called = 0
       const { ctx } = makeEnv({
         sessionQuery: {
           filterSessions: async () => { called++; return [] },
         },
       })
-      await expect(createHostPort(ctx).subagentCounts([])).resolves.toEqual({})
+      await expect(createHostPort(ctx).subagentMembersOf([])).resolves.toEqual({ available: true, value: {} })
       expect(called).toBe(0)
     })
   })
@@ -249,7 +264,7 @@ describe('宿主服务层端口的接线', () => {
   // 删除要带走整个组，先得知道**后代是谁、目录在哪**。身份与 cwd 都取宿主自己的记录（官方 `filterSessions`
   // 的 `kind:'parent'` 那一支交回的是带 `header` 的记录克隆，而那一支只会交出**带 `parentSession`** 的记录），
   // 项目目录用我们**已在端口里逐字镜像**的 `projectKey` 从 cwd 反推（与 `projectDirOf` 同一根算法，不另起一套）。
-  describe('subagentMembers（删除时把盘上的孩子点出来）', () => {
+  describe('subagentMembersOf（删除时把盘上的孩子点出来）', () => {
     it('交回每个孩子的 sessionId 与项目目录（cwd 走同一个 projectKey 算法）', async () => {
       const { ctx } = makeEnv({
         sessionQuery: {
@@ -259,10 +274,15 @@ describe('宿主服务层端口的接线', () => {
           ],
         },
       })
-      expect(await createHostPort(ctx).subagentMembers('session-parent')).toEqual([
-        { sessionId: 'session-child1', projectDir: '--C-develop-p--' },
-        { sessionId: 'session-child2', projectDir: '--C-develop-p--' },
-      ])
+      expect(await createHostPort(ctx).subagentMembersOf(['session-parent'])).toEqual({
+        available: true,
+        value: {
+          'session-parent': [
+            { sessionId: 'session-child1', projectDir: '--C-develop-p--' },
+            { sessionId: 'session-child2', projectDir: '--C-develop-p--' },
+          ],
+        },
+      })
     })
 
     it('问的是这个父：values 带上它两种写法；parent 自己不混进来（宿主按 header.parentSession 判）', async () => {
@@ -272,7 +292,7 @@ describe('宿主服务层端口的接线', () => {
           filterSessions: async (filters) => { seen.push(filters); return [] },
         },
       })
-      await createHostPort(ctx).subagentMembers('bare-parent')
+      await createHostPort(ctx).subagentMembersOf(['bare-parent'])
       expect(seen[0]).toEqual([{ kind: 'parent', values: ['bare-parent', 'session-bare-parent'].sort() }])
     })
 
@@ -285,19 +305,22 @@ describe('宿主服务层端口的接线', () => {
           ],
         },
       })
-      expect(await createHostPort(ctx).subagentMembers('p')).toEqual([{ sessionId: 'session-kid', projectDir: '_no-cwd' }])
+      expect(await createHostPort(ctx).subagentMembersOf(['p'])).toEqual({
+        available: true,
+        value: { p: [{ sessionId: 'session-kid', projectDir: '_no-cwd' }] },
+      })
     })
 
-    it('sessionQuery 没挂 ⇒ 空组（删除照旧只管父，不因此失败）', async () => {
+    it('sessionQuery 没挂 ⇒ { available:false }（删除侧据此只删父，不因此失败）', async () => {
       const { ctx } = makeEnv({})
-      await expect(createHostPort(ctx).subagentMembers('p')).resolves.toEqual([])
+      await expect(createHostPort(ctx).subagentMembersOf(['p'])).resolves.toEqual({ available: false })
     })
   })
 
   // 级联的那个「组」是**全部后代**，不是"直接孩子"（issue #1）：宿主客户端对所有 `origin:"subagent"`
   // 一律藏行 ⇒ 深度 ≥2 上"删了父还剩多少本来看不见"原样存在。往下问只有一条路：`kind:'parent'`
   // 一次问一层——官方的 `traceSession` 在父已经进回收站时认不出目标（`SESSION_QUERY_SESSION_NOT_FOUND`）。
-  describe('subagentCounts / subagentMembers 走传递闭包', () => {
+  describe('subagentMembersOf 走传递闭包', () => {
     /** 按 `values` 作答的替身：宿主那一支的判据逐字是 `values.includes(record.header.parentSession ?? null)`。 */
     function closing(
       records: Array<{ id: string; parentSession?: string; cwd?: string }>,
@@ -321,23 +344,31 @@ describe('宿主服务层端口的接线', () => {
         { id: 'session-grandkid', parentSession: 'session-kid', cwd: 'C:/p' },
         { id: 'session-greatkid', parentSession: 'session-grandkid', cwd: 'C:/p' },
       ], asked) })
-      expect(await createHostPort(ctx).subagentCounts(['session-root'])).toEqual({ 'session-root': 3 })
+      const read = await createHostPort(ctx).subagentMembersOf(['session-root'])
+      expect(read.available).toBe(true)
+      if (!read.available) throw new Error('sessionQuery 在场时不该缺席')
+      expect(read.value['session-root']).toHaveLength(3)
       expect(asked.length).toBe(4) // 根 / kid / grandkid / greatkid 各问一层，第五层没有记录就停
       expect(asked[1]).toEqual(expect.arrayContaining(['kid', 'session-kid']))
     })
 
-    it('subagentMembers 交回全部后代 ⇒ 删父时孙代也一起搬进回收站', async () => {
+    it('subagentMembersOf 交回全部后代 ⇒ 删父时孙代也一起搬进回收站', async () => {
       const asked: string[][] = []
       const { ctx } = makeEnv({ sessionQuery: closing([
         { id: 'session-kid', parentSession: 'session-root', cwd: 'C:/p' },
         { id: 'session-grandkid', parentSession: 'session-kid', cwd: 'C:/p' },
         { id: 'session-greatkid', parentSession: 'session-grandkid', cwd: 'C:/p' },
       ], asked) })
-      expect(await createHostPort(ctx).subagentMembers('session-root')).toEqual([
-        { sessionId: 'session-kid', projectDir: '--C-p--' },
-        { sessionId: 'session-grandkid', projectDir: '--C-p--' },
-        { sessionId: 'session-greatkid', projectDir: '--C-p--' },
-      ])
+      expect(await createHostPort(ctx).subagentMembersOf(['session-root'])).toEqual({
+        available: true,
+        value: {
+          'session-root': [
+            { sessionId: 'session-kid', projectDir: '--C-p--' },
+            { sessionId: 'session-grandkid', projectDir: '--C-p--' },
+            { sessionId: 'session-greatkid', projectDir: '--C-p--' },
+          ],
+        },
+      })
     })
 
     // 行数与宿主调用次数**脱钩**：一层一次，而不是每行各扫一遍库（清单可以有几百行）。
@@ -348,9 +379,13 @@ describe('宿主服务层端口的接线', () => {
         { id: 'session-kid2', parentSession: 'session-p2' },
         { id: 'session-grand', parentSession: 'session-kid1' },
       ], asked) })
-      expect(await createHostPort(ctx).subagentCounts(['session-p1', 'session-p2'])).toEqual({
-        'session-p1': 2, 'session-p2': 1,
-      })
+      const read = await createHostPort(ctx).subagentMembersOf(['session-p1', 'session-p2'])
+      expect(read.available).toBe(true)
+      if (!read.available) throw new Error('sessionQuery 在场时不该缺席')
+      expect({
+        'session-p1': read.value['session-p1']?.length,
+        'session-p2': read.value['session-p2']?.length,
+      }).toEqual({ 'session-p1': 2, 'session-p2': 1 })
       expect(asked.length).toBe(3) // 最深那支三层 ⇒ 三次，两行也一样
     })
 
@@ -363,7 +398,10 @@ describe('宿主服务层端口的接线', () => {
         { id: 'session-root', parentSession: 'session-a' },
         { id: 'session-b', parentSession: 'session-a' },
       ], asked) })
-      expect(await createHostPort(ctx).subagentCounts(['session-root'])).toEqual({ 'session-root': 2 })
+      const read = await createHostPort(ctx).subagentMembersOf(['session-root'])
+      expect(read.available).toBe(true)
+      if (!read.available) throw new Error('sessionQuery 在场时不该缺席')
+      expect(read.value['session-root']).toHaveLength(2)
       expect(asked.length).toBe(3)
     })
   })
@@ -575,7 +613,7 @@ describe('宿主服务层端口的接线', () => {
 })
 
 /* ------------------------------------------------------------------ *
- * 清单的 storage domain 绑定（createStorageManifest）
+ * 清单的 storage domain 绑定（createHostStorageManifest）
  * ------------------------------------------------------------------ */
 
 function makeStorageEnv(seed: TrashEntry[] = []) {
@@ -619,7 +657,7 @@ function makeStorageEnv(seed: TrashEntry[] = []) {
 describe('清单的 storage domain 绑定', () => {
   it('open 的 spec 是官方形状（defineDomain：name/version/tables + domainTable 的 valueSchema），名字过 UNIT_NAME_RE', async () => {
     const env = makeStorageEnv()
-    await createStorageManifest(env.ctx as never).list()
+    await createHostStorageManifest(env.ctx as never).list()
     expect(env.calls).toContain('open()')
     expect(env.spec.name).toBe('xrn1997_session_delete_trash')
     expect(env.spec.name).toMatch(/^[a-z][a-z0-9_]*$/)
@@ -632,7 +670,7 @@ describe('清单的 storage domain 绑定', () => {
 
   it('记录校验器认合法条目、拒残缺条目（域 open 时逐条 parse）', async () => {
     const env = makeStorageEnv()
-    await createStorageManifest(env.ctx as never).list()
+    await createHostStorageManifest(env.ctx as never).list()
     const { parse } = env.spec.tables.entries.valueSchema
     expect(parse(entry('a'))).toMatchObject({ id: 'a' })
     expect(() => parse({ id: 'a' })).toThrow(/sessionId/)
@@ -642,7 +680,7 @@ describe('清单的 storage domain 绑定', () => {
 
   it('list/add/remove 折成 domain.table("entries") 的 entries/put/delete，key = 条目 id', async () => {
     const env = makeStorageEnv([entry('a', { deletedAt: 100 }), entry('b', { deletedAt: 200 })])
-    const m = createStorageManifest(env.ctx as never)
+    const m = createHostStorageManifest(env.ctx as never)
     expect((await m.list()).map(e => e.id)).toEqual(['b', 'a']) // 最近的在前
     await m.add(entry('c', { deletedAt: 300 }))
     expect([...env.rows.keys()].sort()).toEqual(['a', 'b', 'c'])
@@ -653,7 +691,7 @@ describe('清单的 storage domain 绑定', () => {
 
   it('域句柄在插件卸载时被关掉（ctx.effect 的清理），且只开一次域', async () => {
     const env = makeStorageEnv()
-    const m = createStorageManifest(env.ctx as never)
+    const m = createHostStorageManifest(env.ctx as never)
     await m.list()
     await m.list()
     expect(env.calls.filter(c => c === 'open()').length).toBe(1)
@@ -673,7 +711,7 @@ describe('清单的 storage domain 绑定', () => {
       if (attempts === 1) throw new Error('domain already open')
       return open(s)
     }
-    const m = createStorageManifest(env.ctx as never)
+    const m = createHostStorageManifest(env.ctx as never)
     await expect(m.list()).rejects.toThrow(/already open/)
     expect(await m.list()).toEqual([]) // 第二次重新走 open()，拿到的就是活的句柄
     expect(attempts).toBe(2)
@@ -684,7 +722,7 @@ describe('清单的 storage domain 绑定', () => {
   it('open 失败后立刻卸载：disposer 不等那条拒绝，安静落地', async () => {
     const env = makeStorageEnv()
     env.ctx.storageDomain.open = async () => { throw new Error('domain already open') }
-    const m = createStorageManifest(env.ctx as never)
+    const m = createHostStorageManifest(env.ctx as never)
     await expect(m.list()).rejects.toThrow(/already open/)
     await expect(env.dispose()).resolves.toBeUndefined()
     expect(env.closedCount).toBe(0)
@@ -700,7 +738,7 @@ describe('清单的 storage domain 绑定', () => {
       table: () => ({ entries: () => [][Symbol.iterator](), put: async () => {}, delete: async () => false }),
       close: () => { closeStarted = true; return new Promise<void>((r) => { finishClose = r }) },
     })
-    const m = createStorageManifest(env.ctx as never)
+    const m = createHostStorageManifest(env.ctx as never)
     await m.list()
     const disposed: unknown = env.dispose() // 不 await：等的正是这条还没落地的 promise
     expect(closeStarted).toBe(true)

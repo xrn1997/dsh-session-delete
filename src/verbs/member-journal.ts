@@ -15,8 +15,7 @@
  * 边界：它只服务"成员在 `sessions/` 与 `session-trash/` 之间搬"这一件事。做成通用撤销框架就会吸进
  * 不属于它的知识（谁该通告、通告几次、哪些失败算成功）。
  */
-import { SESSION_DELETE_ERROR_DOMAIN } from '../shared/wire.js'
-import { rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
+import { isVerbCodeError, rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
 
 export interface JournalStep {
   /** 这一步在做什么。失败原文按「`<label>：<原错误>`」拼——与既有那 22 处 `rollbackReason` 的措辞同形。 */
@@ -98,7 +97,6 @@ export async function rollbackJournals(journals: readonly Journal[], error: unkn
  * 换一种拼法会让上屏原文跟着变。
  */
 function journalFailure(step: JournalStep, error: unknown): VerbError {
-  const raw = (error as { code?: unknown } | undefined)?.code
-  if (typeof raw === 'string' && raw.startsWith(`${SESSION_DELETE_ERROR_DOMAIN}/`)) return error as VerbError
+  if (isVerbCodeError(error)) return error as VerbError
   return verbError('io', `${step.label}：${String(error)}`, error)
 }

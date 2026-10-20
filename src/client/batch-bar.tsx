@@ -2,10 +2,10 @@
  * 批量删除的浮条（2026-10-17 `6f24fd4`）：**多选模式内常驻**（0 条也渲染，既显示模式又给退出入口），
  * 汇总「已选 N 条」+（读得到时）「含 K 个子会话」；「查看已选」展开限高可滚动的标题清单
  * （逐条可移除），回答"到底选了哪些"——清单默认收起，不把底部输入区盖住。
- * 模式内的整行点击守卫也挂在这棵常驻宿主上（见 `batch-select.tsx` 的 `useSelectionRowClickGuard`）。
+ * 模式内的整行点击守卫也挂在这棵常驻宿主上（见 `host-rows.ts` 的 `useSelectionRowClickGuard`）。
  *
- * 为什么单独一个文件而不是并进 `batch-select.tsx`：那份是"选中集 + 行开关"（被确认框 import），
- * 而浮条要点开确认框（要 import 它的现场）——两个方向合到一个文件上就是一圈。浮条住在
+ * 为什么单独一个文件而不是并进 `batch-select.tsx`：那份是"行开关控件"，而浮条要点开确认框
+ * （要 import 它的现场）——两个方向合到一个文件上就是一圈。浮条住在
  * `shell.overlay` 上，与单删的撤销提示/确认框同类（槽位原文："a toast stack or a status pill
  * all belong here"）。
  *
@@ -14,21 +14,12 @@
  * 读不到就整句不说——K 是合计，缺一条就是假数（「不许拿 0 冒充没有」）。
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import {
-  allVisibleSelected,
-  clearPicks,
-  exitSelection,
-  fetchCounts,
-  getPicks,
-  selectAllVisible,
-  togglePick,
-  usePicks,
-  useSelecting,
-  useSelectionRowClickGuard,
-} from './batch-select.js'
+import { fetchCounts } from './batch-select.js'
 import { requestDeleteBatch } from './batch-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
+import { allVisibleSelected, selectAllVisible, useSelectionRowClickGuard } from './host-rows.js'
 import type { SessionDeleteRemote } from './remote.js'
+import { clearPicks, exitSelection, getPicks, togglePick, useSelection } from './batch-selection-store.js'
 import { Button } from './ui/Button.js'
 import { IconCloseOutlineRegular } from './ui/icons.js'
 
@@ -45,8 +36,7 @@ export function BatchBar({
   deps: BatchBarDeps
   t?: Translate
 }): ReactElement | null {
-  const selecting = useSelecting()
-  const picks = usePicks()
+  const { selecting, picks } = useSelection()
   // 模式内的整行点击（勾/取消、拦会话切换）挂在浮条这棵常驻宿主上：浮条是模式的可见形态。
   useSelectionRowClickGuard()
   const [counts, setCounts] = useState<Map<string, number> | null>(null)

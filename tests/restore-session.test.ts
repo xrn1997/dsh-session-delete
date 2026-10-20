@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { attachableWorkspaceId, isWorkspaceMissing, restoreSession } from '../src/verbs/restore-session.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
-import type { HostPort } from '../src/ports/host-port.js'
+import type { HostIdentityPort } from '../src/ports/host-port.js'
 import { createFakeDeps, type FakeDeps, type FakeFs, type FakeHost } from './support/fake-deps.js'
 
 const HOME = '/h'
@@ -121,7 +121,7 @@ describe('恢复动词', () => {
   // 行上那句与"到底挂不挂账本"必须是同一条判据（`isWorkspaceMissing` 由 `attachableWorkspaceId` 派生）：
   // 三种输入三个结论，尤其不许拿"删除时就没有账目"冒充"工作区没了"。
   it('挂账本的判据与清单那句同源：还在 / 没了 / 从来就没有', async () => {
-    const host = (id: boolean): Pick<HostPort, 'workspaceExists'> => ({ workspaceExists: async () => id })
+    const host = (id: boolean): Pick<HostIdentityPort, 'workspaceExists'> => ({ workspaceExists: async () => id })
     expect(await attachableWorkspaceId(host(true), entry)).toBe('ws-1')
     expect(await isWorkspaceMissing(host(true), entry)).toBe(false)
     expect(await attachableWorkspaceId(host(false), entry)).toBeUndefined()
@@ -270,5 +270,25 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
       rollbackFailures: expect.arrayContaining([expect.stringContaining('EACCES')]),
     })
     expect(host.announceRemoved).not.toHaveBeenCalled()
+  })
+
+  it('组回滚里已经恢复的成员：目录退回回收站后发"已移除"，按相反顺序', async () => {
+    const calls: string[] = []
+    const made = createFakeDeps({
+      seed: [parent, kidA, kidB],
+      fs: { exists: () => true, size: 0 },
+      log: calls,
+      logMethods: ['evictLive', 'announceRemoved'],
+      format: (method, args) => `${method}(${String(args[0])})`,
+    })
+    made.host.attach = vi.fn(async (id: string) => {
+      if (id === 'session-kidB') throw new Error('attach boom')
+    })
+    const err = await failureOf(made.deps, parent.id)
+    expect(err.code).toBe('sessiondelete/io')
+    expect(calls).toEqual([
+      'evictLive(session-kidA)', 'announceRemoved(session-kidA)',
+      'evictLive(session-parent)', 'announceRemoved(session-parent)',
+    ])
   })
 })

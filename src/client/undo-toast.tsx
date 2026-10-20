@@ -9,12 +9,12 @@
  * `rowToastInjected = () => ({ hooks: { toast: rowToast }, dismissToast, undoArchive: unarchiveSession })`）。
  * 本文件就是那份 store + 那个常驻组件。
  *
- * 状态源用 React 自带的 `useSyncExternalStore`——不引 `@deepseek-ai/dsh-client-store`
- * （它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
+ * 状态源走 `store.ts` 的 `createStore`（内部用 React 自带的 `useSyncExternalStore`）——
+ * 不引 `@deepseek-ai/dsh-client-store`（它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
  */
-import { useSyncExternalStore } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
 import { applyOne, callRemote, type OneShotDeps } from './remote.js'
+import { createStore } from './store.js'
 import { invalidateTrash } from './trash-store.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
@@ -47,47 +47,31 @@ export type UndoNotice = {
     }
 )
 
-let notice: UndoNotice | null = null
-let nextSeq = 0
-const listeners = new Set<() => void>()
-
-const emit = (): void => {
-  for (const listener of listeners) listener()
-}
+const noticeStore = createStore<UndoNotice | null>(null)
 
 /** 删除成功后发布一条撤销提示（单条）。 */
 export function publishUndoNotice(input: { entryId: string; title: string }): void {
-  notice = { seq: (nextSeq += 1), kind: 'one', entryId: input.entryId, title: input.title }
-  emit()
+  noticeStore.publish((seq) => ({ seq, kind: 'one', entryId: input.entryId, title: input.title }))
 }
 
 /** 批量删除成功后发布一条撤销提示（2026-10-17）：覆盖上一条，只报这一次移走的条数。 */
 export function publishUndoBatchNotice(input: { entryIds: readonly string[]; n: number }): void {
-  notice = { seq: (nextSeq += 1), kind: 'batch', entryIds: input.entryIds, n: input.n }
-  emit()
+  noticeStore.publish((seq) => ({ seq, kind: 'batch', entryIds: input.entryIds, n: input.n }))
 }
 
 /** 撤销成功后把提示收掉（用户点「撤销」、或横幅自己走完停留时间）。 */
 export function clearUndoNotice(): void {
-  if (notice === null) return
-  notice = null
-  emit()
-}
-
-function getUndoNotice(): UndoNotice | null {
-  return notice
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
+  noticeStore.set(null)
 }
 
 /** 供组件订阅。 */
 export function useUndoNotice(): UndoNotice | null {
-  return useSyncExternalStore(subscribe, getUndoNotice, getUndoNotice)
+  return noticeStore.use()
+}
+
+/** 测试专用：现场与 seq 归零，用例之间互不串味。 */
+export function resetUndoNotice(): void {
+  noticeStore.reset()
 }
 
 /** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/architecture.md` §3.1 只指到这里，不抄这个数。 */
@@ -98,7 +82,7 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
   if (current.kind === 'one' && current.entryId === '') return
   const outcome =
     current.kind === 'one'
-      ? await callRemote(() => applyOne(deps, 'restore', current.entryId).then((item) => item.value))
+      ? await callRemote(() => applyOne(deps, 'restore', current.entryId))
       : await callRemote(() => deps.applyOutcomes('restore', current.entryIds))
   if (outcome.ok) {
     // 回收站少了几条：让正开着的清单面板重读（撤销也是"从别处动回收站"的一种）。
@@ -106,8 +90,7 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
     clearUndoNotice()
     return
   }
-  notice = { ...current, seq: (nextSeq += 1), failure: outcome.failure.message }
-  emit()
+  noticeStore.publish((seq) => ({ ...current, seq, failure: outcome.failure.message }))
 }
 
 /**

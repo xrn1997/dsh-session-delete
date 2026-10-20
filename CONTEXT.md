@@ -15,6 +15,10 @@
 
 ## 名词
 
+**数据根**（home）
+宿主运行时数据根：显式配置 > `$DSH_HOME`（空白视为未设）> `~/.dsh`。插件只镜像后两级；解析只住
+`src/ports/home.ts`。
+
 **会话**（session）
 宿主持久化的一条对话。落盘为 `sessions/<项目目录>/<会话目录>/session.vN.jsonl.zstd`——zstd **多帧**，
 第一行是 header（含 `id` 与 `cwd`）；一个目录里可以并存多代日志，只读版本号最大的那代。
@@ -51,6 +55,23 @@
 **活体**（live session）
 宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**。
 
+**永久删除计划**（permanent removal plan）
+一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、
+哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**（`/list` 上「这次会释放多少」念的是
+`planVisibleTrash`，与 purge 的 `planTrashRemoval` 共用同一套测量 / 筛选口径）；拿到计划之后才按它动盘的
+是**执行器**——只写、不再量、不再判活体。purge 与 orphan-clean 共用这一对，`/list` 只用只读那半。
+**journal 不参与永久删除**：journal 只服务"有反向动作的一次成员移动"，永久删除没有可回滚的那一半；
+步骤顺序与部分回执都住 `src/verbs/permanent-removal.ts`。回执**由 `kind` 决定**：`kind:'trash'`（purge）
+的删目录阶段失败不带 details，`kind:'orphan'`（orphan-clean）带 `{removed, freedBytes, failedSessionId}`；
+更早的 `unarchive` / `detach` 一步不在回执范围内：purge 照旧折成带标签的 `io`，orphan-clean 照旧原样抛出，
+都不带 details。
+
+**成员在场**（member presence）
+一个成员在宿主可见列表里的状态。**离场** = 摘活体并如实发 `api-session/removed`（`evictLive` 回
+`unknown` 时不通告）；**归位** = 目录 / 账本 / 可见性三件写都回去后才发 `api-session/added`。
+判据与成对通告只住 `src/verbs/member-presence.ts`；批量恢复的 `announceRestoredBatch` 仍归
+`src/verbs/batch.ts`。
+
 **归档**（archive）
 宿主「从分组面藏掉」那一档。删除时用它把会话藏起来（否则它掉进「未分组」）；恢复按 `wasArchived`
 反推可见性：原本已归档的一个字节都不动。
@@ -58,6 +79,25 @@
 **通告**（announce）
 让客户端**当场**删掉/加回一行的两条宿主事件（`api-session/removed` / `api-session/added`）。
 冷会话没有活体可摘，通告照样必须发。
+
+**跨槽位现场**（cross-slot state）
+浏览器半挂在**互不相邻的座位**上（`shell.overlay`、`main`、会话行菜单）的模块级快照：同一个宿主进程里
+跨组件卸载存活。快照 / 订阅 / 每实例 seq / `reset` 的脚手架只有一份，住 `src/client/store.ts`；
+现场语义各自住调用方——多选模式与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与整行点击守卫住
+`src/client/host-rows.ts`。
+
+**角色端口**（role ports）
+宿主能力端口的三个切面，同住 `src/ports/host-port.ts`：**身份与归属**（`HostIdentityPort`，10 个方法：
+会话是谁、落在哪个项目/工作区、活不活/归档没有，以及账本与归档的写面）、**在场通告**（`HostPresencePort`，
+5 个：摘活体三态与 `api-session/*` 如实通告）、**会话语料**（`HostCorpusPort`，2 个：`listSessions` 与
+`subagentMembersOf`）。`HostPort` 是三者相交的**复合别名**，生产 adapter 只有一颗（`createHostPort`），
+`DeleteDeps.host` 仍是复合面。裁决在 ADR-0007。
+
+**语料缺席**（corpus absence）
+「这一趟看不见语料」（`sessionQuery` 没挂，或它的读面方法缺席 / 不是函数）与「看见了、里面是空的」是两件事。
+两个语料读面都交 `CorpusRead<T>`：`{ available: true, value }` | `{ available: false }`，**不带原因串**；
+形状的家是 `src/ports/host-port.ts`。**缺席之后怎么办归调用方**：删除只删父、count 报 0、`/list` 与 purge
+静默降级、`/orphans` 与经 `loadOrphanGroups` 的 `orphan-clean` 响亮失败。裁决在 ADR-0007。
 
 **薄线**
 插件专属的宿主前缀路由 `/dsh-session-delete-api`。为什么不用官方 `remote.<namespace>`：第三方拿不到
@@ -86,6 +126,7 @@ Typert 描述符的动态发现挂载点；现行形状（六个段名、同源�
 - **groups module**：`src/trash/groups.ts`——组语义的唯一家（谁能接住孩子、这一组有谁、谁已被同批带走）。
 - **批量层**（batch layer）：`src/verbs/batch.ts`——「这一批」的唯一拥有者：去重保序、清册快照、
   已带走账本、逐条信封。
+- **成员在场**：`src/verbs/member-presence.ts`——成员离场 / 归位通告的唯一家。
 - **journal**：一次成员移动 = 一串步骤，每步**自带反向动作**；journal 拥有顺序反转、失败收集与
   `details.rollbackFailures` 的合并。
 - **路由表**（route table）：`src/api/route-table.ts`——段名 → `{ 方法, body, 纯度, 处理 }`；`dispatch` 的
@@ -105,11 +146,20 @@ Typert 描述符的动态发现挂载点；现行形状（六个段名、同源�
 | 组语义（根行才接得住孩子、闭包） | `src/trash/groups.ts` |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` |
 | 清册与目录的对账 | `src/trash/reconcile.ts` |
+| 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` |
 | 详情正文给谁看、给多少（`source.kind` 过滤与载荷闸） | `src/trash/detail.ts` |
 | 回滚失败的措辞与合并（码本身住 `wire.ts`） | `src/verbs/errors.ts` |
 | 「这一批」 | `src/verbs/batch.ts` |
-| 宿主能力的唯一适配 | `src/ports/host-port.ts` |
+| 成员离场 / 归位通告（摘活体、三态、成对事件） | `src/verbs/member-presence.ts` |
+| 永久删除的计划与执行（成员 / 目录 / 字节 / live 准入 / 部分回执） | `src/verbs/permanent-removal.ts` |
+| 宿主能力的唯一适配：三个角色切面与复合别名 `HostPort` | `src/ports/host-port.ts` |
+| 语料缺席的形状（`CorpusRead`；缺席之后怎么办归调用方） | `src/ports/host-port.ts` |
+| 数据根的解析（env → home） | `src/ports/home.ts` |
 | 文案 | `src/client/copy.ts`（命名空间字典） |
+| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 确认派发 / 自动选中 / 下钻回退） | `src/client/use-trash-panel-controller.ts` |
+| 跨槽位现场脚手架（快照 / 订阅 / 每实例 seq / `reset`） | `src/client/store.ts` |
+| 批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` |
+| 宿主行读取与整行点击守卫（可见行 / 全选判定 / 捕获阶段拦行点击） | `src/client/host-rows.ts` |
 | 宿主槽位与注册 | `src/client/index.tsx` |
 
 **跨插件一律 `import type`**；浏览器半一条 `@deepseek-ai/*` 的 import 都不许有（type-only 也不留）。

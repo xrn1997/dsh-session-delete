@@ -57,16 +57,13 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
-  useEffect,
   useMemo,
   useRef,
-  useState,
 } from 'react'
 import { TRASH_DIR_LABEL } from '../shared/wire.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
-import { applyOne, callRemote, type ApplyOutcome, type SessionDeleteRemote, type TrashDetailLike, type TrashEntryLike } from './remote.js'
-import { useTrashRevision } from './trash-store.js'
-import { TrashDetail, type TrashDetailState } from './trash-detail.js'
+import { type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
+import { TrashDetail } from './trash-detail.js'
 import { useColumnResize } from './use-column-resize.js'
 import { usePanelWidth } from './use-panel-width.js'
 import { Button } from './ui/Button.js'
@@ -81,7 +78,8 @@ import {
 } from './ui/icons.js'
 import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
-import { OrphanConfirm, TrashConfirm, type PendingAction } from './trash-confirm.js'
+import { OrphanConfirm, TrashConfirm } from './trash-confirm.js'
+import { useTrashPanelController, useTrashPanelGate } from './use-trash-panel-controller.js'
 import { useTrashQuery } from './use-trash-query.js'
 import { useTrashSelection } from './use-trash-selection.js'
 import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
@@ -235,34 +233,17 @@ function deletedAgo(at: number, now: number, t: Translate): string {
  * 头部合计与单条确认卡片都读它，于是同一屏不可能有两套口径，也就不再有"两行都算到同一个后代"那种偏差。 */
 
 export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
-  /** 一枚全局闸：写动作在飞时按住这一排按钮（清单行那颗按 `busy` 置灰），并挡住"旧清单那一拍再点一次"。 */
-  const [busy, setBusy] = useState(false)
-  const around = useCallback(async <T,>(task: () => Promise<T>): Promise<T> => {
-    setBusy(true)
-    try {
-      return await task()
-    } finally {
-      setBusy(false)
-    }
-  }, [])
+  /** 面板唯一的一枚全局闸（写动作在飞时按住一排按钮）：本体住控制器 module，查询侧的写动作也吃它。 */
+  const gate = useTrashPanelGate()
 
   // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`。
-  const query = useTrashQuery({ deps, t, around })
+  const query = useTrashQuery({ deps, t, around: gate.around })
   const {
     entries, listFailure,
     orphanReport, orphanFailure, orphanNotice, orphanConfirm, setOrphanConfirm,
     refresh,
   } = query
 
-  /** 恢复/彻底删除 的失败原文，按条目 id 存：切走再回来还在，不是一次性的。 */
-  const [actionFailure, setActionFailure] = useState<Readonly<Record<string, string>>>({})
-  const [pending, setPending] = useState<PendingAction | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [loadingId, setLoadingId] = useState<string | null>(null)
-  const [detailFailure, setDetailFailure] = useState<{ entryId: string; message: string } | null>(null)
-  const [drilled, setDrilled] = useState(false)
-  /** 面板存活期内每条只读一次（本机量级：最大一条 135ms，125 条全读 2.0s ⇒ 不预读、也不重复读）。 */
-  const detailCache = useRef(new Map<string, TrashDetailLike>())
   const listRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const width = usePanelWidth(rootRef)
@@ -282,35 +263,6 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     step: HANDLE_STEP,
     label: t('trash.divider.label'),
   })
-  // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍就把清单重读一遍。
-  const revision = useTrashRevision()
-
-  useEffect(() => {
-    void refresh()
-  }, [refresh, revision])
-
-  /**
-   * 选一条：命中缓存就直接摆，没命中才去读那条会话自己的日志。
-   * `drill` 是窄档的第二步语义（点行 = 选中并下钻；方向键 = 只移动选中）。
-   */
-  const select = useCallback(
-    async (entry: TrashEntryLike, options: { drill?: boolean } = {}): Promise<void> => {
-      setSelectedId(entry.id)
-      if (options.drill === true) setDrilled(true)
-      if (detailCache.current.has(entry.id)) {
-        setLoadingId(null)
-        setDetailFailure(null)
-        return
-      }
-      setLoadingId(entry.id)
-      setDetailFailure(null)
-      const outcome = await callRemote(() => deps.detail(entry.id))
-      setLoadingId((current) => (current === entry.id ? null : current))
-      if (outcome.ok) detailCache.current.set(entry.id, outcome.value)
-      else setDetailFailure({ entryId: entry.id, message: outcome.failure.message })
-    },
-    [deps],
-  )
 
   const groups = useMemo(() => groupByProject(entries ?? [], t), [entries, t])
   // 选择面（多选 / 折叠 / 勾选与它们派生的三样只读）整块住在 `use-trash-selection.ts`。
@@ -321,58 +273,35 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     toggleCheck, toggleGroupCheck, groupFullyChecked, groupPartiallyChecked,
   } = selection
 
-  // 清单换了（别处删了一条、恢复成功、彻底删除成功）：选中那条已经不在了就让位，并把它的缓存丢掉。
-  useEffect(() => {
-    if (entries === null || selectedId === null) return
-    if (entries.some((entry) => entry.id === selectedId)) return
-    detailCache.current.delete(selectedId)
-    setSelectedId(null)
-    setDrilled(false)
-  }, [entries, selectedId])
-
-  // 宽档首读完成后自动选中第一条：右栏空着比多一次点击更怪（窄档不自动下钻）。
-  useEffect(() => {
-    if (split && selectedId === null && ordered.length > 0) void select(ordered[0]!)
-  }, [split, selectedId, ordered, select])
-
+  /** 行的 DOM 查询留给面板；控制器只拿"把焦点还给哪一行"这个动作（不认选择器）。 */
   const focusRow = useCallback((entryId: string): void => {
     const node = listRef.current?.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`)
     node?.focus()
   }, [])
 
   /**
-   * 下钻里按 Esc 退回清单（docs/architecture.md §3.1）。
-   *
-   * 监听挂在 `document` 而不是清单容器：窄档下钻时清单**不在 DOM 里**，挂在容器上的 Esc 是一条
-   * 永远收不到的死路径。退回后焦点交还给选中的那一行（行还没进 DOM，所以记一笔等这一拍渲染完再做）。
+   * 选中 / 详情缓存 / 清单换版清场 / 宽档自动选中 / Esc 交还焦点 / 写动作与失败落点，整块住在
+   * `use-trash-panel-controller.ts`。布局常量不搬进控制器：面板只交两样从布局算出来的面——
+   * 屏幕上的顺序 `ordered`（只含展开的组）与"这一档要不要自动选中"（`canAutoSelect: split`）。
    */
-  const refocusRow = useRef<string | null>(null)
-  useEffect(() => {
-    if (!drilled) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
-      refocusRow.current = selectedId
-      setDrilled(false)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => { document.removeEventListener('keydown', onKey) }
-  }, [drilled, selectedId])
-
-  useEffect(() => {
-    if (drilled || refocusRow.current === null) return
-    focusRow(refocusRow.current)
-    refocusRow.current = null
-  }, [drilled, focusRow])
+  const controller = useTrashPanelController({
+    deps,
+    gate,
+    query,
+    ordered,
+    canAutoSelect: split,
+    focusRow,
+  })
 
   const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (ordered.length === 0) return
-    const index = ordered.findIndex((entry) => entry.id === selectedId)
+    const index = ordered.findIndex((entry) => entry.id === controller.selectedId)
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       const step = event.key === 'ArrowDown' ? 1 : -1
       const next = index < 0 ? (step > 0 ? 0 : ordered.length - 1) : (index + step + ordered.length) % ordered.length
       const target = ordered[next]!
-      void select(target)
+      void controller.select(target)
       focusRow(target.id)
       return
     }
@@ -384,77 +313,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         toggleCheck(ordered[index]!.id)
         return
       }
-      void select(ordered[index]!, { drill: true })
+      void controller.select(ordered[index]!, { drill: true })
     }
-  }
-
-  const failRow = (entryId: string, message: string): void => {
-    setActionFailure((current) => ({ ...current, [entryId]: message }))
-  }
-
-  const restore = async (entry: TrashEntryLike): Promise<void> => {
-    setActionFailure((current) => {
-      const next = { ...current }
-      delete next[entry.id]
-      return next
-    })
-    await around(async () => {
-      const outcome = await callRemote(() => applyOne(deps, 'restore', entry.id).then((item) => item.value))
-      if (!outcome.ok) {
-        failRow(entry.id, outcome.failure.message)
-        return
-      }
-      detailCache.current.delete(entry.id)
-      // `around` 把 `busy` 保持到 refresh 结束：否则这一拍旧清单还在屏上，同一个动作能被再点一次。
-      await refresh()
-    })
-  }
-
-  /** 一段批量 → 组件状态：成功的丢详情缓存，失败的原文落回它自己那一行。整批一次上屏、一次重读。 */
-  const settleOutcomes = (outcomes: readonly ApplyOutcome[]): void => {
-    const failures: Array<{ id: string; message: string }> = []
-    for (const outcome of outcomes) {
-      if (outcome.ok) detailCache.current.delete(outcome.id)
-      else failures.push({ id: outcome.id, message: outcome.error.message })
-    }
-    if (failures.length > 0) {
-      setActionFailure((current) => {
-        const next = { ...current }
-        for (const failure of failures) next[failure.id] = failure.message
-        return next
-      })
-    }
-  }
-
-  /**
-   * 批量彻底删除 / 批量恢复**共用这一条**（2026-10-17 批量重构）：一次 `apply` 把整批交给 Node 半，
-   * 逐条成败住在 `ApplyOutcome` 里 ⇒ 组件不再自己拼循环、也不再"每条一次全量重读"。
-   */
-  const confirmApply = async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
-    await around(async () => {
-      const outcome = await callRemote(() => deps.applyOutcomes(action, ids))
-      setPending(null)
-      if (!outcome.ok) {
-        // 整次调用没办成（路由自检 / 通道断）：这批一条都没落地 ⇒ 原文摆到每一行，别让清单看起来"删成功了"
-        for (const id of ids) failRow(id, outcome.failure.message)
-      } else {
-        settleOutcomes(outcome.value)
-      }
-      await refresh()
-    })
-  }
-
-  const confirmPurge = async (): Promise<void> => {
-    const target = pending
-    if (target === null) return
-    if (target.kind === 'entries') return confirmApply('purge', target.ids)
-    if (target.kind === 'restore') return confirmApply('restore', target.ids)
-    if (target.kind === 'entry') return confirmApply('purge', [target.entry.id])
-    // 清空：聚合回执、不按条回，所以它不走 `apply`（形状不同，不是偷懒）。
-    // 失败落在"清单读不到"那一格、成功就把详情缓存清空——两件都由 `useTrashQuery.emptyTrash` 之外的这里定。
-    const emptied = await query.emptyTrash()
-    setPending(null)
-    if (emptied) detailCache.current.clear()
   }
 
   /** 清理那批无主子会话：整块住在 `useTrashQuery.cleanOrphans`（扫描的报告、两种失败的分流、先刷新后落提示
@@ -468,6 +328,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
    * （重读会把它从勾选里也剔掉）。
    */
   const byIdEntries = useMemo(() => new Map((entries ?? []).map((entry) => [entry.id, entry])), [entries])
+  const pending = controller.pending
   const restoreEntries = pending?.kind === 'restore'
     ? pending.ids.map((id) => byIdEntries.get(id)).filter((entry): entry is TrashEntryLike => entry !== undefined)
     : []
@@ -483,28 +344,14 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
    * 在准备批量恢复时是假话——那类具体警告归各自的确认框，这里只留两件事：回收站在哪、不自动过期。
    */
   const noteParts = splitOn(t('trash.footer.note', { dir: TRASH_DIR }), TRASH_DIR)
-  /**
-   * 选中那条从**全量条目**里找，不从 `ordered`（只含展开的组）里找：把选中那条所在的组折叠起来
-   * 只是把那一列收掉，右栏那条不该跟着消失——详情读的是这条会话，跟清单怎么分段无关。
-   */
-  const selected = (entries ?? []).find((entry) => entry.id === selectedId) ?? null
   /** `aria-activedescendant` 只能指向**在 DOM 里**的那一行：折叠起来之后它就是不存在，指过去是假引用。 */
-  const activeDescendantId = ordered.some((entry) => entry.id === selectedId) ? selectedId : null
+  const activeDescendantId = ordered.some((entry) => entry.id === controller.selectedId) ? controller.selectedId : null
   /**
    * 清单里那个唯一的 tab 落点（roving tabindex）。它必须**永远有一行拿着**：窄档不自动选中，
    * 只按"选中那行拿 0"来给的话，一次没点过时全行都是 `-1`，键盘根本进不来清单。
    * 落点与 `aria-activedescendant` 同一条可见性规则——选中那行被折叠起来时落到第一条可见行。
    */
   const tabStopId = activeDescendantId ?? ordered[0]?.id ?? null
-
-  const detailState: TrashDetailState = useMemo(() => {
-    if (selected === null) return { kind: 'idle' }
-    if (loadingId === selected.id) return { kind: 'loading', entry: selected }
-    const cached = detailCache.current.get(selected.id)
-    if (cached !== undefined) return { kind: 'ready', entry: selected, detail: cached }
-    if (detailFailure?.entryId === selected.id) return { kind: 'failed', entry: selected, message: detailFailure.message }
-    return { kind: 'loading', entry: selected }
-  }, [selected, loadingId, detailFailure])
 
   /**
    * 清单容器（roving tabindex 那个唯一的 tab 巢）。`flex:'1 1 auto'` 是**空态居中链**的一节：
@@ -643,7 +490,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             </div>
 
             {isCollapsed(group.projectDir) ? null : group.entries.map((entry) => {
-              const isSelected = entry.id === selectedId
+              const isSelected = entry.id === controller.selectedId
               const isChecked = checked.has(entry.id)
               const title = entry.title === '' ? t('common.untitled') : entry.title
               const kids = entry.subagentCount ?? 0
@@ -665,7 +512,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       toggleCheck(entry.id)
                       return
                     }
-                    void select(entry, { drill: !split })
+                    void controller.select(entry, { drill: !split })
                   }}
                 >
                   {/* 勾选框在**标题左侧**（照用户给的参考图那一版布局）。两颗动作按钮这时整排退场：
@@ -706,7 +553,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                     ) : null}
                     {/* 恢复/彻底删除 的失败原文留在这条记录上（2026-10-15 真机反馈：动作回到行内，
                         失败也就跟着回行内——"动作与它的原因在同一行"这条住 docs/architecture.md §3.1「失败落点」，没换地方）。 */}
-                    {actionFailure[entry.id] === undefined ? null : (
+                    {controller.actionFailure[entry.id] === undefined ? null : (
                       <div
                         role="status"
                         style={{
@@ -722,7 +569,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         <span style={{ display: 'inline-flex', flex: 'none' }} aria-hidden="true">
                           <IconWarningOutlineRegular size={13} />
                         </span>
-                        <span>{actionFailure[entry.id]}</span>
+                        <span>{controller.actionFailure[entry.id]}</span>
                       </div>
                     )}
                   </div>
@@ -730,7 +577,12 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       不抢动作的位置——动作一直在，看详情才需要点整行。多选态整排退场。 */}
                   {selectMode ? null : (
                     <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
-                      <Button variant="outline" size="sm" disabled={busy} onClick={() => void restore(entry)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={controller.busy}
+                        onClick={() => void controller.restore(entry)}
+                      >
                         {t('trash.row.restore')}
                       </Button>
                       <Button
@@ -738,8 +590,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         size="sm"
                         style={QUIET_DANGER}
                         icon={<IconTrashOutlineRegular size={13} />}
-                        disabled={busy}
-                        onClick={() => setPending({ kind: 'entry', entry })}
+                        disabled={controller.busy}
+                        onClick={() => controller.setPending({ kind: 'entry', entry })}
                       >
                         {t('trash.row.purge')}
                       </Button>
@@ -758,13 +610,11 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     <div data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
       <div style={DETAIL_INNER}>
         <TrashDetail
-          state={detailState}
-          busy={busy}
+          state={controller.detail}
+          busy={controller.busy}
           wide={split}
-          onRetry={() => {
-            if (selected !== null) void select(selected)
-          }}
-          onBack={() => setDrilled(false)}
+          onRetry={() => controller.retry()}
+          onBack={() => controller.back()}
           t={t}
         />
       </div>
@@ -855,9 +705,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             variant="outline"
             size="sm"
             style={{ flex: 'none' }}
-            disabled={busy}
+            disabled={controller.busy}
             onClick={() => {
-              if (busy) return
+              if (controller.busy) return
               query.openOrphanPreview()
             }}
           >
@@ -876,7 +726,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-state-error-primary)' }}>
             {orphanFailure}
           </span>
-          <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={busy} onClick={() => void refresh()}>
+          <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={controller.busy} onClick={() => void refresh()}>
             {t('common.retry')}
           </Button>
         </div>
@@ -907,7 +757,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             <span className="sd-width-handle" {...resize.handleProps} />
             {detailPane}
           </>
-        ) : drilled && selected !== null ? (
+        ) : controller.drilled && controller.selected !== null ? (
           detailPane
         ) : (
           // 单列时铺满 BODY：不给 flex，这一栏会按内容宽缩在行的左边（空态时约 390px）
@@ -948,8 +798,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={checkedIds.length === 0 || busy}
-                      onClick={() => setPending({ kind: 'restore', ids: checkedIds })}
+                      disabled={checkedIds.length === 0 || controller.busy}
+                      onClick={() => controller.setPending({ kind: 'restore', ids: checkedIds })}
                     >
                       {t('trash.select.restore', { count: checkedIds.length })}
                     </Button>
@@ -962,8 +812,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       size="sm"
                       style={BULK_DANGER}
                       icon={<IconTrashOutlineRegular size={13} />}
-                      disabled={checkedIds.length === 0 || busy}
-                      onClick={() => setPending({ kind: 'entries', ids: checkedIds })}
+                      disabled={checkedIds.length === 0 || controller.busy}
+                      onClick={() => controller.setPending({ kind: 'entries', ids: checkedIds })}
                     >
                       {t('trash.select.purge', { count: checkedIds.length })}
                     </Button>
@@ -976,8 +826,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                 size="sm"
                 style={BULK_DANGER}
                 icon={<IconTrashOutlineRegular size={13} />}
-                disabled={busy}
-                onClick={() => setPending({ kind: 'all' })}
+                disabled={controller.busy}
+                onClick={() => controller.setPending({ kind: 'all' })}
               >
                 {t('trash.emptyAll')}
               </Button>
@@ -990,18 +840,18 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         <TrashConfirm
           pending={pending}
           restoreEntries={restoreEntries}
-          busy={busy}
+          busy={controller.busy}
           t={t}
-          onCancel={() => setPending(null)}
-          onConfirmPurge={() => void confirmPurge()}
-          onConfirmRestore={(ids) => void confirmApply('restore', ids)}
+          onCancel={() => controller.setPending(null)}
+          onConfirmPurge={() => void controller.confirmPurge()}
+          onConfirmRestore={(ids) => void controller.confirmApply('restore', ids)}
         />
       )}
 
       {orphanConfirm && orphanReport !== null ? (
         <OrphanConfirm
           report={orphanReport}
-          busy={busy}
+          busy={controller.busy}
           t={t}
           onCancel={() => setOrphanConfirm(false)}
           onConfirm={() => void confirmOrphans()}

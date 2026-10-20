@@ -5,6 +5,7 @@ import type { ManifestPort } from '../trash/manifest.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { verbError } from './errors.js'
 import { attempt, createJournal, rollbackJournals, type Journal, type JournalStep } from './member-journal.js'
+import { createMemberPresence, type MemberPresence } from './member-presence.js'
 
 export interface DeleteDeps {
   fs: FsPort
@@ -37,8 +38,11 @@ interface Member {
  * interface 只有**一个 id**：批量的性质不在这里（同批"已被前一条带走"的判据归 `verbs/batch.ts`）。
  */
 export function deleteSession(deps: DeleteDeps) {
+  const presence = createMemberPresence(deps.host)
   return async function deleteSession(sessionId: string): Promise<TrashEntry> {
-    const kids = await deps.host.subagentMembers(sessionId)
+    // 语料看不见（`available: false`）⇒ 只删父：写侧只许降级，盘上残留留给 `GET /orphans` 兜底。
+    const read = await deps.host.subagentMembersOf([sessionId])
+    const kids = read.available ? (read.value[sessionId] ?? []) : []
 
     const parentProjectDir = await deps.host.projectDirOf(sessionId)
     if (parentProjectDir === undefined) throw verbError('not-found', `宿主的持久化里没有这个会话：${sessionId}`)
@@ -71,7 +75,7 @@ export function deleteSession(deps: DeleteDeps) {
     try {
       for (const member of members) {
         const isParent = member.sessionId === sessionId
-        const move = await memberMove(deps, member, deletedAt, isParent ? undefined : parentEntry!.id)
+        const move = await memberMove(deps, presence, member, deletedAt, isParent ? undefined : parentEntry!.id)
         if (isParent) parentEntry = move.entry
         await move.journal.run()
         done.push(move.journal)
@@ -95,6 +99,7 @@ export function deleteSession(deps: DeleteDeps) {
  */
 async function memberMove(
   deps: DeleteDeps,
+  presence: MemberPresence,
   member: Member,
   deletedAt: number,
   parentEntryId: string | undefined,
@@ -113,7 +118,7 @@ async function memberMove(
   }
   /** 目录真的搬进回收站了吗——决定那一步的反向动作有没有东西可退。 */
   let moved = false
-  /** 回滚的三件写是否都真正退回原样：目录、账本、可见性。`announceRestored` 只在这三件都成立时发。 */
+  /** 回滚的三件写是否都真正退回原样：目录、账本、可见性。三个事实交给成员在场 module 判「归位」通告。 */
   let movedBack = false
   let workspaceBack = workspaceId === undefined
   let visibleBack = wasArchived
@@ -185,20 +190,16 @@ async function memberMove(
   return {
     entry,
     journal: {
-      // 搬完之后才把"从宿主内存里摘掉 + 如实通告"补上：这两件都不抛，且只在完全搬成之后有意义。
+      // 搬完之后才把"离开可见面"补上：摘活体与如实通告都不抛，且只在完全搬成之后有意义。
       async run() {
         await journal.run()
-        const eviction = await deps.host.evictLive(sessionId)
-        if (eviction !== 'unknown') await deps.host.announceRemoved(sessionId)
+        await presence.memberGone(sessionId)
       },
-      /** 组级回滚：先把成员自己的步骤按相反顺序退回，再在**三件写都真正回去**时补一条"已恢复"通告。
-       *  这一行此前已经收过 `api-session/removed`；不发"回来了"它就会在客户端消失到重连为止。
-       *  目录没退回、账本没挂回、或可见性没还原 ⇒ 不发——那会是假话（同 restore 侧 `movedBack` 的判据）。 */
+      /** 组级回滚：先把成员自己的步骤按相反顺序退回，再交给成员在场 module 判「三件写都回去了吗」。
+       *  这一行此前已经收过 `api-session/removed`；不发"回来了"它就会在客户端消失到重连为止。 */
       async undo() {
         const failures = await journal.undo()
-        if (movedBack && workspaceBack && visibleBack) {
-          await deps.host.announceRestored(sessionId).catch(() => {})
-        }
+        await presence.memberBack(sessionId, { diskBack: movedBack, workspaceBack, visibleBack })
         return failures
       },
     },

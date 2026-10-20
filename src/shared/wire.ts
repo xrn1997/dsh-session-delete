@@ -94,13 +94,15 @@ export interface TrashEntryWire {
  * 也不许拿缺席冒充否。
  */
 export interface TrashRowWire extends TrashEntryWire {
-  /** **这一行「彻底删除」会释放多少**：本行 + 跟着进来的孩子 + 盘上还留着的后代。
-   *  它是**存储侧的事实**（彻底删除删的正是这三样），所以由 Node 半算一次过线；界面上头部合计与
-   *  单条确认框共用这一个数——不许各算一遍（各算一遍就是两套口径，且客户端那套会重复计数）。 */
+  /** **这一行「彻底删除」会释放多少**：这一组在盘上**实测**的字节合计（回收站里本行与孩子的目录 +
+   *  盘上还留着的后代），与 purge 的 `freedBytes` 同一口径。算式只住 `verbs/permanent-removal.ts` 的
+   *  `planVisibleTrash`，Node 半算一次过线、投影原样搬运；界面上头部合计与单条确认框共用这一个数——
+   *  不许各算一遍（各算一遍就是两套口径，且客户端那套会重复计数）。 */
   releaseBytes: number
   /** 跟着这条父会话**一起进了回收站**的孩子数（清册里 `parentEntryId` 指向它的行）。 */
   subagentCount?: number
-  /** 那些孩子的字节合计（头部合计要算上它们，不能只加父自己那一格）。 */
+  /** 那些孩子**回收站目录的实测字节**合计（`planVisibleTrash` 在盘上现量，与 `releaseBytes` 同一条口径；
+   *  不念清册里记的 `sizeBytes`。头部合计要算上它们，不能只加父自己那一格）。 */
   subagentBytes?: number
   /** **还留在盘上、没被带走**的孩子数（宿主 `sessionQuery`）。与 `subagentCount` 各说各的。 */
   strandedSubagents?: number

@@ -59,7 +59,7 @@ const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale)\/([A-Za-z0-9_\-
 
 /** 看着像路径、其实不是路径，或故意保留的历史名。每条都要有理由。 */
 const ALLOWED: Record<string, string> = {
-  'docs/adr/0001..0004': '散文里的区间写法（ADR-0001 到 0004 四篇），不是单个文件',
+  'docs/adr/0001..0007': '散文里的区间写法（ADR-0001 到 0007 七篇），不是单个文件',
   'src/verbs/apply.ts': 'ADR-0001 的"当时"表：那一格写的就是改名前的位置，同行已注明改名到 batch.ts',
 }
 

@@ -32,12 +32,15 @@ function deps(over: Partial<TrashQueryDeps> & Partial<Record<'list' | 'scanOrpha
   } as TrashQueryDeps
 }
 
-/** 面板那枚 `busy` 闸的替身：直接放行（这类编排测试不关心渲染期的禁用）。 */
-const around = <T,>(task: () => Promise<T>): Promise<T> => task()
+/** 面板那枚 `busy` 闸的形状：把一次任务整个包进"这一趟还算忙"里。 */
+type Around = <T>(task: () => Promise<T>) => Promise<T>
 
-function mount(over: Partial<TrashQueryDeps> = {}) {
+/** 这类编排测试不关心渲染期的禁用：替身直接放行。 */
+const around: Around = <T,>(task: () => Promise<T>): Promise<T> => task()
+
+function mount(over: Partial<TrashQueryDeps> = {}, wrap: Around = around) {
   const d = deps(over)
-  const view = renderHook(() => useTrashQuery({ deps: d, t: zhTranslate, around }))
+  const view = renderHook(() => useTrashQuery({ deps: d, t: zhTranslate, around: wrap }))
   return { d, ...view }
 }
 
@@ -147,5 +150,25 @@ describe('取数编排 · 清理那批无主子会话', () => {
     expect(result.current.orphanFailure).toContain('目录搬不动')
     expect(result.current.orphanFailure).toContain('1') // 已先删掉 1 个
     await waitFor(() => expect(result.current.orphanFailure).not.toBeNull())
+  })
+})
+
+describe('取数编排 · 清空走注入的闸', () => {
+  it('emptyTrash 的请求与清单重读都在 around 里跑：先开闸、再发请求、最后关闸', async () => {
+    const order: string[] = []
+    const wrap: Around = <T,>(task: () => Promise<T>): Promise<T> => {
+      order.push('gate:enter')
+      return task().finally(() => { order.push('gate:leave') })
+    }
+    const { result } = mount({
+      list: vi.fn(async () => { order.push('list'); return rows }) as never,
+      emptyTrash: vi.fn(async () => { order.push('empty'); return { removed: 1, freedBytes: 1 } }) as never,
+    }, wrap)
+
+    await act(async () => { await result.current.emptyTrash() })
+    // 若请求在 around 之外发、或重读没被包进去，这个序都会对不上。
+    expect(order).toEqual(['gate:enter', 'empty', 'list', 'gate:leave'])
+    expect(result.current.entries).toEqual(rows)
+    expect(result.current.listFailure).toBeNull()
   })
 })

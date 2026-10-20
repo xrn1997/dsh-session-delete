@@ -1,16 +1,25 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import { makeEntryId, sessionDirOf, trashDirOf } from '../src/trash/entry.js'
-import { createFakeDeps, type FakeDeps, type FakeFs, type FakeHost } from './support/fake-deps.js'
+import { createFakeDeps, type FakeDeps, type FakeDepsOptions, type FakeFs, type FakeHost } from './support/fake-deps.js'
 
 const HOME = '/h'
-/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：19 个宿主方法一次到位，用例只描述世界。
+/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：17 个宿主方法一次到位，用例只描述世界。
  *  日志按**发生顺序**记 fs 与 host 两端——删除的顺序（归档 → 摘账本 → 搬目录 → 摘活体 → 通告）是一条断言。 */
-function deps(over: { host?: Partial<FakeHost>; fs?: Partial<FakeFs> } = {}) {
+function deps(over: {
+  host?: Partial<FakeHost>
+  fs?: Partial<FakeFs>
+  /** 父 → 盘上后代（`subagentMembersOf` 的值）；缺席的父回空表。 */
+  members?: FakeDepsOptions['members']
+  /** `false` = 语料看不见（`subagentMembersOf` 回 `{ available:false }`）。 */
+  membersAvailable?: boolean
+} = {}) {
   const calls: string[] = []
   const made = createFakeDeps({
     now: Date.UTC(2026, 8, 30, 13, 5, 0),
     projectDirOf: '--C-develop-GitHub-dsh-ebook--',
+    members: over.members,
+    membersAvailable: over.membersAvailable,
     log: calls,
     logMethods: ['archive', 'detach', 'unarchive', 'attach', 'evictLive', 'announceRemoved', 'announceRestored', 'rename'],
   })
@@ -201,7 +210,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
   const kidB = { sessionId: 'session-kidB', projectDir: '--p--' }
 
   it('父搬进去之后，每个孩子各自成目录、各自一行，清册记 parentEntryId 指向父那一行', async () => {
-    const d = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    const d = deps({ members: { 'session-parent': [kidA, kidB] } })
     const parent = await deleteSession(d.deps)('session-parent')
     const rows = await d.manifest.list()
     expect(rows.map(r => r.sessionId).sort()).toEqual(['session-kidA', 'session-kidB', 'session-parent'])
@@ -220,8 +229,20 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     ].sort())
   })
 
+  // 语料看不见不是"盘上没有后代"，但写侧只许降级：父照样删，盘上残留留给 `GET /orphans` 兜底。
+  it('语料看不见（available:false）⇒ 只删父，不因此失败', async () => {
+    const d = deps({ membersAvailable: false })
+    const parent = await deleteSession(d.deps)('session-parent')
+    expect(parent).toMatchObject({ sessionId: 'session-parent' })
+    // 写侧真的读了这一格（不是碰巧走了"没有孩子"的默认值）：缺席也必须点名问过这个父。
+    expect(d.host.subagentMembersOf).toHaveBeenCalledWith(['session-parent'])
+    const rows = await d.manifest.list()
+    expect(rows.map(r => r.sessionId)).toEqual(['session-parent'])
+    expect(d.fs.rename).toHaveBeenCalledTimes(1)
+  })
+
   it('宿主报了孩子但盘上没有那个目录 ⇒ 跳过它，其余照搬，不让整次删除失败', async () => {
-    const d = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    const d = deps({ members: { 'session-parent': [kidA, kidB] } })
     d.fs.exists = vi.fn(async (p: string) => !p.includes('session-kidB'))
     const parent = await deleteSession(d.deps)('session-parent')
     const rows = await d.manifest.list()
@@ -231,8 +252,8 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
 
   it('孩子在跑 ⇒ 整组拒绝，一个字节都不动（不替用户终止正在跑的活）', async () => {
     const d = deps({
+      members: { 'session-parent': [kidA, kidB] },
       host: {
-        subagentMembers: vi.fn(async () => [kidA, kidB]),
         isLive: vi.fn(async (id: string) => id === 'session-kidB'),
       },
     })
@@ -243,7 +264,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
   })
 
   it('第二个孩子搬不动 ⇒ 已经搬进去的（父与第一个孩子）一起滚回原处', async () => {
-    const d = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    const d = deps({ members: { 'session-parent': [kidA, kidB] } })
     d.fs.rename = vi.fn(async (_from: string, to: string) => {
       if (to.includes('session-kidB')) throw new Error('EBUSY')
     })
@@ -258,7 +279,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
   })
 
   it('回滚本身失败 ⇒ 原错误保留，回滚失败进 details，且不发"已恢复"', async () => {
-    const { deps: d, fs, host } = deps({ host: { subagentMembers: vi.fn(async () => [kidA, kidB]) } })
+    const { deps: d, fs, host } = deps({ members: { 'session-parent': [kidA, kidB] } })
     fs.rename = vi.fn(
       async (from: string, to: string) => {
         if (to.includes('session-kidB')) throw new Error('EBUSY')

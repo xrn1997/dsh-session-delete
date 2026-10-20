@@ -58,11 +58,24 @@ describe('批量层 · 一条 id 一条结果', () => {
 
   it('count 是**整批一次**宿主调用，不是每条一次', async () => {
     const { deps, host } = world([parent])
-    host.subagentCounts.mockImplementation(async (ids: readonly string[]) =>
-      Object.fromEntries(ids.map((id) => [id, 2])))
+    host.subagentMembersOf.mockImplementation(async (ids: readonly string[]) => ({
+      available: true as const,
+      value: Object.fromEntries(ids.map((id) => [id, [
+        { sessionId: `${id}-1`, projectDir: '--p--' },
+        { sessionId: `${id}-2`, projectDir: '--p--' },
+      ]])),
+    }))
     const outcomes = await applyActions(deps, 'count', ['a', 'b', 'c'])
     expect(outcomes.map((item) => (item.ok ? item.value : null))).toEqual([2, 2, 2])
-    expect(host.subagentCounts).toHaveBeenCalledTimes(1)
+    expect(host.subagentMembersOf).toHaveBeenCalledTimes(1)
+  })
+
+  it('count 在语料看不见（available:false）时整批回 0，不失败', async () => {
+    const { deps, host } = world([parent])
+    host.subagentMembersOf.mockResolvedValue({ available: false })
+    const outcomes = await applyActions(deps, 'count', ['a', 'b'])
+    expect(outcomes.map((item) => (item.ok ? item.value : null))).toEqual([0, 0])
+    expect(host.subagentMembersOf).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -106,8 +119,12 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
 
   it('delete：同批第二个孩子是幂等 no-op（值 null）——名单由结果推出，不靠动词回调', async () => {
     const { deps, host } = world([])
-    host.subagentMembers.mockImplementation(async (sessionId: string) =>
-      sessionId === 'session-parent' ? [{ sessionId: 'session-kid', projectDir: '--p--' }] : [])
+    host.subagentMembersOf.mockImplementation(async (ids: readonly string[]) => ({
+      available: true as const,
+      value: Object.fromEntries(ids.map((id) => [id, id === 'session-parent'
+        ? [{ sessionId: 'session-kid', projectDir: '--p--' }]
+        : []])),
+    }))
     const outcomes = await applyActions(deps, 'delete', ['session-parent', 'session-kid'])
     expect(outcomes.map((item) => item.ok)).toEqual([true, true])
     expect(outcomes[1]).toMatchObject({ ok: true, value: null })
