@@ -1,7 +1,6 @@
 # ADR-0005 — 成员离场 / 归位通告只有一个家：`src/verbs/member-presence.ts`
 
-- **状态**：已接受（2026-10-20）
-- **相关**：`CONTEXT.md`（成员在场 / 通告）；`src/verbs/member-presence.ts`
+Status: accepted
 
 ## 背景
 
@@ -52,3 +51,5 @@
 - **调用方算好一个布尔再交给 module**：「三件写都回去」的真值表继续住调用点，正是这次要收的东西。
 - **module 直接读 journal 的 `failures`**：耦合到回滚措辞，且恢复回滚的 `movedBack` 不是 journal 失败串能表达的。
 - **把批量 `announceRestoredBatch` 也收进来**：一个 module 同时拥有单成员与整批两种通告粒度，违背 ADR-0002。
+
+锚点：`CONTEXT.md`（成员在场 / 通告）；`src/verbs/member-presence.ts`

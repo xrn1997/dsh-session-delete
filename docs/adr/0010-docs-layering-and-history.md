@@ -1,7 +1,6 @@
 # ADR-0010 — 文档分层：当前事实、裁决与历史各归一个家，过程工件不入库
 
-- **状态**：已接受（2026-10-21）
-- **相关**：`AGENTS.md`；`docs/AGENTS.md`；`docs/architecture.md` §4；`docs/adr/ADR-FORMAT.md`；`tests/docs.test.ts`；`.gitignore`
+Status: superseded by 0011
 
 ## 背景
 
@@ -12,7 +11,7 @@
 ## 决定
 
 1. 根 `AGENTS.md` 只放每次会话必须可见的硬约束、先读表与门；详细文档规则住 `docs/AGENTS.md`。
-2. 当前事实按读者分层：用户入口 `README.md`、词汇 `CONTEXT.md`、架构与主人清单 `docs/architecture.md`、操作 `docs/developing.md`、贡献 `CONTRIBUTING.md`、发布历史 `CHANGELOG.md`、界面 `docs/ui-spec.md`。
+2. 当前事实按读者分层：用户入口 `README.md`、词汇 `CONTEXT.md`、架构与主人清单 `docs/architecture.md`、操作 `docs/development.md`、贡献 `CONTRIBUTING.md`、发布历史 `CHANGELOG.md`、界面 `docs/ui-spec.md`。
 3. 裁决只进 `docs/adr/`：一篇一个决定，写 why、边界、被否方案与后果；ADR 不写现状地图。
 4. 历史只留 git；仓库不建批次日志、plans/specs/archive。进行中的计划住 GitHub Issues 或本机 `.superpowers/`（gitignore），完成后把长期成立的部分提炼进事实源，其余不落库。
 5. `.qoder/repowiki/` 是生成快照，不手改、不作事实源、不把它的结论抄进手写文档；与代码冲突时以代码为准。
@@ -34,6 +33,8 @@
 
 - **保留批次日志**：同一事实多处复述，批次号没有可查坐标；2026-10-20 已退役。
 - **建 plans/specs/archive**：本仓面向单人维护的小插件，进行中的计划用 Issues/本机草稿即可；入库会引入「已完成计划仍以计划口吻存在」的问题。
-- **照搬 android-ebook 的全套文档层**：它有远多于本仓的手写文档与 ADR，需要 specs/plans/archive；本仓体量不够，照搬只会多出空目录与第二份抄本。
+- **照搬重型文档层（大量手写文档、规格、计划与归档）**：本仓体量不够，照搬只会多出空目录与第二份抄本。
 - **把 `.qoder/repowiki` 当事实源**：它是生成快照，更新路径不在仓内，必然落后。
 - **继续把文档规则写在根 AGENTS**：根 AGENTS 是常驻规则入口，不是文档手册；细节放进去会让每次会话都为它付费。
+
+锚点：`AGENTS.md`；`docs/AGENTS.md`；`docs/architecture.md` §4；`docs/adr/ADR-FORMAT.md`；`tests/docs.test.ts`；`.gitignore`

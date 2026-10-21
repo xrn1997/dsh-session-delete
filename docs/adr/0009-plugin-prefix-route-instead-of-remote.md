@@ -1,7 +1,6 @@
 # ADR-0009 — 通道走插件专属前缀路由，不挂官方 `remote.<namespace>`
 
-- **状态**：已接受（2026-09-30 起；2026-10-17 收成六段名，2026-10-19 加 `/orphans`）
-- **相关**：ADR-0003（线上形状）；ADR-0004（路由表）；`src/shared/wire.ts`；`src/api/dispatch.ts`；`src/client/remote.ts`；`docs/architecture.md` §1
+Status: accepted
 
 ## 背景
 
@@ -35,3 +34,5 @@
 - **自挂自**：补生成物 + 自己 `$mount` 能跑，但要把官方仓库形状与生成器产物搬进第三方仓，随宿主换代维护；本仓的通道面不值得。
 - **一个动作一条路由**：单条与批量各有一条执行路径，判据会分叉；现在单条就是长度为 1 的批量。
 - **只比 `Origin`**：桌面壳转发前删掉它，真机上所有请求都会被栅栏挡成 403，而 headless http 的过门读数完全看不出来。
+
+锚点：ADR-0003（线上形状）；ADR-0004（路由表）；`src/shared/wire.ts`；`src/api/dispatch.ts`；`src/client/remote.ts`；`docs/architecture.md` §1

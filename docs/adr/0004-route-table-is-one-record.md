@@ -1,7 +1,6 @@
 # ADR-0004 — 路由表是一条记录，`dispatch` 读它
 
-- **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`
+Status: accepted
 
 ## 背景
 
@@ -49,3 +48,5 @@
 - **把 handler 放进 `shared/wire.ts`**：值 import 会把 Node 半（`node:http`、`node:fs`）拖进浏览器半的
   bundle，正好撞上 `tsdown` 的纯度门。
 - **只把 `APPLY_ACTIONS` 从类型派生**：三处判断仍分居两处，最危险的那条（纯度）继续靠注释。
+
+锚点：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`

@@ -1,7 +1,6 @@
 # ADR-0006 — 永久删除的计划与执行只有一个家：`src/verbs/permanent-removal.ts`
 
-- **状态**：已接受（2026-10-20）
-- **相关**：`CONTEXT.md`（永久删除计划）；`src/verbs/permanent-removal.ts`；ADR-0002（journal 只服务有反向动作的一次移动）、ADR-0005（成员通告）
+Status: accepted
 
 ## 背景
 
@@ -53,3 +52,5 @@
 - **只在执行时量**（计划不量、执行器删前才算）：`/list` 就没有同一条口径可念；而且量字节失败会发生在已经退完归档集、摘完账本之后，不再是「一切写之前」。
 - **purge 继续用 journal**（只把两个动词的序列抽成共享 steps）：把一条没有 `undo` 的序列塞进「每步自带反向动作」的 interface，ADR-0002 的边界会被「journal 也能跑单向步骤」抹掉。
 - **计划与执行器拆成两个 module**：两者共享同一份形状（`RemovalPlan` / `PlannedTrashRow` / `PlannedMemberRemoval`），执行器每一步都在解释计划里的字段；拆开只会让「计划就是执行前的闸」这条不变量跨文件维护。
+
+锚点：`CONTEXT.md`（永久删除计划）；`src/verbs/permanent-removal.ts`；ADR-0002（journal 只服务有反向动作的一次移动）、ADR-0005（成员通告）

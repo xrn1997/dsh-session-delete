@@ -2,7 +2,7 @@
 
 这份文档只回答两个问题：**系统分成哪几块、为什么这么切；某条语义的主人在谁头上**。它是 explanation——给读懂代码提供地图，不给代码充当副本。
 
-不在这里的东西，各有各的家：**术语**在 `CONTEXT.md`（词表）；**难逆的裁决与被否决的替代**在 `docs/adr/`（索引见 `docs/adr/README.md`）；**用户可见的事实**在 `README.md`；**构建、门控与发版**在 `docs/developing.md`；**提交与发布边界**在 `CONTRIBUTING.md`；**发布历史**在 `CHANGELOG.md`；**界面规格**在 `docs/ui-spec.md`；**文档分层与生命周期**在 `docs/AGENTS.md`；**"怎么做"**在代码自己。这里一条读数都不列——列了就是第二份抄本，且必然腐烂。批次账与实测证据不再另存日志，历史留在 git。
+不在这里的东西，各有各的家：**术语**在 `CONTEXT.md`（词表）；**难逆的裁决与被否决的替代**在 `docs/adr/`（索引见 `docs/adr/README.md`）；**用户可见的事实**在 `README.md`；**构建、门控与发版**在 `docs/development.md`；**提交与发布边界**在 `CONTRIBUTING.md`；**发布历史**在 `CHANGELOG.md`；**界面规格**在 `docs/ui-spec.md`；**文档分层与生命周期**在 `docs/AGENTS.md`；**"怎么做"**在代码自己。这里一条读数都不列——列了就是第二份抄本，且必然腐烂。批次账与实测证据不再另存日志，历史留在 git。
 
 ## 设计词
 

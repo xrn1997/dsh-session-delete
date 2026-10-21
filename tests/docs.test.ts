@@ -77,6 +77,7 @@ const ALLOWED: Record<string, string> = {
 
 /** 已废的称呼：批次号、两份批次日志本身、以及它们的"复核候选"编号——都没有可查的坐标了。 */
 const DEAD_NAMES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/docs\/developing\.md/, '开发手册统一为 docs/development.md'],
   [/现状稿/, '现状住 `docs/architecture.md`；"现状稿"这个名字已废'],
   [/第\s*[0-9一二三四五六七八九十百零Nn]+\s*批/, '批次号没有可查的坐标；引用历史写日期，有 commit 就带上，要指裁决就指 ADR 篇号'],
   [/设计稿\s*§|稿\s*§/, '「设计稿 §N」指向已删的两份批次日志；改指还活着的家'],
@@ -290,8 +291,8 @@ describe('文档门 · 职责边界', () => {
   })
 
   it('AGENTS.md 是入口，不是仓库手册', () => {
-    const size = Buffer.byteLength(readFileSync(join(ROOT, 'AGENTS.md'), 'utf8'))
-    expect(size, `AGENTS.md ${size} 字节；超过 12000 就把细节移到 architecture / developing / ADR`).toBeLessThanOrEqual(12000)
+    const chars = [...readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')].length
+    expect(chars, `AGENTS.md ${chars} 字符；超过 8,000 先搬迁或压缩，提额要写理由`).toBeLessThanOrEqual(8000)
   })
 
   it('点名的小节号在目标文档里真的存在', () => {
@@ -331,6 +332,33 @@ describe('文档门 · 文档分层', () => {
     expect(files.filter((id) => !listed.has(id)), '这些 ADR 没进 docs/adr/README.md').toEqual([])
     expect([...listed].filter((id) => !files.includes(id)), '索引指向不存在的 ADR').toEqual([])
   })
+
+  it('每个 ADR 紧跟标题有 Status 行', () => {
+    const files = readdirSync(join(ROOT, 'docs', 'adr')).filter((name) => /^\d{4}-.+\.md$/.test(name))
+    const bad = files.filter((name) => {
+      const lines = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8').split(/\r?\n/)
+      return !/^Status: (accepted|superseded by \d{4})$/.test(lines[2] ?? '')
+    })
+    expect(bad, `缺 Status 或状态不合规：${bad.join(', ')}`).toEqual([])
+  })
+
+  it('核心文档在场', () => {
+    const required = [
+      'AGENTS.md',
+      'README.md',
+      'CONTEXT.md',
+      'CONTRIBUTING.md',
+      'CHANGELOG.md',
+      'docs/AGENTS.md',
+      'docs/architecture.md',
+      'docs/development.md',
+      'docs/adr/README.md',
+      'docs/adr/ADR-FORMAT.md',
+    ]
+    const missing = required.filter((f) => !existsSync(join(ROOT, f)))
+    expect(missing, `缺少核心文档：${missing.join(', ')}`).toEqual([])
+  })
+
 })
 
 describe('文档门 · 兼容性事实单源', () => {

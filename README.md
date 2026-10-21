@@ -118,11 +118,11 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 ## 开发
 
-构建、本地调试、门控、真机验证与发版见 [`docs/developing.md`](docs/developing.md)；提交信息与 PR 约定见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；架构地图与主人清单见 [`docs/architecture.md`](docs/architecture.md)；界面规格见 [`docs/ui-spec.md`](docs/ui-spec.md)；裁决见 [`docs/adr/`](docs/adr/README.md)；发布历史见 [`CHANGELOG.md`](CHANGELOG.md)。历史取舍在 git 历史里，README 不复述。
+构建、本地调试、门控、真机验证与发版见 [`docs/development.md`](docs/development.md)；提交信息与 PR 约定见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；架构地图与主人清单见 [`docs/architecture.md`](docs/architecture.md)；界面规格见 [`docs/ui-spec.md`](docs/ui-spec.md)；文档分层与放置见 [`docs/AGENTS.md`](docs/AGENTS.md)；裁决见 [`docs/adr/`](docs/adr/README.md)；发布历史见 [`CHANGELOG.md`](CHANGELOG.md)。历史取舍在 git 历史里，README 不复述。
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交信息、PR 约定与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；提交前按 [`docs/developing.md`](docs/developing.md) 的「复核门」跑 `pnpm test` 与 `pnpm typecheck`，并确认退出码；提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交信息、PR 约定与发版边界见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；提交前按 [`docs/development.md`](docs/development.md) 的「复核门」跑 `pnpm test` 与 `pnpm typecheck`，并确认退出码；提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 许可
 

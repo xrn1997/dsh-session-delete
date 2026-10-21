@@ -1,7 +1,6 @@
 # ADR-0001 — 组语义只有一个家：`src/trash/groups.ts`
 
-- **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（组 / 组根 / 盘上后代）；`src/trash/groups.ts`
+Status: accepted
 
 ## 背景
 
@@ -48,3 +47,5 @@
 - **只给 `purgeTrash` 加一句注释**：那是打补丁——四处仍各有一份规则，下一次改动照样能漂。
 - **把组语义放进 `shared/wire.ts`**：浏览器半没有「这一组有谁」的判据需求（它只念服务端给的数），
   放进去等于给线上契约加一个没人用的概念。
+
+锚点：`CONTEXT.md`（组 / 组根 / 盘上后代）；`src/trash/groups.ts`

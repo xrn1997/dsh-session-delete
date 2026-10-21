@@ -1,7 +1,6 @@
 # ADR-0002 — 「这一批」与「一次移动」各有自己的 module
 
-- **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（批量层 / journal）；`src/verbs/batch.ts`、`src/verbs/member-journal.ts`
+Status: accepted
 
 ## 背景
 
@@ -81,3 +80,5 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 - **把回滚语义留到下一轮**：等于承认「同一条正反动作对写两遍」长期合法。
 - **让浏览器半也用批量 module**：浏览器半不需要「这一批」的账本，它只要 N=1 的便捷支
   （N=1 也走同一段，口径在 `src/shared/wire.ts` 的段名那本账）。
+
+锚点：`CONTEXT.md`（批量层 / journal）；`src/verbs/batch.ts`、`src/verbs/member-journal.ts`

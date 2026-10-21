@@ -1,7 +1,6 @@
 # ADR-0008 — 回收站与归档解耦：删除完整摘除活体，恢复走冷 resume
 
-- **状态**：已接受（2026-10-21）
-- **相关**：ADR-0005（成员在场通告）；ADR-0007（宿主端口角色）；`src/ports/host-port.ts` 的 `evictLive` / `src/ports/agent-handles.ts` 的 `captureAgentHandles`；`src/verbs/delete-session.ts`；`src/verbs/restore-session.ts`
+Status: accepted
 
 ## 背景
 
@@ -113,3 +112,5 @@
   prompt 仍不落盘（实测）。
 - **删除时拒绝有活 agent 的会话**：安全但让“刚用过的会话”删不掉；没有关闭会话的官方 UI。
 - **继续用归档藏回收站**：恢复仍要猜 `wasArchived`，且用户明确要求回收站与归档分离。
+
+锚点：ADR-0005（成员在场通告）；ADR-0007（宿主端口角色）；`src/ports/host-port.ts` 的 `evictLive` / `src/ports/agent-handles.ts` 的 `captureAgentHandles`；`src/verbs/delete-session.ts`；`src/verbs/restore-session.ts`

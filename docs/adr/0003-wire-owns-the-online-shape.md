@@ -1,7 +1,6 @@
 # ADR-0003 — 线上形状的家是 `src/shared/wire.ts`，投影显式写一遍
 
-- **状态**：已接受（2026-10-19）
-- **相关**：`CONTEXT.md`（wire / 行投影）；`src/shared/wire.ts`、`src/api/trash-rows.ts`
+Status: accepted
 
 ## 背景
 
@@ -58,3 +57,5 @@
 - **让 `wire.ts` 从 `TrashEntry` 派生**（`TrashEntry & {…}`）：能跑，但线上形状与落地形状的分歧会被
   `&` 藏起来——哪天清册里多一个只在 Node 半用得上的字段，它会自动过线。
 - **只修浏览器半的镜像、不建投影**：`/list` 仍然可能发出镜像里没有的键，契约依旧靠自觉。
+
+锚点：`CONTEXT.md`（wire / 行投影）；`src/shared/wire.ts`、`src/api/trash-rows.ts`
