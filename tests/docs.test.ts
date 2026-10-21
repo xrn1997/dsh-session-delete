@@ -11,8 +11,8 @@
  * 同行已注明现在的家）与**看着像路径其实不是路径的串**（宿主的事件名、官方生成器的仓形约定）。
  * 白名单不是"改不动就跳过"——那种条目应当改文档。
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -38,6 +38,8 @@ const targets = [
   join(ROOT, 'AGENTS.md'),
   join(ROOT, 'CONTEXT.md'),
   join(ROOT, 'README.md'),
+  join(ROOT, 'CONTRIBUTING.md'),
+  join(ROOT, 'CHANGELOG.md'),
   ...walk(join(ROOT, 'docs')),
   ...walk(join(ROOT, 'src')),
   ...walk(join(ROOT, 'tests')),
@@ -50,8 +52,14 @@ const corpus = targets.map((file) => ({
   lines: readFileSync(file, 'utf8').split(/\r?\n/),
 }))
 
-/** 手写文档（根三份 + docs/**）；结构门只看这些，src/tests 的注释不参与。 */
-const rootDocs = new Set([join(ROOT, 'AGENTS.md'), join(ROOT, 'CONTEXT.md'), join(ROOT, 'README.md')])
+/** 手写文档（根文档 + docs/**）；结构门只看这些，src/tests 的注释不参与。 */
+const rootDocs = new Set([
+  join(ROOT, 'AGENTS.md'),
+  join(ROOT, 'CONTEXT.md'),
+  join(ROOT, 'README.md'),
+  join(ROOT, 'CONTRIBUTING.md'),
+  join(ROOT, 'CHANGELOG.md'),
+])
 const docsRoot = join(ROOT, 'docs') + sep
 const docCorpus = corpus.filter(({ file }) => rootDocs.has(file) || file.startsWith(docsRoot))
 
@@ -79,9 +87,97 @@ const DEAD_NAMES: ReadonlyArray<readonly [RegExp, string]> = [
 const SECTION_REF = /§\s*\d/
 const SECTION_ANCHORS = ['docs/architecture.md', 'architecture.md', 'docs/ui-spec.md', 'ui-spec.md', 'ui-spec', '本文']
 
+interface CompatibilityManifest {
+  engines: { dsh: string }
+  dsh: { compatibility: { dshReleases: Record<string, string> } }
+}
+
 function normalize(raw: string): string {
   // 中文句读与括号会紧跟在路径后面：剥掉尾部噪声
   return raw.replace(/[.,;:!?)\]}、。，；：）】」]+$/u, '')
+}
+
+function read(relPath: string): string {
+  return readFileSync(join(ROOT, relPath), 'utf8')
+}
+
+function pathExists(path: string): boolean {
+  try {
+    statSync(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function stripFencedCode(markdown: string): string {
+  return markdown.replace(/^```[\s\S]*?^```/gm, '')
+}
+
+function slugify(text: string): string {
+  return text
+    .trim()
+    .replace(/<[^>]+>/g, '')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .replace(/\s+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function headingSlugs(markdown: string): Set<string> {
+  const seen = new Map<string, number>()
+  const slugs = new Set<string>()
+  for (const line of stripFencedCode(markdown).split(/\r?\n/)) {
+    const match = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)
+    if (match === null) continue
+    const base = slugify(match[1]!)
+    const count = seen.get(base) ?? 0
+    slugs.add(count === 0 ? base : `${base}-${count}`)
+    seen.set(base, count + 1)
+  }
+  return slugs
+}
+
+function linkTargets(markdown: string): string[] {
+  return [...stripFencedCode(markdown).matchAll(/\]\(([^)]+)\)/g)]
+    .map((match) => match[1]!.split(/\s+/)[0]!)
+}
+
+function decodeAnchor(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
+function brokenLinks(file: string, markdown: string): string[] {
+  const broken: string[] = []
+  const ownSlugs = headingSlugs(markdown)
+  for (const target of linkTargets(markdown)) {
+    if (/^(?:https?:|mailto:|tel:)/i.test(target)) continue
+    if (target.startsWith('<')) continue
+    const [rawPath = '', ...rawAnchor] = target.split('#')
+    const anchor = rawAnchor.join('#')
+    const path = rawPath.split('?')[0]!
+    if (path === '') {
+      if (anchor !== '' && !ownSlugs.has(decodeAnchor(anchor))) broken.push(`${rel(file)} → #${anchor}`)
+      continue
+    }
+    const resolved = resolve(dirname(file), decodeAnchor(path))
+    if (!pathExists(resolved)) {
+      broken.push(`${rel(file)} → ${target}`)
+      continue
+    }
+    if (anchor !== '' && resolved.endsWith('.md')) {
+      const targetSlugs = headingSlugs(readFileSync(resolved, 'utf8'))
+      if (!targetSlugs.has(decodeAnchor(anchor))) broken.push(`${rel(file)} → ${target}`)
+    }
+  }
+  return broken
 }
 
 /** 文档里实际存在的编号小节（`## 1. ...` / `## 2.3 ...`）。 */
@@ -185,6 +281,14 @@ describe('文档门 · 职责边界', () => {
     expect(offenders, '界面规格是一个独立文档；architecture 只留指针').toEqual([])
   })
 
+  it('“文档规范”标题只出现在 docs/AGENTS.md', () => {
+    const offenders = docCorpus
+      .filter(({ file, lines }) => rel(file) !== 'docs/AGENTS.md'
+        && lines.some((line) => /^#{1,4}\s.*文档规范/.test(line)))
+      .map(({ file }) => rel(file))
+    expect(offenders, '文档分层与生命周期只能有一份').toEqual([])
+  })
+
   it('AGENTS.md 是入口，不是仓库手册', () => {
     const size = Buffer.byteLength(readFileSync(join(ROOT, 'AGENTS.md'), 'utf8'))
     expect(size, `AGENTS.md ${size} 字节；超过 12000 就把细节移到 architecture / developing / ADR`).toBeLessThanOrEqual(12000)
@@ -208,5 +312,97 @@ describe('文档门 · 职责边界', () => {
       if (rel(file) === 'docs/architecture.md' && line.includes('本文')) check(arch)
     })
     expect(offenders, '小节号只在那份文档里有序；搬家或重排后要同步指路').toEqual([])
+  })
+})
+
+describe('文档门 · 文档分层', () => {
+  it('文档标准存在，根 AGENTS 指向它', () => {
+    expect(existsSync(join(ROOT, 'docs', 'AGENTS.md')), '文档分层与生命周期应住 docs/AGENTS.md').toBe(true)
+    expect(read('AGENTS.md')).toContain('docs/AGENTS.md')
+  })
+
+  it('每个 ADR 文件都进索引，索引里也没有不存在的篇', () => {
+    const files = readdirSync(join(ROOT, 'docs', 'adr'))
+      .filter((name) => /^\d{4}-.+\.md$/.test(name))
+      .map((name) => name.slice(0, 4))
+    expect(files.length, 'ADR 目录没有扫到任何文件').toBeGreaterThan(0)
+    const listed = new Set([...read('docs/adr/README.md').matchAll(/`(\d{4})`/g)].map((match) => match[1]!))
+    expect(listed.size, 'ADR 索引没有解析出任何编号').toBeGreaterThan(0)
+    expect(files.filter((id) => !listed.has(id)), '这些 ADR 没进 docs/adr/README.md').toEqual([])
+    expect([...listed].filter((id) => !files.includes(id)), '索引指向不存在的 ADR').toEqual([])
+  })
+})
+
+describe('文档门 · 兼容性事实单源', () => {
+  const manifest = JSON.parse(read('package.json')) as CompatibilityManifest
+  const releases = Object.keys(manifest.dsh.compatibility.dshReleases)
+
+  const projectionDrift = (readme: string): string[] => {
+    const snippets = [
+      `窗口是 **\`${manifest.engines.dsh}\`**`,
+      `**DSH Desktop ${releases.join('、')}**`,
+      `DSH%20Desktop-${releases.map((version) => version.replaceAll('-', '--')).join('%20%7C%20')}-brightgreen`,
+    ]
+    return snippets.filter((snippet) => !readme.includes(snippet))
+  }
+
+  it('README 的窗口、真机名单与徽章都从 package.json 投影', () => {
+    const drift = projectionDrift(read('README.md'))
+    expect(drift, `README 与 package.json 不一致：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出漂移（正控）', () => {
+    const drifted = read('README.md').replace(manifest.engines.dsh, '>=0.1.0 <0.3.0-0')
+    expect(projectionDrift(drifted)).not.toEqual([])
+  })
+
+  it('AGENTS 只把 package.json 说成兼容性事实源', () => {
+    const agents = read('AGENTS.md')
+    expect(agents).toContain('事实源是 `package.json`')
+    expect(agents).not.toContain('以 `package.json`、`README.md` 和 `tests/skeleton.test.ts` 为准')
+  })
+})
+
+describe('文档门 · 相对链接与锚点', () => {
+  it('手写文档里的相对链接与锚点都指得到东西', () => {
+    const broken = docCorpus.flatMap(({ file, lines }) => brokenLinks(file, lines.join('\n')))
+    expect(broken, `断链或死锚点：\n${broken.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出缺失文件与死锚点（正控）', () => {
+    const readme = read('README.md')
+    const missingFile = brokenLinks(join(ROOT, 'README.md'), `${readme}\n[x](definitely-missing.md)`)
+    const missingAnchor = brokenLinks(join(ROOT, 'README.md'), `${readme}\n[x](#definitely-missing-anchor)`)
+    expect(missingFile).not.toEqual([])
+    expect(missingAnchor).not.toEqual([])
+  })
+})
+
+describe('文档门 · 截图清单', () => {
+  const manifest = JSON.parse(read('screenshots.json')) as string[]
+  const images = [...read('README.md').matchAll(
+    /https:\/\/raw\.githubusercontent\.com\/[^)\s]+\/main\/(docs\/screenshots\/[^)\s]+)/g,
+  )].map((match) => match[1]!)
+
+  const drift = (found: string[], listed: string[]): string[] => {
+    const a = [...new Set(found)].sort()
+    const b = [...new Set(listed)].sort()
+    return [
+      ...a.filter((path) => !b.includes(path)).map((path) => `README 有、清册没有：${path}`),
+      ...b.filter((path) => !a.includes(path)).map((path) => `清册有、README 没有：${path}`),
+    ]
+  }
+
+  it('README 截图、screenshots.json、本地文件三者一致', () => {
+    expect(images.length, 'README 截图重复').toBe(new Set(images).size)
+    expect(manifest.length, 'screenshots.json 重复').toBe(new Set(manifest).size)
+    const now = drift(images, manifest)
+    expect(now, now.join('\n')).toEqual([])
+    for (const path of manifest) expect(pathExists(join(ROOT, path)), path).toBe(true)
+  })
+
+  it('判据认得出漂移（正控）', () => {
+    expect(drift([...images, 'docs/screenshots/extra.png'], manifest)).not.toEqual([])
+    expect(drift(images, [...manifest, 'docs/screenshots/extra.png'])).not.toEqual([])
   })
 })
