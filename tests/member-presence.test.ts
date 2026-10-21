@@ -91,4 +91,10 @@ describe('通告的唯一调用者', () => {
       })
     expect(violations).toEqual([])
   })
+
+  it('扫描不是空转：member-presence 里三件都还命中着（删空它不会让上一条变绿）', () => {
+    const text = readFileSync(join(ROOT, PRESENCE), 'utf8')
+    const hits = new Set([...text.matchAll(HOST_CALL)].map((match) => match[1]))
+    expect(hits).toEqual(new Set(['evictLive', 'announceRemoved', 'announceRestored']))
+  })
 })
