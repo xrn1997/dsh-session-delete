@@ -29,6 +29,10 @@
 3. **批量通告不进来**：`announceRestoredBatch` 仍归 `src/verbs/batch.ts`（ADR-0002）。
 4. 不叠第二层 `catch`：`HostPort` 的三条方法按契约不抛；通告失败不翻动词结果这条语义留在端口。
 
+> **就地订正（2026-10-21，ADR-0008）**：删除不再归档，可见性不是这次删除改过的事实 ⇒
+> `memberBack` 的第三件 `visibleBack` 已删除，现在只判 `diskBack && workspaceBack`。
+> 正文与表格保留当时的裁决。
+
 ## 边界
 
 - 不做通用「在场框架」：它只服务「成员在会话列表里是否可见」这一件事。

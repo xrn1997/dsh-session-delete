@@ -16,7 +16,7 @@ import { createMemberPresence, type MemberPresence } from './member-presence.js'
  *    预检在写之前，是为了不让"父已经回到 `sessions/`、孩子因为项目目录没了而回不去"这种半组留在外面。
  *    **工作区账本不在这条硬前提里**：宿主的「删除工作区」只删注册、保留日志，记下的工作区没了就按
  *    「未分组」收（判据在 {@link attachableWorkspaceId}），照旧回盘——恢复是加法，不该因为一个可选的账目而失败。
- * ② **逐个恢复**，顺序与删除相反：文件先回来 → 挂账本 → 还原可见性 → 摘清册行。
+ * ② **逐个恢复**，顺序与删除相反：文件先回来 → 挂账本 →（旧清单迁移）取消归档 → 摘清册行。
  * ③ 中途失败时 journal 把这个成员自己退回回收站；**已经恢复完的**兄弟由整组 catch 按相反顺序一起退回。
  *
  * **通告不在这里**：一次批量只该拉一遍宿主会话表、只发一次 `api-session/added`（2026-10-17 那次
@@ -93,7 +93,7 @@ export async function isWorkspaceMissing(host: Pick<HostIdentityPort, 'workspace
 }
 
 /**
- * 一个成员的恢复步骤（顺序与删除相反）：放回目录 → 挂账本 → 还原可见性 → 摘清册行。
+ * 一个成员的恢复步骤（顺序与删除相反）：放回目录 → 挂账本 →（旧清单迁移）取消归档 → 摘清册行。
  *
  * 账本那一步有个**只认端口那句**的兜底：查过之后、挂之前账本被删掉（宿主的「删除工作区」与这次恢复
  * 撞上）⇒ 按未分组收、不回滚；**别的**失败是真故障，照旧抛（吞掉它就等于把一次存储故障伪装成"未分组"）。
@@ -108,6 +108,12 @@ async function memberRestore(
 
   // 账本归属是**可选的一步**，判据见 {@link attachableWorkspaceId}。
   const workspaceId = await attachableWorkspaceId(deps.host, entry)
+  /**
+   * **旧清单迁移**：2026-10-21 之前的删除用归档来藏会话，所以那些条目在盘上仍是归档态。
+   * 新删除不再碰归档（回收站与归档解耦）⇒ `wasArchived:false` 且当前**仍**归档的，只可能是旧条目；
+   * 恢复时取消归档。`wasArchived:true` 是用户删除前自己归档的，保持归档态不动。
+   */
+  const legacyArchived = !entry.wasArchived && await deps.host.isArchived(entry.sessionId)
   /** 真挂上了账本才记下那个 id——回滚里"摘账本"那一步只对挂过的成员存在。 */
   let attached = false
   /** 组级回滚时，目录是否真的退回回收站——作为事实交给成员在场 module 判「已移除」通告。 */
@@ -140,10 +146,10 @@ async function memberRestore(
         ? attempt('摘账本失败', () => deps.host.detach(entry.sessionId, workspaceId))
         : []),
     }]),
-    // ③ 可见性按 `wasArchived` 反推：删除时"原本未归档"的会话是我们把它归档才藏起来的 ⇒ 现在放回树里；
-    //    "原本已归档"的删前删后都在归档集里 ⇒ 一个字节都不动（用例钉在 `tests/restore-session.test.ts` 的归档那组）。
+    // ③ **只为旧清单迁移**取消归档：新删除不归档，`legacyArchived` 为假时一个字节都不碰归档集。
+    //    用户删除前原本已归档（`wasArchived:true`）的也保持归档态（`legacyArchived` 为假）。
     //    `undoOnFailure`：取消归档可能已经半做完，所以它自己失败时也要先把会话藏回去。
-    ...(entry.wasArchived ? [] : [{
+    ...(!legacyArchived ? [] : [{
       label: '取消归档失败',
       undoOnFailure: true,
       run: async () => { await deps.host.unarchive(entry.sessionId) },

@@ -15,3 +15,4 @@
 | `0005` | 成员离场 / 归位通告为什么收进 `verbs/member-presence.ts` 一个家（当时四个动词六处调用各写、三态与归位条件各拼各的） |
 | `0006` | 永久删除为什么收进 `verbs/permanent-removal.ts` 一个只读计划 + 执行器（当时 purge 与 orphan 各手写一遍删除序列，purge 还借 journal 放没有反向动作的步骤；`/list` 念的是清册里记的旧 `sizeBytes`） |
 | `0007` | 宿主端口为什么按角色切成身份 / 在场 / 语料三片、语料缺席为什么显式成 `CorpusRead`（当时 19 个方法平铺一个接口、缺席有 `undefined`/`{}`/`[]` 三种形状、三个 BFS 口共用一次遍历） |
+| `0008` | 回收站为什么与归档解耦、删除为什么必须把 session + agent 一起摘掉（当时删除用归档藏会话、`evictLive` 只摘 session，恢复后旧 agent 拦住 prompt） |

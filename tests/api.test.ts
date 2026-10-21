@@ -985,11 +985,30 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     expect(host.restoredSummariesOf).toHaveBeenCalledTimes(1)
     expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
     expect(host.announceRestored).not.toHaveBeenCalled()
+    // 新清单的删除不归档 ⇒ 恢复不碰归档集。
+    expect(host.unarchive).not.toHaveBeenCalled()
+    expect(host.archive).not.toHaveBeenCalled()
+  })
+
+  // 旧清单（2026-10-21 之前用归档藏会话）的批量恢复：每一条都要先取消归档，整批通告必须等它们都落地。
+  // 新清单那条上面的用例已经钉了"不碰归档"；这两条一起把迁移支与常规支分开。
+  it('旧清单的批量恢复：先取消归档再发批量通告', async () => {
+    const seed = [entry('session-a'), entry('session-b')]
+    const { deps, host } = makeDeps({ seed })
+    host.isArchived.mockResolvedValue(true)
+    host.restoredSummariesOf.mockResolvedValue([
+      { sessionId: 'session-a', summary: { sessionId: 'session-a' } },
+      { sessionId: 'session-b', summary: { sessionId: 'session-b' } },
+    ])
+    const base = await start(deps)
+    await call(base, ROUTES.apply, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
+    })
     expect(host.unarchive).toHaveBeenCalledTimes(2)
-    // 通告必须在可见性还原之后发（客户端拿到的摘要才是"回来了"的那一份）
-    const batchOrder = host.announceRestoredBatch.mock.invocationCallOrder[0]!
-    const unarchiveOrders = host.unarchive.mock.invocationCallOrder
-    expect(batchOrder).toBeGreaterThan(Math.max(...unarchiveOrders))
+    expect(host.archive).not.toHaveBeenCalled()
+    const announced = host.announceRestoredBatch.mock.invocationCallOrder[0]!
+    expect(announced).toBeGreaterThan(Math.max(...host.unarchive.mock.invocationCallOrder))
   })
 
   // 用户勾的是父那一行，回来的是**一整组**。通告漏掉孩子 = 客户端那一行永远还挂着"在回收站"的读感

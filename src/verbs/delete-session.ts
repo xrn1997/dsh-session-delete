@@ -33,7 +33,7 @@ interface Member {
  * ② **逐个搬**：每个成员是一份 `journal`（`verbs/member-journal.ts`），搬不动时 journal 自己把
  *    这个成员已经做成的步骤退回去。
  * ③ **组级回滚**：某一个成员搬不动时，把**已经搬进去的**那些按相反顺序退回原处（清册行跟着摘、
- *    账本跟着挂、可见性跟着还原），失败照抛——不留"半组在回收站、半组在原地"的世界。
+ *    账本跟着挂），失败照抛——不留"半组在回收站、半组在原地"的世界。
  *
  * interface 只有**一个 id**：批量的性质不在这里（同批"已被前一条带走"的判据归 `verbs/batch.ts`）。
  */
@@ -90,12 +90,17 @@ export function deleteSession(deps: DeleteDeps) {
 }
 
 /**
- * 一个成员要做的步骤（顺序承重，那五步就列在下面一行）：
- * 读现场（两件纯读）→ 归档 → 摘账本 → 搬目录 → 写清册行。
+ * 一个成员要做的步骤（顺序承重，那四步就列在下面一行）：
+ * 读现场（两件纯读）→ 摘账本 → 搬目录 → 写清册行。搬完之后由 `memberGone` 把活体（session + agent）
+ * 真正关掉；**删除不碰归档**——回收站与归档是两套状态，归档只在用户自己归档过时保留。
+ *
+ * **已知窗口**：摘账本之后、`memberGone` 之前的这一拍，活体会短暂无主（客户端可能把它归入「未分组」）。
+ * 这是 ADR-0008 去掉归档后的已知代价；`memberGone` 不能提前到文件/清册写成功之前，否则一次失败回滚
+ * 会留下"文件在、agent 已关"的半个世界。窗口与可选修法登记在 ADR-0008 的「边界」。
  *
  * 每一步的反向动作都是"把这件写退回原样"；**清册行是最后一件写**，它失败时 journal 会把目录搬回去、
- * 账本挂回去、可见性还原。清册行的反向动作带一道闸：**回收站目录还没搬回来就不摘那一行**——
- * 留着行至少元数据还在（与旧实现"目录退不回就不摘行"同一条判据）。
+ * 账本挂回去。清册行的反向动作带一道闸：**回收站目录还没搬回来就不摘那一行**——留着行至少元数据还在
+ * （与旧实现"目录退不回就不摘行"同一条判据）。
  */
 async function memberMove(
   deps: DeleteDeps,
@@ -118,10 +123,10 @@ async function memberMove(
   }
   /** 目录真的搬进回收站了吗——决定那一步的反向动作有没有东西可退。 */
   let moved = false
-  /** 回滚的三件写是否都真正退回原样：目录、账本、可见性。三个事实交给成员在场 module 判「归位」通告。 */
+  /** 回滚的两件写是否都真正退回原样：目录、账本。两个事实交给成员在场 module 判「归位」通告。
+   *  删除不碰归档集 ⇒ 可见性不是这次删除改过的事实，不进真值表。 */
   let movedBack = false
   let workspaceBack = workspaceId === undefined
-  let visibleBack = wasArchived
 
   const steps: JournalStep[] = [
     {
@@ -131,18 +136,6 @@ async function memberMove(
         entry.sizeBytes = await deps.fs.sizeOfDir(sessionDir)
       },
     },
-    // 归档必须先于摘账本（否则中间有一段"无主且可见"的窗口，它会掉进「未分组」）
-    ...(wasArchived ? [] : [{
-      label: '归档失败',
-      run: async () => { await deps.host.archive(sessionId, workspaceId) },
-      undo: async () => {
-        const failures = await attempt('可见性还原失败', async () => {
-          await deps.host.unarchive(sessionId)
-          visibleBack = true
-        })
-        return failures
-      },
-    }]),
     ...(workspaceId === undefined ? [] : [{
       label: '摘账本失败',
       run: async () => { await deps.host.detach(sessionId, workspaceId) },
@@ -199,7 +192,7 @@ async function memberMove(
        *  这一行此前已经收过 `api-session/removed`；不发"回来了"它就会在客户端消失到重连为止。 */
       async undo() {
         const failures = await journal.undo()
-        await presence.memberBack(sessionId, { diskBack: movedBack, workspaceBack, visibleBack })
+        await presence.memberBack(sessionId, { diskBack: movedBack, workspaceBack })
         return failures
       },
     },

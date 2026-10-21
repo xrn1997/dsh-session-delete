@@ -5,7 +5,8 @@ import { createFakeDeps, type FakeDeps, type FakeDepsOptions, type FakeFs, type 
 
 const HOME = '/h'
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：17 个宿主方法一次到位，用例只描述世界。
- *  日志按**发生顺序**记 fs 与 host 两端——删除的顺序（归档 → 摘账本 → 搬目录 → 摘活体 → 通告）是一条断言。 */
+ *  日志按**发生顺序**记 fs 与 host 两端——删除的顺序（摘账本 → 搬目录 → 摘活体 → 通告）是一条断言。
+ *  **删除不碰归档**：回收站与归档解耦；活体靠 `evictLive`（session + agent）离开宿主。 */
 function deps(over: {
   host?: Partial<FakeHost>
   fs?: Partial<FakeFs>
@@ -50,48 +51,48 @@ describe('删除动词', () => {
     expect(fs.rename).not.toHaveBeenCalled()
   })
 
-  // 归档在摘账本与动文件之前：删除后会话必须**一上来就被挡在分组面外**。
-  // 反过来的话，detach 与归档之间会有一段"无主且可见"的窗口，客户端正好把它派生成「未分组」
-  // ——真机上就是这个形状（会话文件已进回收站、账本已摘，侧栏却留着一行在未分组下）。
-  // 收尾两步才是"让它从客户端那一行里也消失"：evictLive 摘掉宿主的活体，
-  // announceRemoved 把这件事**如实通告**给客户端（宿主自己的转发事件 `api-session/removed`，
-  // 冷会话没有活体可摘、但同样需要这一条通告——否则客户端那一行要等到重连才消失）。
-  it('顺序固定为 archive → detach → rename → evictLive → announceRemoved', async () => {
-    const { deps: d, calls } = deps()
+  // 删除不再用归档藏会话：先摘账本，搬目录，再让 `memberGone` 把 session + agent 一起摘掉，
+  // 最后发 `api-session/removed`。归档集在删除前后都不变（用户原本归档的仍归档）。
+  it('顺序固定为 detach → rename → evictLive → announceRemoved（不碰归档）', async () => {
+    const { deps: d, calls, host } = deps()
     await deleteSession(d)('session-abc')
-    expect(calls).toEqual(['archive', 'detach', 'rename', 'evictLive', 'announceRemoved'])
+    expect(calls).toEqual(['detach', 'rename', 'evictLive', 'announceRemoved'])
+    expect(host.archive).not.toHaveBeenCalled()
+    expect(host.unarchive).not.toHaveBeenCalled()
   })
 
-  it('删除前已归档的会话不动归档集，清单里记下"原本就是归档态"', async () => {
+  it('删除前已归档的会话：不碰归档集，清单里记下"原本就是归档态"', async () => {
     const { deps: d, calls, host } = deps()
     host.isArchived = vi.fn(async () => true)
     const entry = await deleteSession(d)('session-abc')
     expect(calls).toEqual(['detach', 'rename', 'evictLive', 'announceRemoved'])
     expect(entry).toMatchObject({ wasArchived: true })
+    expect(host.archive).not.toHaveBeenCalled()
+    expect(host.unarchive).not.toHaveBeenCalled()
   })
 
-  it('rename 失败即回滚已摘的账本与归档态，并把原始错误带出', async () => {
+  it('rename 失败即回滚已摘的账本，并把原始错误带出', async () => {
     const { deps: d, calls, fs } = deps()
     const boom = new Error('EXDEV')
     fs.rename = vi.fn(async () => { calls.push('rename'); throw boom })
     const err = await failureOf(d, 'session-abc')
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
-    // 反向调用序：attach 挂回账本 + unarchive 复原可见性（wasArchived: false ⇒ 归档是我们加的）
-    expect(calls).toEqual(['archive', 'detach', 'rename', 'attach', 'unarchive'])
+    // 反向调用序：attach 挂回账本；归档没被碰过
+    expect(calls).toEqual(['detach', 'rename', 'attach'])
   })
 
-  // 清单登记是最后一件写：它失败也必须把归档 / 账本 / 文件全部退回去，否则会话就成了
+  // 清单登记是最后一件写：它失败也必须把账本 / 文件全部退回去，否则会话就成了
   // 「文件在回收站里、面板却看不见」的孤儿（判据住 `src/verbs/delete-session.ts`：清册行是最后一件写，
-  // 它失败就把前三步全退回去）。
-  it('清单登记失败即整体回退：目录搬回原处、账本挂回、归档态还原', async () => {
+  // 它失败就把前几步全退回去）。
+  it('清单登记失败即整体回退：目录搬回原处、账本挂回', async () => {
     const { deps: d, calls, fs, manifest } = deps()
     const boom = new Error('storage boom')
     manifest.add = vi.fn(async () => { throw boom })
     const err = await failureOf(d, 'session-abc')
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
-    expect(calls).toEqual(['archive', 'detach', 'rename', 'rename', 'attach', 'unarchive'])
+    expect(calls).toEqual(['detach', 'rename', 'rename', 'attach'])
     const rename = fs.rename
     expect(rename.mock.calls).toEqual([
       [sessionDirOf('--C-develop-GitHub-dsh-ebook--', 'session-abc', HOME),
@@ -101,26 +102,14 @@ describe('删除动词', () => {
     ])
   })
 
-  it('detach 失败即复原归档态，文件一动不动', async () => {
+  it('detach 失败即退出，文件一动不动', async () => {
     const { deps: d, calls, host, fs } = deps()
     const boom = new Error('detach boom')
     host.detach = vi.fn(async () => { calls.push('detach'); throw boom })
     const err = await failureOf(d, 'session-abc')
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
-    expect(calls).toEqual(['archive', 'detach', 'unarchive'])
-    expect(fs.rename).not.toHaveBeenCalled()
-  })
-
-  it('archive 失败时报 io，还是第一步，无需回滚也不动后续', async () => {
-    const { deps: d, calls, host, fs } = deps()
-    const boom = new Error('archive boom')
-    host.archive = vi.fn(async () => { calls.push('archive'); throw boom })
-    const err = await failureOf(d, 'session-abc')
-    expect(err).toMatchObject({ code: 'sessiondelete/io' })
-    expect(err.cause).toBe(boom)
-    expect(calls).toEqual(['archive'])
-    expect(host.detach).not.toHaveBeenCalled()
+    expect(calls).toEqual(['detach'])
     expect(fs.rename).not.toHaveBeenCalled()
   })
 
@@ -151,7 +140,7 @@ describe('删除动词', () => {
     const { deps: d, calls, host } = deps()
     host.workspaceOf = vi.fn(async () => undefined)
     const entry = await deleteSession(d)('session-abc')
-    expect(calls).toEqual(['archive', 'rename', 'evictLive', 'announceRemoved'])
+    expect(calls).toEqual(['rename', 'evictLive', 'announceRemoved'])
     expect(entry).toMatchObject({ workspaceId: '', wasArchived: false })
   })
 
@@ -164,15 +153,17 @@ describe('删除动词', () => {
     expect(entry).toMatchObject({ workspaceId: '', wasArchived: true })
   })
 
-  it('未分组 + rename 失败：只撤销归档，不回挂账本', async () => {
+  it('未分组 + rename 失败：不回挂账本，也不碰归档', async () => {
     const { deps: d, calls, host, fs } = deps()
     host.workspaceOf = vi.fn(async () => undefined)
     const boom = new Error('EXDEV')
     fs.rename = vi.fn(async () => { calls.push('rename'); throw boom })
     const err = await failureOf(d, 'session-abc')
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
-    expect(calls).toEqual(['archive', 'rename', 'unarchive'])
+    expect(calls).toEqual(['rename'])
     expect(host.attach).not.toHaveBeenCalled()
+    expect(host.archive).not.toHaveBeenCalled()
+    expect(host.unarchive).not.toHaveBeenCalled()
   })
 
   it('只有推不出项目目录（账本 header 里查不到）才判 not-found，且零副作用', async () => {

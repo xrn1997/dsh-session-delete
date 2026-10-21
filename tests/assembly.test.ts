@@ -35,6 +35,10 @@ function makeEnv(over: {
   projectionCache?: unknown
   /** `ctx.get('sessions')` 的替身（live store 的窄面：`get` + `liveEntryFor`）。 */
   sessions?: unknown
+  /** `ctx.get('agents')` 的替身（捕获 `resume`/`create` 返回的 AgentHandle）。 */
+  agents?: unknown
+  /** `ctx.inject` 的替身：捕获延迟挂载的 agents 服务。 */
+  inject?: (names: readonly string[], callback: (ctx: { get(name: string): unknown }) => void) => void
   /** `ctx.get('sessionController')` 的替身（通告"加回"时取摘要的那一处）。 */
   sessionController?: unknown
   /** `ctx.get('sessionQuery')` 的替身。`listSessions` 给无主子会话扫描；`filterSessions` 给闭包。
@@ -79,6 +83,7 @@ function makeEnv(over: {
       calls.push(`get(${name})`)
       if (name === 'sessionProjectionCache') return over.projectionCache
       if (name === 'sessions') return over.sessions
+      if (name === 'agents') return over.agents
       if (name === 'sessionController') return over.sessionController
       if (name === 'sessionQuery') return over.sessionQuery
       return undefined
@@ -87,6 +92,7 @@ function makeEnv(over: {
       calls.push(`emit(${name})`)
       over.emit?.(name, ...args)
     },
+    inject: over.inject,
   }
   return { ctx, calls }
 }
@@ -136,7 +142,7 @@ describe('宿主服务层端口的接线', () => {
   it('projectDirOf 的 cwd 来自 workspaceRegistry.readSessionHeader（官方 header 读面）', async () => {
     const { ctx, calls } = makeEnv({ headers: { s9: { cwd: 'C:/x' } } })
     await createHostPort(ctx).projectDirOf('s9')
-    expect(calls).toEqual(['registry.readSessionHeader(s9)'])
+    expect(calls).toEqual(['get(agents)', 'registry.readSessionHeader(s9)'])
   })
 
   // 未知会话这条：宿主 `readSessionHeader(id)` 抛的是**裸 Error**（无类型、无码）。它是**未命中**，
@@ -472,7 +478,7 @@ describe('宿主服务层端口的接线', () => {
     const host = createHostPort(ctx)
     await host.detach('s1', 'ws-1')
     await host.attach('s1', 'ws-1')
-    expect(calls).toEqual(['registry.get(ws-1)', 'detachSession(ws-1,s1)', 'registry.get(ws-1)', 'attachSession(ws-1,s1)'])
+    expect(calls).toEqual(['get(agents)', 'registry.get(ws-1)', 'detachSession(ws-1,s1)', 'registry.get(ws-1)', 'attachSession(ws-1,s1)'])
   })
 
   it('detach / attach 遇到未知工作区**响亮失败**，不静默当成功', async () => {
@@ -490,10 +496,10 @@ describe('宿主服务层端口的接线', () => {
     const host = createHostPort(ctx)
     expect(await host.workspaceExists('ws-1')).toBe(true)
     expect(await host.workspaceExists('gone')).toBe(false)
-    expect(calls).toEqual(['registry.get(ws-1)', 'registry.get(gone)'])
+    expect(calls).toEqual(['get(agents)', 'registry.get(ws-1)', 'registry.get(gone)'])
   })
 
-  // 这是本仓走宿主**内部入口**的两处之一（另一处是 `announceRemoved` 发的转发事件）——
+  // 这是本仓走宿主**内部入口**的几处之一（另见 captureAgentHandles 与 `announceRemoved` 的转发事件）——
   // `dsh-session` 的 SessionStore：会话列表 = 持久化 ∪ 活体，
   // 搬文件摘不掉活体，只有 `liveEntryFor(session).detach()` 这一条路（宿主 owner 自己用的那条）。
   // 判据是三态：`evicted`/`not-live` = 宿主列表已经不含它（可以据此如实通告客户端）；
@@ -509,6 +515,104 @@ describe('宿主服务层端口的接线', () => {
     expect(await createHostPort(ctx).evictLive('s1')).toBe('evicted')
     expect(detached).toEqual(['s1'])
     expect(calls).toContain('get(sessions)')
+  })
+
+  // `SessionController` 把 `agents.resume/create` 返回的 AgentHandle 丢掉；本端口在服务实例上包一层，
+  // 按会话 id 留住 handle，删除时调用它的 dispose（宿主自己的外层 teardown：关写句柄、摘 agent/session）。
+  // 没有这一步，恢复后旧 agent 会拦住 prompt（真机事故 2026-10-21）。
+  it('evictLive：捕获 agents.resume 返回的 AgentHandle，连 agent 一起 dispose', async () => {
+    const detached: string[] = []
+    const disposed: string[] = []
+    const handle = { agent: { id: 's1' }, dispose: async () => { disposed.push('s1') } }
+    const agents = { resume: async () => handle, create: async () => handle }
+    const session = { id: 's1' }
+    const sessions = {
+      get: (id: string) => (id === 's1' ? session : undefined),
+      liveEntryFor: () => ({ detach: () => { detached.push('s1') } }),
+    }
+    const { ctx } = makeEnv({ agents, sessions })
+    const port = createHostPort(ctx)
+    await agents.resume()
+    expect(await port.evictLive('s1')).toBe('evicted')
+    expect(detached).toEqual(['s1'])
+    expect(disposed).toEqual(['s1'])
+  })
+
+  // 真机事故（2026-10-21）：cordis 的 traceable 服务代理每次读函数都会新包一层（`createShadowMethod`），
+  // 所以 `service[name] !== wrapped` 是**必然**的假警报。旧安装器在这里抛，循环还没走到 `create`
+  // ⇒ 新建会话的 handle 一个都没捕获；恢复后旧 agent 留在 `ctx.agents` 里，`resolve()` 直接命中它。
+  // 这条用例用同一个"读函数返回新代理"的形状钉住：resume 与 create 都必须真正装上。
+  it('evictLive：traceable 代理读回不等于写入函数时，resume/create 仍各自装上并捕获', async () => {
+    const detached: string[] = []
+    const disposed: string[] = []
+    const events: string[] = []
+    const resumeHandle = { agent: { id: 's1' }, dispose: async () => { disposed.push('s1'); events.push('dispose:s1') } }
+    const createHandle = { agent: { id: 's2' }, dispose: async () => { disposed.push('s2'); events.push('dispose:s2') } }
+    const writes: string[] = []
+    const raw = {
+      resume: async () => resumeHandle,
+      create: async () => createHandle,
+    }
+    const traced = new Proxy(raw, {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver)
+        // 只模拟 cordis 对函数的那一层：读回永远是一个新代理，但调用仍落到原函数/后装 wrapper。
+        return typeof value === 'function'
+          ? new Proxy(value, { apply: (fn, thisArg, args) => Reflect.apply(fn, thisArg, args) })
+          : value
+      },
+      set(target, prop, value, receiver) {
+        writes.push(String(prop))
+        return Reflect.set(target, prop, value, receiver)
+      },
+    })
+    const sessions = {
+      get: (id: string) => ({ id }),
+      liveEntryFor: (session: unknown) => ({
+        detach: () => {
+          const id = (session as { id: string }).id
+          detached.push(id)
+          events.push(`detach:${id}`)
+        },
+      }),
+    }
+    const { ctx } = makeEnv({ agents: traced, sessions })
+    const port = createHostPort(ctx)
+    // 第二次安装（get 与 inject 各一次）必须看见第一次留下的 symbol 标记，不能再套一层；
+    // 而且第二个端口的 evictLive 必须用**第一层 wrapper 写的同一张表**（返回空表 = handle 捕捉不到）。
+    const secondPort = createHostPort(ctx)
+
+    await traced.resume()
+    await traced.create()
+    expect(await port.evictLive('s1')).toBe('evicted')
+    expect(await secondPort.evictLive('s2')).toBe('evicted')
+    expect(detached.sort()).toEqual(['s1', 's2'])
+    expect(disposed.sort()).toEqual(['s1', 's2'])
+    // 先摘 session、再 dispose agent（ADR-0008 的承重顺序）
+    expect(events).toEqual(['detach:s1', 'dispose:s1', 'detach:s2', 'dispose:s2'])
+    expect(writes.filter(name => name === 'resume')).toHaveLength(1)
+    expect(writes.filter(name => name === 'create')).toHaveLength(1)
+  })
+
+  // live profile 的插件激活顺序可能早于 agents 服务就绪：createHostPort 不能在 apply 时只 get 一次就放弃。
+  it('evictLive：agents 服务晚于端口创建挂载时，走 ctx.inject 补装 handle 捕获', async () => {
+    const detached: string[] = []
+    const disposed: string[] = []
+    const handle = { agent: { id: 's1' }, dispose: async () => { disposed.push('s1') } }
+    const service = { resume: async () => handle, create: async () => handle }
+    const sessions = {
+      get: (id: string) => (id === 's1' ? { id: 's1' } : undefined),
+      liveEntryFor: () => ({ detach: () => { detached.push('s1') } }),
+    }
+    let late: ((ctx: { get(name: string): unknown }) => void) | undefined
+    const { ctx } = makeEnv({ agents: undefined, sessions, inject: (_names, callback) => { late = callback } })
+    const port = createHostPort(ctx)
+    expect(late).toBeDefined()
+    late!({ get: (name) => (name === 'agents' ? service : undefined) })
+    await service.resume()
+    expect(await port.evictLive('s1')).toBe('evicted')
+    expect(detached).toEqual(['s1'])
+    expect(disposed).toEqual(['s1'])
   })
 
   it('evictLive：内存里本来就没有 ⇒ not-live；服务缺席/形状不符/detach 抛 ⇒ unknown，绝不抛', async () => {
@@ -575,7 +679,7 @@ describe('宿主服务层端口的接线', () => {
     const host = createHostPort(ctx)
     await host.archive('s1', 'ws-1')
     await host.unarchive('s1')
-    expect(calls).toEqual(['registry.archiveSession(s1)', 'registry.unarchiveSession(s1)'])
+    expect(calls).toEqual(['get(agents)', 'registry.archiveSession(s1)', 'registry.unarchiveSession(s1)'])
   })
 
   it('titleOf 取投影缓存 title 行的**视图值**（string）；null/缺失/没挂缓存/抛错一律空串', async () => {

@@ -53,7 +53,8 @@
 **不自动**跑，且一次只清会话目录（投影缓存与附件不在范围内）。
 
 **活体**（live session）
-宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**。
+宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**；
+删除时 `evictLive` 把 session 与它的 agent handle 一起摘掉（见 ADR-0008）。
 
 **永久删除计划**（permanent removal plan）
 一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、
@@ -67,14 +68,16 @@
 都不带 details。
 
 **成员在场**（member presence）
-一个成员在宿主可见列表里的状态。**离场** = 摘活体并如实发 `api-session/removed`（`evictLive` 回
-`unknown` 时不通告）；**归位** = 目录 / 账本 / 可见性三件写都回去后才发 `api-session/added`。
-判据与成对通告只住 `src/verbs/member-presence.ts`；批量恢复的 `announceRestoredBatch` 仍归
-`src/verbs/batch.ts`。
+一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`
+（`evictLive` 回 `unknown` 时不通告）；**归位** = 目录 / 账本两件写都回去后才发
+`api-session/added`。判据与成对通告只住 `src/verbs/member-presence.ts`；批量恢复的
+`announceRestoredBatch` 仍归 `src/verbs/batch.ts`。
 
 **归档**（archive）
-宿主「从分组面藏掉」那一档。删除时用它把会话藏起来（否则它掉进「未分组」）；恢复按 `wasArchived`
-反推可见性：原本已归档的一个字节都不动。
+宿主「从分组面藏掉」那一档，只反映**用户自己**的归档状态；**回收站不使用它**（2026-10-21 起
+删除不调 `archiveSession`，靠 `evictLive` 把 session + agent 一起摘掉；恢复走冷 resume）。
+旧版本删除留下的归档态条目在恢复时迁移式取消归档（`wasArchived:false` 且当前仍归档）；
+`wasArchived:true` 是用户删除前自己归档的，删前删后都不动。
 
 **通告**（announce）
 让客户端**当场**删掉/加回一行的两条宿主事件（`api-session/removed` / `api-session/added`）。
@@ -89,7 +92,7 @@
 **角色端口**（role ports）
 宿主能力端口的三个切面，同住 `src/ports/host-port.ts`：**身份与归属**（`HostIdentityPort`，10 个方法：
 会话是谁、落在哪个项目/工作区、活不活/归档没有，以及账本与归档的写面）、**在场通告**（`HostPresencePort`，
-5 个：摘活体三态与 `api-session/*` 如实通告）、**会话语料**（`HostCorpusPort`，2 个：`listSessions` 与
+5 个：摘活体（session + agent）三态与 `api-session/*` 如实通告）、**会话语料**（`HostCorpusPort`，2 个：`listSessions` 与
 `subagentMembersOf`）。`HostPort` 是三者相交的**复合别名**，生产 adapter 只有一颗（`createHostPort`），
 `DeleteDeps.host` 仍是复合面。裁决在 ADR-0007。
 
@@ -126,7 +129,7 @@ Typert 描述符的动态发现挂载点；现行形状（六个段名、同源�
 - **groups module**：`src/trash/groups.ts`——组语义的唯一家（谁能接住孩子、这一组有谁、谁已被同批带走）。
 - **批量层**（batch layer）：`src/verbs/batch.ts`——「这一批」的唯一拥有者：去重保序、清册快照、
   已带走账本、逐条信封。
-- **成员在场**：`src/verbs/member-presence.ts`——成员离场 / 归位通告的唯一家。
+- **成员在场**：`src/verbs/member-presence.ts`——成员离场（摘 session + agent）/ 归位通告的唯一家。
 - **journal**：一次成员移动 = 一串步骤，每步**自带反向动作**；journal 拥有顺序反转与失败收集——
   `details.rollbackFailures` 的**合并与措辞**住 `src/verbs/errors.ts` 的 `withRollbackFailures`（journal 是唯一调用方）。
 - **路由表**（route table）：`src/api/route-table.ts`——段名 → `{ 方法, body, 纯度, 处理 }`；`dispatch` 的
@@ -150,7 +153,7 @@ Typert 描述符的动态发现挂载点；现行形状（六个段名、同源�
 | 详情正文给谁看、给多少（`source.kind` 过滤与载荷闸） | `src/trash/detail.ts` |
 | 回滚失败的措辞与合并（码本身住 `wire.ts`） | `src/verbs/errors.ts` |
 | 「这一批」 | `src/verbs/batch.ts` |
-| 成员离场 / 归位通告（摘活体、三态、成对事件） | `src/verbs/member-presence.ts` |
+| 成员离场 / 归位通告（摘 session+agent、三态、成对事件） | `src/verbs/member-presence.ts` |
 | 永久删除的计划与执行（成员 / 目录 / 字节 / live 准入 / 部分回执） | `src/verbs/permanent-removal.ts` |
 | 宿主能力的唯一适配：三个角色切面与复合别名 `HostPort` | `src/ports/host-port.ts` |
 | 语料缺席的形状（`CorpusRead`；缺席之后怎么办归调用方） | `src/ports/host-port.ts` |

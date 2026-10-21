@@ -52,6 +52,9 @@
 - **缺席可测**：`{ available: false }` 与 `{ available: true, value: [] }` / `value: {}` 在类型上就分得开，用例不再从"空"反推"没挂"。
 - **调用方拿到自己那个角色**：`member-presence.ts` 的 `MemberPresenceHost` 就是 `HostPresencePort`（原来是 `Pick<HostPort, …>`；**2026-10-20 就地订正**：落地时又窄了一格——`MemberPresenceHost` 是 `Pick<HostPresencePort, 'evictLive' | 'announceRemoved' | 'announceRestored'>`。批量通告与摘要预取各有自己的家（`verbs/batch.ts`），不该因为共用同一颗 adapter 就在类型上声明依赖）；`attachableWorkspaceId` / `isWorkspaceMissing` 收 `Pick<HostIdentityPort, 'workspaceExists'>`。
 - **新语料调用方必须当场选策略**：读 `CorpusRead` 就得写 `available` 分支——这是有意的摩擦，防止再出现一个"空表兼表两意"的读面。
+- **`evictLive` 的完整 teardown**（2026-10-21 就地订正）：方法签名与角色计数不变；内部除
+  `liveEntryFor(...).detach()` 外，还会 dispose 从 `ctx.agents.resume/create` 捕获到的 `AgentHandle`
+  （ADR-0008）——否则恢复后旧 agent 会拦住 prompt。捕获只在 adapter 内部，不进端口类型。
 
 ## 被否掉的替代
 

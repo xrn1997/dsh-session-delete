@@ -15,12 +15,15 @@ const trashDir = trashDirOf(entry.id, HOME)
 const sessionDir = sessionDirOf(entry.projectDir, entry.sessionId, HOME)
 
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）。日志只记**恢复自己会做的那几件**：
- *  `detach` 故意不记——有一条用例断言的正是"回滚里没有摘账本那一步"。 */
-function deps(over: { workspaceExists?: boolean; host?: Partial<FakeHost>; fs?: Partial<FakeFs> } = {}) {
+ *  `detach` 故意不记——有一条用例断言的正是"回滚里没有摘账本那一步"。
+ *  `archived` 缺省 true：`wasArchived:false` 的条目按**旧清单**处理（旧删除用归档藏会话），
+ *  恢复时要迁移式取消归档；新清单用例显式传 false。 */
+function deps(over: { workspaceExists?: boolean; archived?: boolean; host?: Partial<FakeHost>; fs?: Partial<FakeFs> } = {}) {
   const calls: string[] = []
   const made = createFakeDeps({
     seed: [entry],
     workspaceExists: over.workspaceExists ?? true,
+    archived: over.archived ?? true,
     log: calls,
     logMethods: ['rename', 'attach', 'unarchive', 'archive', 'announceRestoredBatch'],
     format: (method, args) => method === 'announceRestoredBatch'
@@ -42,15 +45,23 @@ async function failureOf(d: FakeDeps, entryId: string) {
 }
 
 describe('恢复动词', () => {
-  // 可见性由 wasArchived 反推：删除时"原本未归档"的会话是被我们归档才藏起来的，
-  // 恢复就得把它放回树里；"原本已归档"的删前删后都在归档集里，恢复不该动它。
-  // 删除时客户端那一行是**靠通告**掉下去的（宿主不再列出它），所以恢复也必须通告回来
-  // ——用宿主自己列出来的那行摘要（`api-session/added`），不自己造一行。
-  it('顺序固定为 rename → attach → unarchive（原本未归档的：放回树里）', async () => {
+  // 旧清单（2026-10-21 之前的删除用归档藏会话）：`wasArchived:false` 但盘上仍归档 ⇒
+  // 恢复时迁移式取消归档，把它放回树里；"原本已归档"的删前删后都在归档集里，恢复不该动它。
+  // 新清单的删除不碰归档，见下面那条专门的用例。
+  it('旧清单：rename → attach → unarchive（删前未归档、删除时被归档的）', async () => {
     const { d, calls } = deps()
     await d.manifest.add({ ...entry, wasArchived: false })
     await restoreSession(d)(entry.id)
     expect(calls).toEqual(['rename', 'attach', 'unarchive'])
+  })
+
+  it('新清单：删前未归档且当前未归档 ⇒ 恢复不碰归档', async () => {
+    const { d, calls, host } = deps({ archived: false })
+    await d.manifest.add({ ...entry, wasArchived: false })
+    await restoreSession(d)(entry.id)
+    expect(calls).toEqual(['rename', 'attach'])
+    expect(host.unarchive).not.toHaveBeenCalled()
+    expect(host.archive).not.toHaveBeenCalled()
   })
 
   it('原本已归档的：恢复后仍处归档态，不动归档集', async () => {
@@ -62,7 +73,7 @@ describe('恢复动词', () => {
     expect(d.host.unarchive).not.toHaveBeenCalled()
   })
 
-  // 删除时就没有工作区账目的会话（未分组），清单里记空串 ⇒ 恢复没有账本可挂，只把文件与可见性还原。
+  // 删除时就没有工作区账目的会话（未分组），清单里记空串 ⇒ 恢复没有账本可挂，只把文件放回。
   it('未分组会话（清单里工作区是空串）恢复时不挂账本', async () => {
     const { d, calls } = deps()
     const manifest = d.manifest

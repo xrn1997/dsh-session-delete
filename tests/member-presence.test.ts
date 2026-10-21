@@ -41,17 +41,16 @@ describe('成员在场', () => {
     expect(log).toEqual([])
   })
 
-  it('memberBack：三件写都回去才发 added', async () => {
+  it('memberBack：目录与账本都回去才发 added', async () => {
     const { host, log } = makeHost()
-    await createMemberPresence(host).memberBack('s1', { diskBack: true, workspaceBack: true, visibleBack: true })
+    await createMemberPresence(host).memberBack('s1', { diskBack: true, workspaceBack: true })
     expect(log).toEqual(['announceRestored(s1)'])
   })
 
   it('memberBack：任一件没回去就不发（假话比不发更糟）', async () => {
     for (const facts of [
-      { diskBack: false, workspaceBack: true, visibleBack: true },
-      { diskBack: true, workspaceBack: false, visibleBack: true },
-      { diskBack: true, workspaceBack: true, visibleBack: false },
+      { diskBack: false, workspaceBack: true },
+      { diskBack: true, workspaceBack: false },
     ]) {
       const { host, log } = makeHost()
       await createMemberPresence(host).memberBack('s1', facts)
@@ -61,7 +60,7 @@ describe('成员在场', () => {
 
   it('memberBack：不摘活体（归位只补通告）', async () => {
     const { host } = makeHost()
-    await createMemberPresence(host).memberBack('s1', { diskBack: true, workspaceBack: true, visibleBack: true })
+    await createMemberPresence(host).memberBack('s1', { diskBack: true, workspaceBack: true })
     expect(host.evictLive).not.toHaveBeenCalled()
   })
 })

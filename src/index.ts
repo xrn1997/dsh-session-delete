@@ -14,13 +14,15 @@ export const name = '@xrn1997/dsh-session-delete'
  * 插件依赖：**只写字符串数组**（隔离数据根上实测：写成 `{ required, optional }` 会让插件停在
  * `pending (waiting for services: required, optional)`）。
  *
- * 三项都是在隔离数据根上实测注入成功、且本插件真正用到的宿主服务。三个**故意不写**的：
+ * 三项都是在隔离数据根上实测注入成功、且本插件真正用到的宿主服务。**不进 inject 的**：
  * - `remote`：那是**浏览器半**的服务（asar `dsh-api-gateway/lib/client.js`：`super(ctx, "remote")`），
  *   Node 半挂的是 `ctx.typertGateway`。把它写进 Node 半的 inject 会让插件永远 pending（同 `slots` 那次的形状）。
  * - `sessions` / `sessionProjectionCache`：两者都按 `ctx.get(...)` **可选读**——`sessions` 只给 `evictLive`
  *   用（活跃判据走 waterfall，见 src/ports/host-port.ts；服务缺席回 `unknown`），`sessionProjectionCache` 是标题的尽力读面。
  *   inject 一个可能没挂的服务 = 整个插件 pending。
  *   它取不到时 `titleOf` 返回空串，正是契约允许的降级。
+ * - `agents`：只给 handle 捕获用（`ctx.get('agents')`；缺席时 `ctx.inject(['agents'])` 等服务就绪再装）。
+ *   它同样可能晚于本插件激活，写进插件 inject 只会让整个插件 pending。
  *
  * `webServer` 是**浏览器半取数通道的承载者**（那条薄线）：插件用它注册 `/dsh-session-delete-api`
  * 前缀路由，浏览器半同源 fetch 那六个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
