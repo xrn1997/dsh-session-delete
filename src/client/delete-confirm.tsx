@@ -25,6 +25,7 @@
  */
 import { useEffect, useState } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
+import { closeMainIfDeleted } from './main-view.js'
 import { applyOne, callRemote, type DeleteConfirmDeps } from './remote.js'
 import { createStore } from './store.js'
 import { invalidateTrash } from './trash-store.js'
@@ -134,11 +135,21 @@ function ConfirmDialog({
       return
     }
     clearDeleteRequest()
+    // 宿主客户端的常驻 Session 会把 `removed` 粘住（`api-session/added` 不清它）⇒ 删的是当前
+    // 正在看的会话时先把主视图关掉；撤销恢复后由撤销路径重开。
+    const reopenOnUndo = closeMainIfDeleted([current.sessionId])
     // 回收站多了一条：让正开着的清单面板重读（它挂载时只取一次数，见 trash-store.ts 头注）。
     invalidateTrash()
     // 单条删除（N=1）不会命中"已被同批前一条带走"的幂等值；真遇上（批量入口共用这条包装、
     // 或通道被别的窗口抢先动过）就只刷新，不 publish 一条没有落点的撤销提示。
-    if (outcome.value !== null) publishUndoNotice({ entryId: outcome.value.id, title: current.title })
+    // 幂等条仍可能正是当前会话：主视图照样关掉（`removed` 不能留着），恢复走回收站面板。
+    if (outcome.value !== null) {
+      publishUndoNotice({
+        entryId: outcome.value.id,
+        title: current.title,
+        ...(reopenOnUndo === undefined ? {} : { reopenOnUndo }),
+      })
+    }
   }
 
   return (

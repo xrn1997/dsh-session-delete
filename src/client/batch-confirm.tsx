@@ -15,6 +15,7 @@ import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
 import { getPicks, shrinkPicksToFailures, type PickItem } from './batch-selection-store.js'
+import { closeMainIfDeleted } from './main-view.js'
 import { createStore } from './store.js'
 import { invalidateTrash } from './trash-store.js'
 import { Button } from './ui/Button.js'
@@ -149,6 +150,7 @@ function BatchConfirmDialog({
     const byId = new Map<string, (typeof outcome.value)[number]>()
     for (const item of outcome.value) if (!byId.has(item.id)) byId.set(item.id, item)
     const moved: string[] = []
+    const deletedSessionIds: string[] = []
     const failed = new Map<string, string>()
     let okCount = 0
     for (const id of pendingIds) {
@@ -163,10 +165,20 @@ function BatchConfirmDialog({
         continue
       }
       okCount += 1
+      deletedSessionIds.push(id)
       // `value === null` 是"已被同批前一条带走"的幂等条：跟着组走，不单列进撤销名单
       if (item.action === 'delete' && item.value !== null) moved.push(item.value.id)
     }
-    if (okCount > 0) publishUndoBatchNotice({ entryIds: moved, n: okCount })
+    if (okCount > 0) {
+      // 当前主视图若在本批成功的会话里，先关掉（宿主常驻 Session 的 `removed` 是粘的）；
+      // 撤销恢复后由撤销路径重开。
+      const reopenOnUndo = closeMainIfDeleted(deletedSessionIds)
+      publishUndoBatchNotice({
+        entryIds: moved,
+        n: okCount,
+        ...(reopenOnUndo === undefined ? {} : { reopenOnUndo }),
+      })
+    }
     // 回收站多了几条：让正开着的清单面板重读
     invalidateTrash()
     shrinkPicksToFailures([...failed.keys()])

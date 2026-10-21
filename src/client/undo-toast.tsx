@@ -13,6 +13,7 @@
  * 不引 `@deepseek-ai/dsh-client-store`（它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
  */
 import { zhTranslate, type Translate } from './copy.js'
+import { openMainWhenListed } from './main-view.js'
 import { applyOne, callRemote, type OneShotDeps } from './remote.js'
 import { createStore } from './store.js'
 import { invalidateTrash } from './trash-store.js'
@@ -30,6 +31,8 @@ export type UndoNotice = {
   seq: number
   /** 撤销失败时把原因顶上来：这时不再有「撤销」动作，只剩原文。 */
   failure?: string
+  /** 删除时被关掉的当前主视图会话；撤销恢复成功后把它重开（见 main-view.ts）。 */
+  reopenOnUndo?: string
 } & (
   | {
       kind: 'one'
@@ -50,13 +53,29 @@ export type UndoNotice = {
 const noticeStore = createStore<UndoNotice | null>(null)
 
 /** 删除成功后发布一条撤销提示（单条）。 */
-export function publishUndoNotice(input: { entryId: string; title: string }): void {
-  noticeStore.publish((seq) => ({ seq, kind: 'one', entryId: input.entryId, title: input.title }))
+export function publishUndoNotice(input: { entryId: string; title: string; reopenOnUndo?: string }): void {
+  noticeStore.publish((seq) => ({
+    seq,
+    kind: 'one',
+    entryId: input.entryId,
+    title: input.title,
+    ...(input.reopenOnUndo === undefined ? {} : { reopenOnUndo: input.reopenOnUndo }),
+  }))
 }
 
 /** 批量删除成功后发布一条撤销提示（2026-10-17）：覆盖上一条，只报这一次移走的条数。 */
-export function publishUndoBatchNotice(input: { entryIds: readonly string[]; n: number }): void {
-  noticeStore.publish((seq) => ({ seq, kind: 'batch', entryIds: input.entryIds, n: input.n }))
+export function publishUndoBatchNotice(input: {
+  entryIds: readonly string[]
+  n: number
+  reopenOnUndo?: string
+}): void {
+  noticeStore.publish((seq) => ({
+    seq,
+    kind: 'batch',
+    entryIds: input.entryIds,
+    n: input.n,
+    ...(input.reopenOnUndo === undefined ? {} : { reopenOnUndo: input.reopenOnUndo }),
+  }))
 }
 
 /** 撤销成功后把提示收掉（用户点「撤销」、或横幅自己走完停留时间）。 */
@@ -85,6 +104,13 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
       ? await callRemote(() => applyOne(deps, 'restore', current.entryId))
       : await callRemote(() => deps.applyOutcomes('restore', current.entryIds))
   if (outcome.ok) {
+    // 删除时被关掉的主视图：恢复成功后重开它（宿主常驻 Session 的 removed 是粘的，只有丢实例才清）。
+    if (current.reopenOnUndo !== undefined) {
+      const restored = Array.isArray(outcome.value)
+        ? outcome.value.flatMap((item) => (item.ok && item.action === 'restore' && item.value !== null ? [item.value.sessionId] : []))
+        : outcome.value.value === null ? [] : [outcome.value.value.sessionId]
+      if (restored.includes(current.reopenOnUndo)) openMainWhenListed(current.reopenOnUndo)
+    }
     // 回收站少了几条：让正开着的清单面板重读（撤销也是"从别处动回收站"的一种）。
     invalidateTrash()
     clearUndoNotice()

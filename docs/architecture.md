@@ -59,6 +59,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 **入口与面板**
 
 - 会话行菜单一项红色「删除」；会话在跑时置灰，并说明先停止。
+- 删除的是**当前主视图**里的会话时，主视图随删除关闭（与宿主归档的 `clearArchivedCurrent` 同法）；撤销恢复成功后重新打开它。宿主客户端的常驻 `Session` 把 `removed` 记成粘性状态，`api-session/added` 不清它——不关就会停在「会话不可用」（判据与收尾住 `src/client/main-view.ts`，裁决见 ADR-0008）。
 - 回收站入口是一对座位：`sidebar.panellist` 的一行 + `main` 同 key 的中央面板，必须同批注册（`selectPanel` 对未注册的 id 直接抛）。面板行常驻，不做计数角标；头部只放标题与条数/占用（多选态那一行改说「已选 N 条」，合计让位给勾选数），动作在面板体顶端。
 
 **六个基础状态**
@@ -96,7 +97,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 清册行 → 线上行的投影 | `src/api/trash-rows.ts` 的 `toWire`（显式字面量，不 `...row`） | 组语义 |
 | 组语义（谁能接住孩子、这一组有谁、谁已被同批带走） | `src/trash/groups.ts` | 步骤与回滚 |
 | 「这一批」（去重保序 / 清册快照 / 已带走账本 / 逐条信封 / 一批一次通告） | `src/verbs/batch.ts` | 单条动词的步骤 |
-| 成员离场 / 归位通告（摘活体、三态、成对事件） | `src/verbs/member-presence.ts` | 批量通告（`announceRestoredBatch` 归 `src/verbs/batch.ts`） |
+| 成员离场 / 归位通告（摘 session + agent、三态、成对事件） | `src/verbs/member-presence.ts` | 批量通告（`announceRestoredBatch` 归 `src/verbs/batch.ts`） |
 | 一次成员移动的步骤与反向动作（含逐条失败收集） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
 | 永久删除的计划与执行（成员 / 目录 / 字节 / live 准入 / 部分回执） | `src/verbs/permanent-removal.ts` | 组语义归 `src/trash/groups.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` | 对账 |
@@ -110,9 +111,10 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 数据根的解析（`$DSH_HOME` / `~/.dsh`） | `src/ports/home.ts` | 宿主的显式配置（插件不可得） |
 | 恢复时「挂不挂账本」与那句「归入未分组」 | `src/verbs/restore-session.ts` 的 `attachableWorkspaceId` / `isWorkspaceMissing` | 工作区还在时的挂接失败 |
 | 宿主身份与归属（会话是谁、落哪个项目/工作区、活不活/归档没有、账本与归档的写面） | `src/ports/host-port.ts` 的 `HostIdentityPort` | 通告（`api-session/*`，归 `HostPresencePort`） |
-| 宿主在场通告（摘活体三态、`api-session/*` 如实通告） | `src/ports/host-port.ts` 的 `HostPresencePort` | 什么时候算「已离开 / 已回来」（归 `src/verbs/member-presence.ts`） |
+| 宿主在场通告（摘 session + agent 三态、`api-session/*` 如实通告；agent handle 捕获也只住这里） | `src/ports/host-port.ts` 的 `HostPresencePort` | 什么时候算「已离开 / 已回来」（归 `src/verbs/member-presence.ts`） |
 | 会话语料读（整表身份 `listSessions`、子会话闭包 `subagentMembersOf`） | `src/ports/host-port.ts` 的 `HostCorpusPort` | 看不见语料时怎么办（**缺席策略归调用方**；各调用方的清单只住 `CONTEXT.md` 的「语料缺席」条） |
 | 宿主能力的生产 adapter（一颗对象同时满足三个角色） | `src/ports/host-port.ts` 的 `createHostPort` | 各动词的调用顺序 |
+| 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量） |
 | 无主子会话的扫描与分组（谁算孤儿、传递闭包与去重） | `src/verbs/orphan-subagents.ts` | 删哪些目录、报多少字节、谁挡活体（归 `src/verbs/permanent-removal.ts`）；回收站里的组 |
 | 失败码的措辞与映射、回滚失败的措辞与合并（`details.rollbackFailures`；码本身住 `wire.ts`） | `src/verbs/errors.ts` + `src/remote/map-error.ts` | 上屏文案 |
 | 同源栅栏（桌面壳那条只留 Referer 的路） | `src/api/dispatch.ts` | 操作失败的信封（那是 `map-error`） |
@@ -134,6 +136,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - **`session-trash/` 目录是唯一需要手动动的地方**：每次读清单都先与目录对账（多出的目录重建出行、目录没了摘行、认不出的当外人）；`storages/` 那份是内部索引，外面改它要重启宿主才生效。
 - **清册只记文件里真有的事实**：随盘上随时变的数（还剩几个孩子、这次释放多少）一律现算现给、不落清册。
 - **删除 = 移入回收站**（可恢复，不自动过期）；**彻底删除**（单条 / 一批 / 清空）与**无主子会话清理**是仅有的三条永久删除路径，都要二次确认。
+- **回收站与归档解耦**（2026-10-21，ADR-0008）：删除**不调** `archiveSession`；`evictLive` 把 session 与它的 agent handle 一起摘掉，恢复走冷 resume。`wasArchived` 只记删除前用户自己的归档事实；旧版本删除留下的归档态条目在恢复时迁移式 `unarchive`。
 - 会话日志是**多帧 zstd**：只读版本号最大的那代，绝不拼代（判据与用例住 `src/log/session-log.ts`、`src/log/zstd-frames.ts` 与 `tests/session-log.test.ts`、`tests/zstd-frames.test.ts`）。
 - 附件是全局内容寻址的，与会话不是父子关系——删除不连坐、不回收。
 

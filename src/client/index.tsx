@@ -82,6 +82,7 @@ import { type ClientContextLike } from './context.js'
 import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
 import { DeleteMenuItem } from './delete-menu-item.js'
+import { bindMainView } from './main-view.js'
 import {
   buildDeps,
   createHttpRemote,
@@ -240,6 +241,7 @@ function TrashPanelIconSlot({ size }: { size?: number }) {
  * 漏一半的代价是**宿主那句响亮的抛错**，不是静默降级。
  */
 async function activate(client: ClientContextLike): Promise<void> {
+  bindMainView(client)
   const raw = createHttpRemote()
   if (!(await probeChannel(raw))) return
   const deps = buildDeps(raw)

@@ -22,6 +22,7 @@ import { resetBatchConfirm } from '../../src/client/batch-confirm.js'
 import { resetDeleteRequest } from '../../src/client/delete-confirm.js'
 import { resetHostRows } from '../../src/client/host-rows.js'
 import { apply, inject } from '../../src/client/index.js'
+import { resetMainView } from '../../src/client/main-view.js'
 import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { enterSelection, resetSelection } from '../../src/client/batch-selection-store.js'
 import { resetUndoNotice } from '../../src/client/undo-toast.js'
@@ -35,6 +36,7 @@ beforeEach(() => {
   resetSelection()
   resetHostRows()
   resetBatchConfirm()
+  resetMainView()
 })
 
 afterEach(() => {
@@ -43,6 +45,7 @@ afterEach(() => {
   resetSelection()
   resetHostRows()
   resetBatchConfirm()
+  resetMainView()
 })
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
@@ -183,6 +186,7 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
 async function bootstrap(
   raw: RawSessionDeleteRemote = rawRemote(),
   channel: Channel = 'up',
+  uiWorkspace?: unknown,
 ) {
   const fetchCalls = installFetch(raw, channel).calls
   const injected: string[] = []
@@ -198,6 +202,9 @@ async function bootstrap(
         return component
       },
     },
+    ...(uiWorkspace === undefined ? {} : {
+      get: (name: string) => (name === 'uiWorkspace' ? uiWorkspace : undefined),
+    }),
   }
   apply(ctx as never)
   await settle()
@@ -383,6 +390,57 @@ describe('apply 的装配面', () => {
       { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'delete', ids: ['session-a'] } },
       { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'restore', ids: ['a'] } },
     ])
+  })
+
+  // 真机（2026-10-21）：宿主客户端的常驻 Session 把 `removed` 粘住，`api-session/added` 不清它
+  // ⇒ 恢复后输入框仍是「会话不可用」。删除当前主视图时关掉它（宿主归档也是这么做的），
+  // 撤销恢复成功后等摘要落地再把会话重开（新实例 removed=false）。
+  it('删除当前主视图 → 关掉它；撤销恢复 → 重开它', async () => {
+    let selected: { sessionId?: string } = { sessionId: 'session-a' }
+    const clearMain = vi.fn(() => { selected = {} })
+    const openSession = vi.fn()
+    const uiWorkspace = {
+      selection: { getSnapshot: () => selected },
+      sessions: { list: { getSnapshot: () => ({ byId: { 'session-a': {} } }) } },
+      clearMain,
+      openSession,
+    }
+    const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
+    const { registered } = await bootstrap(rawRemote({ apply }), 'up', uiWorkspace)
+    render(<Scene registered={registered} />)
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+    await waitFor(() => expect(clearMain).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(await screen.findByRole('button', { name: '撤销' }))
+    await waitFor(() => expect(openSession).toHaveBeenCalledWith('session-a'))
+  })
+
+  // 批量删除走的是另一条成功路径（`batch-confirm.tsx` 自己发撤销提示）——同一条主视图收尾也要接上。
+  it('批量删除当前主视图 → 关掉它；批量撤销恢复 → 重开它', async () => {
+    let selected: { sessionId?: string } = { sessionId: 'session-a' }
+    const clearMain = vi.fn(() => { selected = {} })
+    const openSession = vi.fn()
+    const uiWorkspace = {
+      selection: { getSnapshot: () => selected },
+      sessions: { list: { getSnapshot: () => ({ byId: { 'session-a': {} } }) } },
+      clearMain,
+      openSession,
+    }
+    const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
+    const { registered } = await bootstrap(rawRemote({ apply }), 'up', uiWorkspace)
+    render(<Scene registered={registered} />)
+
+    fireEvent.click(screen.getByRole('menuitem', { name: '多选' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量删除' }))
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: '移入回收站 1 条' }))
+    await waitFor(() => expect(clearMain).toHaveBeenCalledTimes(1))
+
+    fireEvent.click(await screen.findByRole('button', { name: '撤销' }))
+    await waitFor(() => expect(openSession).toHaveBeenCalledWith('session-a'))
   })
 
   // 2026-10-17：宿主列表批量删除的端到端形状。「⋯ → 多选」进入模式 → 行首勾选 → 浮条 → 批量确认框
