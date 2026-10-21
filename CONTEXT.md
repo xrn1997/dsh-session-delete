@@ -127,8 +127,8 @@ Typert 描述符的动态发现挂载点；现行形状（六个段名、同源�
 - **批量层**（batch layer）：`src/verbs/batch.ts`——「这一批」的唯一拥有者：去重保序、清册快照、
   已带走账本、逐条信封。
 - **成员在场**：`src/verbs/member-presence.ts`——成员离场 / 归位通告的唯一家。
-- **journal**：一次成员移动 = 一串步骤，每步**自带反向动作**；journal 拥有顺序反转、失败收集与
-  `details.rollbackFailures` 的合并。
+- **journal**：一次成员移动 = 一串步骤，每步**自带反向动作**；journal 拥有顺序反转与失败收集——
+  `details.rollbackFailures` 的**合并与措辞**住 `src/verbs/errors.ts` 的 `withRollbackFailures`（journal 是唯一调用方）。
 - **路由表**（route table）：`src/api/route-table.ts`——段名 → `{ 方法, body, 纯度, 处理 }`；`dispatch` 的
   方法 / 纯度 / 请求体预读三件事都读它。
 - **行投影**（`toWire`）：清册那一行（`TrashEntry`）→ 线上那一行（`TrashRowWire`）的唯一投影处。

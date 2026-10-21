@@ -12,16 +12,17 @@ import { join, resolve } from 'node:path'
  *  ② `ctx.profileContext` 按 launcher 原文只装「profile 位置 / 启动 bundle 名 / 调用覆盖 / 遥测开关」，
  *     里面没有数据根；
  *  ③ 宿主自己的服务也不是"问出来"的——它们各自声明 `Config.dshHome`，由**装配那一行的人**填。
- * ⇒ 后果与边界（src/ports/host-port.ts）：显式配置过的 profile 上我们算出的根与宿主不一致 ⇒ 文件探测落空 ⇒
- * 删除/恢复以 `not-found` **响亮拒绝、零副作用**；**不会**动到别的树（sessions 与回收站同源 ⇒ 同卷）。
+ * ⇒ 后果与边界（判据在 `src/verbs/delete-session.ts` 与 `src/verbs/restore-session.ts` 的预检）：显式配置过的
+ * profile 上我们算出的根与宿主不一致 ⇒ 文件探测落空 ⇒ 删除/恢复**响亮拒绝、零副作用**（`not-found` /
+ * `trash-empty` / `project-missing`）；**不会**动到别的树（sessions 与回收站同源 ⇒ 同卷）。
  * 本机两条路径都因此对得上：桌面版走 `~/.dsh`（实测 profile 在其下），隔离探针靠 `$DSH_HOME`。
  *
- * `home` 只用于测试注入假主目录；默认值仍是 `homedir()`，行为与搬家前一致。
+ * `homeDir` 只用于测试注入假主目录；默认值仍是 `homedir()`，行为与搬家前一致。
  */
-export function resolveHome(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
+export function resolveHome(env: NodeJS.ProcessEnv = process.env, homeDir: string = homedir()): string {
   const fromEnv = env.DSH_HOME
-  const raw = fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : join(home, '.dsh')
-  if (raw === '~') return home
-  if (raw.startsWith('~/') || raw.startsWith('~\\')) return resolve(join(home, raw.slice(2)))
+  const raw = fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : join(homeDir, '.dsh')
+  if (raw === '~') return homeDir
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) return resolve(join(homeDir, raw.slice(2)))
   return resolve(raw)
 }

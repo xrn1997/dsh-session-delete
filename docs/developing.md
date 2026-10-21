@@ -23,7 +23,7 @@ pnpm typecheck    # tsc --noEmit
 
 ## 复核门（改过那一层就要过）
 
-- **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**；来源表与已知差异只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级。差异只许文件头点名的那几类，条数一律不钉。
+- **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
 - **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；带 `imports` 分流的非宿主依赖走同文件的 `resolveBrowserBranchImport`。为什么这么收，见 `AGENTS.md` 的浏览器半那两条。
 
 ## 本地源码调试

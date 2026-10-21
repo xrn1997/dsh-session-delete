@@ -102,7 +102,7 @@ export interface TrashRowWire extends TrashEntryWire {
   /** 跟着这条父会话**一起进了回收站**的孩子数（清册里 `parentEntryId` 指向它的行）。 */
   subagentCount?: number
   /** 那些孩子**回收站目录的实测字节**合计（`planVisibleTrash` 在盘上现量，与 `releaseBytes` 同一条口径；
-   *  不念清册里记的 `sizeBytes`。头部合计要算上它们，不能只加父自己那一格）。 */
+   *  不念清册里记的 `sizeBytes`。它们已折进 `releaseBytes`——头部合计照念那个数，别再单独相加）。 */
   subagentBytes?: number
   /** **还留在盘上、没被带走**的孩子数（宿主 `sessionQuery`）。与 `subagentCount` 各说各的。 */
   strandedSubagents?: number

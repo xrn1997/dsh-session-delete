@@ -2,7 +2,7 @@
  * 一次成员移动 = 一串**自带反向动作的步骤**（ADR-0002）。
  *
  * 为什么需要它：`delete-session.ts` 的 `moveOneIn`/`undoOneIn` 与 `restore-session.ts` 的 `restoreOne`
- * （含它的反向闭包）互为镜像，各自手写了三到四段嵌套 `try/catch`：全仓 `rollbackReason(` **22 处**、
+ * （含它的反向闭包）互为镜像，各自手写了三到四段嵌套 `try/catch`：迁移前全仓 `rollbackReason(` **22 处**、
  * `withRollbackFailures(` **8 处**。那不是"回滚值得自己的候选"，而是**同一条正反动作对被写了两遍**。
  *
  * 这里独占四件事，三个动词各自只声明"这次要做哪几步、每步怎么退"：
@@ -18,7 +18,7 @@
 import { isVerbCodeError, rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
 
 export interface JournalStep {
-  /** 这一步在做什么。失败原文按「`<label>：<原错误>`」拼——与既有那 22 处 `rollbackReason` 的措辞同形。 */
+  /** 这一步在做什么。失败原文按「`<label>：<原错误>`」拼——与迁移前那 22 处 `rollbackReason` 的措辞同形。 */
   readonly label: string
   /** 做这一步。抛什么都由 journal 折成 `sessiondelete/io`（除非它自己已经是一个动词码）。 */
   run(): Promise<void>
