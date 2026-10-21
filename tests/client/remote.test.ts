@@ -7,7 +7,14 @@
 // 信封形状（`RemoteResult`）、失败形状（`RemoteFailure`）与标记位判别（`isDSHRemoteError`）的家是
 // 两半共用的 `src/shared/wire.js`；这里验的是**浏览器半对它们的使用**：判别、原文兜底、注入面展开。
 import { describe, expect, it, vi } from 'vitest'
-import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, isDSHRemoteError, type RemoteFailure } from '../../src/shared/wire.js'
+import {
+  PARAMS,
+  ROUTES,
+  SESSION_DELETE_API_PREFIX,
+  isDSHRemoteError,
+  type ApplyOutcome,
+  type RemoteFailure,
+} from '../../src/shared/wire.js'
 import {
   applyOne,
   buildDeps,
@@ -236,5 +243,16 @@ describe('注入面 · 一个动作只有一条路', () => {
     }
     const outcome = await applyOne(deps, 'restore', 'only-one')
     expect(outcome.id).toBe('only-one')
+  })
+
+  it('applyOne：请求的 id 没回 / 回了幂等空值 ⇒ 都当通道错，不冒充成功', async () => {
+    const empty = { applyOutcomes: async () => [] as ApplyOutcome[] }
+    await expect(applyOne(empty, 'restore', 'a')).rejects.toThrow(/批量通道没回这一条的结果/)
+
+    const gone = {
+      applyOutcomes: async (action: 'restore', ids: readonly string[]) =>
+        ids.map((id) => ({ id, action, ok: true as const, value: null })),
+    }
+    await expect(applyOne(gone, 'restore', 'a')).rejects.toThrow(/单条动作回了幂等空值/)
   })
 })

@@ -2,8 +2,8 @@
 // `batch-selection-store.test.ts`，这里只钉"控件渲染与翻转"这一半）。
 // 两个现场都是模块级（跨用例存活）：每个用例前清一次。
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { BatchPickButton, BatchPickCheckbox } from '../../src/client/batch-select.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { BatchPickButton, BatchPickCheckbox, fetchCounts } from '../../src/client/batch-select.js'
 import { readVisibleSelectableRows, resetHostRows } from '../../src/client/host-rows.js'
 import { enterSelection, getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
 
@@ -71,6 +71,13 @@ describe('多选态行首勾选框', () => {
     expect(box).toBeChecked()
     act(() => { togglePick({ sessionId: 's1', title: 'A' }) })
     expect(box).not.toBeChecked()
+  })
+})
+
+describe('子会话计数', () => {
+  it('fetchCounts：缺一条回执 ⇒ null（不拿假数）', async () => {
+    const deps = { applyOutcomes: vi.fn(async () => []) }
+    await expect(fetchCounts(deps, ['a'])).resolves.toBeNull()
   })
 })
 

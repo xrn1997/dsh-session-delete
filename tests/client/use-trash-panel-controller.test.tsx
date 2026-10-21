@@ -71,7 +71,8 @@ function detailOf(id: string): TrashDetailLike {
 
 /** `/apply` 的逐条结果（形状按 `shared/wire.ts` 的判别联合：动作 + 成败各一支）。 */
 function restoreOk(id: string): ApplyOutcome {
-  return { id, action: 'restore', ok: true, value: null }
+  // 单条恢复的 `applyOne` 把 `value: null` 当通道错（幂等空值只在批量里出现）⇒ 成功支要是真行。
+  return { id, action: 'restore', ok: true, value: { ...A, id, sessionId: `session-${id}`, title: id } }
 }
 
 function restoreFailed(id: string, message: string): ApplyOutcome {
@@ -606,6 +607,17 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
     expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+  })
+
+  it('confirmApply 请求里的 id 没回：那条落 missing 原文，不静默', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a')])
+    const refreshBefore = m.refresh.mock.calls.length
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a', 'b'])
+    })
+    expect(m.result.current.actionFailure).toEqual({ b: '批量通道没回这一条的结果：purge b' })
+    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
   })
 
   it('confirmApply 顶层失败：每个 id 落同一句原文，pending 收起，清单照样重读', async () => {

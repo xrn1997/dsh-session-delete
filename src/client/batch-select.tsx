@@ -17,6 +17,7 @@ import { useEffect, type ReactElement } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
 import { registerHostRowInfo } from './host-rows.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
+import { readReceipt } from './receipt.js'
 import { togglePick, useSelection } from './batch-selection-store.js'
 import { Checkbox } from './ui/Checkbox.js'
 import { IconCheckOutlineRegular } from './ui/icons.js'
@@ -35,12 +36,11 @@ export async function fetchCounts(
   if (ids.length === 0) return new Map()
   const outcome = await callRemote(() => deps.applyOutcomes('count', ids))
   if (!outcome.ok) return null
-  const counts = new Map<string, number>()
-  for (const item of outcome.value) {
-    if (item.action !== 'count' || !item.ok) return null
-    counts.set(item.id, item.value)
-  }
-  return counts.size === ids.length ? counts : null
+  const receipt = readReceipt('count', ids, outcome.value)
+  if (receipt.verdicts.some((verdict) => verdict.kind !== 'ok')) return null
+  // `readReceipt` 已去重且为每个请求 id 填了一条 verdict ⇒ `counts` 的键集就是请求集，不用再比一次。
+  return new Map(receipt.verdicts.map((verdict): [string, number] =>
+    [verdict.id, verdict.kind === 'ok' ? verdict.value : 0]))
 }
 
 export interface BatchPickCheckboxProps {

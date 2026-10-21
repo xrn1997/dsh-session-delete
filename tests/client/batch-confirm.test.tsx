@@ -171,4 +171,22 @@ describe('批量确认框', () => {
     await waitFor(() => expect(applyOutcomes).toHaveBeenLastCalledWith('delete', ['b']))
     expect(applyOutcomes).toHaveBeenCalledTimes(3)
   })
+
+  it('整批失败：失败原文落行，不发撤销横幅', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids),
+    )
+    togglePick({ sessionId: 'a', title: 'A' })
+    requestDeleteBatch()
+    render(
+      <>
+        <BatchConfirmHost deps={{ applyOutcomes } as never} />
+        <UndoToast deps={{ applyOutcomes } as never} />
+      </>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+    expect(await screen.findByText('会话目录不在盘上')).toBeInTheDocument()
+    expect(screen.queryByText(/条会话已移入回收站/)).not.toBeInTheDocument()
+    expect(getPicks()).toHaveLength(1)
+  })
 })

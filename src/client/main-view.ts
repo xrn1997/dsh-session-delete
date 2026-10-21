@@ -8,8 +8,10 @@
  * 清掉——**除非把常驻实例本身丢掉**。宿主自己的归档走的就是这条路：`clearArchivedCurrent()`
  * 发现当前会话进了归档集就 `clearMain()`（`dsh-client-ui-workspace/lib/client.js`）。
  *
- * 所以删除成功后：当前主视图若正是被删的会话，调 `clearMain()` 释放它；撤销恢复成功后，
- * 等客户端清单收到这条摘要再 `openSession()` 重开（新实例的 `removed` 从 false 开始）。
+ * 所以关闭/重开是**一段生命周期**（2026-10-21），不是一个 id：删除成功后 `afterDelete` 关掉当前
+ * 主视图并记下"这一条是我们关掉的"；撤销成功后 `afterRestore` 只重开自己记过的那些。调用方不再
+ * 各自判定该不该关、也不再把会话 id 塞进撤销提示传一圈——判据全在这一处。两次重开排队时只有最新
+ * 那条会打开（token 守卫），`resetMainView()` 清掉这份记忆并让在等的重开作废。
  *
  * **不 import 宿主客户端包**（AGENTS.md 红线）：只通过 `ctx.get('uiWorkspace')` 可选读服务，
  * 形状不符/服务缺席都安静退回，绝不影响插件激活。字段与方法名来自上面两个包的产物原文；
@@ -32,15 +34,22 @@ interface UiWorkspaceLike {
 }
 
 let client: ClientContextLike | undefined
+/** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开。 */
+// 面板恢复不走 `afterRestore` ⇒ 这条记录可能一直留着；重开前的 `canTakeFocus` 挡住抢焦点（`resetMainView` 仍清它）。
+let closedByUs = new Set<string>()
+/** 重开排队的最新序号：后一次删除/恢复（或重开）让前一次的等待作废（只开最新那条）。 */
+let openToken = 0
 
 /** 入口激活时绑一次；之后每次调用再读服务（客户端插件激活顺序早于 `uiWorkspace` 也没关系）。 */
 export function bindMainView(ctx: ClientContextLike): void {
   client = ctx
 }
 
-/** 测试专用：模块级现场归零，用例之间互不串味。 */
+/** 测试专用：模块级现场归零（记忆清空、在等的重开作废），用例之间互不串味。 */
 export function resetMainView(): void {
   client = undefined
+  closedByUs = new Set()
+  openToken += 1
 }
 
 function uiWorkspaceOf(): UiWorkspaceLike | undefined {
@@ -64,33 +73,54 @@ function currentSessionOf(ui: UiWorkspaceLike): string | undefined {
 }
 
 /**
- * 删除成功后调用：当前主视图若在这批里，把它关掉并交回那个会话 id（供撤销重开）。
- * 关不掉/不是当前会话都回 `undefined`——这只是界面收尾，绝不让删除结果变红。
+ * 删除成功后调用：当前主视图若在这批里，把它关掉并记下"这一条是我们关掉的"（供撤销重开）。
+ * 关不掉/不是当前会话都什么都不做——这只是界面收尾，绝不让删除结果变红。
  */
-export function closeMainIfDeleted(ids: readonly string[]): string | undefined {
-  if (ids.length === 0) return undefined
+export function afterDelete(sessionIds: readonly string[]): void {
+  if (sessionIds.length === 0) return
+  // 新的删除也是新动作：旧的撤销重开等待让位，哪怕删的不是当前会话。
+  openToken += 1
   const ui = uiWorkspaceOf()
-  if (ui === undefined) return undefined
+  if (ui === undefined) return
   const current = currentSessionOf(ui)
-  if (current === undefined || !ids.includes(current)) return undefined
+  if (current === undefined || !sessionIds.includes(current)) return
   try {
     ui.clearMain!()
-    return current
+    closedByUs.add(current)
   } catch {
-    return undefined
+    // Main-view cleanup must never turn a delete result red.
   }
 }
 
 /**
- * 撤销恢复成功后调用：把刚被关掉的会话重新打开。
+ * 撤销恢复成功后调用：把**我们自己关掉的**那几个会话重新打开（只认 `afterDelete` 记过的）。
  *
- * `api-session/added` 从宿主发出到客户端摘要表落地有一拍（WS 与 HTTP 响应各走各的），
- * `openSession` 的目标必须先出现在清单里才不会抛「unknown session」——所以先等它出现，
- * 最多 2 秒；期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
+ * 一批里只有最后一条会开（`targets[targets.length - 1]`）：主视图一次只装一个会话，而撤销恢复
+ * 的成功条数可能多于一条；`openWhenListed` 的 token 守卫保证前一条的等待不会后落地抢焦点。
+ * 任何更新的删除/恢复都会先作废旧等待；这里只负责「这一次要开哪一条」。
  */
-export function openMainWhenListed(sessionId: string): void {
+export function afterRestore(sessionIds: readonly string[]): void {
+  if (sessionIds.length === 0) return
+  // 新的恢复也是新动作：先作废旧的等待；命中自己关过的会话时再开一个新的等待。
+  openToken += 1
+  const targets = sessionIds.filter((id) => closedByUs.has(id))
+  if (targets.length === 0) return
+  for (const id of targets) closedByUs.delete(id)
+  openWhenListed(targets[targets.length - 1]!)
+}
+
+/**
+ * 把会话重新打开：`api-session/added` 从宿主发出到客户端摘要表落地有一拍（WS 与 HTTP 响应各走
+ * 各的），`openSession` 的目标必须先出现在清单里才不会抛「unknown session」——所以先等它出现，
+ * 最多 2 秒；期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
+ *
+ * **token 守卫**（`openToken`）：开始等待时取一个序号，立即开与每次 tick 都核对；后一次删除/
+ * 恢复（或 `resetMainView`）推进序号，前一次的等待就不再打开、也不再续时。
+ */
+function openWhenListed(sessionId: string): void {
   const ui = uiWorkspaceOf()
   if (ui === undefined) return
+  const token = ++openToken
   const listReady = (): boolean => {
     try {
       return ui.sessions?.list?.getSnapshot()?.byId?.[sessionId] !== undefined
@@ -103,6 +133,7 @@ export function openMainWhenListed(sessionId: string): void {
     return current === undefined || current === sessionId
   }
   const open = (): void => {
+    if (token !== openToken) return
     if (!canTakeFocus()) return
     try {
       ui.openSession?.(sessionId)
@@ -116,6 +147,7 @@ export function openMainWhenListed(sessionId: string): void {
   }
   let attempts = 0
   const tick = (): void => {
+    if (token !== openToken) return
     attempts += 1
     if (listReady()) {
       open()

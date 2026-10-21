@@ -48,6 +48,7 @@ import {
   type TrashDetailWire,
   type TrashRowWire,
 } from '../shared/wire.js'
+import { missingOutcomeMessage, readReceipt } from './receipt.js'
 
 /**
  * 回收站条目（`/list` 那一行）。**形状的家在 `shared/wire.ts`**（ADR-0003）：这里只是旧名的别名，
@@ -222,6 +223,14 @@ export type { ApplyAction, ApplyOutcome, OrphanReportWire } from '../shared/wire
 export type ApplySuccess<A extends ApplyAction> = Extract<ApplyOutcome, { action: A; ok: true }>
 
 /**
+ * N=1 的成功支：`delete` / `restore` 的幂等 `null` 已被 `applyOne` 判成通道错，
+ * 所以它的 `value` 必然非空；其余动作就是 `ApplySuccess`。
+ */
+export type OneShotSuccess<A extends ApplyAction> = A extends 'delete' | 'restore'
+  ? Omit<ApplySuccess<A>, 'value'> & { readonly value: NonNullable<ApplySuccess<A>['value']> }
+  : ApplySuccess<A>
+
+/**
  * 注入面（`deps`）的 interface：**与六个段名一一对应的五个方法**（`ping` 只给探测用，留在 raw 层）。
  *
  * **不再有 N=1 的便捷方法**：`delete` / `restore` / `countSubagents` 曾是同一段
@@ -250,15 +259,20 @@ export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
  * 三条判据都在这一处：
  * - **按发出去的那个 id** 取结果（取"第一条"会把别条的成败安在这条头上）；
  * - 一条没回是**通道的错**，不是"没做成"（后者住在 outcome 的 `ok:false` 里）；
- * - `null` 是批量里"已被同批前一条带走"的幂等值——单条调用（N=1）永远不会命中它。
+ * - `null` 是批量里"已被同批前一条带走"的幂等值——N=1 永远不会命中它，回 `null` 只能是通道答错了，
+ *   所以同样按通道错抛，不冒充成功。
+ *
+ * 成/败/幂等/缺失的判读只走 {@link readReceipt}（一个家）。
  */
-export async function applyOne<A extends ApplyAction>(deps: OneShotDeps, action: A, id: string): Promise<ApplySuccess<A>> {
+export async function applyOne<A extends ApplyAction>(deps: OneShotDeps, action: A, id: string): Promise<OneShotSuccess<A>> {
   const outcomes = await deps.applyOutcomes(action, [id])
-  const outcome = outcomes.find((candidate) => candidate.id === id)
-  if (outcome === undefined) throw new Error(`批量通道没回这一条的结果：${action} ${id}`)
-  if (!outcome.ok) throwRemoteFailure(outcome.error)
-  // `applyOutcomes` 回来的 `action` 是宽化的联合；这里按调用方传的字面量收窄（同一请求自己发的动作）
-  return outcome as ApplySuccess<A>
+  const verdict = readReceipt(action, [id], outcomes).byId.get(id)
+  // `readReceipt` 保证每个请求 id 都有一条 verdict；这一支只为类型收窄（别删）。
+  if (verdict === undefined) throw new Error(missingOutcomeMessage(action, id))
+  if (verdict.kind === 'failed' || verdict.kind === 'neutral') throwRemoteFailure(verdict.error)
+  if (verdict.kind === 'missing') throw new Error(verdict.message)
+  if (verdict.kind === 'already-gone') throw new Error(`单条动作回了幂等空值：${action} ${id}`)
+  return { id, action, ok: true, value: verdict.value } as OneShotSuccess<A>
 }
 
 /**

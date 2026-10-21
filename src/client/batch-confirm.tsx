@@ -14,14 +14,14 @@ import { fetchCounts } from './batch-select.js'
 import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
+import { failureMessage, readReceipt } from './receipt.js'
 import { getPicks, shrinkPicksToFailures, type PickItem } from './batch-selection-store.js'
-import { closeMainIfDeleted } from './main-view.js'
 import { createStore } from './store.js'
-import { invalidateTrash } from './trash-store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
 import { publishUndoBatchNotice } from './undo-toast.js'
+import { commitExternalDelete } from './write-commit.js'
 
 export interface BatchDeleteRequest {
   /** 每次发布递增：换一批就重挂载，busy / 失败面不带着上一批的记忆。 */
@@ -147,40 +147,37 @@ function BatchConfirmDialog({
       setFailures(new Map(pendingIds.map((id) => [id, outcome.failure.message])))
       return
     }
-    const byId = new Map<string, (typeof outcome.value)[number]>()
-    for (const item of outcome.value) if (!byId.has(item.id)) byId.set(item.id, item)
+    const receipt = readReceipt('delete', pendingIds, outcome.value)
     const moved: string[] = []
     const deletedSessionIds: string[] = []
     const failed = new Map<string, string>()
     let okCount = 0
-    for (const id of pendingIds) {
-      const item = byId.get(id)
-      // 一条没回是**通道的错**，不是"没做成"，更不是"已被带走"（与 `remote.ts` 的 `applyOne` 同判据）
-      if (item === undefined) {
-        failed.set(id, `批量通道没回这一条的结果：delete ${id}`)
-        continue
+    for (const verdict of receipt.verdicts) {
+      switch (verdict.kind) {
+        case 'failed':
+        case 'neutral':
+        case 'missing':
+          failed.set(verdict.id, failureMessage(verdict))
+          break
+        case 'ok':
+          okCount += 1
+          deletedSessionIds.push(verdict.id)
+          // `value === null` 是"已被同批前一条带走"的幂等条：跟着组走，不单列进撤销名单
+          if (verdict.value !== null) moved.push(verdict.value.id)
+          break
+        case 'already-gone':
+          okCount += 1
+          deletedSessionIds.push(verdict.id)
+          break
       }
-      if (!item.ok) {
-        failed.set(id, item.error.message)
-        continue
-      }
-      okCount += 1
-      deletedSessionIds.push(id)
-      // `value === null` 是"已被同批前一条带走"的幂等条：跟着组走，不单列进撤销名单
-      if (item.action === 'delete' && item.value !== null) moved.push(item.value.id)
     }
-    if (okCount > 0) {
-      // 当前主视图若在本批成功的会话里，先关掉（宿主常驻 Session 的 `removed` 是粘的）；
-      // 撤销恢复后由撤销路径重开。
-      const reopenOnUndo = closeMainIfDeleted(deletedSessionIds)
-      publishUndoBatchNotice({
-        entryIds: moved,
-        n: okCount,
-        ...(reopenOnUndo === undefined ? {} : { reopenOnUndo }),
-      })
-    }
-    // 回收站多了几条：让正开着的清单面板重读
-    invalidateTrash()
+    commitExternalDelete({
+      sessionIds: deletedSessionIds,
+      publishUndo: () => {
+        // 一条都没办成时不发布撤销提示：没有落点的横幅是假按钮。清单失效通告照常发。
+        if (okCount > 0) publishUndoBatchNotice({ entryIds: moved, n: okCount })
+      },
+    })
     shrinkPicksToFailures([...failed.keys()])
     if (failed.size === 0) {
       clearDeleteBatchRequest()

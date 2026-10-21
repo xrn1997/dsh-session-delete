@@ -138,6 +138,15 @@ describe('取数编排 · 清理那批无主子会话', () => {
     expect(result.current.orphanFailure).toBeNull()
   })
 
+  it('请求里有 root 没回：落 missing 失败，不冒充已不在了', async () => {
+    const { result } = await withReport({
+      applyOutcomes: vi.fn(async () => [] as ApplyOutcome[]),
+    })
+    await act(async () => { await result.current.cleanOrphans() })
+    expect(result.current.orphanNotice).toBeNull()
+    expect(result.current.orphanFailure).toContain('批量通道没回这一条的结果：orphan-clean session-root')
+  })
+
   it('io ⇒ 失败上屏，并把服务端给的部分计数说出来', async () => {
     const { result } = await withReport({
       applyOutcomes: vi.fn(async (action: string, ids: readonly string[]) =>

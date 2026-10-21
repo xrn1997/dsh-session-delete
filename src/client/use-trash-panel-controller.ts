@@ -38,6 +38,7 @@ import {
   type TrashDetailLike,
   type TrashEntryLike,
 } from './remote.js'
+import { failureMessage, readReceipt } from './receipt.js'
 import type { PendingAction } from './trash-confirm.js'
 import { useTrashRevision } from './trash-store.js'
 import type { TrashDetailState } from './trash-detail.js'
@@ -255,12 +256,25 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     })
   }, [deps, failRow, gate, refresh])
 
-  /** 一段批量 → 组件状态：成功的丢详情缓存，失败的原文落回它自己那一行。整批一次上屏。 */
-  const settleOutcomes = useCallback((outcomes: readonly ApplyOutcome[]): void => {
+  /**
+   * 一段批量 → 组件状态：成功的丢详情缓存，失败的原文落回它自己那一行。整批一次上屏。
+   * **请求了但没回的 id 也是失败**（通道的错），落 missing 原文，不静默当成成功。
+   */
+  const settleOutcomes = useCallback((action: 'purge' | 'restore', ids: readonly string[], outcomes: readonly ApplyOutcome[]): void => {
+    const receipt = readReceipt(action, ids, outcomes)
     const failures: Array<{ id: string; message: string }> = []
-    for (const outcome of outcomes) {
-      if (outcome.ok) detailCache.current.delete(outcome.id)
-      else failures.push({ id: outcome.id, message: outcome.error.message })
+    for (const verdict of receipt.verdicts) {
+      switch (verdict.kind) {
+        case 'ok':
+        case 'already-gone':
+          detailCache.current.delete(verdict.id)
+          break
+        case 'failed':
+        case 'neutral':
+        case 'missing':
+          failures.push({ id: verdict.id, message: failureMessage(verdict) })
+          break
+      }
     }
     if (failures.length === 0) return
     setActionFailure((current) => {
@@ -286,7 +300,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
           return next
         })
       } else {
-        settleOutcomes(outcome.value)
+        settleOutcomes(action, ids, outcome.value)
       }
       await refresh()
     })

@@ -13,12 +13,12 @@
  * 不引 `@deepseek-ai/dsh-client-store`（它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
  */
 import { zhTranslate, type Translate } from './copy.js'
-import { openMainWhenListed } from './main-view.js'
 import { applyOne, callRemote, type OneShotDeps } from './remote.js'
+import { failureMessage, isFailureVerdict, readReceipt } from './receipt.js'
 import { createStore } from './store.js'
-import { invalidateTrash } from './trash-store.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
+import { commitExternalRestore } from './write-commit.js'
 
 export type UndoToastDeps = OneShotDeps
 
@@ -31,8 +31,6 @@ export type UndoNotice = {
   seq: number
   /** 撤销失败时把原因顶上来：这时不再有「撤销」动作，只剩原文。 */
   failure?: string
-  /** 删除时被关掉的当前主视图会话；撤销恢复成功后把它重开（见 main-view.ts）。 */
-  reopenOnUndo?: string
 } & (
   | {
       kind: 'one'
@@ -53,13 +51,12 @@ export type UndoNotice = {
 const noticeStore = createStore<UndoNotice | null>(null)
 
 /** 删除成功后发布一条撤销提示（单条）。 */
-export function publishUndoNotice(input: { entryId: string; title: string; reopenOnUndo?: string }): void {
+export function publishUndoNotice(input: { entryId: string; title: string }): void {
   noticeStore.publish((seq) => ({
     seq,
     kind: 'one',
     entryId: input.entryId,
     title: input.title,
-    ...(input.reopenOnUndo === undefined ? {} : { reopenOnUndo: input.reopenOnUndo }),
   }))
 }
 
@@ -67,14 +64,12 @@ export function publishUndoNotice(input: { entryId: string; title: string; reope
 export function publishUndoBatchNotice(input: {
   entryIds: readonly string[]
   n: number
-  reopenOnUndo?: string
 }): void {
   noticeStore.publish((seq) => ({
     seq,
     kind: 'batch',
     entryIds: input.entryIds,
     n: input.n,
-    ...(input.reopenOnUndo === undefined ? {} : { reopenOnUndo: input.reopenOnUndo }),
   }))
 }
 
@@ -93,30 +88,46 @@ export function resetUndoNotice(): void {
   noticeStore.reset()
 }
 
-/** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/architecture.md` §3.1 只指到这里，不抄这个数。 */
+/** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/ui-spec.md` §2 状态 ③ 只指到这里，不抄这个数。 */
 export const UNDO_HOLD_MS = 6000
+
+/** 撤销失败：把原因换到同一条横幅上（seq 递增 ⇒ Toast 重挂载、重新计停留）。 */
+function failNotice(current: UndoNotice, message: string): void {
+  noticeStore.publish((seq) => ({ ...current, seq, failure: message }))
+}
 
 /** 撤销：单条 `restore(entryId)`、批量**一次** `applyOutcomes('restore', entryIds)`；失败就把原因换到同一条横幅上，不静默。 */
 async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
   if (current.kind === 'one' && current.entryId === '') return
-  const outcome =
-    current.kind === 'one'
-      ? await callRemote(() => applyOne(deps, 'restore', current.entryId))
-      : await callRemote(() => deps.applyOutcomes('restore', current.entryIds))
-  if (outcome.ok) {
-    // 删除时被关掉的主视图：恢复成功后重开它（宿主常驻 Session 的 removed 是粘的，只有丢实例才清）。
-    if (current.reopenOnUndo !== undefined) {
-      const restored = Array.isArray(outcome.value)
-        ? outcome.value.flatMap((item) => (item.ok && item.action === 'restore' && item.value !== null ? [item.value.sessionId] : []))
-        : outcome.value.value === null ? [] : [outcome.value.value.sessionId]
-      if (restored.includes(current.reopenOnUndo)) openMainWhenListed(current.reopenOnUndo)
+  if (current.kind === 'one') {
+    const outcome = await callRemote(() => applyOne(deps, 'restore', current.entryId))
+    if (!outcome.ok) {
+      failNotice(current, outcome.failure.message)
+      return
     }
-    // 回收站少了几条：让正开着的清单面板重读（撤销也是"从别处动回收站"的一种）。
-    invalidateTrash()
-    clearUndoNotice()
-    return
+    // 恢复成功后重开删除时被关掉的会话（只认 main-view 自己记过的），并让清单面板重读。
+    commitExternalRestore([outcome.value.value.sessionId])
+  } else {
+    const outcome = await callRemote(() => deps.applyOutcomes('restore', current.entryIds))
+    if (!outcome.ok) {
+      failNotice(current, outcome.failure.message)
+      return
+    }
+    const receipt = readReceipt('restore', current.entryIds, outcome.value)
+    const restored = receipt.verdicts.flatMap((verdict) =>
+      verdict.kind === 'ok' && verdict.value !== null ? [verdict.value.sessionId] : [])
+    // 信封成功（哪怕逐条有失败）⇒ 成功的那几条已经回盘：照样重开它们、清单照样重读；
+    // 逐条失败提前 return 时这次收尾已经做完（全失败时名单为空，多付一次无害的重读）。
+    commitExternalRestore(restored)
+    const failure = receipt.verdicts.find(isFailureVerdict)
+    if (failure !== undefined) {
+      // 信封成功 ≠ 每一条都撤销成功：逐条全失败时横幅要换成失败原文，不能假装撤销成功。
+      failNotice(current, failureMessage(failure))
+      return
+    }
   }
-  noticeStore.publish((seq) => ({ ...current, seq, failure: outcome.failure.message }))
+  // 走到这里 = 这一次撤销全部成功（失败支都已提前 return 并把原文留在横幅上）。
+  clearUndoNotice()
 }
 
 /**

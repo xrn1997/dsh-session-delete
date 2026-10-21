@@ -13,8 +13,8 @@
  * `around` 传进来（`around` 里跑的就是"这一趟还算忙"）。
  */
 import { useCallback, useRef, useState } from 'react'
-import { SESSION_DELETE_CODES } from '../shared/wire.js'
 import { callRemote, type OrphanReportWire, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
+import { failureMessage, isFailureVerdict, readReceipt } from './receipt.js'
 import type { Translate } from './copy.js'
 import { fileSizeText } from './ui/format.js'
 
@@ -132,16 +132,20 @@ export function useTrashQuery({
         setOrphanFailure(t('trash.orphans.failure', { message: outcome.failure.message }))
         return
       }
-      // 两种"不是整组清完"要分开：`not-found` = 这一组已经不在了（中性提示，不计入未清理）；
-      // 其余是真失败，把服务端在 `details` 里给的部分计数说出来。
-      const failures = outcome.value.filter((item) => !item.ok)
-      const gone = failures.filter((item) => item.error.code === SESSION_DELETE_CODES['not-found'])
-      const failed = failures.filter((item) => item.error.code !== SESSION_DELETE_CODES['not-found'])
-      const partialRemoved = failed.reduce((sum, item) => sum + detailNumber(item.error.details, 'removed'), 0)
-      const partialBytes = failed.reduce((sum, item) => sum + detailNumber(item.error.details, 'freedBytes'), 0)
+      // 回执的判读只走 `readReceipt`：`not-found` = 这一组已经不在了（中性提示，不计入未清理）；
+      // 真失败（含请求了却没回的 id）把服务端在 `details` 里给的部分计数说出来。
+      const receipt = readReceipt('orphan-clean', orphanReport.roots, outcome.value)
+      const failures = receipt.verdicts.filter(isFailureVerdict)
+      const gone = failures.filter((verdict) => verdict.kind === 'neutral')
+      const failed = failures.filter((verdict) => verdict.kind !== 'neutral')
+      const partialRemoved = failed.reduce(
+        (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'removed'), 0)
+      const partialBytes = failed.reduce(
+        (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'freedBytes'), 0)
       if (gone.length > 0) setOrphanNotice(t('trash.orphans.cleanGone', { count: gone.length }))
       if (failed.length > 0) {
-        const base = t('trash.orphans.cleanFailed', { count: failed.length, message: failed[0]!.error.message })
+        const message = failureMessage(failed[0]!)
+        const base = t('trash.orphans.cleanFailed', { count: failed.length, message })
         const partial = partialRemoved > 0 || partialBytes > 0
           ? ` ${t('trash.orphans.cleanPartial', { removed: partialRemoved, size: fileSizeText(partialBytes) })}`
           : ''
