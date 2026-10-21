@@ -64,7 +64,7 @@ describe('删除动词', () => {
   it('删除前已归档的会话：不碰归档集，清单里记下"原本就是归档态"', async () => {
     const { deps: d, calls, host } = deps()
     host.isArchived = vi.fn(async () => true)
-    const entry = await deleteSession(d)('session-abc')
+    const { entry } = await deleteSession(d)('session-abc')
     expect(calls).toEqual(['detach', 'rename', 'evictLive', 'announceRemoved'])
     expect(entry).toMatchObject({ wasArchived: true })
     expect(host.archive).not.toHaveBeenCalled()
@@ -125,7 +125,7 @@ describe('删除动词', () => {
 
   it('成功后清单里有且只有一条，记录了原目录名、工作区与归档态', async () => {
     const { deps: d, manifest } = deps()
-    const entry = await deleteSession(d)('session-abc')
+    const { entry } = await deleteSession(d)('session-abc')
     expect(entry).toMatchObject({
       id: '20260930T130500Z-session-abc', sessionId: 'session-abc',
       projectDir: '--C-develop-GitHub-dsh-ebook--', workspaceId: 'ws-1', wasArchived: false,
@@ -139,7 +139,7 @@ describe('删除动词', () => {
   it('未分组的会话照样能删：不摘账本，清单里工作区记空串', async () => {
     const { deps: d, calls, host } = deps()
     host.workspaceOf = vi.fn(async () => undefined)
-    const entry = await deleteSession(d)('session-abc')
+    const { entry } = await deleteSession(d)('session-abc')
     expect(calls).toEqual(['rename', 'evictLive', 'announceRemoved'])
     expect(entry).toMatchObject({ workspaceId: '', wasArchived: false })
   })
@@ -148,7 +148,7 @@ describe('删除动词', () => {
     const { deps: d, calls, host } = deps()
     host.workspaceOf = vi.fn(async () => undefined)
     host.isArchived = vi.fn(async () => true)
-    const entry = await deleteSession(d)('session-abc')
+    const { entry } = await deleteSession(d)('session-abc')
     expect(calls).toEqual(['rename', 'evictLive', 'announceRemoved'])
     expect(entry).toMatchObject({ workspaceId: '', wasArchived: true })
   })
@@ -179,7 +179,7 @@ describe('删除动词', () => {
   it('摘内存结果未知（unknown）时不发移除通告，删除照样成功', async () => {
     const { deps: d, host, manifest } = deps()
     host.evictLive = vi.fn(async () => 'unknown' as const)
-    const entry = await deleteSession(d)('session-abc')
+    const { entry } = await deleteSession(d)('session-abc')
     expect(entry).toMatchObject({ sessionId: 'session-abc', workspaceId: 'ws-1' })
     expect(await manifest.list()).toHaveLength(1)
     expect(host.evictLive).toHaveBeenCalledWith('session-abc')
@@ -202,7 +202,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
 
   it('父搬进去之后，每个孩子各自成目录、各自一行，清册记 parentEntryId 指向父那一行', async () => {
     const d = deps({ members: { 'session-parent': [kidA, kidB] } })
-    const parent = await deleteSession(d.deps)('session-parent')
+    const { entry: parent } = await deleteSession(d.deps)('session-parent')
     const rows = await d.manifest.list()
     expect(rows.map(r => r.sessionId).sort()).toEqual(['session-kidA', 'session-kidB', 'session-parent'])
     expect(rows.find(r => r.sessionId === 'session-parent')?.id).toBe(parent.id)
@@ -220,11 +220,17 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     ].sort())
   })
 
+  it('交回这次真的搬走的成员（父 + 盘上的孩子）', async () => {
+    const d = deps({ members: { 'session-parent': [kidA, kidB] } })
+    const result = await deleteSession(d.deps)('session-parent')
+    expect(result.movedSessionIds).toEqual(['session-parent', 'session-kidA', 'session-kidB'])
+  })
+
   // 语料看不见不是"盘上没有后代"，但写侧只许降级：父照样删，盘上残留留给 `GET /orphans` 兜底。
   it('语料看不见（available:false）⇒ 只删父，不因此失败', async () => {
     const d = deps({ membersAvailable: false })
-    const parent = await deleteSession(d.deps)('session-parent')
-    expect(parent).toMatchObject({ sessionId: 'session-parent' })
+    const { entry } = await deleteSession(d.deps)('session-parent')
+    expect(entry).toMatchObject({ sessionId: 'session-parent' })
     // 写侧真的读了这一格（不是碰巧走了"没有孩子"的默认值）：缺席也必须点名问过这个父。
     expect(d.host.subagentMembersOf).toHaveBeenCalledWith(['session-parent'])
     const rows = await d.manifest.list()
@@ -235,10 +241,11 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
   it('宿主报了孩子但盘上没有那个目录 ⇒ 跳过它，其余照搬，不让整次删除失败', async () => {
     const d = deps({ members: { 'session-parent': [kidA, kidB] } })
     d.fs.exists = vi.fn(async (p: string) => !p.includes('session-kidB'))
-    const parent = await deleteSession(d.deps)('session-parent')
+    const { entry: parent, movedSessionIds } = await deleteSession(d.deps)('session-parent')
     const rows = await d.manifest.list()
     expect(rows.map(r => r.sessionId).sort()).toEqual(['session-kidA', 'session-parent'])
     expect(rows.find(r => r.sessionId === 'session-kidA')?.parentEntryId).toBe(parent.id)
+    expect(movedSessionIds).toEqual(['session-parent', 'session-kidA'])
   })
 
   it('孩子在跑 ⇒ 整组拒绝，一个字节都不动（不替用户终止正在跑的活）', async () => {

@@ -1,6 +1,6 @@
 import type { TrashEntry } from '../trash/entry.js'
 import { groupOf } from '../trash/groups.js'
-import type { DeleteDeps } from './delete-session.js'
+import type { CoreDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
 
@@ -18,7 +18,7 @@ import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
  * 带部分计数的 `details` 回执只属于 `orphan-clean`，purge 的 `removed` / `freedBytes` 仍只在成功回执里给）。
  * 对应地，`kind:'trash'` 的计划失败时执行器只抛那一步的 `io` 与原文、不带 details。
  */
-export function purgeTrash(deps: DeleteDeps) {
+export function purgeTrash(deps: CoreDeps) {
   return async function purgeTrash(
     entryId?: string,
     /** **只读**清册快照：批量层已经读过一次就递下来（ADR-0002）；收缩归批量层，动词不碰它。 */

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import { applyActions } from '../src/verbs/batch.js'
-import type { DeleteDeps } from '../src/verbs/delete-session.js'
+import type { DeleteDeps } from '../src/deps.js'
 import type { ManifestPort } from '../src/trash/manifest.js'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createFakeDeps } from './support/fake-deps.js'
@@ -117,8 +117,8 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
     expect(outcomes[1]).toMatchObject({ ok: true, value: { removed: 1 } })
   })
 
-  it('delete：同批第二个孩子是幂等 no-op（值 null）——名单由结果推出，不靠动词回调', async () => {
-    const { deps, host } = world([])
+  it('delete：同批第二个孩子是幂等 no-op（值 null）——账本从动词结果长出', async () => {
+    const { deps, host, manifest } = world([])
     host.subagentMembersOf.mockImplementation(async (ids: readonly string[]) => ({
       available: true as const,
       value: Object.fromEntries(ids.map((id) => [id, id === 'session-parent'
@@ -128,6 +128,7 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
     const outcomes = await applyActions(deps, 'delete', ['session-parent', 'session-kid'])
     expect(outcomes.map((item) => item.ok)).toEqual([true, true])
     expect(outcomes[1]).toMatchObject({ ok: true, value: null })
+    expect(manifest.reads()).toBe(0)
   })
 
   it('幽灵 id 不是"被带走"：原始快照里本来就认不出 ⇒ 照样响亮失败', async () => {

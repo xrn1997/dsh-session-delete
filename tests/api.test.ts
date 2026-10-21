@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiHandler } from '../src/api/dispatch.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyOutcome } from '../src/shared/wire.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
-import type { DeleteDeps } from '../src/verbs/delete-session.js'
+import type { DeleteDeps } from '../src/deps.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createFakeDeps } from './support/fake-deps.js'
 

@@ -13,7 +13,7 @@
  * `wire.ts`（两半的共同契约），这张表只回答"怎么处理"。
  */
 import { PARAMS, ROUTES, type ApplyAction } from '../shared/wire.js'
-import type { DeleteDeps } from '../verbs/delete-session.js'
+import type { DeleteDeps } from '../deps.js'
 import { applyActions } from '../verbs/batch.js'
 import { routeError } from '../verbs/errors.js'
 import { reportOrphans, loadOrphanGroups } from '../verbs/orphan-subagents.js'

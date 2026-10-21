@@ -6,7 +6,7 @@
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
 import { bareSessionId, type HostCorpusPort, type SubagentMember } from '../ports/host-port.js'
-import type { DeleteDeps } from './delete-session.js'
+import type { CoreDeps } from '../deps.js'
 import { isVerbCodeError, verbError } from './errors.js'
 import { createMemberPresence } from './member-presence.js'
 
@@ -44,7 +44,7 @@ interface DirProbe {
  *  而清册行照旧摘——盘上留下目录等下一次 `reconcile` 重建成行，自愈、不丢数据）。复核一次
  *  `exists(dir)` 能把两者分开，却会让「宿主正在写、文件刚被挪走」这类正常竞态把 `/list` 整个打红——
  *  这里选自愈不选响亮。 */
-async function probeDir(deps: DeleteDeps, dir: string): Promise<DirProbe> {
+async function probeDir(deps: CoreDeps, dir: string): Promise<DirProbe> {
   if (!(await deps.fs.exists(dir))) return { present: false, bytes: 0 }
   try {
     return { present: true, bytes: await deps.fs.sizeOfDir(dir) }
@@ -57,7 +57,7 @@ async function probeDir(deps: DeleteDeps, dir: string): Promise<DirProbe> {
 /** 成员的盘上目录与字节（扫描、清单装配与 purge 共用这一条路径/存在性/度量口径；
  *  目录缺席回 `undefined`，不拿一份"记录还在、盘上已经没了"的旧读数冒充盘上残留）。 */
 export async function measureMemberDir(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   member: { readonly sessionId: string; readonly projectDir: string },
 ): Promise<MeasuredMemberDir | undefined> {
   const dir = sessionDirOf(member.projectDir, member.sessionId, deps.home)
@@ -69,7 +69,7 @@ export async function measureMemberDir(
  *  `purge` 的盘上后代、`orphan-clean` 的整组与 `/list` 的盘上残留都走这一处，别再各写一遍
  *  measure + workspaceOf。 */
 export async function planMemberRemovals(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   members: readonly { readonly sessionId: string; readonly projectDir: string }[],
 ): Promise<PlannedMemberRemoval[]> {
   const plans: PlannedMemberRemoval[] = []
@@ -95,7 +95,7 @@ export interface PlannedTrashRow {
 }
 
 /** 量一条回收站行；目录不在回 `present: false` / 0 字节（目录不在不等于清册行不用摘）。 */
-async function measureTrashRow(deps: DeleteDeps, entry: TrashEntry): Promise<PlannedTrashRow> {
+async function measureTrashRow(deps: CoreDeps, entry: TrashEntry): Promise<PlannedTrashRow> {
   const dir = trashDirOf(entry.id, deps.home)
   const probe = await probeDir(deps, dir)
   return { entry, dir, present: probe.present, bytes: probe.bytes }
@@ -155,7 +155,7 @@ export interface VisibleTrashGroup extends TrashGroupView {
  * 不进 `members`（与 `planMemberRemovals` 同口径）。
  */
 export async function planVisibleTrash(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   rows: readonly TrashEntry[],
   groups: readonly TrashGroupView[],
 ): Promise<VisibleTrashGroup[]> {
@@ -194,7 +194,7 @@ export interface RemovalPlan {
 
 /** 活体准入：逐个问，任一在跑就抛 `live`。**计划函数就是执行前的闸**——调用方拿到计划才允许写，
  *  所以这里必须发生在任何写之前（`admission:'none'` 的调用方自己承担这个风险，不进来）。 */
-async function assertNoLive(deps: DeleteDeps, sessionIds: readonly string[]): Promise<void> {
+async function assertNoLive(deps: CoreDeps, sessionIds: readonly string[]): Promise<void> {
   for (const sessionId of sessionIds) {
     if (await deps.host.isLive(sessionId)) throw verbError('live', `会话正在运行：${sessionId}`)
   }
@@ -216,7 +216,7 @@ function totalBytes(items: readonly { readonly bytes: number }[]): number {
  * - `sessionQuery` 缺席时端口回 `{ available: false }` ⇒ members 为空、不抛（盘上残留留给 `GET /orphans` 兜底）。
  */
 export async function planTrashRemoval(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   rows: readonly TrashEntry[],
   targets: readonly TrashEntry[],
   options: { readonly admission: 'none' | 'live' },
@@ -249,7 +249,7 @@ export async function planTrashRemoval(
  * - 回执由 `kind:'orphan'` 派生：删目录阶段失败时执行器要交回 `{removed, freedBytes, failedSessionId}`。
  */
 export async function planOrphanRemoval(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   members: readonly { readonly sessionId: string; readonly projectDir: string }[],
 ): Promise<RemovalPlan> {
   await assertNoLive(deps, members.map((member) => member.sessionId))
@@ -278,7 +278,7 @@ export async function planOrphanRemoval(
  * 通告只经 `member-presence`（摘活体三态 + `api-session/removed`），不在这里另写一份。
  */
 export async function executeRemoval(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   plan: RemovalPlan,
 ): Promise<{ removed: number; freedBytes: number }> {
   const presence = createMemberPresence(deps.host)

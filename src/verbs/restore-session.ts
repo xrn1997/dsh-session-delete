@@ -1,7 +1,7 @@
 import { parseEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import { groupOf } from '../trash/groups.js'
 import { isWorkspaceMissingError, type HostIdentityPort } from '../ports/host-port.js'
-import type { DeleteDeps } from './delete-session.js'
+import type { CoreDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { attempt, createJournal, rollbackJournals, type Journal, type JournalStep } from './member-journal.js'
 import { createMemberPresence, type MemberPresence } from './member-presence.js'
@@ -23,7 +23,7 @@ import { createMemberPresence, type MemberPresence } from './member-presence.js'
  * "恢复很慢"就是逐条发）。通告归 `verbs/batch.ts`（ADR-0002），所以这个动词的 interface 只有
  * "一个条目 id 进、回收站那一行出"，没有批量专用的开关。
  */
-export function restoreSession(deps: DeleteDeps) {
+export function restoreSession(deps: CoreDeps) {
   const presence = createMemberPresence(deps.host)
   return async function restoreSession(
     entryId: string,
@@ -66,7 +66,7 @@ export function restoreSession(deps: DeleteDeps) {
 
 /** 放回哪儿：用**删除时记进 entryId 的那段原目录名**，不从 `sessionId` 现推（CONTEXT.md 的「条目」条）——
  *  因此不依赖宿主当时的目录命名约定（v3 无前缀 / v4 带 `session-` 前缀）。 */
-function restoreTargetDir(deps: DeleteDeps, entry: TrashEntry): string {
+function restoreTargetDir(deps: CoreDeps, entry: TrashEntry): string {
   return sessionDirOf(entry.projectDir, parseEntryId(entry.id).sessionDirName, deps.home)
 }
 
@@ -99,7 +99,7 @@ export async function isWorkspaceMissing(host: Pick<HostIdentityPort, 'workspace
  * 撞上）⇒ 按未分组收、不回滚；**别的**失败是真故障，照旧抛（吞掉它就等于把一次存储故障伪装成"未分组"）。
  */
 async function memberRestore(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   presence: MemberPresence,
   entry: TrashEntry,
 ): Promise<{ journal: Journal }> {

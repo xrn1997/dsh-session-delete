@@ -5,7 +5,7 @@
  * 是这一层的事。「折进谁、谁露面」那条判据读 `trash/groups.ts`（ADR-0001）；一组会释放多少、盘上还剩谁
  * 归 `verbs/permanent-removal.ts` 的只读计划 —— 这里只做装配，不再自己枚举盘上后代。
  */
-import type { DeleteDeps } from '../verbs/delete-session.js'
+import type { CoreDeps } from '../deps.js'
 import { isWorkspaceMissing } from '../verbs/restore-session.js'
 import { planVisibleTrash } from '../verbs/permanent-removal.js'
 import type { TrashEntry } from '../trash/entry.js'
@@ -53,7 +53,7 @@ export function toWire(row: TrashEntry, readouts: TrashRowReadouts): TrashRowWir
  * 一组要释放多少、盘上还剩谁**只读计划一处算**（`planVisibleTrash`，与 purge 同一条口径）；
  * 这里不再自己枚举盘上后代，也不碰 `isLive`（活体准入只属于写动词）。
  */
-export async function assembleTrashRows(deps: DeleteDeps, rows: readonly TrashEntry[]): Promise<TrashRowWire[]> {
+export async function assembleTrashRows(deps: CoreDeps, rows: readonly TrashEntry[]): Promise<TrashRowWire[]> {
   // 「折进谁」与「谁露面」由 `trash/groups.ts` 算出（ADR-0001）：**接得住孩子的只有根行**。
   const groups = visibleGroups(rows)
   // 两个取数面各管各的、可以并行：`planVisibleTrash` 量盘（与 purge 同一条口径）；`isWorkspaceMissing`

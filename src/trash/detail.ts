@@ -34,7 +34,11 @@ export type TrashDetailMessage = TrashDetailMessageWire
 
 export type TrashDetail = TrashDetailWire
 
-export type DetailDeps = { fs: FsPort; manifest: ManifestPort; home: string }
+export type DetailDeps = {
+  fs: Pick<FsPort, 'exists' | 'listFiles' | 'readFile'>
+  manifest: ManifestPort
+  home: string
+}
 
 /** 两个载荷闸（可调是为把策略单独验穿；生产走的就是这两个默认值，用例里钉着）。 */
 export interface DetailLimits {

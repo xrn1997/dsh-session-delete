@@ -24,7 +24,7 @@ import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../shared/wi
 import type { TrashEntry } from '../trash/entry.js'
 import { groupOf, takenByEarlierInBatch } from '../trash/groups.js'
 import { reconcileTrash } from '../trash/reconcile.js'
-import type { DeleteDeps } from './delete-session.js'
+import type { CoreDeps, DeleteDeps } from '../deps.js'
 import { deleteSession } from './delete-session.js'
 import { verbError } from './errors.js'
 import { cleanOrphanGroup, loadOrphanGroups } from './orphan-subagents.js'
@@ -83,24 +83,20 @@ function shrink(current: TrashEntry[], rows: readonly TrashEntry[]): void {
 async function applyDelete(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const run = deleteSession(deps)
   // 同批父先被删时，孩子是跟着父一起搬走的；后到的孩子 id 是一次幂等 no-op。
-  // 这份名单**由结果推出**（清册里 `parentEntryId` 指向父那一行），不靠动词回调——动词的 interface 因此
-  // 只剩"一个会话 id 进、回收站那一行出"。这一次清册读发生在**这次删除写完之后**（新行只在那时才有），
-  // 所以它是这条批量动作里唯一不能整批预取的一读；判据读 `trash/groups.ts`，不在这里另写一份。
+  // 这份名单**由动词的结果长出**（`movedSessionIds` = 这次真的搬走的整组），删除写完之后不再读一次清册。
   const carried = new Set<string>()
   return forEachId('delete', ids, async (sessionId) => {
     const root = bareSessionId(sessionId)
     if (carried.has(root)) return null
-    const entry = await run(sessionId)
-    for (const row of groupOf(await deps.manifest.list(), entry.id)) {
-      if (bareSessionId(row.sessionId) !== root) carried.add(bareSessionId(row.sessionId))
-    }
+    const { entry, movedSessionIds } = await run(sessionId)
+    for (const movedId of movedSessionIds) carried.add(bareSessionId(movedId))
     return entry
   })
 }
 
 /** 「这条是不是被同批前一条带走了」：原始快照里认得出、当前快照里已经空了。
  *  **收缩归这一层**（动词只拿只读快照）——`apply` 整批只读一次清册，`takenByEarlierInBatch` 不比它多读。 */
-async function applyRestore(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   // 整批一次清册读（"最初的样子"）+ 一份会收缩的**本层私有**视图；通告攒到批尾，配一次预取的摘要表发。
   const original = await deps.manifest.list()
   const current: TrashEntry[] = [...original]
@@ -123,7 +119,7 @@ async function applyRestore(deps: DeleteDeps, ids: readonly string[]): Promise<A
   return outcomes
 }
 
-async function applyPurge(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyPurge(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const original = await deps.manifest.list()
   const current: TrashEntry[] = [...original]
   const run = purgeTrash(deps)
@@ -140,7 +136,7 @@ async function applyPurge(deps: DeleteDeps, ids: readonly string[]): Promise<App
 /** 删除确认框那句「含 N 个子会话」：一次问完整批（`subagentMembersOf` 本来就是批量口）。
  *  宿主口缺席（`available:false`）时按 0（这里不再有"空表"这一步）；真读失败则整次调用失败，
  *  浏览器半按"读不到"把整句不说。 */
-async function applyCount(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const wanted = unique(ids)
   const read = await deps.host.subagentMembersOf(wanted)
   return wanted.map(id => success(id, 'count', read.available ? (read.value[id]?.length ?? 0) : 0))
@@ -158,7 +154,7 @@ async function applyCount(deps: DeleteDeps, ids: readonly string[]): Promise<App
  * 对账写在动词这一侧而不是只写在路由里，为的是 `apply` 的批量入口只有一个：链上的排队与这份快照
  * 谁也别想只占一半。
  */
-async function applyOrphanClean(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyOrphanClean(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   await reconcileTrash(deps)
   // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。
   const groups = await loadOrphanGroups(deps)

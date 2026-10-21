@@ -34,7 +34,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { routeError } from '../verbs/errors.js'
-import type { DeleteDeps } from '../verbs/delete-session.js'
+import type { DeleteDeps } from '../deps.js'
 import { routeOf, type BodyKind, type Purity } from './route-table.js'
 
 /** 请求体字节上限：这条通道只收几个 id，1MiB 是"够用且不给自己开一条内存放大器"的量级。 */

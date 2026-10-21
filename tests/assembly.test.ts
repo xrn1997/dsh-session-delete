@@ -3,7 +3,7 @@ import { createHostPort } from '../src/ports/host-port.js'
 import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
 import { unescapeProjectKey } from '../src/shared/wire.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
-import type { DeleteDeps } from '../src/verbs/delete-session.js'
+import type { DeleteDeps } from '../src/deps.js'
 import type { TrashEntry } from '../src/trash/entry.js'
 
 /**

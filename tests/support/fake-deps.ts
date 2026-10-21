@@ -23,7 +23,7 @@ import type {
 } from '../../src/ports/host-port.js'
 import type { TrashEntry } from '../../src/trash/entry.js'
 import { createMemoryManifest, type ManifestPort } from '../../src/trash/manifest.js'
-import type { DeleteDeps } from '../../src/verbs/delete-session.js'
+import type { DeleteDeps } from '../../src/deps.js'
 
 /** 把端口上的每个方法换成 `vi.fn`（保参数与返回值类型——强转换不来这一点）。
  *  成员**可写**：用例经常"翻一格"（`host.isLive = vi.fn(...)`）来表达"这一条在跑"，那是这份假件的

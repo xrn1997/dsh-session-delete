@@ -5,7 +5,7 @@ import { createFsPort } from './ports/fs-port.js'
 import { createHostPort } from './ports/host-port.js'
 import { resolveHome } from './ports/home.js'
 import { createHostStorageManifest } from './trash/storage-manifest.js'
-import type { DeleteDeps } from './verbs/delete-session.js'
+import type { DeleteDeps } from './deps.js'
 import { SESSION_DELETE_API_PREFIX } from './shared/wire.js'
 
 export const name = '@xrn1997/dsh-session-delete'

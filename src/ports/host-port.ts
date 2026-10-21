@@ -1,3 +1,5 @@
+import { captureAgentHandles } from './agent-handles.js'
+
 /** 摘内存的三种落地（见 {@link HostPort.evictLive}）：`not-live` / `evicted` 都意味着**宿主列表已经不含它**；
  *  `unknown` 意味着读不到或摘不掉，**不能**据此通告客户端（发了就是假话，重连后那一行会自己长回来）。 */
 export type EvictionOutcome = 'evicted' | 'not-live' | 'unknown'
@@ -44,7 +46,7 @@ export interface HostIdentityPort {
  */
 export interface HostPresencePort {
   /** 尽力把会话从宿主**内存里的 live store** 摘掉；三态见 {@link EvictionOutcome}。
-   *  **这是本仓走宿主内部入口的几处之一**（另见 `captureAgentHandles` 对 `agents.resume/create` 的包装，
+   *  **这是本仓走宿主内部入口的几处之一**（另见 `src/ports/agent-handles.ts` 对 `agents.resume/create` 的包装，
    *  以及 {@link HostPresencePort.announceRemoved} 发的转发事件）：删除的两半里，"磁盘上的持久化"我们搬得走，
    *  "内存里 attach 着的活体"只有这一条路能请掉。 */
   evictLive(sessionId: string): Promise<EvictionOutcome>
@@ -149,91 +151,6 @@ function liveSessionsOf(ctx: HostCtxLike): LiveSessionsLike | undefined {
   return store
 }
 
-/** `ctx.agents`（宿主 Agent 服务）的窄面：`resume` / `create` 返回的 **AgentHandle** 带一具
- *  这个 agent 的 dispose，正是 `agentLoop` 里那个会关写句柄、摘 agent/session 的外层 teardown。
- *  `SessionController` 只取 `.agent`、把 handle 丢掉；本插件在服务实例上包一层，把 handle 按会话 id
- *  记下来，供 `evictLive` 在删除时**真正把 agent 也关掉**。不是公开契约（见 `evictLive` 的注释）。 */
-interface AgentHandleLike {
-  readonly agent?: { readonly id?: unknown }
-  dispose?: () => Promise<void>
-}
-type AgentMethod = (...args: unknown[]) => Promise<unknown>
-const CAPTURED_AGENT_HANDLES = Symbol.for('dsh-session-delete.captured-agent-handles')
-interface AgentServiceLike {
-  resume?: AgentMethod
-  create?: AgentMethod
-  [CAPTURED_AGENT_HANDLES]?: Map<string, () => Promise<void>>
-}
-
-/** 在 `ctx.agents` 上包一层 `resume` / `create`，把返回的 agent handle 的 dispose 按会话 id 记下。
- *  服务缺席时走 `ctx.inject(['agents'])` **等服务挂上再装**——live profile 的插件激活顺序可能早于
- *  `agents` 服务就绪；只在 apply 时 `get` 一次会让捕获静默缺席（真机症状：重启前在回收站的能冷恢复，
- *  刚删除的会话恢复后旧 agent 拦住 prompt）。形状不符 / 属性不可写都只是**不捕获**，不影响插件激活。 */
-function captureAgentHandles(ctx: HostCtxLike): Map<string, () => Promise<void>> {
-  let handles = new Map<string, () => Promise<void>>()
-  let installed = false
-  const install = (candidate: unknown): void => {
-    if (installed) return
-    const service = candidate as AgentServiceLike | undefined
-    if (service === undefined || service === null) return
-    const existing = service[CAPTURED_AGENT_HANDLES]
-    if (existing !== undefined) {
-      // 同一个 agents 服务上第二次 createHostPort：它的 evictLive 必须看第一层 wrapper 写的同一张表。
-      handles = existing
-      installed = true
-      return
-    }
-    let wrappedCount = 0
-    for (const name of ['resume', 'create'] as const) {
-      try {
-        const original = service[name]
-        if (typeof original !== 'function') continue
-        const wrapped: AgentMethod = function (this: unknown, ...args: unknown[]) {
-          const result = Reflect.apply(original, this, args) as Promise<unknown>
-          void result.then((value) => {
-            const handle = value as AgentHandleLike | null | undefined
-            const id = handle?.agent?.id
-            if (typeof id !== 'string' || id.length === 0 || typeof handle?.dispose !== 'function') return
-            handles.set(id, async () => { await handle.dispose!() })
-          }, () => undefined)
-          return result
-        }
-        service[name] = wrapped
-        // **不能拿 `service[name]` 读回比身份**：cordis 的 traceable 服务代理每次读函数都会新包一层
-        // （`get` 里的 `createShadowMethod`），读回永远不等于刚写进去的那个函数。赋值本身落在代理的
-        // 目标对象上（实测：`Object.getOwnPropertyDescriptor(proxy, name).value === wrapped`），
-        // 调用也真的走 wrapper。2026-10-21 真机事故就是这条假警报：resume 已包上却在这里抛，
-        // 循环随后没走到 create ⇒ 新建会话的 handle 一个都没捕获。
-        if (Object.getOwnPropertyDescriptor(service, name)?.value !== wrapped) {
-          throw new Error(`agents.${name} is not writable`)
-        }
-        wrappedCount += 1
-      } catch {
-        // 一个方法装不上不该拖死另一个；两个都没装上才是"不捕获"。
-      }
-    }
-    if (wrappedCount === 0) return
-    try {
-      // 只改类型；运行时仍是同一颗服务对象。标记写在 symbol 上，代理的 symbol 分支直通目标，
-      // 第二次安装（get 与 inject 各一次）会看见它，不会把 resume/create 套第二层。
-      ;(service as AgentServiceLike)[CAPTURED_AGENT_HANDLES] = handles
-    } catch {
-      // 标记只是防重复安装；写不上不改变 wrapper 已经装上这一事实。
-    }
-    installed = true
-  }
-  const service = ctx.get('agents')
-  if (service !== undefined && service !== null) install(service)
-  if (!installed && typeof ctx.inject === 'function') {
-    try {
-      ctx.inject(['agents'], (child) => { install(child.get('agents')) })
-    } catch {
-      // 没有 inject 的旧 ctx：不捕获。
-    }
-  }
-  return handles
-}
-
 /** 会话标题的官方读面：`ctx.sessionProjectionCache`（投影缓存服务，服务键 `sessionProjectionCache`）。
  *  官方消费方（`dsh-api-session-controller/lib/index.js` 的 `projectionsFor`）原文：
  *  `const cache = this.ctx.get('sessionProjectionCache'); return cache?.cachedSnapshot(header) ?? cache?.cachedPredecessorTitle(header);`
@@ -253,9 +170,6 @@ interface HostCtxLike {
   ): Promise<readonly unknown[]>
   /** cordis 的可选服务读法（`ctx.get(name)`），官方用它读可选服务。 */
   get(name: string): unknown
-  /** cordis 的按依赖注入子上下文（`ctx.inject([...], child => ...)`）；`agents` 服务晚于本插件
-   *  激活时用它等就绪。旧 ctx / 假件可以没有。 */
-  inject?(names: readonly string[], callback: (ctx: HostCtxLike) => void): unknown
   /** cordis 的普通事件发送。**不带 carrier**（首参不是对象/函数）时 event 派发不过滤监听者
    *  ——asar `@deepseek-ai/cordis/lib/index.js` 的 `dispatch`：`const filter = thisArg?.[Context.filter]`，
    *  而 `thisArg` 只在首参是对象/函数时才取走 ⇒ 全量派发到转发器（见 {@link HostPort.announceRemoved}）。 */
@@ -600,8 +514,9 @@ export function createHostPort(ctx: unknown): HostPort {
      *
      * **agent 也必须关**：`ctx.agents` 没有 per-agent dispose；宿主 `AgentService.resume` / `create` 返回的
      * `AgentHandle` 带宿主自己的外层 teardown（关写句柄、摘 agent/session），但 `SessionController` 只取
-     * `.agent`、把 handle 丢掉。`captureAgentHandles` 在 `ctx.agents` 上包一层，按会话 id 留住 handle；
-     * 这里先 `entry.detach()`（摘 session、发 `session/disposed`），再 `await handle.dispose()`。
+     * `.agent`、把 handle 丢掉。agent handle 捕获（`src/ports/agent-handles.ts`）在 `ctx.agents` 上包一层，
+     * 按会话 id 留住 handle；这里先 `entry.detach()`（摘 session、发 `session/disposed`），再
+     * `await agentHandles.dispose(sessionId)`。
      * **只摘 session 的后果**：恢复后 `SessionController.resolve` 会先命中那具旧 agent，prompt 被收下、
      * 日志不再增长，直到宿主重启（2026-10-21 真机复现）。
      *
@@ -613,28 +528,19 @@ export function createHostPort(ctx: unknown): HostPort {
      * 任何一步都不抛：删除的持久化部分已经完成，这里不该把它翻成失败。
      */
     async evictLive(sessionId) {
-      const disposeCaptured = async (): Promise<void> => {
-        const dispose = agentHandles.get(sessionId)
-        if (dispose === undefined) return
-        try {
-          await dispose()
-        } finally {
-          agentHandles.delete(sessionId)
-        }
-      }
       try {
         const store = liveSessionsOf(host)
         const session = store?.get(sessionId)
         if (store === undefined) return 'unknown'
         if (session === undefined || session === null) {
           // session 已不在 store，但捕获到 handle（前一次半摘/宿主自己摘过）⇒ 仍把 agent 关掉。
-          await disposeCaptured()
+          await agentHandles.dispose(sessionId)
           return 'not-live'
         }
         const entry = store.liveEntryFor(session)
         if (entry === undefined || entry === null || typeof entry.detach !== 'function') return 'unknown'
         entry.detach()
-        await disposeCaptured()
+        await agentHandles.dispose(sessionId)
         return 'evicted'
       } catch {
         return 'unknown'

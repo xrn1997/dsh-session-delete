@@ -1,18 +1,14 @@
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
-import type { FsPort } from '../ports/fs-port.js'
-import type { HostPort } from '../ports/host-port.js'
-import type { ManifestPort } from '../trash/manifest.js'
+import type { CoreDeps, DeleteDeps } from '../deps.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { verbError } from './errors.js'
 import { attempt, createJournal, rollbackJournals, type Journal, type JournalStep } from './member-journal.js'
 import { createMemberPresence, type MemberPresence } from './member-presence.js'
 
-export interface DeleteDeps {
-  fs: FsPort
-  host: HostPort
-  manifest: ManifestPort
-  home: string
-  now(): number
+export interface DeleteResult {
+  readonly entry: TrashEntry
+  /** 这一次真的搬进回收站的成员（父 + 盘上存在的孩子）；批量层用它建幂等账本。 */
+  readonly movedSessionIds: readonly string[]
 }
 
 /** 组里的一个成员（父自己也是一个成员）。 */
@@ -36,10 +32,11 @@ interface Member {
  *    账本跟着挂），失败照抛——不留"半组在回收站、半组在原地"的世界。
  *
  * interface 只有**一个 id**：批量的性质不在这里（同批"已被前一条带走"的判据归 `verbs/batch.ts`）。
+ * 结果带回这次真的搬走的整组（`movedSessionIds`）——它是动词交回的内部数据，不再靠回调借用动词的手。
  */
 export function deleteSession(deps: DeleteDeps) {
   const presence = createMemberPresence(deps.host)
-  return async function deleteSession(sessionId: string): Promise<TrashEntry> {
+  return async function deleteSession(sessionId: string): Promise<DeleteResult> {
     // 语料看不见（`available: false`）⇒ 只删父：写侧只许降级，盘上残留留给 `GET /orphans` 兜底。
     const read = await deps.host.subagentMembersOf([sessionId])
     const kids = read.available ? (read.value[sessionId] ?? []) : []
@@ -85,7 +82,7 @@ export function deleteSession(deps: DeleteDeps) {
       // 客户端只看 code 会以为已经回到删除前，实际半组还挂在回收站里。
       await rollbackJournals(done, error)
     }
-    return parentEntry!
+    return { entry: parentEntry!, movedSessionIds: members.map((member) => member.sessionId) }
   }
 }
 
@@ -103,7 +100,7 @@ export function deleteSession(deps: DeleteDeps) {
  * （与旧实现"目录退不回就不摘行"同一条判据）。
  */
 async function memberMove(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   presence: MemberPresence,
   member: Member,
   deletedAt: number,

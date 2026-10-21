@@ -1,6 +1,6 @@
 import { bareSessionId, type SessionIdentity } from '../ports/host-port.js'
 import type { OrphanCleanStatsWire, OrphanReportWire } from '../shared/wire.js'
-import type { DeleteDeps } from './delete-session.js'
+import type { CoreDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { executeRemoval, measureMemberDir, planOrphanRemoval } from './permanent-removal.js'
 
@@ -82,7 +82,7 @@ export function orphanGroupsOf(
  *  `listSessions()` 回 `{ available: false }` 时**必须抛**：那是宿主的会话语料服务没挂，不是"这个家没有孤儿"。
  *  拿缺席当空语料 ⇒ 报告说"零条孤儿"、界面上一句"没有要清理的"，而盘上真有几百 MB——那是假话，
  *  所以这里按 `io` 响亮失败（AGENTS.md：`available: false` 意味着服务缺席，扫描方不许冒充读数）。 */
-export async function loadOrphanGroups(deps: DeleteDeps): Promise<readonly OrphanGroup[]> {
+export async function loadOrphanGroups(deps: CoreDeps): Promise<readonly OrphanGroup[]> {
   const read = await deps.host.listSessions()
   if (!read.available) {
     throw verbError('io', '无主子会话扫描需要宿主的 sessionQuery.listSessions')
@@ -147,7 +147,7 @@ export function reportOrphans(groups: readonly OrphanGroup[]): OrphanReportWire 
  * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 本来就是「未分组」，不是故障）。
  */
 export async function cleanOrphanGroup(
-  deps: DeleteDeps,
+  deps: CoreDeps,
   group: OrphanGroup,
 ): Promise<OrphanCleanStatsWire> {
   return await executeRemoval(deps, await planOrphanRemoval(deps, group.members))

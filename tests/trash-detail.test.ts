@@ -3,7 +3,7 @@ import zlib from 'node:zlib'
 import { expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
-import { PER_MESSAGE_CHAR_CAP, TOTAL_CHAR_CAP, readTrashDetail } from '../src/trash/detail.js'
+import { PER_MESSAGE_CHAR_CAP, TOTAL_CHAR_CAP, readTrashDetail, type DetailDeps } from '../src/trash/detail.js'
 
 const DELETED_AT = Date.UTC(2026, 9, 14, 6, 56, 58)
 const id = makeEntryId(DELETED_AT, 'session-x')
@@ -23,7 +23,8 @@ function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null
     listFiles: vi.fn(async () => over.files ?? ['session.v4.jsonl.zstd']),
     readFile: vi.fn(async () => log),
   }
-  return { deps: { fs, manifest: createMemoryManifest([entry()]), home: '/h' } as never, fs }
+  const deps: DetailDeps = { fs, manifest: createMemoryManifest([entry()]), home: '/h' }
+  return { deps, fs }
 }
 
 /** 带 header 的日志（其余记录追加在后面） */
@@ -119,7 +120,7 @@ it('读盘抛 ⇒ sessiondelete/io，原文留在 message 里', async () => {
     listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
     readFile: vi.fn(async () => { throw new Error('EACCES: permission denied') }),
   }
-  const deps = { fs, manifest: createMemoryManifest([entry()]), home: '/h' } as never
+  const deps: DetailDeps = { fs, manifest: createMemoryManifest([entry()]), home: '/h' }
   await expect(readTrashDetail(deps)(id)).rejects.toMatchObject({ code: 'sessiondelete/io', message: /EACCES/ })
 })
 
@@ -154,7 +155,7 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
     asstLine(16, [{ type: 'text', text: '第二轮' }]),
   )
   const readFile = vi.fn(async (path: string) => (path.endsWith('session.v3.jsonl.zstd') ? v3 : v4))
-  const deps = {
+  const deps: DetailDeps = {
     fs: {
       exists: vi.fn(async () => true),
       listFiles: vi.fn(async () => ['session.v3.jsonl.zstd', 'session.v4.jsonl.zstd']),
@@ -162,7 +163,7 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
     },
     manifest: createMemoryManifest([entry()]),
     home: '/h',
-  } as never
+  }
 
   const detail = await readTrashDetail(deps)(id)
 
