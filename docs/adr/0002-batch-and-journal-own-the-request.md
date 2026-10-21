@@ -36,6 +36,10 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 `onMembers` / `suppressAnnounce` 从它们的 interface 上消失，就地收缩快照的契约也一并消失。
 （`verbs/apply.ts` 改名 `verbs/batch.ts`：名字说的就是这个 module 拥有什么。）
 
+删除动词的结果是 `{ entry, movedSessionIds }`：`movedSessionIds` 是这次实际搬进回收站的父与孩子；
+批量层从结果建「已被同批前一条带走」的账本，不再在每条删除后重读清册。它不是回调——
+「一个 id 进、一条结果出」不变。
+
 ### 一点五、一个**保留**的参数，以及它为什么不算残留
 
 `restoreSession` / `purgeTrash` 仍收一个**只读**的 `snapshot?: readonly TrashEntry[]`。
@@ -64,7 +68,7 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 
 ## 后果
 
-- 三个动词的 interface 缩到「一个 id」；批量语义只有一个拥有者。
+- 三个动词的 interface 缩到「一个 id」；删除的结果是 `{ entry, movedSessionIds }`，批量语义只有一个拥有者。
 - 22 处 `rollbackReason(` 变成步骤标签（数据），8 处 `withRollbackFailures(` 收进 `member-journal.ts`
   （`journalFailure` 与组级 `rollbackJournals` 各一处）。
 - 测试落点前移：**步骤顺序**与**回滚顺序**可以拿一个假 journal 直接断言（现有测试已经在用

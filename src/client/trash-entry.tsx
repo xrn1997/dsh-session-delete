@@ -1,5 +1,5 @@
 /**
- * 侧栏面板列表里的「回收站」行图标（`sidebar.panellist` 的占用者；docs/architecture.md §3.1 状态 ④ 的入口那一行）。
+ * 侧栏面板列表里的「回收站」行图标（`sidebar.panellist` 的占用者；docs/ui-spec.md 状态 ④ 的入口那一行）。
  *
  * **只出 glyph**——行本体由宿主 `PanelRow` 画：`<button class=panelRow aria-current
  * onClick=selectPanel(id)>` 里一个 `.panelGlyph`（`renderSlot("sidebar.panellist", { size: wide ? 16 : 18,

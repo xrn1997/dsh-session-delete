@@ -1,7 +1,7 @@
 # ADR-0008 — 回收站与归档解耦：删除完整摘除活体，恢复走冷 resume
 
 - **状态**：已接受（2026-10-21）
-- **相关**：ADR-0005（成员在场通告）；ADR-0007（宿主端口角色）；`src/ports/host-port.ts` 的 `evictLive` / `captureAgentHandles`；`src/verbs/delete-session.ts`；`src/verbs/restore-session.ts`
+- **相关**：ADR-0005（成员在场通告）；ADR-0007（宿主端口角色）；`src/ports/host-port.ts` 的 `evictLive` / `src/ports/agent-handles.ts` 的 `captureAgentHandles`；`src/verbs/delete-session.ts`；`src/verbs/restore-session.ts`
 
 ## 背景
 

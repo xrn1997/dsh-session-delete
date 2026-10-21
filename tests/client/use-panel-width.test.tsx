@@ -1,4 +1,4 @@
-// 面板宽度观测（回收站两栏/下钻那条断点的数据来源，docs/architecture.md §3.1）
+// 面板宽度观测（回收站两栏/下钻那条断点的数据来源，docs/ui-spec.md）
 import { act, render, screen } from '@testing-library/react'
 import { useRef } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'

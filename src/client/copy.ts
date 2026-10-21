@@ -116,7 +116,7 @@ const ZH = {
   'trash.orphans.cleanPartial': '已先删掉 {removed} 个会话目录（{size}）',
   'trash.orphans.cleanGone': '有 {count} 组已不在了（可能已被别处清理，或父会话已恢复）',
 
-  // 详情那一层（docs/architecture.md §3.1）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
+  // 详情那一层（docs/ui-spec.md）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
   'detail.notSelected': '选中一条会话，看它讲了什么',
   'detail.loading': '正在读这条会话…',
   'detail.readFailed': '这条会话的正文读不出来',

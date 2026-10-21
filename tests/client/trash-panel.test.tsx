@@ -109,7 +109,7 @@ describe('回收站面板', () => {
     expect(listBox.style.flex).toBe('1 1 auto')
   })
 
-  // 动作住在行右侧（2026-10-15 真机反馈后回到 2026-10-01 的形状，docs/architecture.md §3.1），所以这条直接点行内那颗。
+  // 动作住在行右侧（2026-10-15 真机反馈后回到 2026-10-01 的形状，docs/ui-spec.md），所以这条直接点行内那颗。
   it('行右侧的「恢复」调 restore 并带上条目 id（动作住在行内，2026-10-15 真机反馈后回归原形）', async () => {
     const deps = makeDeps()
     renderWide(deps)
@@ -1038,7 +1038,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeNull()
   })
 
-  // docs/architecture.md §3.1：清单为空或读数失败时右栏不出现——那一栏没有可选项也没有动作。
+  // docs/ui-spec.md：清单为空或读数失败时右栏不出现——那一栏没有可选项也没有动作。
   it('空回收站即便盒子够宽也不出右栏（也没把手可拖）', async () => {
     const { container } = renderAt(1100, makeDeps({ list: vi.fn(async () => []) }))
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()

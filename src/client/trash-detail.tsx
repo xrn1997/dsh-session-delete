@@ -1,5 +1,5 @@
 /**
- * 回收站的**详情块**（docs/architecture.md §3.1 的四态）。
+ * 回收站的**详情块**（docs/ui-spec.md 的四态）。
  *
  * 它**不自己取数**：选中、缓存、失败与重读全在面板控制器（`use-trash-panel-controller.ts`）手里，
  * 这里只把一个状态画出来——
@@ -264,7 +264,7 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
         <Meta label={t('detail.field.created')}>{timeText(detail.createdAt)}</Meta>
         <Meta label={t('detail.field.lastActivity')}>{timeText(detail.lastActivity)}</Meta>
         <Meta label={t('detail.field.span')}>{spanText(detail.createdAt, detail.lastActivity, t) ?? '—'}</Meta>
-        {/* 「删除于」两样都要（docs/architecture.md §3.1 状态⑥）：相对那句好读，绝对那句好核对。 */}
+        {/* 「删除于」两样都要（docs/ui-spec.md 状态⑥）：相对那句好读，绝对那句好核对。 */}
         <Meta label={t('detail.field.deletedAt')}>
           {`${agoText(entry.deletedAt, Date.now(), t)}（${absoluteText(entry.deletedAt)}）`}
         </Meta>

@@ -91,7 +91,7 @@ export function DeleteConfirmHost({ deps, t = zhTranslate }: { deps: DeleteConfi
 }
 
 /**
- * 确认框本体。视图与文案与 docs/architecture.md §3.1 一致（`Modal` + `variant="primary"` 主按钮「移入回收站」；
+ * 确认框本体。视图与文案与 docs/ui-spec.md 一致（`Modal` + `variant="primary"` 主按钮「移入回收站」；
  * 那个 primary 在宿主浅色下是近黑、深色下近白，**从来不是蓝**）。
  * 失败面**不吞**：原文以 `Tag tone="danger"` 摆进对话框，且**确认失败后不关框**，
  * 用户可以再点一次（不是一次失败就永久锁死）。

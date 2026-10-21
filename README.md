@@ -118,29 +118,11 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 ## 开发
 
-```bash
-pnpm install
-pnpm build        # tsdown：Node 半 + 浏览器半（含浏览器半的纯度门）
-pnpm test         # vitest run
-pnpm typecheck    # tsc --noEmit
-```
-
-### 本地源码调试
-
-**`lib/` 是构建产物且不入库，从源码目录链进 profile 的安装方式不会替你构建它。**
-
-```bash
-pnpm build        # 必须在源码目录手动跑一次
-dsh plugin --profile <profile> add "link:<本仓绝对路径>"
-```
-
-改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
-
-架构地图与**现行界面规格**见 [`docs/architecture.md`](docs/architecture.md)（唯一主人清单、双半形态、界面规格 §3.1、数据与生命周期），裁决见 [`docs/adr/`](docs/adr/README.md)；构建、门控与发版流程见 [`docs/developing.md`](docs/developing.md)。历史取舍在 git 历史里。README 不复述。
+构建、本地调试、门控、真机验证与发版见 [`docs/developing.md`](docs/developing.md)；架构地图与主人清单见 [`docs/architecture.md`](docs/architecture.md)；界面规格见 [`docs/ui-spec.md`](docs/ui-spec.md)；裁决见 [`docs/adr/`](docs/adr/README.md)。历史取舍在 git 历史里，README 不复述。
 
 ## 贡献
 
-欢迎 Issue 与 PR。提交改动前请确保 `pnpm test` 与 `pnpm typecheck` 都通过，且**两条命令的退出码都亲眼看过**——跑门要把输出先灌进文件、再单独打印退出码，管道会把红吃掉。提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
+欢迎 Issue 与 PR。提交前按 [`docs/developing.md`](docs/developing.md) 的「复核门」跑 `pnpm test` 与 `pnpm typecheck`，并确认退出码；提交即表示你同意以 [Apache-2.0](LICENSE) 协议授权你的贡献。
 
 ## 许可
 

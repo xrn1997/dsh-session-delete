@@ -1,8 +1,8 @@
 /**
- * 会话条目「…」菜单里的「删除」行（docs/architecture.md §3.1 状态 ①）。
+ * 会话条目「…」菜单里的「删除」行（docs/ui-spec.md 状态 ①）。
  *
  * 这一行**只做两件事**：把「要删这个会话」写进 `delete-confirm.tsx` 的模块级现场，然后让菜单
- * owner 把菜单收起来（确认框不许叠在收起的菜单上——docs/architecture.md §3.1 状态 ② 说的就是菜单已经收起之后
+ * owner 把菜单收起来（确认框不许叠在收起的菜单上——docs/ui-spec.md 状态 ② 说的就是菜单已经收起之后
  * 的画面）。**确认框不在这棵子树里**——
  * 原因见 `delete-confirm.tsx` 的头注：宿主的菜单行随菜单一起卸载（真产物 `Menu` 是
  * `open && jsxs(MenuSurface, { … children: [items.map(renderEntry), children] })`，`open === false`
@@ -18,7 +18,7 @@
  *    菜单的**开合归 owner**：槽位把 `useMenuOpenState` 交给这一行（`index.tsx` 的 `DeleteRow` 接住后
  *    当 `dismissMenu` 传下来），按下时先发请求、再收菜单——与官方 README 的示例同序
  *    （`onSelect={() => { setMenuOpen(false); … }}`）。
- * 2. **运行中置灰**（docs/architecture.md §3.1「运行中」）。置灰用**原生 `disabled`**：本平台的菜单行组件
+ * 2. **运行中置灰**（docs/ui-spec.md「运行中」）。置灰用**原生 `disabled`**：本平台的菜单行组件
  *    `MenuItemButton` 只把 `disabled` 落在原生按钮属性上（真产物原文 `<button type="button"
  *    role="menuitem" … disabled={disabled}>`），jest-dom 的 `toBeDisabled()` 也只认这个属性；
  *    `aria-disabled` 在这条链上既渲染不出来也不算数。原因文案用 `ui/Tooltip.tsx`（照官方 Tooltip 抄的，

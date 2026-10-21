@@ -150,7 +150,7 @@ function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState, t }
   const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
   const live = select((state) => state?.byId?.[sessionId]?.running === true)
   // 菜单收不收是 owner（本槽位的宿主菜单）的决定，我们只消费它给的这对状态：按下这一行时先发请求、
-  // 再让 owner 收菜单——确认框不叠在菜单上（docs/architecture.md §3.1 状态 ②；官方 README 的示例同序）。
+  // 再让 owner 收菜单——确认框不叠在菜单上（docs/ui-spec.md 状态 ②；官方 README 的示例同序）。
   const useMenuState = typeof useMenuOpenState === 'function' ? useMenuOpenState : NEVER_MENU_OPEN_STATE
   const [, setMenuOpen] = useMenuState()
   return (
@@ -319,7 +319,7 @@ async function activate(client: ClientContextLike): Promise<void> {
   // order 落在官方两个面板行（plugins 0 / schedules）与第三方「小说」（20）之后。
   // **名字走 thunk**：宿主 `resolveSlotLabel` 在每次重读时才求值，并在语言变化时重读
   // （`ctx.locale.subscribe(syncPanels)`）⇒ 切换语言这一行跟着走。**别改成活计数**：它只在
-  // 条目变化或语言变化时重读，拿它当计数必然 stale（docs/architecture.md §3.1）。
+  // 条目变化或语言变化时重读，拿它当计数必然 stale（docs/ui-spec.md）。
   client.slots.inject(PANEL_SLOT, () =>
     client.slots.register(
       { name: PANEL_SLOT, id: PANEL_ID, order: 900, label: () => t('trash.title') },

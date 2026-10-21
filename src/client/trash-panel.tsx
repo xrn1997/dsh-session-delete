@@ -1,5 +1,5 @@
 /**
- * 回收站清单面板（界面规格 §3.1 的状态 ④⑤ + 两栏形态）——**中央面板的本体**（`main` 槽的占用者）。
+ * 回收站清单面板（`docs/ui-spec.md` 的状态 ④⑤ + 两栏形态）——**中央面板的本体**（`main` 槽的占用者）。
  *
  * 面板自带页面骨架（标题 / 条数与合计 / 工具排 / 内容区 / 页脚），因为宿主给中央列的那个盒子
  * （`AppFrame` 的 `.centerCol`）只有背景与圆角，**没有 padding、也不是滚动容器**——asar 里那条
@@ -7,7 +7,7 @@
  * 如此。回收站可以很长（本机 125 个会话合计 85M），不自己收滚动就会把整列顶长。
  *
  * **2026-10-15 形态改版：居中一列 → 清单在左、单条详情在右。**三条决定摆在这里（现行界面规格住
- * `docs/architecture.md` §3.1，本文件只记这三条与实现约束）：
+ * `docs/ui-spec.md`，本文件只记这三条与实现约束）：
  * ① 动机：一条只有一个标题，判断不了该恢复还是该彻底删除 ⇒ 详情要摆出这条会话自己日志里的元信息
  *   与正文，而详情只能我们自己画（宿主读不到回收站目录里的文件）；
  * ② 断点 900px（盒子宽，不是窗口宽）：中央列宽由 `usePanelWidth`（ResizeObserver）观测，**只听
@@ -45,7 +45,7 @@
  *   + 就地覆盖 `--dsw-alias-button-primary-fill` / `-hover`）照抄宿主插件管理页 @21658274。
  *
  * 布局只用**结构**内联样式，**配色与圆角一律走 token**，**字号是字面量 px**（宿主同类面也这么写）。
- * 结构与层级归 docs/architecture.md §3.1，皮肤只由 token 决定。控件样式住在 `src/client/ui/ui.css`，
+ * 结构与层级归 docs/ui-spec.md，皮肤只由 token 决定。控件样式住在 `src/client/ui/ui.css`，
  * 由 `ui/styles.ts` 在浏览器半模块物化时挂成一个 `<style>`——这是宿主给客户端插件的一等公民通道。
  *
  * **浅色主题已在真机看过（2026-10-01）**：浅色下 `bg-base` 与 `bg-layer-2` 同值（都是 `bluish-00`）
@@ -103,7 +103,7 @@ export interface TrashPanelProps {
 const TRASH_DIR = TRASH_DIR_LABEL
 
 /**
- * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（docs/architecture.md §3.1，2026-10-15 真机后定值）。
+ * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（docs/ui-spec.md，2026-10-15 真机后定值）。
  *
  * 为什么是 900 而不是当初那个 760：760 是从"正文列限宽"那条关心得搬来的，**不是两栏所需宽度**。
  * 两栏要成立，详情那一栏得真的读得下去：那一格固定要吃掉 90（两道 gap 32 + 把手 10 + 页内边距 48），
@@ -250,7 +250,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const wide = width >= SPLIT_MIN_WIDTH
   /**
    * 真走两栏的条件：盒子够宽 **且清单里有东西可看**。空态与读数失败时右栏不出现——那一栏既没有
-   * 可选项也没有动作，白占一半宽度（docs/architecture.md §3.1）。失败那块自己的「重试」
+   * 可选项也没有动作，白占一半宽度（docs/ui-spec.md）。失败那块自己的「重试」
    * 负责把清单读回来，读回来之后右栏跟着回来。
    */
   const split = wide && entries !== null && entries.length > 0
@@ -507,7 +507,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   style={isSelected ? CARD_SELECTED : CARD}
                   onClick={() => {
                     // 多选态下点行说的是"勾上/取消这一条"，不再切换详情：两套语义同时活在一次点击里
-                    // 一定有一套是错的（docs/architecture.md §3.1 状态④）。
+                    // 一定有一套是错的（docs/ui-spec.md 状态④）。
                     if (selectMode) {
                       toggleCheck(entry.id)
                       return
@@ -552,7 +552,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       </div>
                     ) : null}
                     {/* 恢复/彻底删除 的失败原文留在这条记录上（2026-10-15 真机反馈：动作回到行内，
-                        失败也就跟着回行内——"动作与它的原因在同一行"这条住 docs/architecture.md §3.1「失败落点」，没换地方）。 */}
+                        失败也就跟着回行内——"动作与它的原因在同一行"这条住 docs/ui-spec.md「失败落点」，没换地方）。 */}
                     {controller.actionFailure[entry.id] === undefined ? null : (
                       <div
                         role="status"
@@ -788,7 +788,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           <span style={{ marginLeft: 'auto', flex: 'none', display: 'flex', alignItems: 'center', gap: 8 }}>
             {/* 多选态下这里住两颗：**恢复 N 条**（描边款，无确认框的单行「恢复」的批量版——它带确认框，
                 因为一批条目多、去向是各自的旧项目目录）与**彻底删除 N 条**（实心红）。危险那颗位置不换：
-                docs/architecture.md §3.1「危险层级」那句"整页唯一一块实心红"靠"它永远是这一排的最后一个"来守。
+                docs/ui-spec.md「危险层级」那句"整页唯一一块实心红"靠"它永远是这一排的最后一个"来守。
                 一条没勾时两颗都置灰，原因走 Tooltip——置灰的按钮自己不吃 hover，anchor 用一层 span，
                 与 `delete-menu-item` 那处运行中置灰是同一个路子。 */}
             {selectMode ? (

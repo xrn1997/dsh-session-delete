@@ -2,7 +2,7 @@
  * **文档门**：文档与代码注释里点名的**仓内路径**必须真实存在，已废的文档称呼不再出现，
  * 指路的 `§N` 必须点名一个还活着的家。
  *
- * 为什么要它：本仓的不变量是"一条事实只住一个家"，而文档里到处是指向"那个家"的路径。
+ * 为什么要它：本仓的不变量是"一条事实只住一个家"，而文档里到处是指向"那个家"的路径与小节号。
  * 模块改名（`verbs/apply.ts` → `verbs/batch.ts`）、路由判断搬家（`dispatch()` → `route-table.ts`）
  * 时，代码与测试会跟着红，**文档不会**——它只会留下一个指不到东西的名字，而下一个 agent 恰好
  * 只读文档。2026-10-20 那次全仓文档复核一次就抓到四处这种断链，所以这条门是确定性的、可重跑的。
@@ -12,7 +12,7 @@
  * 白名单不是"改不动就跳过"——那种条目应当改文档。
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -50,6 +50,11 @@ const corpus = targets.map((file) => ({
   lines: readFileSync(file, 'utf8').split(/\r?\n/),
 }))
 
+/** 手写文档（根三份 + docs/**）；结构门只看这些，src/tests 的注释不参与。 */
+const rootDocs = new Set([join(ROOT, 'AGENTS.md'), join(ROOT, 'CONTEXT.md'), join(ROOT, 'README.md')])
+const docsRoot = join(ROOT, 'docs') + sep
+const docCorpus = corpus.filter(({ file }) => rootDocs.has(file) || file.startsWith(docsRoot))
+
 function eachLine(visit: (file: string, line: string, index: number) => void): void {
   for (const { file, lines } of corpus) lines.forEach((line, index) => visit(file, line, index))
 }
@@ -59,7 +64,6 @@ const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale)\/([A-Za-z0-9_\-
 
 /** 看着像路径、其实不是路径，或故意保留的历史名。每条都要有理由。 */
 const ALLOWED: Record<string, string> = {
-  'docs/adr/0001..0008': '散文里的区间写法（ADR-0001 到 0008 八篇），不是单个文件',
   'src/verbs/apply.ts': 'ADR-0001 的"当时"表：那一格写的就是改名前的位置，同行已注明改名到 batch.ts',
 }
 
@@ -73,11 +77,21 @@ const DEAD_NAMES: ReadonlyArray<readonly [RegExp, string]> = [
 
 /** 每个 `§N` 指路必须点名一个还活着的家（本节内部则写「本文 §N」）。 */
 const SECTION_REF = /§\s*\d/
-const SECTION_ANCHORS = ['docs/architecture.md', 'architecture.md', '本文', '界面规格']
+const SECTION_ANCHORS = ['docs/architecture.md', 'architecture.md', 'docs/ui-spec.md', 'ui-spec.md', 'ui-spec', '本文']
 
 function normalize(raw: string): string {
   // 中文句读与括号会紧跟在路径后面：剥掉尾部噪声
   return raw.replace(/[.,;:!?)\]}、。，；：）】」]+$/u, '')
+}
+
+/** 文档里实际存在的编号小节（`## 1. ...` / `## 2.3 ...`）。 */
+function numberedSections(relPath: string): Set<string> {
+  const sections = new Set<string>()
+  for (const line of readFileSync(join(ROOT, relPath), 'utf8').split(/\r?\n/)) {
+    const match = /^#{1,4}\s+(\d+(?:\.\d+)*)\.?\s/.exec(line)
+    if (match) sections.add(match[1])
+  }
+  return sections
 }
 
 function exists(path: string): boolean {
@@ -151,5 +165,48 @@ describe('文档门 · 已废的称呼不再出现', () => {
       '`§N` 单独出现指不到东西（小节号只在那一份文档里有序）。要指现状就写 `docs/architecture.md` §N，'
         + `要指判据就写文件。\n${offenders.join('\n')}`,
     ).toEqual([])
+  })
+})
+
+describe('文档门 · 职责边界', () => {
+  it('“唯一主人清单”标题只出现在 architecture.md', () => {
+    const offenders = docCorpus
+      .filter(({ file, lines }) => rel(file) !== 'docs/architecture.md'
+        && lines.some((line) => /^#{1,4}\s.*唯一主人清单/.test(line)))
+      .map(({ file }) => rel(file))
+    expect(offenders, '主人清单只能有一份；CONTEXT 只定义词，不重复归属').toEqual([])
+  })
+
+  it('“界面规格”标题只出现在 docs/ui-spec.md', () => {
+    const offenders = docCorpus
+      .filter(({ file, lines }) => rel(file) !== 'docs/ui-spec.md'
+        && lines.some((line) => /^#{1,4}\s.*界面规格/.test(line)))
+      .map(({ file }) => rel(file))
+    expect(offenders, '界面规格是一个独立文档；architecture 只留指针').toEqual([])
+  })
+
+  it('AGENTS.md 是入口，不是仓库手册', () => {
+    const size = Buffer.byteLength(readFileSync(join(ROOT, 'AGENTS.md'), 'utf8'))
+    expect(size, `AGENTS.md ${size} 字节；超过 12000 就把细节移到 architecture / developing / ADR`).toBeLessThanOrEqual(12000)
+  })
+
+  it('点名的小节号在目标文档里真的存在', () => {
+    const arch = numberedSections('docs/architecture.md')
+    const ui = numberedSections('docs/ui-spec.md')
+    const offenders: string[] = []
+    eachLine((file, line, i) => {
+      const mentionsArch = line.includes('architecture.md')
+      const mentionsUi = line.includes('ui-spec.md')
+      const check = (sections: Set<string>) => {
+        for (const match of line.matchAll(/§\s*(\d+(?:\.\d+)*)/g)) {
+          if (!sections.has(match[1])) offenders.push(`${rel(file)}:${i + 1} → §${match[1]}`)
+        }
+      }
+      // 一行同时点两份文档时不猜每个 § 归谁；分开写清楚再指。
+      if (mentionsArch && !mentionsUi) check(arch)
+      if (mentionsUi && !mentionsArch) check(ui)
+      if (rel(file) === 'docs/architecture.md' && line.includes('本文')) check(arch)
+    })
+    expect(offenders, '小节号只在那份文档里有序；搬家或重排后要同步指路').toEqual([])
   })
 })

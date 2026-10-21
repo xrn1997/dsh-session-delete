@@ -1,4 +1,4 @@
-// 回收站的详情块：四态 + 两个动作 + 窄档返回（docs/architecture.md §3.1）
+// 回收站的详情块：四态 + 两个动作 + 窄档返回（docs/ui-spec.md）
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
@@ -197,7 +197,7 @@ describe('回收站详情块 · 两档形态的差别', () => {
   })
 })
 
-describe('回收站详情块 · 「删除于」两样都给（docs/architecture.md §3.1 状态⑥）', () => {
+describe('回收站详情块 · 「删除于」两样都给（docs/ui-spec.md 状态⑥）', () => {
   it('相对那句好读、绝对那句好核对，同一格里两个都在', () => {
     at({ kind: 'ready', entry, detail })
     const value = screen.getByText(/前（/).textContent ?? ''

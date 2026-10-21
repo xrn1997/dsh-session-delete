@@ -1,6 +1,6 @@
 # 开发与验证
 
-这份文档是贡献者的入口：构建、本地调试、门控、真机验证与发版。用户怎么装、怎么用，见 `README.md`；模块为什么这么切、某条语义归谁，见 `docs/architecture.md`；裁决见 `docs/adr/`。这里只写「怎么做」与「怎么验」。
+这份文档是贡献者的入口：构建、本地调试、门控、真机验证与发版。用户怎么装、怎么用，见 `README.md`；模块为什么这么切、某条语义归谁，见 `docs/architecture.md`；界面规格见 `docs/ui-spec.md`；裁决见 `docs/adr/`。这里只写「怎么做」与「怎么验」。
 
 ## 构建与日常开发
 
@@ -13,18 +13,18 @@ pnpm test         # vitest run
 pnpm typecheck    # tsc --noEmit
 ```
 
-**`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`。
+**`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`。三条分发路：`link:` 要自己构建；npm 发布由 `prepack` 兜；源码 git 直装没有构建（本仓没有 `prepare`，那条路现在是死的）。
 
 改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
 
-`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住三类——点名的四类仓内路径（`src/`、`tests/`、`docs/`、`locale/`）都真实存在（改名/删除没同步文档就红）、已废的文档称呼不再出现、`§N` 指路要点名一个还活着的家。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
+`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住四件事——点名的四类仓内路径（`src/`、`tests/`、`docs/`、`locale/`）都真实存在（改名/删除没同步文档就红）、已废的文档称呼不再出现、`§N` 指路要点名一个还活着的家且小节号在该文档里存在、主人清单与界面规格只有一份。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
 
 ## 复核门（改过那一层就要过）
 
 - **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
-- **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；带 `imports` 分流的非宿主依赖走同文件的 `resolveBrowserBranchImport`。为什么这么收，见 `AGENTS.md` 的浏览器半那两条。
+- **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；非宿主的 npm 依赖落 `dependencies`（不是 `peerDependencies`）、不进 `PLATFORM_MODULES`，可以 inline，但带 `imports` 分流的依赖走同文件的 `resolveBrowserBranchImport`——只认那类 `#` 请求，且同级真有 `.browser.js` 才接，否则返回 `null` 让纯度门重新响（`unified → vfile` 的 `#minpath` 分流就是实例）。为什么这么收，见 `docs/architecture.md` §1 与 §2。
 
 ## 本地源码调试
 
@@ -53,6 +53,8 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。
    - 根目录 `screenshots.json` 列的是 README 那些真机图的清单（仓内没有代码读它，2026-10-20 grep 零命中）；换图时同步它，别让 README 与它对不上。
 4. **README 徽章**与「真跑过」名单按当次实测代次更新（徽章读 npm `latest` 清单，工作树改了不会变）。
+
+   商店牌子读 npm `latest` 清单（`engines.dsh`；超过 256 字符的范围串会被整条丢弃）；`dsh.compatibility.dshReleases` 只是真机账本，宿主与市场都不读它。发版后现查 npm `latest`，别把某次读数写死。
 
 ## 已知的环境坑
 
