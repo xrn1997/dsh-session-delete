@@ -1,6 +1,6 @@
 # 开发与验证
 
-这份文档是贡献者的入口：构建、本地调试、门控、真机验证与发版。用户怎么装、怎么用，见 `README.md`；模块为什么这么切、某条语义归谁，见 `docs/architecture.md`；界面规格见 `docs/ui-spec.md`；裁决见 `docs/adr/`。这里只写「怎么做」与「怎么验」。
+这份文档是贡献者的入口：构建、本地调试、门控、真机验证与发版；提交信息与 PR 约定见 `CONTRIBUTING.md`。用户怎么装、怎么用，见 `README.md`；模块为什么这么切、某条语义归谁，见 `docs/architecture.md`；界面规格见 `docs/ui-spec.md`；裁决见 `docs/adr/`。这里只写「怎么做」与「怎么验」。
 
 ## 构建与日常开发
 
@@ -19,7 +19,7 @@ pnpm typecheck    # tsc --noEmit
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
 
-`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住四件事——点名的四类仓内路径（`src/`、`tests/`、`docs/`、`locale/`）都真实存在（改名/删除没同步文档就红）、已废的文档称呼不再出现、`§N` 指路要点名一个还活着的家且小节号在该文档里存在、主人清单与界面规格只有一份。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
+`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 指路活着、相对链接与锚点指得到东西、ADR 索引双向完整、README 截图清单与兼容性投影一致、主人清单/界面规格/文档标准各只有一份、根 `AGENTS.md` 预算；具体判据以该文件为准。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
 
 ## 复核门（改过那一层就要过）
 
@@ -48,11 +48,12 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 ## 发版流程
 
 1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm build`，退出码逐个看过（0/0/0）。
-2. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交、打 annotated tag `Vx.y.z`、push。
-3. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`（`lib/client.js.map` 就是故意留在盘上不进包的）。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。
+2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，逐提交明细留 git。
+3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交、打 annotated tag `Vx.y.z`、push。
+4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`（`lib/client.js.map` 就是故意留在盘上不进包的）。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。
-   - 根目录 `screenshots.json` 列的是 README 那些真机图的清单（仓内没有代码读它，2026-10-20 grep 零命中）；换图时同步它，别让 README 与它对不上。
-4. **README 徽章**与「真跑过」名单按当次实测代次更新（徽章读 npm `latest` 清单，工作树改了不会变）。
+   - 根目录 `screenshots.json` 列的是 README 那些真机图的清单；文档门会钉住 README、清单与本地文件三方一致，换图时同批更新。
+5. **README 徽章**与「真跑过」名单按当次实测代次更新（徽章读 npm `latest` 清单，工作树改了不会变）。
 
    商店牌子读 npm `latest` 清单（`engines.dsh`；超过 256 字符的范围串会被整条丢弃）；`dsh.compatibility.dshReleases` 只是真机账本，宿主与市场都不读它。发版后现查 npm `latest`，别把某次读数写死。
 
@@ -63,4 +64,4 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 - 回收站的运行时数据不在本仓：`~/.dsh/session-trash/`（本体）与 `~/.dsh/storages/`（内部索引，别手碰）。
 - 会话文件是**多帧** zstd，Node 自带 API 只给第一帧——读法与用例住 `src/log/zstd-frames.ts` 与 `tests/zstd-frames.test.ts`。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
-- **`.qoder/repowiki` 是生成的知识库快照**：它的基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码——与代码或上面那几个家冲突时一律以代码为准，别照它改判据，也别把它的结论抄进手写文档。
+- **`.qoder/repowiki` 是生成的知识库快照**：它的基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。

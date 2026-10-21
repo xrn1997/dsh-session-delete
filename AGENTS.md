@@ -11,10 +11,13 @@ DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读�
 | 系统分成哪几块、某条语义归谁、数据怎么走 | `docs/architecture.md`（§4 是唯一主人清单） |
 | 界面现在长什么样、有哪些状态与层级 | `docs/ui-spec.md` |
 | 怎么构建、怎么验、怎么发版、有哪些环境坑 | `docs/developing.md` |
+| 怎么提交、PR、发版边界 | `CONTRIBUTING.md` |
+| 每个版本改了什么、升级注意 | `CHANGELOG.md` |
 | 当初为什么这么定、否掉了什么 | `docs/adr/`（索引 `docs/adr/README.md`；写作规范 `docs/adr/ADR-FORMAT.md`） |
+| 文档该放哪、什么时候更新/归档 | `docs/AGENTS.md` |
 | issue / 标签 / 领域文档约定 | `docs/agents/*` |
 
-**一条事实只住一个家**：动手前先在 `docs/architecture.md` §4 找到主人；同一判据不要在第二处再写一遍。代码与测试是最终真相；文档与代码冲突时，改文档。
+**一条事实只住一个家**：动手前先在 `docs/architecture.md` §4 找到主人；同一判据不要在第二处再写一遍。代码与测试是最终真相；文档与代码冲突时，改文档。文档分层、放置与生命周期见 `docs/AGENTS.md`；进行中的计划住 GitHub Issues 或本机 `.superpowers/`，不入库。
 
 ## 必须过的门
 
@@ -24,7 +27,7 @@ DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读�
 4. **删除 / 恢复不碰归档**：回收站与归档是两套状态；删除必须把 session 和它的 agent handle 一起摘掉，恢复走冷 resume。判据与已知限制见 ADR-0008。
 5. **浏览器半不许 import 任何宿主客户端包**（type-only 也不留）；跨插件一律 `import type`；宿主类型面用本地窄镜像，不装宿主类型包、不做 `declare module` 增强。
 6. **客户端条目注册只在 `src/client/index.tsx`**：槽位只挂官方已声明的；可选服务走 `ctx.get`，不进条目的 `inject`（条目 pending = 宿主进程死）。
-7. **宿主要求只在顶层 `engines.dsh`**；`@deepseek-ai/dsh*` peer 保持零条。窗口值与真机名单以 `package.json`、`README.md` 和 `tests/skeleton.test.ts` 为准。
+7. **宿主要求只在顶层 `engines.dsh`**；`@deepseek-ai/dsh*` peer 保持零条。窗口值与真机名单的事实源是 `package.json`；README 与徽章是投影（文档门校验），`tests/skeleton.test.ts` 双向钉住 `package.json` 与实测代次。
 8. **构建产物 `lib/` 不入库**；`files` 是精确清单，构建每新多出一个要发布的产物就同步加进去。构建与发版细节见 `docs/developing.md`。
 9. **工具名 / 服务名带插件专属前缀**：宿主对重名直接抛错，不是显示难看，是整个工具面挂掉。
 
