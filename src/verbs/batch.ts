@@ -7,24 +7,25 @@
  * interface 上（`onMembers` / `snapshot` / `suppressAnnounce`），于是每个动词都得知道"我是第几个、
  * 前面的兄弟带走了谁"，同一个事实还有三种机制（回调、调用方 `taken` 集合、动词就地收缩数组）。
  *
- * 这一层独占四件（每条批量语义都在这里）：
+ * 这一层拥有三件（每条批量语义都在这里）：
  * ① **去重保序**：输入顺序就是界面"清单从上往下"的读感；
- * ② **清册快照**：整批只读一次"最初的样子"，用来判断"已被同批前一条带走"；
- * ③ **逐条信封**：一条失败不传染下一条，失败按 `map-error` 那张表折成 `{code,message,details?}`；
- * ④ **一批一次通告**：恢复的 `api-session/added` 攒到批尾、配一次预取的摘要表发（逐条发 = 每条一次
+ * ② **逐条信封**：一条失败不传染下一条，失败按 `map-error` 那张表折成 `{code,message,details?}`；
+ * ③ **一批一次通告**：恢复的 `api-session/added` 攒到批尾、配一次预取的摘要表发（逐条发 = 每条一次
  *   宿主全表扫，那正是 2026-10-17 "恢复很慢"的头号来源）。
  *
+ * **同批已带走集**（整批只读一次"最初的样子"）住 `src/verbs/batch-carried.ts`；这里消费它的
+ * `claim` / `take`，purge 另取 entry 域的 `rows()` 作为当前只读清册。
+ *
  * 「已被同批前一条带走」是**幂等成功**，不是失败：用户要的结果本来就已经达成了（`delete`/`restore`
- * 回 `null`；`purge` 回 `{removed:0,freedBytes:0}`）。判据读 `trash/groups.ts`（ADR-0001），
- * 与 `/list` 的装配、与三个动词同一条。
+ * 回 `null`；`purge` 回 `{removed:0,freedBytes:0}`）。判据仍归 `trash/groups.ts`（ADR-0001，
+ * 由 `batch-carried.ts` 调用），同批已带走集只决定"这一条还该不该交给动词"。
  */
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../ports/host-port.js'
 import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../shared/wire.js'
-import type { TrashEntry } from '../trash/entry.js'
-import { groupOf, takenByEarlierInBatch } from '../trash/groups.js'
 import { reconcileTrash } from '../trash/reconcile.js'
 import type { CoreDeps, DeleteDeps } from '../deps.js'
+import { createEntryCarried, createSessionCarried } from './batch-carried.js'
 import { deleteSession } from './delete-session.js'
 import { verbError } from './errors.js'
 import { cleanOrphanGroup, loadOrphanGroups } from './orphan-subagents.js'
@@ -72,45 +73,35 @@ async function forEachId<A extends ApplyAction>(
   return outcomes
 }
 
-/** 这一组的行从"当前快照"里摘掉（父行带走孩子后，后到的孩子 id 要认得出"已经不在了"）。 */
-function shrink(current: TrashEntry[], rows: readonly TrashEntry[]): void {
-  for (const row of rows) {
-    const at = current.indexOf(row)
-    if (at >= 0) current.splice(at, 1)
-  }
-}
-
 async function applyDelete(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const run = deleteSession(deps)
   // 同批父先被删时，孩子是跟着父一起搬走的；后到的孩子 id 是一次幂等 no-op。
   // 这份名单**由动词的结果长出**（`movedSessionIds` = 这次真的搬走的整组），删除写完之后不再读一次清册。
-  const carried = new Set<string>()
+  const carried = createSessionCarried()
   return forEachId('delete', ids, async (sessionId) => {
-    const root = bareSessionId(sessionId)
-    if (carried.has(root)) return null
+    if (carried.claim(sessionId).verdict === 'carried') return null
     const { entry, movedSessionIds } = await run(sessionId)
-    for (const movedId of movedSessionIds) carried.add(bareSessionId(movedId))
+    for (const movedId of movedSessionIds) carried.take(movedId)
     return entry
   })
 }
 
-/** 「这条是不是被同批前一条带走了」：原始快照里认得出、当前快照里已经空了。
- *  **收缩归这一层**（动词只拿只读快照）——`apply` 整批只读一次清册，`takenByEarlierInBatch` 不比它多读。 */
+/** 「这条是不是被同批前一条带走了」与视图收缩都归 `batch-carried.ts`；`apply` 整批只读一次清册，
+ *  动词只拿它交回的只读组与当前清册。 */
 async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  // 整批一次清册读（"最初的样子"）+ 一份会收缩的**本层私有**视图；通告攒到批尾，配一次预取的摘要表发。
-  const original = await deps.manifest.list()
-  const current: TrashEntry[] = [...original]
+  // 整批一次清册读（"最初的样子"）+ 一份会收缩的同批已带走集；通告攒到批尾，配一次预取的摘要表发。
+  const carried = createEntryCarried(await deps.manifest.list())
   const run = restoreSession(deps)
   const restored: string[] = []
   const outcomes = await forEachId('restore', ids, async (entryId) => {
-    if (takenByEarlierInBatch(original, current, entryId)) return null // 已被同批前一条带走：幂等 no-op
-    // **当前视图**是这一批的私有副本：前一条已经恢复的行不在里面了。动词只读它、绝不改它；
-    // 收缩归这一层（`shrink`），于是整批仍然只读一次清册，而"先点孩子再点父"也不会拿旧组去重放。
-    const group = groupOf(current, entryId)
-    const entry = await run(entryId, current)
+    const claim = carried.claim(entryId)
+    if (claim.verdict === 'carried') return null // 已被同批前一条带走：幂等 no-op
+    // `absent`（幽灵 id）没有组：递空组，动词照样抛 trash-empty（原文只在动词一处）。
+    const group = claim.verdict === 'fresh' ? claim.group : []
+    const entry = await run(entryId, group)
+    carried.take(entryId)
     // 通告的是**这一组的会话 id**（父 + 跟着它回来的孩子）
     restored.push(...group.map((row) => row.sessionId))
-    shrink(current, group)
     return entry
   })
   if (restored.length > 0) {
@@ -120,15 +111,16 @@ async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<App
 }
 
 async function applyPurge(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  const original = await deps.manifest.list()
-  const current: TrashEntry[] = [...original]
+  const carried = createEntryCarried(await deps.manifest.list())
   const run = purgeTrash(deps)
   return forEachId('purge', ids, async (entryId) => {
-    if (takenByEarlierInBatch(original, current, entryId)) return { removed: 0, freedBytes: 0 } // 已被同批前一条带走
-    // 与 restore 同理：动词读**当前视图**，前一条已经清掉的行不再出现在这一组的预检/删除目标里。
-    const group = groupOf(current, entryId)
-    const stats = await run(entryId, current)
-    shrink(current, group)
+    const claim = carried.claim(entryId)
+    if (claim.verdict === 'carried') return { removed: 0, freedBytes: 0 } // 已被同批前一条带走
+    // 与 restore 同理：动词读**当前视图**，前一条已经清掉的行不再出现在这一组的预检/删除目标里；
+    // `absent` 没有组，递空表让动词抛 trash-empty。
+    const group = claim.verdict === 'fresh' ? claim.group : []
+    const stats = await run(group, carried.rows(), entryId)
+    carried.take(entryId)
     return stats
   })
 }
@@ -159,23 +151,15 @@ async function applyOrphanClean(deps: CoreDeps, ids: readonly string[]): Promise
   // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。
   const groups = await loadOrphanGroups(deps)
   const byRoot = new Map(groups.map(group => [bareSessionId(group.root.sessionId), group]))
-  const outcomes: ApplyOutcome[] = []
-  for (const id of unique(ids)) {
+  // 组内没有回收站这一层可退：`cleanOrphanGroup` 的 live 准入在任何写之前（整组拒绝、零副作用）；
+  // 删到一半失败时已删目录不回滚，失败错误的 `details` 带 `{ removed, freedBytes }` 作为部分回执，
+  // 不会伪装成"整组清完了"。`not-found` 在这里抛，由 `forEachId` 折成失败信封；`receipt.ts`
+  // 对 orphan-clean 的 `not-found` 再判为中性。
+  return forEachId('orphan-clean', ids, async (id) => {
     const group = byRoot.get(bareSessionId(id))
-    if (group === undefined) {
-      outcomes.push(failure(id, 'orphan-clean', verbError('not-found', `不再是可清理的无主子会话：${id}`)))
-      continue
-    }
-    try {
-      // 组内没有回收站这一层可退：`cleanOrphanGroup` 的 live 准入在任何写之前（整组拒绝、零副作用）；
-      // 删到一半失败时已删目录不回滚，失败错误的 `details` 带 `{ removed, freedBytes }` 作为部分回执，
-      // 不会伪装成"整组清完了"。
-      outcomes.push(success(id, 'orphan-clean', await cleanOrphanGroup(deps, group)))
-    } catch (error) {
-      outcomes.push(failure(id, 'orphan-clean', error))
-    }
-  }
-  return outcomes
+    if (group === undefined) throw verbError('not-found', `不再是可清理的无主子会话：${id}`)
+    return await cleanOrphanGroup(deps, group)
+  })
 }
 
 export function applyActions(deps: DeleteDeps, action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> {

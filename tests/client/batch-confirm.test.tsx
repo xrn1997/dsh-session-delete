@@ -11,18 +11,21 @@ import {
 } from '../../src/client/batch-confirm.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
 import { getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
+import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast, resetUndoNotice } from '../../src/client/undo-toast.js'
 
 beforeEach(() => {
   resetBatchConfirm()
   resetSelection()
   resetUndoNotice()
+  resetTrashStore()
 })
 
 afterEach(() => {
   resetBatchConfirm()
   resetSelection()
   resetUndoNotice()
+  resetTrashStore()
 })
 
 function countOutcomes(ids: readonly string[], kids: Record<string, number> = {}): ApplyOutcome[] {
@@ -172,21 +175,25 @@ describe('批量确认框', () => {
     expect(applyOutcomes).toHaveBeenCalledTimes(3)
   })
 
-  it('整批失败：失败原文落行，不发撤销横幅', async () => {
+  it('整批失败：失败原文落行、不发撤销横幅，但回收站照样收到失效通告', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
       action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids),
     )
     togglePick({ sessionId: 'a', title: 'A' })
     requestDeleteBatch()
+    const revision = renderHook(() => useTrashRevision())
     render(
       <>
         <BatchConfirmHost deps={{ applyOutcomes } as never} />
         <UndoToast deps={{ applyOutcomes } as never} />
       </>,
     )
+    expect(revision.result.current).toBe(0)
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
     expect(await screen.findByText('会话目录不在盘上')).toBeInTheDocument()
     expect(screen.queryByText(/条会话已移入回收站/)).not.toBeInTheDocument()
     expect(getPicks()).toHaveLength(1)
+    // 回滚失败可能留下半套：信封成功就要让清单重读，哪怕一条都没落地。
+    await waitFor(() => expect(revision.result.current).toBe(1))
   })
 })

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { TrashEntry } from '../src/trash/entry.js'
-import { groupOf, takenByEarlierInBatch, visibleGroups } from '../src/trash/groups.js'
+import { claimOf, groupOf, visibleGroups } from '../src/trash/groups.js'
 
 const row = (id: string, parentEntryId?: string): TrashEntry => ({
   id, sessionId: id, projectDir: '--p--', workspaceId: 'ws-1', wasArchived: false,
@@ -68,19 +68,22 @@ describe('一条 id 所属的整组', () => {
   })
 })
 
-describe('「被同批前一条带走」的判据', () => {
+describe('claimOf 三态', () => {
   const original = [row('p'), row('k', 'p')]
 
-  it('原始快照认得出、当前快照已经空了 ⇒ 被同批带走（幂等 no-op）', () => {
-    expect(takenByEarlierInBatch(original, [], 'p')).toBe(true)
-    expect(takenByEarlierInBatch(original, [], 'k')).toBe(true)
+  it('原始快照认不出 ⇒ absent（没有组可带）', () => {
+    expect(claimOf(original, [], 'ghost')).toEqual({ verdict: 'absent' })
   })
 
-  it('当前快照还在 ⇒ 不是被带走', () => {
-    expect(takenByEarlierInBatch(original, original, 'p')).toBe(false)
+  it('原始快照有、当前视图空了 ⇒ carried（父与孩子同一口径）', () => {
+    expect(claimOf(original, [], 'p')).toEqual({ verdict: 'carried' })
+    expect(claimOf(original, [], 'k')).toEqual({ verdict: 'carried' })
   })
 
-  it('原始快照里本来就没有 ⇒ 不是幂等 no-op（幽灵 id 要响亮报 trash-empty）', () => {
-    expect(takenByEarlierInBatch(original, [], 'ghost')).toBe(false)
+  it('当前视图还在 ⇒ fresh + 当前这一组', () => {
+    const claim = claimOf(original, original, 'p')
+    expect(claim.verdict).toBe('fresh')
+    if (claim.verdict !== 'fresh') return
+    expect(ids(claim.group)).toEqual(['p', 'k'])
   })
 })

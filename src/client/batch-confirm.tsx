@@ -13,8 +13,7 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { fetchCounts } from './batch-select.js'
 import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
-import { callRemote, type SessionDeleteRemote } from './remote.js'
-import { failureMessage, readReceipt } from './receipt.js'
+import type { SessionDeleteRemote } from './remote.js'
 import { getPicks, shrinkPicksToFailures, type PickItem } from './batch-selection-store.js'
 import { createStore } from './store.js'
 import { Button } from './ui/Button.js'
@@ -22,6 +21,7 @@ import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
 import { publishUndoBatchNotice } from './undo-toast.js'
 import { commitExternalDelete } from './write-commit.js'
+import { runWrite } from './write.js'
 
 export interface BatchDeleteRequest {
   /** 每次发布递增：换一批就重挂载，busy / 失败面不带着上一批的记忆。 */
@@ -140,51 +140,41 @@ function BatchConfirmDialog({
   const run = async (): Promise<void> => {
     setBusy(true)
     setFailures(new Map())
-    const outcome = await callRemote(() => deps.applyOutcomes('delete', pendingIds))
-    setBusy(false)
-    if (!outcome.ok) {
-      // 整次调用没办成：一条都没落地 ⇒ 原文摆到每一行，别让框看起来"删成功了"（与回收站那两处同法）
-      setFailures(new Map(pendingIds.map((id) => [id, outcome.failure.message])))
-      return
-    }
-    const receipt = readReceipt('delete', pendingIds, outcome.value)
-    const moved: string[] = []
-    const deletedSessionIds: string[] = []
-    const failed = new Map<string, string>()
-    let okCount = 0
-    for (const verdict of receipt.verdicts) {
-      switch (verdict.kind) {
-        case 'failed':
-        case 'neutral':
-        case 'missing':
-          failed.set(verdict.id, failureMessage(verdict))
-          break
-        case 'ok':
-          okCount += 1
-          deletedSessionIds.push(verdict.id)
-          // `value === null` 是"已被同批前一条带走"的幂等条：跟着组走，不单列进撤销名单
-          if (verdict.value !== null) moved.push(verdict.value.id)
-          break
-        case 'already-gone':
-          okCount += 1
-          deletedSessionIds.push(verdict.id)
-          break
+    try {
+      const outcome = await runWrite({
+        deps,
+        action: 'delete',
+        ids: pendingIds,
+        commit: (success) => {
+          // 撤销名单只收 ok 支的条目 id：already-gone 是「已被同批前一条带走」的幂等条，
+          // 跟着组走（组里 ok 那条的 id 已经在名单里），不单列。
+          const moved: string[] = []
+          for (const verdict of success.receipt.verdicts) {
+            if (verdict.kind === 'ok') moved.push(verdict.value.id)
+          }
+          // `runWrite` 在信封成功时就跑 `commit`（成功名单可能为空）：清单失效照发，
+          // 但一条都没落地时不发布撤销横幅——没有落点的横幅是假按钮。
+          commitExternalDelete({
+            sessionIds: success.successIds,
+            publishUndo: () => {
+              if (success.successIds.length > 0) {
+                publishUndoBatchNotice({ entryIds: moved, n: success.successIds.length })
+              }
+            },
+          })
+        },
+      })
+      const failed = outcome.failures
+      shrinkPicksToFailures([...failed.keys()])
+      if (failed.size === 0) {
+        clearDeleteBatchRequest()
+        return
       }
+      setFailures(failed)
+      shrinkRequestToFailures([...failed.keys()])
+    } finally {
+      setBusy(false)
     }
-    commitExternalDelete({
-      sessionIds: deletedSessionIds,
-      publishUndo: () => {
-        // 一条都没办成时不发布撤销提示：没有落点的横幅是假按钮。清单失效通告照常发。
-        if (okCount > 0) publishUndoBatchNotice({ entryIds: moved, n: okCount })
-      },
-    })
-    shrinkPicksToFailures([...failed.keys()])
-    if (failed.size === 0) {
-      clearDeleteBatchRequest()
-      return
-    }
-    setFailures(failed)
-    shrinkRequestToFailures([...failed.keys()])
   }
 
   return (

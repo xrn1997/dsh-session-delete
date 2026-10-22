@@ -291,4 +291,20 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     })
     expect(host.announceRestored).not.toHaveBeenCalled()
   })
+
+  it('目录已搬回、清册行摘不掉 ⇒ 仍通告已恢复，失败进 details', async () => {
+    const { deps: d, fs, host, manifest } = deps({ members: { 'session-parent': [kidA, kidB] } })
+    fs.rename = vi.fn(async (_from: string, to: string) => {
+      if (to.includes('session-kidB')) throw new Error('EBUSY')
+    })
+    // 回滚里目录先回来、再摘清册行；这一步失败不该把已经回盘的会话继续藏在客户端里。
+    manifest.remove = vi.fn(async () => { throw new Error('storage boom') })
+    const err = await failureOf(d, 'session-parent')
+    expect(err.code).toBe('sessiondelete/io')
+    expect(err.details).toMatchObject({
+      rollbackFailures: expect.arrayContaining([expect.stringContaining('清册行摘除失败')]),
+    })
+    expect(host.announceRestored).toHaveBeenCalledWith('session-parent')
+    expect(host.announceRestored).toHaveBeenCalledWith('session-kidA')
+  })
 })

@@ -30,21 +30,29 @@ Status: accepted
 
 ### 一、`src/verbs/batch.ts` 拥有「这一批」
 
-interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它独占四件：去重保序、清册快照、
-「已被同批前一条带走」的账本、逐条信封。三个动词回到**一个 id 进、一条结果出**，
-`onMembers` / `suppressAnnounce` 从它们的 interface 上消失，就地收缩快照的契约也一并消失。
+interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它独占三件：去重保序、逐条信封、
+一批一次通告。三个动词回到**一个请求 id 对应一条结果**，`onMembers` / `suppressAnnounce` 从它们的
+interface 上消失，就地收缩快照的契约也一并消失。
 （`verbs/apply.ts` 改名 `verbs/batch.ts`：名字说的就是这个 module 拥有什么。）
 
-删除动词的结果是 `{ entry, movedSessionIds }`：`movedSessionIds` 是这次实际搬进回收站的父与孩子；
-批量层从结果建「已被同批前一条带走」的账本，不再在每条删除后重读清册。它不是回调——
-「一个 id 进、一条结果出」不变。
+**同批已带走集**住 `src/verbs/batch-carried.ts`：
+entry / session 两种 id 域各一个 adapter——entry 的三态判据读 `trash/groups.ts` 的 `claimOf`，
+session 只记 `take` 过的会话 id（fresh / carried 两态）。`batch.ts` 消费它的 `claim` / `take`，
+purge 那一路另取 entry 域交回的当前只读视图（盘上后代要按清册里还在的 id 排除）；
+删除动词的结果仍是 `{ entry, movedSessionIds }`，session adapter 从这份结果长出
+集合，不在每条删除后重读清册。它不是回调——一条请求 id 仍只产出一条结果。
 
-### 一点五、一个**保留**的参数，以及它为什么不算残留
+### 一点五、动词收到的是**只读的组 / 清册**
 
-`restoreSession` / `purgeTrash` 仍收一个**只读**的 `snapshot?: readonly TrashEntry[]`。
-它不是批量语义，是**性能契约**：整批只读一次清册，读者把那一份递下去；收缩与「已被同批前一条带走」
-的判据都留在批量层（动词只读它、绝不改它）。不传就自己读一次——单条调用者因此没有任何额外义务。
-不带这个参数就得让每个动词各读一遍清册（100 条 = 100 次读），那正是这一层要消灭的成本。
+批量路径上，`restoreSession(entryId, group)` 与 `purgeTrash(targets, rows, requestedId?)` 收的是由
+`batch-carried.ts` 按组语义算好的只读目标（`targets === undefined` = 清空）。它不是批量语义，是
+**性能契约**：整批只读一次清册，读者把那一份递下去；收缩留在 `batch-carried.ts`，
+「已被同批前一条带走」的判据读 `trash/groups.ts` 的 `claimOf`（动词只读目标、绝不改它）。
+直调路径要自备这一组（一次清册读 + `trash/groups.ts` 的 `groupOf`）；批量层交给 `claimOf`，
+直调者自己按组语义算。ghost 父（父行已摘、只剩孩子）的组只有孩子：restore 照旧报 `trash-empty`，
+purge 照旧清这一组；其余目标按组整体处理。
+不带这份目标就得让每个动词各读一遍清册（100 条 = 100 次读），那正是这一层要消灭的成本；
+批量路径由 `batch.ts` 读一次清册，交给 `batch-carried.ts` 持有收缩视图与只读快照。
 
 ### 二、`src/verbs/member-journal.ts` 拥有「一次移动」
 
@@ -57,6 +65,9 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 - 三个动词变成三条**策略**：各自只声明「这个成员要按什么顺序做哪几步」，
   不再各自手写嵌套 `try/catch` 与 `failures` 数组。
 
+组级的**成员顺序、按序结果与整组逆序回滚**住 `src/verbs/move-group.ts`；journal 仍只服务单个成员。
+它的 `undo()` 交回失败串与 `restored(key)`（每一步到底退回去了没有），动词不再自己累计布尔。
+
 ## 明确的边界
 
 - **可观察语义一律不变**：步骤顺序、回滚顺序、错误码、`rollbackFailures` 的措辞与合并规则
@@ -67,7 +78,9 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 
 ## 后果
 
-- 三个动词的 interface 缩到「一个 id」；删除的结果是 `{ entry, movedSessionIds }`，批量语义只有一个拥有者。
+- 删除的 interface 仍是一个 id；恢复收「id + 只读组」，purge 收「只读目标 + 只读清册」。
+  删除的结果是 `{ entry, movedSessionIds }`；批量请求仍归 `batch.ts`，同批已带走集与组级顺序
+  分别住 `batch-carried.ts` / `move-group.ts`。
 - 22 处 `rollbackReason(` 变成步骤标签（数据），8 处 `withRollbackFailures(` 收进 `member-journal.ts`
   （`journalFailure` 与组级 `rollbackJournals` 各一处）。
 - 测试落点前移：**步骤顺序**与**回滚顺序**可以拿一个假 journal 直接断言（现有测试已经在用
@@ -78,7 +91,8 @@ interface 收一组 id 与一个**单条动作**，产出 `ApplyOutcome[]`；它
 
 - **只把 `apply.ts` 三个循环抽成 `runBatch`**：解决了第 1 层，第 2、3 层原样——正是这次要拆的东西。
 - **把回滚语义留到下一轮**：等于承认「同一条正反动作对写两遍」长期合法。
-- **让浏览器半也用批量 module**：浏览器半不需要「这一批」的账本，它只要 N=1 的便捷支
-  （N=1 也走同一段，口径在 `src/shared/wire.ts` 的段名那本账）。
+- **让浏览器半也用批量 module**：浏览器半不需要同批已带走集，它只要单条写入的判读
+  （单条也走同一段，口径在 `src/shared/wire.ts` 的段名那本账）。
 
-锚点：`CONTEXT.md`（批量层 / journal）；`src/verbs/batch.ts`、`src/verbs/member-journal.ts`
+锚点：`CONTEXT.md`（同批已带走集）；`src/verbs/batch.ts`、`src/verbs/batch-carried.ts`、
+`src/verbs/move-group.ts`、`src/verbs/member-journal.ts`

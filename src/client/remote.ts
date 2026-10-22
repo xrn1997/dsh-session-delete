@@ -41,6 +41,7 @@ import {
   isDSHRemoteError,
   type ApplyAction,
   type ApplyOutcome,
+  type ApplyValueByAction,
   type OrphanReportWire,
   type PurgeStatsWire,
   type RemoteFailure,
@@ -48,7 +49,7 @@ import {
   type TrashDetailWire,
   type TrashRowWire,
 } from '../shared/wire.js'
-import { missingOutcomeMessage, readReceipt } from './receipt.js'
+import { CLIENT_UNKNOWN_CODE, missingOutcomeMessage, readSingleReceipt } from './receipt.js'
 
 /**
  * 回收站条目（`/list` 那一行）。**形状的家在 `shared/wire.ts`**（ADR-0003）：这里只是旧名的别名，
@@ -81,8 +82,8 @@ export function failureOf(reason: unknown): RemoteFailure {
       ...(reason.details === undefined ? {} : { details: reason.details }),
     }
   }
-  if (reason instanceof Error) return { code: 'client/unknown', message: reason.message }
-  return { code: 'client/unknown', message: String(reason) }
+  if (reason instanceof Error) return { code: CLIENT_UNKNOWN_CODE, message: reason.message }
+  return { code: CLIENT_UNKNOWN_CODE, message: String(reason) }
 }
 
 /**
@@ -219,24 +220,24 @@ export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean
 /** `shared/wire.ts` 的 `ApplyOutcome` 与那份扫描报告从这里转出去——浏览器半只认 `remote.js` 这一扇门。 */
 export type { ApplyAction, ApplyOutcome, OrphanReportWire } from '../shared/wire.js'
 
-/** 一段管所有写动作的返回值（逐条）。`ApplySuccess<A>` = 某动作成功支（`value` 按动作收窄）。 */
-export type ApplySuccess<A extends ApplyAction> = Extract<ApplyOutcome, { action: A; ok: true }>
-
 /**
- * N=1 的成功支：`delete` / `restore` 的幂等 `null` 已被 `applyOne` 判成通道错，
- * 所以它的 `value` 必然非空；其余动作就是 `ApplySuccess`。
+ * N=1 的成功支：`null` 已被 `receipt.ts` 的单条读法折成协议错，所以 `value` 必然非空。
+ * 不再需要条件类型把 `delete` / `restore` 的 null 抠掉——那份判据只住回执读法一处。
  */
-export type OneShotSuccess<A extends ApplyAction> = A extends 'delete' | 'restore'
-  ? Omit<ApplySuccess<A>, 'value'> & { readonly value: NonNullable<ApplySuccess<A>['value']> }
-  : ApplySuccess<A>
+export type OneShotSuccess<A extends ApplyAction> = {
+  readonly id: string
+  readonly action: A
+  readonly ok: true
+  readonly value: Exclude<ApplyValueByAction[A], null>
+}
 
 /**
  * 注入面（`deps`）的 interface：**与六个段名一一对应的五个方法**（`ping` 只给探测用，留在 raw 层）。
  *
  * **不再有 N=1 的便捷方法**：`delete` / `restore` / `countSubagents` 曾是同一段
  * `/apply` 的三种写法，于是一个 `module` 里同一个动作有两条路（回收站面板的 deps 同时躺着
- * `applyOutcomes` 与 `restore`）。现在它们收成一个自由函数 {@link applyOne}——要旧形状就显式调它，
- * 而不是让 interface 多背三个方法。
+ * `applyOutcomes` 与 `restore`）。现在单条非写调用（如 `count`）走自由函数 {@link applyOne}；
+ * 写动作走 `src/client/write.ts` 的 `runWrite`，而不是让 interface 多背三个方法。
  */
 export interface SessionDeleteRemote {
   list(): Promise<TrashEntryLike[]>
@@ -250,28 +251,24 @@ export interface SessionDeleteRemote {
   emptyTrash(): Promise<PurgeResultLike>
 }
 
-/** 需要"单条便捷支"的组件只要这一段 deps（同一段 `/apply` 的 N=1 写法，见 {@link applyOne}）。 */
+/** 需要那一段 `/apply` 的组件只要这一段 deps（单条非写调用见 {@link applyOne}，写动作走 `./write.js` 的 `runWrite`）。 */
 export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
 
 /**
- * **N=1 的 `apply`**：一个动作 + 一个 id → 那一条的成功支（`value` 按动作收窄）。
+ * **N=1 的 `apply`**：一个动作 + 一个 id → 那一条的成功支（`value` 必然非空）。
  *
- * 三条判据都在这一处：
+ * 三件事各归一个家：
  * - **按发出去的那个 id** 取结果（取"第一条"会把别条的成败安在这条头上）；
- * - 一条没回是**通道的错**，不是"没做成"（后者住在 outcome 的 `ok:false` 里）；
- * - `null` 是批量里"已被同批前一条带走"的幂等值——N=1 永远不会命中它，回 `null` 只能是通道答错了，
- *   所以同样按通道错抛，不冒充成功。
- *
- * 成/败/幂等/缺失的判读只走 {@link readReceipt}（一个家）。
+ * - 成/败/幂等/缺失与「单条 null 是协议错」的判读只走 {@link readSingleReceipt}；
+ * - 这里只把 verdict 折成「拿到值 / 抛失败」。
  */
 export async function applyOne<A extends ApplyAction>(deps: OneShotDeps, action: A, id: string): Promise<OneShotSuccess<A>> {
   const outcomes = await deps.applyOutcomes(action, [id])
-  const verdict = readReceipt(action, [id], outcomes).byId.get(id)
-  // `readReceipt` 保证每个请求 id 都有一条 verdict；这一支只为类型收窄（别删）。
+  const verdict = readSingleReceipt(action, id, outcomes).byId.get(id)
+  // `readSingleReceipt` 保证每个请求 id 都有一条 verdict；这一支只为类型收窄（别删）。
   if (verdict === undefined) throw new Error(missingOutcomeMessage(action, id))
   if (verdict.kind === 'failed' || verdict.kind === 'neutral') throwRemoteFailure(verdict.error)
   if (verdict.kind === 'missing') throw new Error(verdict.message)
-  if (verdict.kind === 'already-gone') throw new Error(`单条动作回了幂等空值：${action} ${id}`)
   return { id, action, ok: true, value: verdict.value } as OneShotSuccess<A>
 }
 
@@ -298,5 +295,6 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
   }
 }
 
-/** 「删除」确认框的宿主只需要那一段 `/apply`：提交删除与删除前那一次计数都走 {@link applyOne}。 */
+/** 「删除」确认框的宿主只需要那一段 `/apply`：删除前那一次计数走 {@link applyOne}；
+ *  提交删除走 `src/client/write.ts` 的 `runWrite`。 */
 export type DeleteConfirmDeps = OneShotDeps

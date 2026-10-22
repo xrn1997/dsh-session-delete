@@ -6,7 +6,7 @@
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { useTrashQuery, type TrashQueryDeps } from '../../src/client/use-trash-query.js'
+import { useTrashQuery, type ReloadResult, type TrashQueryDeps } from '../../src/client/use-trash-query.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { OrphanReportWire, TrashEntryLike } from '../../src/client/remote.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
@@ -51,11 +51,11 @@ describe('取数编排 · 到达序号', () => {
       resolvers.push((value) => resolve(value))
     }))
     const { result } = mount({ list: list as never })
-    let first: Promise<boolean> | undefined
-    let second: Promise<boolean> | undefined
+    let first: Promise<ReloadResult> | undefined
+    let second: Promise<ReloadResult> | undefined
     act(() => {
-      first = result.current.reload()
-      second = result.current.reload()
+      first = result.current.reloadRows()
+      second = result.current.reloadRows()
     })
     const fresh = [{ ...rows[0]!, id: 'fresh' }]
     await act(async () => {
@@ -69,55 +69,221 @@ describe('取数编排 · 到达序号', () => {
     expect(result.current.entries?.map((entry) => entry.id)).toEqual(['fresh'])
   })
 
+  it('挂载全量刷新被后到的 reload 顶掉时，残留扫描不丢', async () => {
+    const resolvers: Array<(value: readonly TrashEntryLike[]) => void> = []
+    const list = vi.fn(() => new Promise<readonly TrashEntryLike[]>((resolve) => {
+      resolvers.push((value) => resolve(value))
+    }))
+    const { d, result } = mount({ list: list as never })
+    let mountRefresh!: Promise<void>
+    let writeRefresh!: Promise<void>
+    act(() => {
+      mountRefresh = result.current.refreshAll()
+      writeRefresh = result.current.refreshAfterWrite()
+    })
+    // 后到的 reload 先落地：它抢到序号，挂载那次 reload 就作废了；报告仍未知，必须由它补扫。
+    await act(async () => {
+      resolvers[1]!(rows)
+      await writeRefresh
+    })
+    await act(async () => {
+      resolvers[0]!(rows)
+      await mountRefresh
+    })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    // 输掉序号的那次全量刷新不许在赢家扫描后再把报告清掉。
+    expect(result.current.orphanReport).toEqual(EMPTY)
+  })
+
   it('读不到 ⇒ entries 回 null、原文进 listFailure（"读不到"与"空的"是两件事）', async () => {
     const { result } = mount({
       list: vi.fn(async () => { throw Object.assign(new Error('清单损坏'), { code: 'sessiondelete/io' }) }) as never,
     })
-    await act(async () => { await result.current.reload() })
+    await act(async () => { await result.current.reloadRows() })
     expect(result.current.entries).toBeNull()
     expect(result.current.listFailure).toBe('清单损坏')
   })
 })
 
 describe('取数编排 · 先清单后扫描', () => {
-  it('清单读成了才扫；两件事按这个顺序发生', async () => {
+  it('refreshAll：清单读成了才扫；两件事按这个顺序发生', async () => {
     const order: string[] = []
     const { result } = mount({
       list: vi.fn(async () => { order.push('list'); return rows }) as never,
       scanOrphans: vi.fn(async () => { order.push('scan'); return EMPTY }) as never,
     })
-    await act(async () => { await result.current.refresh() })
+    await act(async () => { await result.current.refreshAll() })
     expect(order).toEqual(['list', 'scan'])
     expect(result.current.orphanReport).toEqual(EMPTY)
   })
 
-  it('清单没读成 ⇒ 一次扫描都不发，并清掉上一拍的残留报告', async () => {
-    const { result } = mount()
-    await act(async () => { await result.current.refresh() })
-    expect(result.current.orphanReport).toEqual(EMPTY)
-    // 另一份挂载：清单这一拍读失败
-    const failing = mount({
-      list: vi.fn(async () => { throw new Error('boom') }) as never,
+  it('refreshAll：清单没读成 ⇒ 一次扫描都不发，并清掉上一拍的残留报告', async () => {
+    let fail = false
+    const list = vi.fn(async () => {
+      if (fail) throw new Error('boom')
+      return rows
     })
-    await act(async () => { await failing.result.current.refresh() })
-    expect(failing.d.scanOrphans).not.toHaveBeenCalled()
-    expect(failing.result.current.orphanReport).toBeNull()
+    const { d, result } = mount({ list: list as never })
+    await act(async () => { await result.current.refreshAll() })
+    expect(result.current.orphanReport).toEqual(EMPTY)
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+
+    fail = true
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    expect(result.current.orphanReport).toBeNull()
+    expect(result.current.listFailure).toBe('boom')
   })
 
-  it('扫描读不到 ⇒ 不折成"零条残留"：报告回 null，原文上屏', async () => {
+  it('refreshAll：扫描读不到 ⇒ 不折成"零条残留"：报告回 null，原文上屏', async () => {
     const { result } = mount({
       scanOrphans: vi.fn(async () => { throw Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' }) }) as never,
     })
-    await act(async () => { await result.current.refresh() })
+    await act(async () => { await result.current.refreshAll() })
     expect(result.current.orphanReport).toBeNull()
     expect(result.current.orphanFailure).toContain('sessionQuery 不在')
+  })
+})
+
+describe('取数编排 · 命名读', () => {
+  it('reloadRows 只读清单，不扫残留', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.reloadRows() })
+    expect(d.list).toHaveBeenCalledTimes(1)
+    expect(d.scanOrphans).not.toHaveBeenCalled()
+  })
+
+  it('rescanOrphans 只扫残留，不读清单', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.rescanOrphans() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    expect(d.list).not.toHaveBeenCalled()
+  })
+
+  it('refreshAfterWrite：报告为空时写后只重读清单', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    await act(async () => { await result.current.refreshAfterWrite() })
+    expect(d.list).toHaveBeenCalledTimes(2)
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshAfterWrite：报告为 null（没扫到）时也重扫，不把"未知"当"空的"', async () => {
+    let scans = 0
+    const scanOrphans = vi.fn(async () => {
+      scans += 1
+      if (scans === 1) throw Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' })
+      return EMPTY
+    })
+    const { d, result } = mount({ scanOrphans: scanOrphans as never })
+    await act(async () => { await result.current.refreshAll() })
+    expect(result.current.orphanReport).toBeNull()
+    await act(async () => { await result.current.refreshAfterWrite() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+    expect(result.current.orphanReport).toEqual(EMPTY)
+    expect(result.current.orphanFailure).toBeNull()
+  })
+
+  it('refreshAfterWrite({ rescan:true })：报告为空也重扫（purge / 清空的降级路径）', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    await act(async () => { await result.current.refreshAfterWrite({ rescan: true }) })
+    expect(d.list).toHaveBeenCalledTimes(2)
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshAfterWrite({ rescan:true }) 输给后到的读：强制重扫由赢家补上', async () => {
+    const resolvers: Array<(value: readonly TrashEntryLike[]) => void> = []
+    let deferred = false
+    const list = vi.fn(() => {
+      if (!deferred) return Promise.resolve(rows)
+      return new Promise<readonly TrashEntryLike[]>((resolve) => { resolvers.push(resolve) })
+    })
+    const { d, result } = mount({ list: list as never })
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+
+    deferred = true
+    let forced!: Promise<void>
+    let winner!: Promise<void>
+    act(() => {
+      forced = result.current.refreshAfterWrite({ rescan: true })
+      winner = result.current.refreshAfterWrite()
+    })
+    await act(async () => {
+      resolvers[1]!(rows)
+      await winner
+    })
+    // 赢家看到强制标记，替输掉的那次补扫；报告为空也不会省。
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      resolvers[0]!(rows)
+      await forced
+    })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+  })
+
+  it('清单读失败时，在飞的旧扫描晚到也不把报告写回来', async () => {
+    let failList = false
+    let resolveList!: (value: readonly TrashEntryLike[]) => void
+    const list = vi.fn(() => {
+      if (failList) return Promise.reject(new Error('清单坏了'))
+      return new Promise<readonly TrashEntryLike[]>((resolve) => { resolveList = resolve })
+    })
+    let resolveScan!: (value: OrphanReportWire) => void
+    const scanOrphans = vi.fn(() => new Promise<OrphanReportWire>((resolve) => { resolveScan = resolve }))
+    const { result } = mount({ list: list as never, scanOrphans: scanOrphans as never })
+
+    let refreshing!: Promise<void>
+    act(() => { refreshing = result.current.refreshAll() })
+    await act(async () => { resolveList(rows) })
+    await waitFor(() => expect(scanOrphans).toHaveBeenCalledTimes(1))
+
+    failList = true
+    await act(async () => { await result.current.refreshAfterWrite() })
+    expect(result.current.orphanReport).toBeNull()
+
+    await act(async () => {
+      resolveScan(REPORT)
+      await refreshing
+    })
+    expect(result.current.orphanReport).toBeNull()
+  })
+
+  it('refreshAfterWrite：报告非空时写后重读清单并重扫', async () => {
+    const { d, result } = mount({ scanOrphans: vi.fn(async () => REPORT) as never })
+    await act(async () => { await result.current.refreshAll() })
+    await act(async () => { await result.current.refreshAfterWrite() })
+    expect(d.list).toHaveBeenCalledTimes(2)
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+  })
+
+  it('refreshAfterWrite：清单读失败时清空报告与提示（这一拍不知道盘上长什么样）', async () => {
+    let fail = false
+    const list = vi.fn(async () => {
+      if (fail) throw new Error('清单坏了')
+      return rows
+    })
+    const { result } = mount({ list: list as never, scanOrphans: vi.fn(async () => REPORT) as never })
+    await act(async () => { await result.current.refreshAll() })
+    expect(result.current.orphanReport).toEqual(REPORT)
+    act(() => { result.current.openOrphanPreview() })
+    expect(result.current.orphanConfirm).toBe(true)
+    fail = true
+    await act(async () => { await result.current.refreshAfterWrite() })
+    expect(result.current.entries).toBeNull()
+    expect(result.current.listFailure).toBe('清单坏了')
+    expect(result.current.orphanReport).toBeNull()
+    expect(result.current.orphanConfirm).toBe(false)
   })
 })
 
 describe('取数编排 · 清理那批无主子会话', () => {
   async function withReport(over: Partial<TrashQueryDeps>) {
     const mounted = mount({ scanOrphans: vi.fn(async () => REPORT) as never, ...over })
-    await act(async () => { await mounted.result.current.refresh() })
+    await act(async () => { await mounted.result.current.refreshAll() })
     return mounted
   }
 
@@ -126,6 +292,7 @@ describe('取数编排 · 清理那批无主子会话', () => {
     await act(async () => { await result.current.cleanOrphans() })
     expect(d.applyOutcomes).toHaveBeenCalledWith('orphan-clean', ['session-root'])
     expect(d.list).toHaveBeenCalledTimes(2) // 一次挂载、一次清理后重读
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2) // 清理会把盘上后代也带走 ⇒ 强制重扫一次
   })
 
   it('not-found ⇒ 中性提示，不计入失败', async () => {
@@ -145,6 +312,18 @@ describe('取数编排 · 清理那批无主子会话', () => {
     await act(async () => { await result.current.cleanOrphans() })
     expect(result.current.orphanNotice).toBeNull()
     expect(result.current.orphanFailure).toContain('批量通道没回这一条的结果：orphan-clean session-root')
+  })
+
+  it('顶层失败：关确认框、重扫、原文上屏（与其余写入面同一条生命周期）', async () => {
+    const { d, result } = await withReport({
+      applyOutcomes: vi.fn(async () => { throw new Error('路由自检失败') }) as never,
+    })
+    act(() => { result.current.openOrphanPreview() })
+    await act(async () => { await result.current.cleanOrphans() })
+    expect(result.current.orphanConfirm).toBe(false)
+    expect(result.current.orphanFailure).toContain('路由自检失败')
+    expect(d.list).toHaveBeenCalledTimes(2)
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
 
   it('io ⇒ 失败上屏，并把服务端给的部分计数说出来', async () => {

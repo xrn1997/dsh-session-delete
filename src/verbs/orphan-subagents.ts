@@ -76,7 +76,7 @@ export function orphanGroupsOf(
   return groups
 }
 
-/** 纯读：调用方应先走一次 `/list` 对账（面板的 refresh 就是这样）；本函数不写清单。
+/** 纯读：调用方应先走一次 `/list` 对账（面板的 `refreshAll` / `refreshAfterWrite` 都是这样）；本函数不写清单。
  *  写动作 `orphan-clean` 会自己先 reconcile，避免拿一份过期清册判"父没了"。
  *
  *  `listSessions()` 回 `{ available: false }` 时**必须抛**：那是宿主的会话语料服务没挂，不是"这个家没有孤儿"。

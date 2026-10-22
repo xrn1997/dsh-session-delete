@@ -593,7 +593,7 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
   // 幽灵 id（整批开始前就不在清册）必须报 `trash-empty`，不许被"已被带走"粉饰成成功。
   it('恢复一条不在清单里的 id ⇒ 单条动词响亮抛 trash-empty（与混合批里被带走的幂等 no-op 是两件事）', async () => {
     const { deps } = makeDeps()
-    await expect(restoreSession(deps)('ghost')).rejects.toThrow(/ghost/)
+    await expect(restoreSession(deps)('ghost', [])).rejects.toThrow(/ghost/)
   })
 
   it('恢复时原项目目录没了 ⇒ sessiondelete/project-missing（不静默建目录）', async () => {

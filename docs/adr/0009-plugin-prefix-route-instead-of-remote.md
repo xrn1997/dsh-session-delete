@@ -20,7 +20,7 @@ Status: accepted
 - 不发布官方生成的 `typert.*` 文件，也不在 client 半 `inject` 里声明 `remote.<ns>`。
 - 段名 / 动作 / 形状 / 失败码的家仍是 `src/shared/wire.ts`；加一个新段名改 `wire.ts` 与 `src/api/route-table.ts` 两处，漏任一都是编译错误或测试红（ADR-0004）。
 - 浏览器半只做同源 fetch，不 import 任何宿主客户端包（type-only 也不留）。
-- 通道错误原文（`src/client/receipt.ts` 的 missing-id、`src/client/remote.ts` 的幂等空值与取数通道错误）固定中文，不随 locale；它们是协议诊断，不是界面标签。
+- 通道错误原文（`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误）固定中文，不随 locale；它们是协议诊断，不是界面标签。
 
 ## 后果
 

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClientContextLike } from '../../src/client/context.js'
-import { afterDelete, afterRestore, bindMainView, resetMainView } from '../../src/client/main-view.js'
+import { afterDelete, afterRestore, bindMainView, forgetMainView, resetMainView } from '../../src/client/main-view.js'
 
 /** 只给 `get('uiWorkspace')` 的窄 ctx（`slots` 在这一层用不到）。 */
 function ctxWith(ui: unknown): ClientContextLike {
@@ -190,6 +190,38 @@ describe('删除/恢复时主视图的收尾', () => {
     selected = { sessionId: 'session-b' }
     afterRestore(['session-a'])
     expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('forgetMainView 摘掉我们关过的那些：后续 afterRestore 不再重开', () => {
+    const openSession = vi.fn()
+    bindMainView(ctxWith(uiWith({ sessionId: 'session-a', byId: { 'session-a': {} }, openSession })))
+    afterDelete(['session-a'])
+    forgetMainView(['session-a'])
+    afterRestore(['session-a'])
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('forgetMainView 不动在等的重开：别的会话照常开', () => {
+    vi.useFakeTimers()
+    try {
+      let selected: { sessionId?: string } = { sessionId: 'session-a' }
+      let byId: Record<string, unknown> = {}
+      const openSession = vi.fn()
+      bindMainView(ctxWith({
+        selection: { getSnapshot: () => selected },
+        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        clearMain: () => { selected = {} },
+        openSession,
+      }))
+      afterDelete(['session-a'])
+      afterRestore(['session-a'])
+      forgetMainView(['session-b'])
+      byId = { 'session-a': {} }
+      vi.advanceTimersByTime(150)
+      expect(openSession).toHaveBeenCalledWith('session-a')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('resetMainView 清掉重开记忆：重绑之后也不再重开', () => {

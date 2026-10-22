@@ -34,8 +34,7 @@ interface UiWorkspaceLike {
 }
 
 let client: ClientContextLike | undefined
-/** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开。 */
-// 面板恢复不走 `afterRestore` ⇒ 这条记录可能一直留着；重开前的 `canTakeFocus` 挡住抢焦点（`resetMainView` 仍清它）。
+/** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开；面板恢复用 `forgetMainView` 清掉。 */
 let closedByUs = new Set<string>()
 /** 重开排队的最新序号：后一次删除/恢复（或重开）让前一次的等待作废（只开最新那条）。 */
 let openToken = 0
@@ -107,6 +106,14 @@ export function afterRestore(sessionIds: readonly string[]): void {
   if (targets.length === 0) return
   for (const id of targets) closedByUs.delete(id)
   openWhenListed(targets[targets.length - 1]!)
+}
+
+/**
+ * 面板恢复已经替这些会话完成了“回来”的结算：只忘掉我们关过的那几条，不重开、不抢焦点。
+ * 它不碰 `openToken`：同一会话不会既在等重开、又躺在回收站里等面板恢复；在等的重开属于另一条动作。
+ */
+export function forgetMainView(sessionIds: readonly string[]): void {
+  for (const id of sessionIds) closedByUs.delete(id)
 }
 
 /**

@@ -3,8 +3,8 @@
  *
  * 这一份直接测 hook，不经过面板：闸（`useTrashPanelGate`）、选中/详情缓存、清场/自动选中/
  * 失效重读、下钻/Esc 与写动作派发这几组判据此前只能"整块渲染面板 + 造一个远程假件"才够得着，
- * 现在它们是这个 module 的 interface。替身只有三样：假的 query（entries + refresh 计数 +
- * emptyTrash）、假的闸、可控落地的 deferred。
+ * 现在它们是这个 module 的 interface。替身只有三样：假的 query（entries + `refreshAll` /
+ * `refreshAfterWrite` 计数 + emptyTrash）、假的闸、可控落地的 deferred。
  *
  * 行为口径与 `trash-panel.tsx` 现有的函数体逐条对齐：命中缓存不重读、失败不缓存、清单换版时
  * 选中不见才让位、自动选中只认 `selectedId === null`、失效通告只戳一次重读、动作成功丢详情缓存、
@@ -18,7 +18,14 @@ import type {
   TrashDetailLike,
   TrashEntryLike,
 } from '../../src/client/remote.js'
+import { afterDelete, afterRestore, bindMainView, resetMainView } from '../../src/client/main-view.js'
 import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
+import {
+  publishUndoBatchNotice,
+  publishUndoNotice,
+  resetUndoNotice,
+  useUndoNotice,
+} from '../../src/client/undo-toast.js'
 import {
   useTrashPanelController,
   useTrashPanelGate,
@@ -26,9 +33,11 @@ import {
   type TrashPanelGate,
 } from '../../src/client/use-trash-panel-controller.js'
 
-// 修订号是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
+// 模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
 beforeEach(() => {
   resetTrashStore()
+  resetUndoNotice()
+  resetMainView()
 })
 
 const A: TrashEntryLike = {
@@ -51,6 +60,16 @@ const B: TrashEntryLike = {
   title: 'B',
 }
 
+/** 父行已摘、自己露面的孩子（`visibleGroups` 允许的那种单独一行）。 */
+const CHILD: TrashEntryLike = {
+  ...A,
+  id: 'child',
+  sessionId: 'session-child',
+  parentEntryId: 'missing-parent',
+  deletedAt: 3,
+  title: 'Child',
+}
+
 function detailOf(id: string): TrashDetailLike {
   return {
     entryId: id,
@@ -71,7 +90,7 @@ function detailOf(id: string): TrashDetailLike {
 
 /** `/apply` 的逐条结果（形状按 `shared/wire.ts` 的判别联合：动作 + 成败各一支）。 */
 function restoreOk(id: string): ApplyOutcome {
-  // 单条恢复的 `applyOne` 把 `value: null` 当通道错（幂等空值只在批量里出现）⇒ 成功支要是真行。
+  // 单条恢复的 `runWrite`（single）把 `value: null` 当通道错（幂等空值只在批量里出现）⇒ 成功支要是真行。
   return { id, action: 'restore', ok: true, value: { ...A, id, sessionId: `session-${id}`, title: id } }
 }
 
@@ -118,21 +137,22 @@ function harness() {
     detail: vi.fn(async (id: string) => detailOf(id)),
     applyOutcomes: vi.fn(async () => [] as ApplyOutcome[]),
   }
-  const refresh = vi.fn(async (): Promise<void> => {})
+  const refreshAll = vi.fn(async (): Promise<void> => {})
+  const refreshAfterWrite = vi.fn(async (): Promise<void> => {})
   // `TrashQuery.emptyTrash` 交回的是"这一趟是否落地"，不是聚合回执（回执在 use-trash-query 里）。
-  // 真实实现自己会套 `around` + `refresh`，所以控制器对 `kind:'all'` 不再补第二层。
+  // 真实实现自己会套 `around` + `refreshAfterWrite`，所以控制器对 `kind:'all'` 不再补第二层。
   const emptyTrash = vi.fn(async (): Promise<boolean> => true)
   const focusRow = vi.fn()
   const input = (over: Over = {}): TrashPanelControllerInput => ({
     // 控制器只读这两条：`detail` 给读详情，`applyOutcomes` 给恢复/批量的那一段 `/apply`。
     deps: deps as unknown as Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>,
     gate: over.gate ?? (over.busy === true ? { ...openGate, busy: true } : openGate),
-    query: { entries: over.entries ?? null, refresh, emptyTrash },
+    query: { entries: over.entries ?? null, refreshAll, refreshAfterWrite, emptyTrash },
     ordered: over.ordered ?? [],
     canAutoSelect: over.canAutoSelect ?? false,
     focusRow,
   })
-  return { deps, refresh, emptyTrash, focusRow, input }
+  return { deps, refreshAll, refreshAfterWrite, emptyTrash, focusRow, input }
 }
 
 function mount(over: Over = {}) {
@@ -317,7 +337,7 @@ describe('面板控制器 · 选中与详情缓存', () => {
       await m.result.current.select(A)
     })
     expect(m.result.current.detail.kind).toBe('failed')
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
     const pending = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => pending.promise)
@@ -326,7 +346,7 @@ describe('面板控制器 · 选中与详情缓存', () => {
     })
     expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore)
 
     await act(async () => {
       pending.resolve(detailOf('a'))
@@ -519,17 +539,31 @@ describe('面板控制器 · 下钻与 Esc', () => {
 })
 
 describe('面板控制器 · 恢复与确认动作', () => {
-  it('restore 失败：原文落在这条的行上，清单不重读', async () => {
+  it('restore 失败：原文落在这条的行上，清单照样重读（回滚失败可能留下半套）', async () => {
     const m = mount({ entries: [A, B] })
     m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '恢复失败：项目目录不存在')])
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
     await act(async () => {
       await m.result.current.restore(A)
     })
     expect(m.deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a'])
     expect(m.result.current.actionFailure).toEqual({ a: '恢复失败：项目目录不存在' })
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
+  })
+
+  // 与 `confirmApply 顶层失败` 同一条判据：失败只说"这一次调用没办成"，不说"盘上没动"——
+  // 写可能已经成了、响应断在路上；逐条失败也可能是组回滚留下的半套，只有重读能定。
+  it('restore 顶层失败：原文落在这条的行上，清单照样重读', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes.mockRejectedValueOnce(new Error('路由自检失败'))
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
+
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+    expect(m.result.current.actionFailure).toEqual({ a: '路由自检失败' })
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
   })
 
   it('restore 再点一次先清旧失败：成功后就该没有那一行', async () => {
@@ -541,12 +575,12 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.actionFailure).toEqual({ a: '第一次失败' })
 
     m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await m.result.current.restore(A)
     })
     expect(m.result.current.actionFailure).toEqual({})
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
   })
 
   it('restore 成功丢缓存：同一条再被删回来要重读，不摆旧详情', async () => {
@@ -579,6 +613,137 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
   })
 
+  it('单独恢复露面的孩子（父行已摘）⇒ 强制重扫孤儿；恢复组根不强制', async () => {
+    const child = mount({ entries: [CHILD] })
+    child.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('child')])
+    await act(async () => {
+      await child.result.current.restore(CHILD)
+    })
+    expect(child.refreshAfterWrite).toHaveBeenCalledWith({ rescan: true })
+
+    const root = mount({ entries: [A] })
+    root.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    await act(async () => {
+      await root.result.current.restore(A)
+    })
+    expect(root.refreshAfterWrite).toHaveBeenCalledWith({ rescan: false })
+  })
+
+  it('批量恢复里有露面的孩子 ⇒ 强制重扫；只有组根 ⇒ 不强制', async () => {
+    const withChild = mount({ entries: [A, CHILD] })
+    withChild.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a'), restoreOk('child')])
+    await act(async () => {
+      await withChild.result.current.confirmApply('restore', ['a', 'child'])
+    })
+    expect(withChild.refreshAfterWrite).toHaveBeenCalledWith({ rescan: true })
+
+    const roots = mount({ entries: [A] })
+    roots.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    await act(async () => {
+      await roots.result.current.confirmApply('restore', ['a'])
+    })
+    expect(roots.refreshAfterWrite).toHaveBeenCalledWith({ rescan: false })
+  })
+
+  it('面板恢复结算跨槽位：熄灭撤销横幅，并忘掉 main-view 的 closedByUs', async () => {
+    const openSession = vi.fn()
+    let selected: { sessionId?: string } = { sessionId: 'session-a' }
+    bindMainView({
+      slots: {} as never,
+      get: (name: string) => name === 'uiWorkspace' ? {
+        selection: { getSnapshot: () => selected },
+        sessions: { list: { getSnapshot: () => ({ byId: { 'session-a': {} } }) } },
+        clearMain: () => { selected = {} },
+        openSession,
+      } : undefined,
+    } as never)
+    afterDelete(['session-a'])
+    publishUndoNotice({ entryId: 'a', title: 'A' })
+    const notice = renderHook(() => useUndoNotice())
+    const m = mount({ entries: [A] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+
+    expect(notice.result.current).toBeNull()
+    afterRestore(['session-a'])
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('restore 失败不结算跨槽位：撤销横幅留着，main-view 仍记得自己关过它', async () => {
+    const openSession = vi.fn()
+    let selected: { sessionId?: string } = { sessionId: 'session-a' }
+    bindMainView({
+      slots: {} as never,
+      get: (name: string) => name === 'uiWorkspace' ? {
+        selection: { getSnapshot: () => selected },
+        sessions: { list: { getSnapshot: () => ({ byId: { 'session-a': {} } }) } },
+        clearMain: () => { selected = {} },
+        openSession,
+      } : undefined,
+    } as never)
+    afterDelete(['session-a'])
+    publishUndoNotice({ entryId: 'a', title: 'A' })
+    const notice = renderHook(() => useUndoNotice())
+    const m = mount({ entries: [A] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '恢复失败')])
+
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+
+    expect(m.result.current.actionFailure).toEqual({ a: '恢复失败' })
+    // 没落地就不许熄灭指向它的横幅，也不许把 main-view 的记录当成功结算掉。
+    expect(notice.result.current).not.toBeNull()
+    afterRestore(['session-a'])
+    expect(openSession).toHaveBeenCalledWith('session-a')
+  })
+
+  it('批量恢复也结算跨槽位：ok 与 already-gone 都熄灭整批撤销横幅', async () => {
+    const openSession = vi.fn()
+    let selected: { sessionId?: string } = { sessionId: 'session-a' }
+    bindMainView({
+      slots: {} as never,
+      get: (name: string) => name === 'uiWorkspace' ? {
+        selection: { getSnapshot: () => selected },
+        sessions: { list: { getSnapshot: () => ({ byId: { 'session-a': {}, 'session-b': {} } }) } },
+        clearMain: () => { selected = {} },
+        openSession,
+      } : undefined,
+    } as never)
+    afterDelete(['session-a'])
+    publishUndoBatchNotice({ entryIds: ['a', 'b'], n: 2 })
+    const notice = renderHook(() => useUndoNotice())
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([
+      restoreOk('a'),
+      { id: 'b', action: 'restore', ok: true, value: null } as ApplyOutcome,
+    ])
+
+    await act(async () => {
+      await m.result.current.confirmApply('restore', ['a', 'b'])
+    })
+
+    expect(notice.result.current).toBeNull()
+    afterRestore(['session-a', 'session-b'])
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('purge 不结算撤销横幅：永久删除没有可撤销的动作', async () => {
+    publishUndoNotice({ entryId: 'a', title: 'A' })
+    const notice = renderHook(() => useUndoNotice())
+    const m = mount({ entries: [A] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a')])
+
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a'])
+    })
+
+    expect(notice.result.current).not.toBeNull()
+  })
+
   it('confirmApply 成功：成功条目丢缓存、失败留行、pending 收起、清单只重读一次', async () => {
     const m = mount({ entries: [A, B] })
     await act(async () => {
@@ -590,14 +755,15 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.pending).toEqual({ kind: 'entries', ids: ['a', 'b'] })
 
     m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeFailed('b', '第二条删不掉')])
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a', 'b'])
     })
     expect(m.deps.applyOutcomes).toHaveBeenCalledWith('purge', ['a', 'b'])
     expect(m.result.current.pending).toBeNull()
     expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
+    expect(m.refreshAfterWrite).toHaveBeenCalledWith({ rescan: true })
 
     // 成功的那条缓存已丢：再选它必须重读，否则会摆着已经被删掉的那一世的详情。
     const fresh = deferred<TrashDetailLike>()
@@ -612,12 +778,12 @@ describe('面板控制器 · 恢复与确认动作', () => {
   it('confirmApply 请求里的 id 没回：那条落 missing 原文，不静默', async () => {
     const m = mount({ entries: [A, B] })
     m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a')])
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a', 'b'])
     })
     expect(m.result.current.actionFailure).toEqual({ b: '批量通道没回这一条的结果：purge b' })
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
   })
 
   it('confirmApply 顶层失败：每个 id 落同一句原文，pending 收起，清单照样重读', async () => {
@@ -626,14 +792,14 @@ describe('面板控制器 · 恢复与确认动作', () => {
       m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
     })
     m.deps.applyOutcomes.mockRejectedValueOnce(new Error('路由自检失败'))
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a', 'b'])
     })
     expect(m.result.current.actionFailure).toEqual({ a: '路由自检失败', b: '路由自检失败' })
     expect(m.result.current.pending).toBeNull()
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore + 1)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
   })
 
   it('失败原文按条目留着：切走再回来还在，别条的成败不串台', async () => {
@@ -704,7 +870,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     act(() => {
       m.result.current.setPending({ kind: 'all' })
     })
-    const refreshBefore = m.refresh.mock.calls.length
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
     await act(async () => {
       await m.result.current.confirmPurge()
@@ -714,7 +880,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     // 清空自己已经包了同一枚闸与重读，控制器再套一层会让外层 busy 提前落下。
     expect(aroundCalls).toHaveLength(0)
     expect(m.result.current.pending).toBeNull()
-    expect(m.refresh).toHaveBeenCalledTimes(refreshBefore)
+    expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore)
 
     const fresh = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => fresh.promise)
@@ -760,7 +926,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 })
 
 describe('面板控制器 · 动作期间 busy', () => {
-  it('busy 罩到清单重读落地：恢复的 around 在 refresh 完成前不落', async () => {
+  it('busy 罩到清单重读落地：恢复的 around 在 refreshAfterWrite 完成前不落', async () => {
     const h = harness()
     const view = renderHook(() => {
       const gate = useTrashPanelGate()
@@ -770,13 +936,13 @@ describe('面板控制器 · 动作期间 busy', () => {
 
     h.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
     const refreshSettles = deferred<void>()
-    h.refresh.mockImplementationOnce(() => refreshSettles.promise)
+    h.refreshAfterWrite.mockImplementationOnce(() => refreshSettles.promise)
 
     let task!: Promise<void>
     act(() => {
       task = view.result.current.restore(A)
     })
-    await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(h.refreshAfterWrite).toHaveBeenCalledTimes(1))
     expect(view.result.current.busy).toBe(true)
 
     await act(async () => {
@@ -786,7 +952,7 @@ describe('面板控制器 · 动作期间 busy', () => {
     expect(view.result.current.busy).toBe(false)
   })
 
-  it('busy 罩到清单重读落地：批量的 around 在 refresh 完成前不落', async () => {
+  it('busy 罩到清单重读落地：批量的 around 在 refreshAfterWrite 完成前不落', async () => {
     const h = harness()
     const view = renderHook(() => {
       const gate = useTrashPanelGate()
@@ -796,7 +962,7 @@ describe('面板控制器 · 动作期间 busy', () => {
 
     h.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeOk('b')])
     const refreshSettles = deferred<void>()
-    h.refresh.mockImplementationOnce(() => refreshSettles.promise)
+    h.refreshAfterWrite.mockImplementationOnce(() => refreshSettles.promise)
 
     act(() => {
       view.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
@@ -805,7 +971,7 @@ describe('面板控制器 · 动作期间 busy', () => {
     act(() => {
       task = view.result.current.confirmApply('purge', ['a', 'b'])
     })
-    await waitFor(() => expect(h.refresh).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(h.refreshAfterWrite).toHaveBeenCalledTimes(1))
     expect(view.result.current.busy).toBe(true)
     expect(view.result.current.pending).toBeNull()
 
@@ -818,17 +984,19 @@ describe('面板控制器 · 动作期间 busy', () => {
 })
 
 describe('面板控制器 · 失效通告', () => {
-  it('回收站失效戳一次：重读清单，选中与已读详情都不打断', async () => {
+  it('挂载走完整刷新；失效通告只戳写后刷新（不再付一次全量扫描）', async () => {
     const m = mount({ entries: [A] })
     await act(async () => {
       await m.result.current.select(A)
     })
-    const refreshBefore = m.refresh.mock.calls.length
+    expect(m.refreshAll).toHaveBeenCalledTimes(1)
+    const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
     act(() => {
       invalidateTrash()
     })
-    await waitFor(() => expect(m.refresh.mock.calls.length).toBe(refreshBefore + 1))
+    await waitFor(() => expect(m.refreshAfterWrite.mock.calls.length).toBe(refreshBefore + 1))
+    expect(m.refreshAll).toHaveBeenCalledTimes(1)
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.detail.kind).toBe('ready')
     expect(m.deps.detail).toHaveBeenCalledTimes(1)

@@ -241,7 +241,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const {
     entries, listFailure,
     orphanReport, orphanFailure, orphanNotice, orphanConfirm, setOrphanConfirm,
-    refresh,
+    refreshAll,
   } = query
 
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -385,7 +385,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
               {listFailure}
             </div>
           </div>
-          <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void refresh()}>
+          <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void refreshAll()}>
             {t('common.retry')}
           </Button>
         </div>
@@ -726,7 +726,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-state-error-primary)' }}>
             {orphanFailure}
           </span>
-          <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={controller.busy} onClick={() => void refresh()}>
+          <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={controller.busy} onClick={() => void refreshAll()}>
             {t('common.retry')}
           </Button>
         </div>

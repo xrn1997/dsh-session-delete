@@ -47,7 +47,7 @@ ports/     端口与适配（HostPort / FsPort / Home）
    ▲
 trash/  ·  log/          ← 领域部件：条目形状、清册对账、storage-manifest（宿主 storage 域绑定）、组语义、日志走帧
    ▲
-verbs/     动词：delete / restore / purge / orphan-clean + permanent-removal + batch + member-journal + member-presence
+verbs/     动词：delete / restore / purge / orphan-clean + permanent-removal + batch + batch-carried + move-group + member-journal + member-presence
    ▲
 api/       两个投影面里的那个 Node 面：路由表 + dispatch + 行投影
    ▲
@@ -66,9 +66,9 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - 注册处只有一处：`src/client/index.tsx`（菜单行、行首勾选、行尾兜底、overlay 浮条/确认框、面板行 + 中央面板）。**槽位只挂官方已声明的**——向未声明槽位注册在插件激活时响亮失败。
 - **通道探测决定入口出现与否**：注册任何贡献之前先探 `GET /ping`；探测不过 ⇒ 一个入口都不注册（"不可用"以入口不出现表达，不新造禁用态 UI——半吊子 UI 比没有 UI 更糟）。探测**过了**（哪怕回的是失败信封）就照常注册。
 - **客户端条目 pending = 宿主进程死**：可选服务（locale）走 `ctx.get` 而不是 `inject`。
-- 文案住 `src/client/copy.ts` 的命名空间字典（zh 真源 + en 逐键镜像），经宿主 locale 服务可选读，缺席降级内置 zh。**渠道错误原文除外**：`src/client/receipt.ts` 的 missing-id、`src/client/remote.ts` 的幂等空值与取数通道错误是固定中文，不随 locale；它们是协议诊断原文，不是界面标签。
+- 文案住 `src/client/copy.ts` 的命名空间字典（zh 真源 + en 逐键镜像），经宿主 locale 服务可选读，缺席降级内置 zh。**渠道错误原文除外**：`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale；它们是协议诊断原文，不是界面标签。
 - **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（快照 / 订阅 / 每实例 seq / `reset`）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与整行点击守卫住 `src/client/host-rows.ts`）。
-- 浏览器半**不持任何真相**：失败码与数据根目录名从 `wire.ts` 取常量，"这次会释放多少"念服务端算好的 `releaseBytes`——它只做呈现。
+- 浏览器半**不持任何真相**：线上失败码与数据根目录名从 `wire.ts` 取常量（自己的未分类诊断码住 `receipt.ts`），"这次会释放多少"念服务端算好的 `releaseBytes`——它只做呈现。
 
 界面规格住 `docs/ui-spec.md`：入口与面板、六个基础状态、面板与清单、批量删除四态、残留维护三块。像素值、断点、文案键的唯一定义在 `src/client/` 与 `tests/client/`，那里不抄读数。
 
@@ -78,14 +78,16 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 
 | 语义 | 唯一主人 | 它不回答什么 |
 | --- | --- | --- |
-| 段名 / 线上形状 / 失败码 / 回收站目录名 | `src/shared/wire.ts` | 业务判据 |
-| /apply 回执的读法（缺 id / null 幂等 / 逐条失败 / orphan-clean 的 not-found 中性） | `src/client/receipt.ts` | 各写入面的呈现；线上形状归 `src/shared/wire.ts` |
+| 段名 / 线上形状 / 线上失败码 / 回收站目录名 | `src/shared/wire.ts` | 业务判据 |
+| /apply 回执的读法（缺 id / null 幂等 / 单条 null 的协议错 / 逐条失败 / orphan-clean 的 not-found 中性） | `src/client/receipt.ts` | 各写入面的呈现；线上形状归 `src/shared/wire.ts` |
 | 段名的方法 / 纯度 / body 预读 | `src/api/route-table.ts` | 怎么处理 |
 | 清册行 → 线上行的投影 | `src/api/trash-rows.ts` 的 `toWire`（显式字面量，不 `...row`） | 组语义 |
-| 组语义（谁能接住孩子、这一组有谁、谁已被同批带走） | `src/trash/groups.ts` | 步骤与回滚 |
-| 「这一批」（去重保序 / 清册快照 / 已带走账本 / 逐条信封 / 一批一次通告；delete 的已带走账本由动词结果长出，restore / purge 仍读 `src/trash/groups.ts` 的 `takenByEarlierInBatch`） | `src/verbs/batch.ts` | 单条动词的步骤 |
+| 组语义（谁能接住孩子、这一组有谁、`claimOf` 三态） | `src/trash/groups.ts` | 步骤与回滚；同批已带走集（`src/verbs/batch-carried.ts`） |
+| 「这一批」（去重保序 / 写动作共用一个循环与逐条信封 / 一批一次通告） | `src/verbs/batch.ts` | 单条动词的步骤；同批已带走集归 `src/verbs/batch-carried.ts`，三态谓词归 `src/trash/groups.ts`；`count` 是纯读、没有逐条失败，不走那个循环 |
+| 同批已带走集（entry / session 两种 id 域，各有 `claim` / `take`；entry 的 fresh 支带组，session 只回 fresh / carried；只读视图 `rows` 只在 entry 域） | `src/verbs/batch-carried.ts` | 组语义（`src/trash/groups.ts`）；单个动词的步骤 |
 | 成员离场 / 归位通告（摘 session + agent、三态、成对事件） | `src/verbs/member-presence.ts` | 批量通告（`announceRestoredBatch` 归 `src/verbs/batch.ts`） |
-| 一次成员移动的步骤与反向动作（含逐条失败收集） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
+| 一次成员移动的步骤、反向动作与逐步 undo 结果（`restored(key)`） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
+| 组级成员移动的顺序、按序结果与整组回滚 | `src/verbs/move-group.ts` | 单成员步骤（`src/verbs/member-journal.ts`）；谁算一组（`src/trash/groups.ts`） |
 | 永久删除的计划与执行（成员 / 目录 / 字节 / live 准入 / 部分回执） | `src/verbs/permanent-removal.ts` | 组语义归 `src/trash/groups.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` | 对账 |
 | 清册与 `session-trash/` 目录的对账 | `src/trash/reconcile.ts` | 目录里读哪一代日志 |
@@ -103,19 +105,21 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 会话语料读（整表身份 `listSessions`、子会话闭包 `subagentMembersOf`） | `src/ports/host-port.ts` 的 `HostCorpusPort` | 看不见语料时怎么办（**缺席策略归调用方**；形状见本文 §2 的「语料缺席」） |
 | 宿主能力的生产 adapter（一颗对象同时满足三个角色） | `src/ports/host-port.ts` 的 `createHostPort` | 各动词的调用顺序 |
 | Node 半的依赖面（CoreDeps / DeleteDeps） | `src/deps.ts` | 各动词的调用顺序 |
-| 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量） |
-| 外部写入收尾的顺序（主视图收尾 → 失效回收站 → 撤销通告） | `src/client/write-commit.ts` | 关/开主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、各写入面的交互与本地 refresh（面板归 controller/query） |
+| 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开、面板恢复后忘掉） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量） |
+| 撤销横幅的现场、seq 与按条目熄灭 | `src/client/undo-toast.tsx` | 何时发布（各写入面）；停留时长（文件内 `UNDO_HOLD_MS`） |
+| 一次逐条 `/apply` 写入的生命周期（apply → 信封 → receipt → commit → refresh；含 orphan-clean；`/empty` 聚合回执仍归 `use-trash-query.ts`） | `src/client/write.ts` 的 `runWrite` | 回执判读（`src/client/receipt.ts`）、commit 本体（`src/client/write-commit.ts`）、各面的本地状态 |
+| 外部写入收尾的顺序（主视图收尾 → 失效回收站 → 撤销通告） | `src/client/write-commit.ts` | 关/开主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、什么时机跑（`src/client/write.ts`） |
 | 无主子会话的扫描与分组（谁算孤儿、传递闭包与去重） | `src/verbs/orphan-subagents.ts` | 删哪些目录、报多少字节、谁挡活体（归 `src/verbs/permanent-removal.ts`）；回收站里的组 |
 | 失败码的措辞与映射、回滚失败的措辞与合并（`details.rollbackFailures`；码本身住 `wire.ts`） | `src/verbs/errors.ts` + `src/remote/map-error.ts` | 上屏文案 |
 | 同源栅栏（桌面壳那条只留 Referer 的路） | `src/api/dispatch.ts` | 操作失败的信封（那是 `map-error`） |
-| 客户端可见文案 | `src/client/copy.ts` | 服务端错误原文；渠道错误原文除外（`src/client/receipt.ts` 的 missing-id、`src/client/remote.ts` 的幂等空值与取数通道错误是固定中文，不随 locale） |
-| 清册与残留的取数编排（到达序号、在飞的旧响应不许盖新态） | `src/client/use-trash-query.ts` | 服务端算的那个数 |
+| 客户端可见文案 | `src/client/copy.ts` | 服务端错误原文；渠道错误原文除外（`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale） |
+| 清册与残留的取数编排、清空回收站的聚合回执（命名读 `reloadRows` / `rescanOrphans` / `refreshAll` / `refreshAfterWrite`；到达序号、在飞的旧响应不许盖新态、输给序号的读不清场；写后残留只在「已扫到过且为空」时省，报告未知 / 非空 / 强制重扫（输给后发读时由赢家补扫）；`refreshAll` / `refreshAfterWrite` 的清单读失败清空报告与提示并作废在飞扫描） | `src/client/use-trash-query.ts` | 服务端算的那个数 |
 | 清单的选择面（多选态、勾选集合、组头三态派生） | `src/client/use-trash-selection.ts` | 谁能接住孩子（`src/trash/groups.ts`） |
 | 动过回收站之后谁重读（失效通告台，只有一个修订号） | `src/client/trash-store.ts` | 动了什么、谁动的（清单本体永远问宿主） |
 | 跨槽位现场脚手架（快照 / 订阅 / 每实例 seq / `reset`） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值与不变量 |
 | 批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
 | 宿主行读取与整行点击守卫（可见行 / 全选判定 / 捕获阶段拦行点击） | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
-| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 确认派发 / 自动选中 / 下钻回退） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`） |
+| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 确认派发 / 自动选中 / 下钻回退 / 面板恢复的跨槽位结算） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、写入生命周期（`src/client/write.ts`） |
 | 槽位贡献与注册 | `src/client/index.tsx` | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
 | 抄来的官方控件样式（`sd-` 前缀）与点名的自造差异 | `src/client/ui/ui.css` 文件头那张来源表 | token 的取值 |

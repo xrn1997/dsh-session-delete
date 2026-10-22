@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import { purgeTrash } from '../src/verbs/purge-trash.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { groupOf } from '../src/trash/groups.js'
 import { createFakeDeps } from './support/fake-deps.js'
 
 const HOME = '/h'
@@ -26,10 +27,16 @@ function deps(seed: TrashEntry[]) {
   return { calls, fs, host, manifest, d }
 }
 
+/** 直调路径自己按清册算组；批量层由 `batch-carried.ts` 递下来。 */
+async function purge(d: ReturnType<typeof deps>['d'], entryId?: string) {
+  const rows = await d.manifest.list()
+  return await purgeTrash(d)(entryId === undefined ? undefined : groupOf(rows, entryId), rows, entryId)
+}
+
 describe('彻底删除', () => {
   it('删一条：目录被移除、清单少一条、返回释放字节', async () => {
     const { d, fs } = deps([e('a'), e('b')])
-    const r = await purgeTrash(d)('a')
+    const r = await purge(d, 'a')
     expect(r).toEqual({ removed: 1, freedBytes: 512 })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect(await d.manifest.list()).toHaveLength(1)
@@ -37,7 +44,7 @@ describe('彻底删除', () => {
 
   it('不传 entryId = 清空：移除全部并移除各自的目录', async () => {
     const { d, fs } = deps([e('a'), e('b')])
-    const r = await purgeTrash(d)()
+    const r = await purge(d)
     expect(r.removed).toBe(2)
     expect(fs.removeDir).toHaveBeenCalledTimes(2)
     expect(await d.manifest.list()).toHaveLength(0)
@@ -47,7 +54,7 @@ describe('彻底删除', () => {
   //（真机上就是这个形状）。摘内存是尽力而为；通告只在知道宿主列表已经干净时才发。
   it('每条被彻底删除的会话都尽力从宿主内存里摘掉并通告移除', async () => {
     const { d, calls } = deps([e('a'), e('b')])
-    await purgeTrash(d)()
+    await purge(d)
     expect(calls).toEqual([
       'evictLive(a)', 'announceRemoved(a)',
       'evictLive(b)', 'announceRemoved(b)',
@@ -57,7 +64,7 @@ describe('彻底删除', () => {
   it('摘内存结果未知（unknown）时不发通告，彻底删除的结果不受影响', async () => {
     const { d, host } = deps([e('a')])
     host.evictLive = vi.fn(async () => 'unknown' as const)
-    const r = await purgeTrash(d)('a')
+    const r = await purge(d, 'a')
     expect(r).toEqual({ removed: 1, freedBytes: 512 })
     expect(await d.manifest.list()).toHaveLength(0)
     expect(host.evictLive).toHaveBeenCalledWith('a')
@@ -66,13 +73,13 @@ describe('彻底删除', () => {
 
   it('条目不在清单里时报 trash-empty', async () => {
     const { d } = deps([])
-    await expect(purgeTrash(d)('nope')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty' })
+    await expect(purge(d, 'nope')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty' })
   })
 
   it('目录已被手工删掉：仍移除清单行，不报错', async () => {
     const { d } = deps([e('a')])
     ;d.fs.exists.mockImplementation(async () => false)
-    const r = await purgeTrash(d)('a')
+    const r = await purge(d, 'a')
     expect(r.removed).toBe(1)
   })
 
@@ -84,7 +91,7 @@ describe('彻底删除', () => {
     const kidB = { ...e('kB'), parentEntryId: 'p' }
     const other = e('z')
     const { d, fs } = deps([parent, kidA, kidB, other])
-    const r = await purgeTrash(d)('p')
+    const r = await purge(d, 'p')
     expect(r.removed).toBe(3)
     expect(fs.removeDir).toHaveBeenCalledTimes(3)
     const left = await d.manifest.list()
@@ -95,7 +102,7 @@ describe('彻底删除', () => {
     const parent = e('p')
     const kid = { ...e('k'), parentEntryId: 'p' }
     const { d, fs } = deps([parent, kid])
-    const r = await purgeTrash(d)('k')
+    const r = await purge(d, 'k')
     expect(r.removed).toBe(1)
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
   })
@@ -108,7 +115,7 @@ describe('彻底删除', () => {
       available: true as const,
       value: { p: [{ sessionId: 'session-kid', projectDir: '--p--' }] },
     }))
-    const r = await purgeTrash(d)('p')
+    const r = await purge(d, 'p')
     expect(r).toEqual({ removed: 2, freedBytes: 1024 })
     expect(host.unarchive).toHaveBeenCalledWith('p')
     expect(host.unarchive).toHaveBeenCalledWith('session-kid')
@@ -123,7 +130,7 @@ describe('彻底删除', () => {
   it('语料看不见（available:false）⇒ 静默降级，只清清册里的那一部分', async () => {
     const { d, fs, host } = deps([e('p')])
     host.subagentMembersOf = vi.fn(async () => ({ available: false as const }))
-    const r = await purgeTrash(d)('p')
+    const r = await purge(d, 'p')
     expect(r).toEqual({ removed: 1, freedBytes: 512 })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect(host.unarchive).toHaveBeenCalledWith('p')
@@ -137,7 +144,7 @@ describe('彻底删除', () => {
       value: { p: [{ sessionId: 'session-kid', projectDir: '--p--' }] },
     }))
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')
-    await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    await expect(purge(d, 'p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
     expect(fs.removeDir).not.toHaveBeenCalled()
     expect(host.unarchive).not.toHaveBeenCalled()
     expect(host.detach).not.toHaveBeenCalled()
@@ -149,7 +156,7 @@ describe('彻底删除', () => {
   it('target 自己在跑 ⇒ live，同样零副作用（目标不再能绕过活体准入）', async () => {
     const { d, fs, host } = deps([e('p')])
     host.isLive = vi.fn(async (id: string) => id === 'p')
-    await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    await expect(purge(d, 'p')).rejects.toMatchObject({ code: 'sessiondelete/live' })
     expect(fs.removeDir).not.toHaveBeenCalled()
     expect(host.unarchive).not.toHaveBeenCalled()
     expect(host.detach).not.toHaveBeenCalled()
@@ -162,7 +169,7 @@ describe('彻底删除', () => {
       available: true as const,
       value: { p: [{ sessionId: '../escape', projectDir: '--p--' }] },
     }))
-    await expect(purgeTrash(d)('p')).rejects.toThrow(/不是单段路径/)
+    await expect(purge(d, 'p')).rejects.toThrow(/不是单段路径/)
     expect(fs.removeDir).not.toHaveBeenCalled()
     expect(await d.manifest.list()).toHaveLength(1)
   })
@@ -175,7 +182,7 @@ describe('彻底删除', () => {
       available: true as const,
       value: { p: [{ sessionId: 'k', projectDir: '--p--' }] },
     }))
-    await purgeTrash(d)('p')
+    await purge(d, 'p')
     expect(fs.removeDir).toHaveBeenCalledTimes(2) // p 与 k 的回收站目录，不是 3
     expect(fs.removeDir).not.toHaveBeenCalledWith(sessionDirOf('--p--', 'k', HOME))
   })
@@ -187,7 +194,7 @@ describe('彻底删除', () => {
     const mid = { ...e('mid'), parentEntryId: 'top' }
     const leaf = { ...e('leaf'), parentEntryId: 'mid' }
     const { d, fs, manifest } = deps([top, mid, leaf])
-    const r = await purgeTrash(d)('mid')
+    const r = await purge(d, 'mid')
     expect(r.removed).toBe(1)
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect((await manifest.list()).map(x => x.id).sort()).toEqual(['leaf', 'top'])
@@ -196,7 +203,7 @@ describe('彻底删除', () => {
   it('unarchive 失败 ⇒ io，目录与清册行都不动', async () => {
     const { d, fs, host } = deps([e('p')])
     host.unarchive = vi.fn(async () => { throw new Error('archive boom') })
-    await expect(purgeTrash(d)('p')).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    await expect(purge(d, 'p')).rejects.toMatchObject({ code: 'sessiondelete/io' })
     expect(fs.removeDir).not.toHaveBeenCalled()
     expect(await d.manifest.list()).toHaveLength(1)
   })

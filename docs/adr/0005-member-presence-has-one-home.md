@@ -23,7 +23,8 @@ Status: accepted
    - `memberGone(sessionId, facts?)`：`backInTrash === false` 时什么都不做；否则 `evictLive`，
      三态不是 `unknown` 就 `announceRemoved`。
    - `memberBack(sessionId, facts)`：`diskBack && workspaceBack && visibleBack` 才 `announceRestored`。
-2. 调用方只报事实：删除回滚交三个布尔（本来就在手边）；恢复回滚交 `backInTrash: movedBack`；
+2. 调用方只报事实：删除回滚交 `diskBack` / `workspaceBack` 两件事实（`undo.restored('dir')` /
+   `undo.restored('workspace')`）；恢复回滚交 `backInTrash: undo.restored('dir')`；
    其余路径不交事实（缺省即「确实已离开」）。
 3. **批量通告不进来**：`announceRestoredBatch` 仍归 `src/verbs/batch.ts`（ADR-0002）。
 4. 不叠第二层 `catch`：`HostPort` 的三条方法按契约不抛；通告失败不翻动词结果这条语义留在端口。
@@ -35,7 +36,8 @@ Status: accepted
 ## 边界
 
 - 不做通用「在场框架」：它只服务「成员在会话列表里是否可见」这一件事。
-- 不读 journal 的失败串：那会把 module 耦合到回滚措辞，而且覆盖不了恢复侧「目录回 trash 就算离开」的语义。
+- 不直接读 journal：那会把 module 耦合到回滚实现；调用方只把 `undo.restored('dir')` 读成布尔再交进来
+  （删除侧同理交 `dir` / `workspace` 两件事实）。
 - 不改事件名、载荷形状与调用顺序（现有用例钉着 `rename → evictLive → announceRemoved`）。
 
 ## 后果
@@ -49,7 +51,7 @@ Status: accepted
 
 - **只收通告、不收 `evictLive`**：三态判断会留在六处调用，协议仍然散着。
 - **调用方算好一个布尔再交给 module**：「三件写都回去」的真值表继续住调用点，正是这次要收的东西。
-- **module 直接读 journal 的 `failures`**：耦合到回滚措辞，且恢复回滚的 `movedBack` 不是 journal 失败串能表达的。
+- **module 直接读 journal 的 `JournalUndo`**：耦合到 journal 的键与实现；事实仍由调用方交进来。
 - **把批量 `announceRestoredBatch` 也收进来**：一个 module 同时拥有单成员与整批两种通告粒度，违背 ADR-0002。
 
 锚点：`CONTEXT.md`（成员在场 / 通告）；`src/verbs/member-presence.ts`

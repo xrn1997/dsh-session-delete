@@ -2,12 +2,13 @@ import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash
 import type { CoreDeps, DeleteDeps } from '../deps.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { verbError } from './errors.js'
-import { attempt, createJournal, rollbackJournals, type Journal, type JournalStep } from './member-journal.js'
+import { attempt, createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
 import { createMemberPresence, type MemberPresence } from './member-presence.js'
+import { moveGroup } from './move-group.js'
 
 export interface DeleteResult {
   readonly entry: TrashEntry
-  /** 这一次真的搬进回收站的成员（父 + 盘上存在的孩子）；批量层用它建幂等账本。 */
+  /** 这一次真的搬进回收站的成员（父 + 盘上存在的孩子）；批量层用它建同批已带走集。 */
   readonly movedSessionIds: readonly string[]
 }
 
@@ -23,7 +24,7 @@ interface Member {
  * 整排藏了 ⇒ 那些目录既看不见也继续占着字节（本机实测 41 条父留了 320 个目录 / 74.6 MB）。
  * 所以这里把父在盘上的孩子一起搬进来，各自成目录、各自一行，清册用 `parentEntryId` 记它是谁的孩子。
  *
- * 三段，顺序承重：
+ * 三段，顺序承重（成员循环与整组回滚的实现住 `verbs/move-group.ts`）：
  * ① **先点组、先验活体**（一个字节都不写）。任一成员在跑就整组拒绝——不替用户终止正在跑的活，
  *    也绝不允许"父已经搬进回收站、孩子因为在跑而搬不动"这种半套。
  * ② **逐个搬**：每个成员是一份 `journal`（`verbs/member-journal.ts`），搬不动时 journal 自己把
@@ -31,7 +32,8 @@ interface Member {
  * ③ **组级回滚**：某一个成员搬不动时，把**已经搬进去的**那些按相反顺序退回原处（清册行跟着摘、
  *    账本跟着挂），失败照抛——不留"半组在回收站、半组在原地"的世界。
  *
- * interface 只有**一个 id**：批量的性质不在这里（同批"已被前一条带走"的判据归 `verbs/batch.ts`）。
+ * interface 只有**一个 id**：批量的性质不在这里（同批已带走集归 `verbs/batch-carried.ts`，
+ * 组语义归 `trash/groups.ts`）。
  * 结果带回这次真的搬走的整组（`movedSessionIds`）——它是动词交回的内部数据，不再靠回调借用动词的手。
  */
 export function deleteSession(deps: DeleteDeps) {
@@ -67,22 +69,16 @@ export function deleteSession(deps: DeleteDeps) {
     }
 
     const deletedAt = deps.now()
-    const done: Journal[] = []
-    let parentEntry: TrashEntry | undefined
-    try {
-      for (const member of members) {
-        const isParent = member.sessionId === sessionId
-        const move = await memberMove(deps, presence, member, deletedAt, isParent ? undefined : parentEntry!.id)
-        if (isParent) parentEntry = move.entry
-        await move.journal.run()
-        done.push(move.journal)
-      }
-    } catch (error) {
-      // 相反顺序退回去（执行的最后一件先退）；某一步退不干净时**不能**让原错误独走——
-      // 客户端只看 code 会以为已经回到删除前，实际半组还挂在回收站里。
-      await rollbackJournals(done, error)
-    }
-    return { entry: parentEntry!, movedSessionIds: members.map((member) => member.sessionId) }
+    // 相反顺序退回去（执行的最后一件先退）；某一步退不干净时**不能**让原错误独走——
+    // 客户端只看 code 会以为已经回到删除前，实际半组还挂在回收站里。
+    const results = await moveGroup<Member, TrashEntry>(members, async (member, priorResults) => {
+      // members[0] 是父、moveGroup 保序：父自己排在最前（前面没有前序结果），孩子的首个前序结果就是父条目。
+      const parentEntryId = priorResults[0]?.id
+      const move = await memberMove(deps, presence, member, deletedAt, parentEntryId)
+      return { journal: move.journal, result: move.entry }
+    })
+    // members[0] 是父，moveGroup 保序；走到这里 results[0] 一定是父条目。
+    return { entry: results[0]!, movedSessionIds: members.map((member) => member.sessionId) }
   }
 }
 
@@ -120,13 +116,10 @@ async function memberMove(
   }
   /** 目录真的搬进回收站了吗——决定那一步的反向动作有没有东西可退。 */
   let moved = false
-  /** 回滚的两件写是否都真正退回原样：目录、账本。两个事实交给成员在场 module 判「归位」通告。
-   *  删除不碰归档集 ⇒ 可见性不是这次删除改过的事实，不进真值表。 */
-  let movedBack = false
-  let workspaceBack = workspaceId === undefined
 
   const steps: JournalStep[] = [
     {
+      key: 'read',
       label: '读取会话现场失败',
       run: async () => {
         entry.title = await deps.host.titleOf(sessionId)
@@ -134,21 +127,17 @@ async function memberMove(
       },
     },
     ...(workspaceId === undefined ? [] : [{
+      key: 'workspace' as const,
       label: '摘账本失败',
       run: async () => { await deps.host.detach(sessionId, workspaceId) },
-      undo: async () => {
-        const failures = await attempt('账本挂回失败', async () => {
-          await deps.host.attach(sessionId, workspaceId)
-          workspaceBack = true
-        })
-        return failures
-      },
+      undo: () => stepUndo('账本挂回失败', () => deps.host.attach(sessionId, workspaceId)),
     }]),
     {
       // 目录与清册行合成一步：**行必须在目录搬进回收站之后写**（否则中间有一段"行在、目录还在
       // `sessions/`"的世界，对账会把它当成幽灵行摘掉，接着目录搬进来就成了点不开的孤儿目录）。
       // 反向动作因此也是两件、且有先后：**先搬回目录、再摘行**——搬不回去就留着行，元数据还在。
       // 目录一次都没搬动过（rename 自己就失败了）时没有可退的：那时清册行也还没写。
+      key: 'dir',
       label: '移动会话目录失败',
       undoOnFailure: true,
       run: async () => {
@@ -163,15 +152,14 @@ async function memberMove(
         }
       },
       undo: async () => {
-        if (!moved) return []
-        const failures: string[] = [...await attempt('目录搬回失败', async () => {
-          await deps.fs.rename(trashDir, sessionDir)
-          movedBack = true
-        })]
-        if (failures.length === 0) {
+        if (!moved) return { restored: true, failures: [] }
+        const directory = await stepUndo('目录搬回失败', () => deps.fs.rename(trashDir, sessionDir))
+        const failures: string[] = [...directory.failures]
+        if (directory.restored) {
           failures.push(...await attempt('清册行摘除失败', () => deps.manifest.remove(entry.id)))
         }
-        return failures
+        // 键是 `dir`：目录回来就算归位；清册行是附属写，失败只进 failures（客户端仍要收到 added）。
+        return { restored: directory.restored, failures }
       },
     },
   ]
@@ -185,12 +173,16 @@ async function memberMove(
         await journal.run()
         await presence.memberGone(sessionId)
       },
-      /** 组级回滚：先把成员自己的步骤按相反顺序退回，再交给成员在场 module 判「三件写都回去了吗」。
-       *  这一行此前已经收过 `api-session/removed`；不发"回来了"它就会在客户端消失到重连为止。 */
+      /** 组级回滚：先把成员自己的步骤按相反顺序退回，再交给成员在场 module 判「目录与账本两件写都回去了吗」。
+       *  这一行此前已经收过 `api-session/removed`；不发"回来了"它就会在客户端消失到重连为止。
+       *  「退没退成」由 journal 的逐步结果交出来，这里不再自己累计布尔。 */
       async undo() {
-        const failures = await journal.undo()
-        await presence.memberBack(sessionId, { diskBack: movedBack, workspaceBack })
-        return failures
+        const undo = await journal.undo()
+        await presence.memberBack(sessionId, {
+          diskBack: undo.restored('dir'),
+          workspaceBack: workspaceId === undefined ? true : undo.restored('workspace'),
+        })
+        return undo
       },
     },
   }

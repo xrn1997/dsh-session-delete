@@ -117,7 +117,7 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
     expect(outcomes[1]).toMatchObject({ ok: true, value: { removed: 1 } })
   })
 
-  it('delete：同批第二个孩子是幂等 no-op（值 null）——账本从动词结果长出', async () => {
+  it('delete：同批第二个孩子是幂等 no-op（值 null）——同批已带走集从动词结果长出', async () => {
     const { deps, host, manifest } = world([])
     host.subagentMembersOf.mockImplementation(async (ids: readonly string[]) => ({
       available: true as const,

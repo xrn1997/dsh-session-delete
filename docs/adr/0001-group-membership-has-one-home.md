@@ -24,7 +24,9 @@ Status: accepted
    - `visibleGroups(rows): { root, kids }[]`——清单露面的一行 = 组根（`/list` 的行装配要的是 `root` 与
      `kids` 两样，所以给带 `kids` 的那一版，而不是只回一排行）；
    - `groupOf(rows, id): TrashEntry[]`——一条 id 所属的整组（含「父自己是孩子时只回自己」）；
-   - `takenByEarlierInBatch(original, current, id): boolean`——幂等判据（「被同批前一条带走」）。
+   - `claimOf(original, current, id): GroupClaim`——判别联合的三态（`absent` / `carried` / `fresh`）；
+     **只有 `fresh` 带当前这一组**，carried / absent 没有组可带。调用方只读 `verdict`，
+     boolean 谓词那一层不提供。
 2. 判据原文只在这一个文件里写：**接得住孩子的只有组根**。
 3. `purgeTrash` 改用与其余三处同一条判据——这是**行为变化**：嵌套组不再连带删除孙代。
 4. 补一条嵌套组的回归测试（父行自己也是孩子时，彻底删除只清它自己）。
@@ -34,7 +36,7 @@ Status: accepted
 - **不**提供"只有一排露面行"的那个更窄的函数：`/list` 的装配同时要 `root` 与 `kids`（头部合计与
   孩子数都从那两样算），只回一排行会把组又拆成两个函数做同一件事。
 - **不**把快照装进一个可变句柄（`createGrouping(rows)`）：`/apply` 那条路会在同一批里多次重问、
-  而快照会被就地收缩；把快照当参数传，收缩的时机归调用方，groups module 保持无状态。
+  而这份快照会随批量推进被收缩；把快照当参数传，收缩的时机归调用方，groups module 保持无状态。
 
 ## 后果
 

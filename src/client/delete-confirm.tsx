@@ -32,6 +32,7 @@ import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
 import { publishUndoNotice } from './undo-toast.js'
 import { commitExternalDelete } from './write-commit.js'
+import { runWrite } from './write.js'
 
 /**
  * 被操作对象那张卡。`Modal`（`ui/Modal.tsx`，照官方抄的）的 `.sd-modal-body` 不设字号也不给层级 ⇒ 裸摆一行会话标题会和下面那句
@@ -127,18 +128,31 @@ function ConfirmDialog({
   const confirm = async (): Promise<void> => {
     setBusy(true)
     setFailure(null)
-    const outcome = await callRemote(() => applyOne(deps, 'delete', current.sessionId).then((item) => item.value))
-    setBusy(false)
-    if (!outcome.ok) {
-      setFailure(outcome.failure.message)
-      return
+    try {
+      const outcome = await runWrite({
+        deps,
+        action: 'delete',
+        ids: [current.sessionId],
+        single: true,
+        commit: (success) => {
+          // N=1 只可能有一条 `ok`（单条读法把幂等空值折成了协议错），取到才收尾。
+          const landed = success.receipt.verdicts.find((verdict) => verdict.kind === 'ok')
+          if (landed?.kind !== 'ok') return
+          commitExternalDelete({
+            sessionIds: [current.sessionId],
+            publishUndo: () => publishUndoNotice({ entryId: landed.value.id, title: current.title }),
+          })
+        },
+      })
+      const failure = outcome.failures.get(current.sessionId)
+      if (failure !== undefined) {
+        setFailure(failure)
+        return
+      }
+      clearDeleteRequest()
+    } finally {
+      setBusy(false)
     }
-    const entry = outcome.value
-    commitExternalDelete({
-      sessionIds: [current.sessionId],
-      publishUndo: () => publishUndoNotice({ entryId: entry.id, title: current.title }),
-    })
-    clearDeleteRequest()
   }
 
   return (

@@ -6,6 +6,7 @@ import type { ApplyOutcome } from '../../src/client/remote.js'
 import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
 import {
   UndoToast,
+  dismissUndoNotice,
   publishUndoBatchNotice,
   publishUndoNotice,
   resetUndoNotice,
@@ -53,6 +54,59 @@ describe('通知台 seq', () => {
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     await waitFor(() => expect(view.result.current?.seq).toBe(2))
     expect(view.result.current?.failure).toBe('原项目目录已不在')
+  })
+})
+
+describe('按条目熄灭撤销横幅', () => {
+  it('单条命中就清；未命中保留', () => {
+    const { result } = renderHook(() => useUndoNotice())
+    act(() => { publishUndoNotice({ entryId: 'e1', title: 'T' }) })
+    act(() => { dismissUndoNotice(['other']) })
+    expect(result.current?.seq).toBe(1)
+    act(() => { dismissUndoNotice(['e1']) })
+    expect(result.current).toBeNull()
+  })
+
+  it('批量里任一命中就清整条：不留下计数已变的假动作', () => {
+    const { result } = renderHook(() => useUndoNotice())
+    act(() => { publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 }) })
+    act(() => { dismissUndoNotice(['e2']) })
+    expect(result.current).toBeNull()
+  })
+
+  it('撤销在飞时条目已在别处恢复：旧撤销失败不把熄灭的横幅翻回来', async () => {
+    let rejectApply!: (reason: unknown) => void
+    const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((_resolve, reject) => {
+      rejectApply = reject
+    }))
+    publishUndoNotice({ entryId: 'e1', title: 'T' })
+    const view = renderHook(() => useUndoNotice())
+    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+
+    act(() => { dismissUndoNotice(['e1']) })
+    expect(view.result.current).toBeNull()
+
+    await act(async () => {
+      rejectApply(Object.assign(new Error('回收站里没有这一条'), { code: 'sessiondelete/trash-empty' }))
+    })
+    expect(view.result.current).toBeNull()
+  })
+
+  it('撤销在飞时来了新删除：旧撤销成功不清掉新横幅', async () => {
+    let resolveApply!: (value: ApplyOutcome[]) => void
+    const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((resolve) => {
+      resolveApply = resolve
+    }))
+    publishUndoNotice({ entryId: 'e1', title: 'T' })
+    const view = renderHook(() => useUndoNotice())
+    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+
+    act(() => { publishUndoNotice({ entryId: 'e2', title: 'U' }) })
+    await act(async () => { resolveApply(restoreOutcomes(['e1'])) })
+
+    expect(view.result.current).toMatchObject({ kind: 'one', entryId: 'e2' })
   })
 })
 
@@ -152,10 +206,14 @@ describe('批量撤销横幅', () => {
     // 删除时关掉当前视图（main-view 由此记住 session-a）：全失败的撤销不许把它重开。
     afterDelete(['session-a'])
     publishUndoBatchNotice({ entryIds: ['session-a'], n: 1 })
+    const revision = renderHook(() => useTrashRevision())
     render(<UndoToast deps={{ applyOutcomes } as never} />)
+    expect(revision.result.current).toBe(0)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(await screen.findByText('项目目录不在')).toBeInTheDocument()
     expect(openSession).not.toHaveBeenCalled()
+    // 全失败也发失效通告：回滚失败可能留下半套，清单不能继续摆旧行。
+    await waitFor(() => expect(revision.result.current).toBe(1))
   })
 
   it('批量撤销部分失败：成功回盘的那条仍会被重开（main-view 只认自己关过的会话）', async () => {

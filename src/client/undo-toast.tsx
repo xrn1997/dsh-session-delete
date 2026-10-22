@@ -13,18 +13,20 @@
  * 不引 `@deepseek-ai/dsh-client-store`（它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
  */
 import { zhTranslate, type Translate } from './copy.js'
-import { applyOne, callRemote, type OneShotDeps } from './remote.js'
-import { failureMessage, isFailureVerdict, readReceipt } from './receipt.js'
+import { restoredSessionIds } from './receipt.js'
+import type { OneShotDeps } from './remote.js'
 import { createStore } from './store.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
 import { commitExternalRestore } from './write-commit.js'
+import { runWrite } from './write.js'
 
 export type UndoToastDeps = OneShotDeps
 
 /**
  * 一次待撤销的事。两形（2026-10-17 起）：单条删除（主语是会话名）／批量删除（主语是条数）。
- * 同一个 Toast 宿主、同一停留时长；撤销动作按形走——单条 `restore`，批量**一次** `applyOutcomes`。
+ * 同一个 Toast 宿主、同一停留时长；撤销动作按形分派（单条 / 批量），两条都走 `runWrite` 的同一段；
+ * 单条另带 `single: true` 的读法（null 是协议错，不冒充幂等成功）。
  */
 export type UndoNotice = {
   /** 每次发布递增：Toast 靠它重挂载，同一段文案连续出现两次也能重新计一次停留。 */
@@ -78,6 +80,19 @@ export function clearUndoNotice(): void {
   noticeStore.set(null)
 }
 
+/**
+ * 某个条目已经在别处恢复：把指向它的横幅熄掉。
+ * 批量里任一命中就清整条——名单少了、计数没变，留着就是一条会骗人的「撤销」动作。
+ */
+export function dismissUndoNotice(entryIds: readonly string[]): void {
+  const wanted = new Set(entryIds)
+  noticeStore.update((current) => {
+    if (current === null) return current
+    if (current.kind === 'one') return wanted.has(current.entryId) ? null : current
+    return current.entryIds.some((id) => wanted.has(id)) ? null : current
+  })
+}
+
 /** 供组件订阅。 */
 export function useUndoNotice(): UndoNotice | null {
   return noticeStore.use()
@@ -91,43 +106,45 @@ export function resetUndoNotice(): void {
 /** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/ui-spec.md` §2 状态 ③ 只指到这里，不抄这个数。 */
 export const UNDO_HOLD_MS = 6000
 
+/** 这次撤销开始时的那条横幅还在吗——期间被新删除覆盖、或由面板恢复熄灭时，旧请求不许改写它。 */
+function ownsNotice(current: UndoNotice): boolean {
+  return noticeStore.get() === current
+}
+
 /** 撤销失败：把原因换到同一条横幅上（seq 递增 ⇒ Toast 重挂载、重新计停留）。 */
 function failNotice(current: UndoNotice, message: string): void {
+  if (!ownsNotice(current)) return
   noticeStore.publish((seq) => ({ ...current, seq, failure: message }))
 }
 
-/** 撤销：单条 `restore(entryId)`、批量**一次** `applyOutcomes('restore', entryIds)`；失败就把原因换到同一条横幅上，不静默。 */
+/** 撤销：单条与批量都走**一次** `applyOutcomes('restore', ids)`（`runWrite` 判读；单条带 `single: true`，
+ *  null 是协议错）；失败就把原因换到同一条横幅上，不静默。 */
 async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
+  const ids = current.kind === 'one' ? [current.entryId] : current.entryIds
   if (current.kind === 'one' && current.entryId === '') return
-  if (current.kind === 'one') {
-    const outcome = await callRemote(() => applyOne(deps, 'restore', current.entryId))
-    if (!outcome.ok) {
-      failNotice(current, outcome.failure.message)
-      return
-    }
-    // 恢复成功后重开删除时被关掉的会话（只认 main-view 自己记过的），并让清单面板重读。
-    commitExternalRestore([outcome.value.value.sessionId])
-  } else {
-    const outcome = await callRemote(() => deps.applyOutcomes('restore', current.entryIds))
-    if (!outcome.ok) {
-      failNotice(current, outcome.failure.message)
-      return
-    }
-    const receipt = readReceipt('restore', current.entryIds, outcome.value)
-    const restored = receipt.verdicts.flatMap((verdict) =>
-      verdict.kind === 'ok' && verdict.value !== null ? [verdict.value.sessionId] : [])
-    // 信封成功（哪怕逐条有失败）⇒ 成功的那几条已经回盘：照样重开它们、清单照样重读；
-    // 逐条失败提前 return 时这次收尾已经做完（全失败时名单为空，多付一次无害的重读）。
-    commitExternalRestore(restored)
-    const failure = receipt.verdicts.find(isFailureVerdict)
-    if (failure !== undefined) {
-      // 信封成功 ≠ 每一条都撤销成功：逐条全失败时横幅要换成失败原文，不能假装撤销成功。
-      failNotice(current, failureMessage(failure))
-      return
-    }
+  const outcome = await runWrite({
+    deps,
+    action: 'restore',
+    ids,
+    single: current.kind === 'one',
+    commit: (success) => {
+      // 恢复成功后重开删除时被关掉的会话（只认 main-view 自己记过的），并让清单面板重读。
+      // 信封成功就收尾（哪怕逐条全失败）：成功的那几条回盘要重开；清单失效照发（回滚失败可能留半套）。
+      commitExternalRestore(restoredSessionIds(success.receipt))
+    },
+  })
+  if (!outcome.ok) {
+    failNotice(current, outcome.failure.message)
+    return
   }
-  // 走到这里 = 这一次撤销全部成功（失败支都已提前 return 并把原文留在横幅上）。
-  clearUndoNotice()
+  const failure = outcome.failures.values().next().value
+  if (failure !== undefined) {
+    // 信封成功 ≠ 每一条都撤销成功：逐条失败时横幅要换成失败原文，不能假装撤销成功。
+    failNotice(current, failure)
+    return
+  }
+  // 成功只收掉自己那条：期间若已发布新删除的横幅，不能被这次收尾顺手清掉。
+  if (ownsNotice(current)) clearUndoNotice()
 }
 
 /**

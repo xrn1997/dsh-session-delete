@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { failureMessage, isFailureVerdict, missingOutcomeMessage, readReceipt } from '../../src/client/receipt.js'
+import {
+  failureMessage,
+  isFailureVerdict,
+  missingOutcomeMessage,
+  readReceipt,
+  readSingleReceipt,
+  restoredSessionIds,
+} from '../../src/client/receipt.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
 
 const row = (id: string) => ({
@@ -65,6 +72,29 @@ describe('readReceipt', () => {
     expect(receipt.verdicts[1]).toMatchObject({ kind: 'failed', error: { details: { removed: 1 } } })
   })
 
+  it('single: null 是协议错，不再是 already-gone', () => {
+    const receipt = readReceipt('delete', ['a'], [gone('a')], { single: true })
+    expect(receipt.verdicts[0]).toEqual({
+      kind: 'failed',
+      id: 'a',
+      error: { code: 'client/unknown', message: '单条动作回了幂等空值：delete a' },
+    })
+  })
+
+  it('readSingleReceipt：正常成功支仍是 ok，且类型面不含 already-gone', () => {
+    const receipt = readSingleReceipt('delete', 'a', [entry('a')])
+    expect(receipt.verdicts[0]).toMatchObject({ kind: 'ok', id: 'a', value: { id: 'a' } })
+  })
+
+  it('readSingleReceipt：null 折成 failed，single 读法不产生 already-gone', () => {
+    const receipt = readSingleReceipt('delete', 'a', [gone('a')])
+    expect(receipt.verdicts[0]).toMatchObject({
+      kind: 'failed',
+      id: 'a',
+      error: { code: 'client/unknown', message: '单条动作回了幂等空值：delete a' },
+    })
+  })
+
   it('failureMessage: failed/neutral use error.message; missing uses message', () => {
     const neutral: ApplyOutcome = {
       id: 'a', action: 'orphan-clean', ok: false,
@@ -81,5 +111,26 @@ describe('readReceipt', () => {
       '坏了',
       missingOutcomeMessage('orphan-clean', 'c'),
     ])
+  })
+})
+
+describe('restoredSessionIds', () => {
+  const restoreEntry = (id: string): ApplyOutcome =>
+    ({ id, action: 'restore', ok: true, value: row(id) })
+  const restoreGone = (id: string): ApplyOutcome =>
+    ({ id, action: 'restore', ok: true, value: null })
+  const purgeOk = (id: string): ApplyOutcome =>
+    ({ id, action: 'purge', ok: true, value: { removed: 1, freedBytes: 1 } })
+
+  it('ok 支取 sessionId；already-gone 由条目查找兜底；purge 的聚合值跳过', () => {
+    const receipt = readReceipt('restore', ['a', 'b'], [restoreEntry('a'), restoreGone('b')])
+    expect(restoredSessionIds(receipt, (id) => id === 'b' ? 'session-b' : undefined))
+      .toEqual(['session-a', 'session-b'])
+    expect(restoredSessionIds(readReceipt('purge', ['c'], [purgeOk('c')]))).toEqual([])
+  })
+
+  it('没有兜底时 already-gone 不产生 id（撤销横幅原语义）', () => {
+    const receipt = readReceipt('restore', ['a'], [restoreGone('a')])
+    expect(restoredSessionIds(receipt)).toEqual([])
   })
 })

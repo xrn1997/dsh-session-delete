@@ -13,8 +13,8 @@
  * - **自动选中只认 `selectedId === null`**：同一拍里选中的那条消失时，自动选中看到的是旧选中
  *   （非 null）⇒ 不抢；清场落地后的下一拍才接住新清单的第一条。判据是这道 null 门，不是两个
  *   effect 的声明顺序（顺序反过来也拦得住）。
- * - **失效通告只戳重读**：`useTrashRevision` 变了就 `query.refresh()`，与挂载时同一条路；它不碰
- *   选中、不碰详情缓存（清单换了自会有上面的清场来收尾）。
+ * - **失效通告只戳重读**：`useTrashRevision` 变了就 `query.refreshAfterWrite()`；挂载那拍才走
+ *   `refreshAll()`。它不碰选中、不碰详情缓存（清单换了自会有上面的清场来收尾）。
  * - **动作成功就丢缓存**：恢复/批量彻底删除成功的条目、清空成功的全部条目，详情缓存必须在同一趟里
  *   失效——否则这条会话再被删回来时会摆着上一世的正文。失败只按 `actionFailure[id]` 留原文，不碰缓存。
  * - **Esc 只在 drilled 期间挂 document 监听**：记下 `selectedId` 再退出下钻，渲染落地后把焦点交还
@@ -31,14 +31,15 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  applyOne,
   callRemote,
-  type ApplyOutcome,
   type SessionDeleteRemote,
   type TrashDetailLike,
   type TrashEntryLike,
 } from './remote.js'
-import { failureMessage, readReceipt } from './receipt.js'
+import { forgetMainView } from './main-view.js'
+import { restoredSessionIds } from './receipt.js'
+import { dismissUndoNotice } from './undo-toast.js'
+import { runWrite } from './write.js'
 import type { PendingAction } from './trash-confirm.js'
 import { useTrashRevision } from './trash-store.js'
 import type { TrashDetailState } from './trash-detail.js'
@@ -72,14 +73,15 @@ export function useTrashPanelGate(): TrashPanelGate {
 }
 
 /**
- * 控制器要的面。`query` 只取三样：清单（选中从它里面找）、重读（失效通告与写动作之后用）、
- * 清空（面板的写动作那一半）。`ordered` 是键盘/自动选中用的"屏幕上的顺序"（只含展开的组），
+ * 控制器要的面。`query` 取四样：清单（选中从它里面找）、`refreshAll`（挂载与显式重试）、
+ * `refreshAfterWrite`（失效与写后）、清空（面板的写动作那一半）。`ordered` 是键盘/自动选中用的
+ * "屏幕上的顺序"（只含展开的组），
  * 由面板算好传进来——布局常量不搬进控制器。
  */
 export interface TrashPanelControllerInput {
   deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
   gate: TrashPanelGate
-  query: Pick<TrashQuery, 'entries' | 'refresh' | 'emptyTrash'>
+  query: Pick<TrashQuery, 'entries' | 'refreshAll' | 'refreshAfterWrite' | 'emptyTrash'>
   ordered: readonly TrashEntryLike[]
   canAutoSelect: boolean
   focusRow(entryId: string): void
@@ -99,7 +101,7 @@ export interface TrashPanelController {
   retry(): void
   back(): void
   setPending(pending: PendingAction | null): void
-  /** 单条恢复（`/apply` 的 N=1）：成功后丢缓存并重读清单，失败原文落回这一行。 */
+  /** 单条恢复（`/apply` 的 N=1）：成功后丢缓存，写完无论成败都重读清单，失败原文落回这一行。 */
   restore(entry: TrashEntryLike): Promise<void>
   /** 确认框上的「确认」：按 `pending.kind` 分派到空清或 `confirmApply`。 */
   confirmPurge(): Promise<void>
@@ -115,7 +117,7 @@ interface DetailFailure {
 
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
   const { deps, gate, query, ordered, canAutoSelect, focusRow } = input
-  const { entries, refresh, emptyTrash } = query
+  const { entries, refreshAll, refreshAfterWrite, emptyTrash } = query
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [drilled, setDrilled] = useState(false)
@@ -127,12 +129,19 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   const detailCache = useRef(new Map<string, TrashDetailLike>())
   /** Esc 退出下钻后要交还焦点的那一行；等 `drilled` 落地、清单回到 DOM 之后再用一次。 */
   const refocusRow = useRef<string | null>(null)
+  /** 挂载那一拍做完整刷新（清单 + 残留），之后失效通告只走写后刷新。 */
+  const firstRefresh = useRef(true)
 
-  // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍就把清单重读一遍。
+  // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍重读清单；报告未知或非空才顺带重扫。
   const revision = useTrashRevision()
   useEffect(() => {
-    void refresh()
-  }, [refresh, revision])
+    if (firstRefresh.current) {
+      firstRefresh.current = false
+      void refreshAll()
+      return
+    }
+    void refreshAfterWrite()
+  }, [refreshAll, refreshAfterWrite, revision])
 
   /**
    * 选一条：命中缓存就直接摆（不经过 loading），没命中才去读那条会话自己的日志。
@@ -234,10 +243,17 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     setActionFailure((current) => ({ ...current, [entryId]: message }))
   }, [])
 
+  /** 成功支（含 already-gone）的条目丢详情缓存。 */
+  const clearDetailCache = useCallback((successIds: readonly string[]): void => {
+    for (const id of successIds) detailCache.current.delete(id)
+  }, [])
+
   /**
    * 单条恢复：**先清掉这一行的旧失败**（再点一次不该还挂着上一次的原文），再把手势包进 `around`。
    * 成功要丢详情缓存 + 重读清单——缓存不失效的话，这条会话再被删回来时会直接摆出上一世的正文。
-   * `refresh` 留在 `around` 里：否则旧清单还在屏上，同一个动作能被再点一次。
+   * 失败也重读：组回滚可能自己失败（`details.rollbackFailures`），清单不能继续摆旧行。
+   * 露面的孩子（`parentEntryId` 非空）单独恢复会让它回到语料、可能变成新孤儿 ⇒ 这一格强制重扫残留。
+   * `refreshAfterWrite` 留在 `around` 里：否则旧清单还在屏上，同一个动作能被再点一次。
    */
   const restore = useCallback(async (entry: TrashEntryLike): Promise<void> => {
     setActionFailure((current) => {
@@ -246,65 +262,69 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       return next
     })
     await gate.around(async () => {
-      const outcome = await callRemote(() => applyOne(deps, 'restore', entry.id))
-      if (!outcome.ok) {
-        failRow(entry.id, outcome.failure.message)
-        return
-      }
-      detailCache.current.delete(entry.id)
-      await refresh()
+      const outcome = await runWrite({
+        deps,
+        action: 'restore',
+        ids: [entry.id],
+        single: true,
+        commit: (success) => {
+          clearDetailCache(success.successIds)
+          // 信封成功不等于这条落地：失败时横幅还指着回收站里的那条，main-view 的记录也不能当成功结算掉。
+          if (!success.anySuccess) return
+          dismissUndoNotice([entry.id])
+          forgetMainView([entry.sessionId])
+        },
+        // 无论信封还是逐条成败，都重读：顶层失败可能是"成了但响应断在路上"；逐条失败也可能是
+        // restore 的组回滚自己失败留下的半套——服务端答"失败"不等于盘上没动。
+        // 露面的孩子（父行已摘）单独恢复后可能变成新孤儿；组根恢复会把孩子一起带回，不强制重扫。
+        refresh: () => refreshAfterWrite({ rescan: entry.parentEntryId !== undefined }),
+      })
+      const failure = outcome.failures.get(entry.id)
+      if (failure !== undefined) failRow(entry.id, failure)
     })
-  }, [deps, failRow, gate, refresh])
-
-  /**
-   * 一段批量 → 组件状态：成功的丢详情缓存，失败的原文落回它自己那一行。整批一次上屏。
-   * **请求了但没回的 id 也是失败**（通道的错），落 missing 原文，不静默当成成功。
-   */
-  const settleOutcomes = useCallback((action: 'purge' | 'restore', ids: readonly string[], outcomes: readonly ApplyOutcome[]): void => {
-    const receipt = readReceipt(action, ids, outcomes)
-    const failures: Array<{ id: string; message: string }> = []
-    for (const verdict of receipt.verdicts) {
-      switch (verdict.kind) {
-        case 'ok':
-        case 'already-gone':
-          detailCache.current.delete(verdict.id)
-          break
-        case 'failed':
-        case 'neutral':
-        case 'missing':
-          failures.push({ id: verdict.id, message: failureMessage(verdict) })
-          break
-      }
-    }
-    if (failures.length === 0) return
-    setActionFailure((current) => {
-      const next = { ...current }
-      for (const failure of failures) next[failure.id] = failure.message
-      return next
-    })
-  }, [])
+  }, [clearDetailCache, deps, failRow, gate, refreshAfterWrite])
 
   /**
    * 批量彻底删除 / 批量恢复**共用这一条**：一次 `apply` 把整批交给 Node 半，逐条成败住在
-   * `ApplyOutcome` 里 ⇒ 不再"每条一次全量重读"。顶层失败（路由自检 / 通道断）是**这一批一条都没落地**
-   * ——原文要落到每一个 id 上，别让清单看起来"删成功了"。
+   * `WriteOutcome` 里 ⇒ 不再"每条一次全量重读"。顶层失败（路由自检 / 通道断）只说明没拿到信封，
+   * 不能断言哪几条落地：原文保守地铺到每一个 id（别让清单看起来"删成功了"），清单照样重读。
    */
   const confirmApply = useCallback(async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
-    await gate.around(async () => {
-      const outcome = await callRemote(() => deps.applyOutcomes(action, ids))
+    // purge 在语料缺席时可能把盘上后代留下，父行没了就是新孤儿；恢复整组不新增孤儿，
+    // 但单独恢复一条露面的孩子（父行已摘）可能把它变成孤儿 ⇒ 只有这类恢复（清单未知时也保守）强制重扫。
+    const needsOrphanRescan = action === 'purge' || (action === 'restore' && (
+      entries === null || ids.some((id) => entries.find((entry) => entry.id === id)?.parentEntryId !== undefined)
+    ))
+    // 成败都走同一段收尾（写完框就收、清单就重读）；purge 与恢复的差异只有 rescan 那一格。
+    const settle = (): Promise<void> => {
       setPending(null)
-      if (!outcome.ok) {
-        setActionFailure((current) => {
-          const next = { ...current }
-          for (const id of ids) next[id] = outcome.failure.message
-          return next
-        })
-      } else {
-        settleOutcomes(action, ids, outcome.value)
-      }
-      await refresh()
+      return refreshAfterWrite({ rescan: needsOrphanRescan })
+    }
+    await gate.around(async () => {
+      const outcome = await runWrite({
+        deps,
+        action,
+        ids,
+        commit: (success) => {
+          clearDetailCache(success.successIds)
+          if (action !== 'restore') return
+          dismissUndoNotice(success.successIds)
+          // already-gone 的回执不带行（wire 只回 null），它的 sessionId 只能从面板当前清单取名；
+          // 取不到（清单刚被别的写换过版）就跳过：那条的旧重开 pending 由下一次删除/恢复按
+          // 「最新动作优先」作废，不会开着一条指向已恢复会话的横幅。
+          forgetMainView(restoredSessionIds(success.receipt, (entryId) =>
+            entries?.find((entry) => entry.id === entryId)?.sessionId))
+        },
+        refresh: settle,
+      })
+      if (outcome.failures.size === 0) return
+      setActionFailure((current) => {
+        const next = { ...current }
+        for (const [id, message] of outcome.failures) next[id] = message
+        return next
+      })
     })
-  }, [deps, gate, refresh, settleOutcomes])
+  }, [clearDetailCache, deps, entries, gate, refreshAfterWrite])
 
   /**
    * 确认框上的「确认」按 `pending` 的形状分派：三条按条目标都委托 `confirmApply`（一段 `/apply`）；

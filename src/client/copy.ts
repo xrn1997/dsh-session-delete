@@ -1,8 +1,8 @@
 /**
  * 可见文案（界面标签与提示）＋接上宿主 Client locale 服务的那一步。
  *
- * **例外：渠道错误原文。** `src/client/receipt.ts` 的 missing-id、`src/client/remote.ts` 的
- * 幂等空值与取数通道错误是协议诊断原文，固定中文、不随 locale；它们不进本字典。
+ * **例外：渠道错误原文。** `src/client/receipt.ts` 的 missing-id 与单条幂等空值、
+ * `src/client/remote.ts` 的取数通道错误是协议诊断原文，固定中文、不随 locale；它们不进本字典。
  *
  * ## 为什么不是散在各组件里的中文字面量
  *

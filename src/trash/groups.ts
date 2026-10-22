@@ -9,8 +9,9 @@
  * **接得住孩子的只有组根**——自己不记 `parentEntryId` 的那一行。父行不在、或父行自己也是孩子时，
  * 孩子必须自己占一行，否则它的字节会被头部合计数两遍（而它自己既看不见也清不掉）。
  *
- * 三个函数都是**纯函数**、都吃一份快照：`/apply` 那条路会在同一批里多次重问、而快照会被就地收缩，
- * 收缩的时机归调用方——groups module 不持有可变状态，也就没有"这份快照谁负责更新"的第二套契约。
+ * 三个函数都是**纯函数**、都吃一份快照：`/apply` 那条路会在同一批里多次重问；批量层持有一份
+ * 会收缩的当前视图（`verbs/batch-carried.ts`），收缩时机归调用方——groups module 不持有可变状态，
+ * 也就没有"这份快照谁负责更新"的第二套契约。
  */
 import type { TrashEntry } from './entry.js'
 
@@ -67,17 +68,26 @@ export function groupOf(rows: readonly TrashEntry[], id: string): TrashEntry[] {
   return kidsOf(rows, id)
 }
 
+/** 一条 id 在「原始快照 vs 当前视图」里的三态。判别联合：**只有 `fresh` 带当前这一组**——
+ *  组语义只对"还在"的 id 有意义，carried / absent 没有可交的组，调用方也就无从误用。 */
+export type GroupClaim =
+  | { readonly verdict: 'fresh'; readonly group: readonly TrashEntry[] }
+  | { readonly verdict: 'carried' }
+  | { readonly verdict: 'absent' }
+
 /**
- * 「这条是被**同批前一条**带走的，还是整批开始前就没有？」
+ * 「这条是被**同批前一条**带走的，还是整批开始前就没有，还是仍在？」
  *
- * 幂等语义只属于前者：后来者本来就不在清册里（用户点了条幽灵 id、或对账刚摘掉它）必须照样响亮报
+ * 幂等语义只属于 `carried`：后来者本来就不在清册里（用户点了条幽灵 id、或对账刚摘掉它）必须照样响亮报
  * `trash-empty`，不能被"已被带走"这句话掩盖成成功。**所以判据是快照的原始形状，不是当前形状**：
- * 原始快照里认得出（它自己、它的父、或它的孩子任一在），而当前快照里已经空了 ⇒ 同批带走的。
+ * 原始快照里认得出（它自己、或指向它的孩子任一在），而当前快照里已经空了 ⇒ 同批带走的。
  */
-export function takenByEarlierInBatch(
+export function claimOf(
   original: readonly TrashEntry[],
   current: readonly TrashEntry[],
   id: string,
-): boolean {
-  return groupOf(original, id).length > 0 && groupOf(current, id).length === 0
+): GroupClaim {
+  if (groupOf(original, id).length === 0) return { verdict: 'absent' }
+  const group = groupOf(current, id)
+  return group.length === 0 ? { verdict: 'carried' } : { verdict: 'fresh', group }
 }
