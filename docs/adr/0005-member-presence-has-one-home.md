@@ -26,7 +26,7 @@ Status: accepted
 2. 调用方只报事实：删除回滚交 `diskBack` / `workspaceBack` 两件事实（`undo.restored('dir')` /
    `undo.restored('workspace')`）；恢复回滚交 `backInTrash: undo.restored('dir')`；
    其余路径不交事实（缺省即「确实已离开」）。
-3. **批量通告不进来**：`announceRestoredBatch` 仍归 `src/verbs/batch.ts`（ADR-0002）。
+3. **批量通告不进来**：批量恢复由 `src/verbs/batch.ts` 发起、调同一个 `announceRestored(ids)`（ADR-0002；接口为什么收成一条见 ADR-0014）。
 4. 不叠第二层 `catch`：`HostPort` 的三条方法按契约不抛；通告失败不翻动词结果这条语义留在端口。
 
 > **就地订正（2026-10-21，ADR-0008）**：删除不再归档，可见性不是这次删除改过的事实 ⇒
@@ -44,7 +44,8 @@ Status: accepted
 
 - 六处调用各缩成一行事实；`unknown` 与「三件写都回去」两条判据只有一个家。
 - 测试落点：module 单测覆盖三态与四种事实组合；现有动词用例继续钉调用顺序；
-  一条源码扫描用例钉住「只有 member-presence 调这三条 host 方法」。
+  一条源码扫描用例钉住「`evictLive` / `announceRemoved` 只有 member-presence 调，`announceRestored`
+  另许批量恢复一处」（`tests/member-presence.test.ts`）。
 - 新增词条「成员在场」与 `docs/architecture.md` §4 的主人行。
 
 ## 被否掉的替代
@@ -52,6 +53,6 @@ Status: accepted
 - **只收通告、不收 `evictLive`**：三态判断会留在六处调用，协议仍然散着。
 - **调用方算好一个布尔再交给 module**：「三件写都回去」的真值表继续住调用点，正是这次要收的东西。
 - **module 直接读 journal 的 `JournalUndo`**：耦合到 journal 的键与实现；事实仍由调用方交进来。
-- **把批量 `announceRestoredBatch` 也收进来**：一个 module 同时拥有单成员与整批两种通告粒度，违背 ADR-0002。
+- **把批量恢复的通告也收进来**：一个 module 同时拥有单成员与整批两种通告粒度，违背 ADR-0002。
 
 锚点：`CONTEXT.md`（成员在场 / 通告）；`src/verbs/member-presence.ts`

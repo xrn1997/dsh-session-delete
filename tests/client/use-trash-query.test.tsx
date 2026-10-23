@@ -8,12 +8,26 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useTrashQuery, type ReloadResult, type TrashQueryDeps } from '../../src/client/use-trash-query.js'
 import { zhTranslate } from '../../src/client/copy.js'
+import { readReceipt } from '../../src/client/receipt.js'
 import type { OrphanReportWire, TrashEntryLike } from '../../src/client/remote.js'
-import type { ApplyOutcome } from '../../src/shared/wire.js'
+import type { WriteOutcome } from '../../src/client/write.js'
+import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
 
 const rows: TrashEntryLike[] = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 10, releaseBytes: 10, title: 'A' },
 ]
+
+/** 一段合成的一次写入结局：写后重扫只看 `action` / `ids`，回执细节不影响这条判据。 */
+function outcome<A extends ApplyAction>(
+  action: A,
+  ids: readonly string[],
+  over: Partial<WriteOutcome<A>> = {},
+): WriteOutcome<A> {
+  return {
+    ok: true, action, ids, receipt: readReceipt(action, ids, []),
+    failures: new Map(), successIds: [], anySuccess: false, ...over,
+  } as WriteOutcome<A>
+}
 
 const EMPTY: OrphanReportWire = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
 const REPORT: OrphanReportWire = {
@@ -185,16 +199,16 @@ describe('取数编排 · 命名读', () => {
     expect(result.current.orphanFailure).toBeNull()
   })
 
-  it('refreshAfterWrite({ rescan:true })：报告为空也重扫（purge / 清空的降级路径）', async () => {
+  it('refreshAfterWrite(purge 回执)：报告为空也重扫（语料缺席时留下的盘上后代）', async () => {
     const { d, result } = mount()
     await act(async () => { await result.current.refreshAll() })
     expect(d.scanOrphans).toHaveBeenCalledTimes(1)
-    await act(async () => { await result.current.refreshAfterWrite({ rescan: true }) })
+    await act(async () => { await result.current.refreshAfterWrite(outcome('purge', ['e1'])) })
     expect(d.list).toHaveBeenCalledTimes(2)
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
 
-  it('refreshAfterWrite({ rescan:true }) 输给后到的读：强制重扫由赢家补上', async () => {
+  it('refreshAfterWrite(purge 回执) 输给后到的读：强制重扫由赢家补上', async () => {
     const resolvers: Array<(value: readonly TrashEntryLike[]) => void> = []
     let deferred = false
     const list = vi.fn(() => {
@@ -209,7 +223,7 @@ describe('取数编排 · 命名读', () => {
     let forced!: Promise<void>
     let winner!: Promise<void>
     act(() => {
-      forced = result.current.refreshAfterWrite({ rescan: true })
+      forced = result.current.refreshAfterWrite(outcome('purge', ['e1']))
       winner = result.current.refreshAfterWrite()
     })
     await act(async () => {
@@ -277,6 +291,48 @@ describe('取数编排 · 命名读', () => {
     expect(result.current.listFailure).toBe('清单坏了')
     expect(result.current.orphanReport).toBeNull()
     expect(result.current.orphanConfirm).toBe(false)
+  })
+})
+
+describe('取数编排 · 写后重扫由 outcome 派生', () => {
+  it('restore 一条露面的孩子 ⇒ 写后强制重扫；组根 ⇒ 不强制', async () => {
+    const entries = [
+      { ...rows[0]!, id: 'root', sessionId: 's-root' },
+      { ...rows[0]!, id: 'kid', sessionId: 's-kid', parentEntryId: 'root' },
+    ]
+    const { d, result } = mount({ list: vi.fn(async () => entries) as never })
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+
+    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['kid'])) })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+
+    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['root'])) })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+  })
+
+  it('purge / orphan-clean ⇒ 写后强制重扫', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.refreshAll() })
+    await act(async () => { await result.current.refreshAfterWrite(outcome('purge', ['e1'])) })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+    await act(async () => { await result.current.refreshAfterWrite(outcome('orphan-clean', ['r1'])) })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(3)
+  })
+
+  it('清单还未知时 restore 也强制重扫：未知不是"空的"', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['a'])) })
+    expect(d.list).toHaveBeenCalledTimes(1)
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+  })
+
+  it('restore 的 id 已不在清单里 ⇒ 保守重扫：这一拍不能断言它不是露面的孩子', async () => {
+    const { d, result } = mount({ list: vi.fn(async () => []) as never })
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['gone'])) })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -358,5 +414,13 @@ describe('取数编排 · 清空走注入的闸', () => {
     expect(order).toEqual(['gate:enter', 'empty', 'list', 'gate:leave'])
     expect(result.current.entries).toEqual(rows)
     expect(result.current.listFailure).toBeNull()
+  })
+
+  it('emptyTrash 报告为空也强制重扫：聚合回执没有 WriteOutcome，强制由内部决定', async () => {
+    const { d, result } = mount()
+    await act(async () => { await result.current.refreshAll() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(1)
+    await act(async () => { await result.current.emptyTrash() })
+    expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
 })

@@ -34,13 +34,13 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
 })
 
 /**
- * 六个段名的假依赖：动词要什么给什么——**真动词 + 真清单端口**，只有宿主与文件系统是替身
+ * 六个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
  * （`tests/support/fake-deps.ts` 里那第二个 adapter）。
  * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
- * `listDirs` 按种子（`over.seed`）给：`list` 现在**先对账再读**（`reconcileTrash`），
- * "清单里有行而回收站根下空空"的世界会被对账当场摘空——那是不一致的世界（真实里行与目录成对出现），
- * 所以这里让二者默认一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
+ * `listDirs` 不在这里声明：假件的缺省让回收站目录跟着 raw 清册的 id 走（`rowIds` 随 add/remove 增删），
+ * 于是"删一行就多一个目录"这个世界默认自洽；而对账住在 `ledger.list()` 里——"清单有行而回收站根下空空"
+ * 会被它当场摘空（真实里行与目录成对出现，那是不一致的世界）。要测漂移的用例自己翻 `listDirs` / `readFile`。
  */
 function makeDeps(over: {
   seed?: TrashEntry[]
@@ -66,9 +66,8 @@ function makeDeps(over: {
       size: 224 * 1024,
       // 回收站详情要在条目目录里挑日志；`*.jsonl.zstd` 是 `pickSessionLog` 认得出的一代。
       files: ['session.v4.jsonl.zstd'],
-      // `list` 现在**先对账再读**：清单里有行而回收站根下空空的世界不一致（真实里行与目录成对出现），
-      // 所以默认让二者一致；要测漂移的用例自己翻 `listDirs` / `readFile`。
-      dirs: seed.map((e) => e.id),
+      // `listDirs` 不在这里声明：假件默认让回收站目录跟着 raw 清册的 id 走（真实里行与目录成对出现）。
+      // 要测漂移的用例自己翻 `listDirs` / `readFile`。
       readFile: () =>
         zlib.zstdCompressSync(Buffer.from(
           `${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n`,
@@ -493,6 +492,30 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   })
 })
 
+// `tests/support/fake-deps.ts` 的 raw 清册与 `fs.listDirs` 是同一个世界（`rowIds` 随 add/remove 增删）：
+// 删除新增一行、下一次 `/list` 的对账必须看得见它的目录（否则刚删的会话会被自己的对账当幽灵行摘掉）；
+// 恢复摘掉行，目录跟着消失。假件那处耦合一旦拆开，别的用例会拿到一个"写完之后世界不自洽"的假世界。
+describe('路由层 · 写后世界仍自洽（假件的 raw 清册与回收站目录同步）', () => {
+  it('delete 之后 /list 仍含新行；restore 之后 /list 不再含它', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+
+    const deleted = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-live'] },
+    })
+    const outcome = (deleted.body.value as Array<{ ok: boolean; value: { id: string } }>)[0]!
+    expect(outcome.ok).toBe(true)
+
+    const listed = (await call(base, ROUTES.list)).body.value as TrashEntry[]
+    expect(listed.map((row) => row.sessionId)).toEqual(['session-live'])
+
+    await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [outcome.value.id] },
+    })
+    expect((await call(base, ROUTES.list)).body.value).toEqual([])
+  })
+})
+
 describe('路由层 · list 是对账 + 读（2026-10-16）', () => {
   it('目录多出一条 ⇒ 长出行（id 与项目目录从那条日志的 header 重建）', async () => {
     const ghost = entryIdOf('session-ghost')
@@ -525,6 +548,61 @@ describe('路由层 · list 是对账 + 读（2026-10-16）', () => {
     const { body } = await call(base, ROUTES.list)
     expect((body.value as TrashEntry[]).map((e) => e.id)).toEqual([entryIdOf('a')])
     expect(fs.readFile).not.toHaveBeenCalled()
+  })
+})
+
+// ADR-0012：restore 的组来自 `ledger.list()`（对账 + 读），不是 raw 索引。手工搬进 `session-trash/`
+// 的目录此刻还没有清册行；若 restore 读 raw，这条会被判 `trash-empty` 而不是恢复。
+describe('路由层 · apply restore 走真相读（ADR-0012）', () => {
+  it('只有目录、没有清册行 ⇒ 先对账立行，再按这一行恢复', async () => {
+    const ghost = entryIdOf('session-ghost')
+    const { deps, fs, manifest } = makeDeps()
+    expect(await manifest.list()).toEqual([]) // raw 里没有它：raw 读必然 trash-empty
+    fs.listDirs.mockResolvedValue([ghost])
+    fs.readFile.mockImplementation(async (_path: string) =>
+      zlib.zstdCompressSync(Buffer.from(
+        `${JSON.stringify({ type: 'session', version: 4, id: 'session-ghost', createdAt: 1, cwd: 'C:/develop/p' })}\n`,
+        'utf8',
+      )))
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [ghost] },
+    })
+    expect(status).toBe(200)
+    expect((body.value as Array<Record<string, unknown>>)[0]).toMatchObject({ ok: true, value: { id: ghost } })
+    // 行是从目录与日志头重建出来的：对账真的读过这两处，清册里原本没有它
+    expect(fs.listDirs).toHaveBeenCalled()
+    expect(fs.readFile).toHaveBeenCalled()
+    expect(await manifest.list()).toEqual([])
+    expect(fs.rename).toHaveBeenCalledWith(
+      trashDirOf(ghost, HOME),
+      sessionDirOf('--C-develop-p--', 'session-ghost', HOME),
+    )
+  })
+})
+
+// ADR-0012：purge 的写前读同样走 `ledger.list()`。只有目录、没有清册行的条目要先被对账立起来，
+// 否则 `carried.claim()` 看不到它，动词会按 trash-empty 拒绝。
+describe('路由层 · apply purge 走真相读（ADR-0012）', () => {
+  it('只有目录、没有清册行 ⇒ 先对账立行，再按这一行彻底删除', async () => {
+    const ghost = entryIdOf('session-ghost')
+    const { deps, fs, manifest } = makeDeps()
+    expect(await manifest.list()).toEqual([]) // raw 里没有它
+    fs.listDirs.mockResolvedValue([ghost])
+    fs.readFile.mockImplementation(async (_path: string) =>
+      zlib.zstdCompressSync(Buffer.from(
+        `${JSON.stringify({ type: 'session', version: 4, id: 'session-ghost', createdAt: 1, cwd: 'C:/develop/p' })}\n`,
+        'utf8',
+      )))
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.apply, {
+      method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [ghost] },
+    })
+    expect(status).toBe(200)
+    expect((body.value as Array<Record<string, unknown>>)[0]).toMatchObject({ ok: true, value: { removed: 1 } })
+    expect(fs.listDirs).toHaveBeenCalled()
+    expect(fs.removeDir).toHaveBeenCalledWith(trashDirOf(ghost, HOME))
+    expect(await manifest.list()).toEqual([])
   })
 })
 
@@ -774,6 +852,25 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     expect(fs.readFile).not.toHaveBeenCalled()
   })
 
+  // `/detail` 声明为 pure ⇒ 它只读清册 **raw 索引**（`ledger.raw()`）：对账会写清册行，那是写动作，
+  // 必须排在到达序链上，不能随一次看详情偷跑。行为面照旧由目录判：行在 raw 里而目录不在 ⇒ io，不是
+  // trash-empty（真相读会先把它当幽灵摘掉，那条路是 `/list` 的）。
+  it('/detail 只读 raw 索引、不对账：目录不在的行回 io「回收站目录不在」，一次 listDirs 都不发生', async () => {
+    const { deps, fs, manifest } = makeDeps({ seed })
+    fs.listDirs.mockResolvedValue([]) // 若走 `list()`，这一行会被当场摘掉 ⇒ trash-empty
+    fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith(entryIdOf('session-a')))
+    const base = await start(deps)
+    const { status, code, message } = await failureOf(base, ROUTES.detail, {
+      method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') },
+    })
+    expect(status).toBe(200)
+    expect(code).toBe('sessiondelete/io')
+    expect(message).toMatch(/回收站目录不在/)
+    // 不对账：`listDirs` 零调用，清册里那一行也一个字都没被动过
+    expect(fs.listDirs).not.toHaveBeenCalled()
+    expect((await manifest.list()).map((row) => row.id)).toEqual([entryIdOf('session-a')])
+  })
+
   it('目录里没有会话日志 ⇒ io，原文说的是哪个目录里有什么', async () => {
     const { deps } = makeDeps({ seed })
     ;deps.fs.listFiles = vi.fn(async () => ['notes.txt'])
@@ -839,7 +936,7 @@ describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作�
 })
 
 // 批量通道（2026-10-17）：写动词从「一条一段」收成 `POST /apply`——一次 HTTP 带一组 id，
-// 逐条回 `ApplyOutcome`。钉的是契约：整批只读一次清单、只预取一次宿主会话表；重复 id 去重；
+// 逐条回 `ApplyOutcome`。钉的是契约：整批只读一次清单、整组 id 只通告一次；重复 id 去重；
 // 「已被同批前一条带走」是幂等成功不是失败；一条失败不传染下一条。
 describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => {
   const restoreId = (n: string) => entryIdOf(`session-${n}`)
@@ -971,20 +1068,15 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     expect(await manifest.list()).toHaveLength(2)
   })
 
-  it('整批恢复只预取一次宿主会话表，通告走批量口', async () => {
+  it('整批恢复只调一次通告，整组 id 一起交出去', async () => {
     const seed = [entry('session-a', { sessionId: 'session-a' }), entry('session-b', { sessionId: 'session-b' })]
     const { deps, host } = makeDeps({ seed })
-    host.restoredSummariesOf.mockResolvedValue([
-      { sessionId: 'session-a', summary: { sessionId: 'session-a' } },
-      { sessionId: 'session-b', summary: { sessionId: 'session-b' } },
-    ])
     const base = await start(deps)
     await call(base, ROUTES.apply, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
     })
-    expect(host.restoredSummariesOf).toHaveBeenCalledTimes(1)
-    expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
-    expect(host.announceRestored).not.toHaveBeenCalled()
+    expect(host.announceRestored).toHaveBeenCalledTimes(1)
+    expect(host.announceRestored.mock.calls[0]?.[0]).toEqual(['session-a', 'session-b'])
     // 新清单的删除不归档 ⇒ 恢复不碰归档集。
     expect(host.unarchive).not.toHaveBeenCalled()
     expect(host.archive).not.toHaveBeenCalled()
@@ -996,10 +1088,6 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const seed = [entry('session-a'), entry('session-b')]
     const { deps, host } = makeDeps({ seed })
     host.isArchived.mockResolvedValue(true)
-    host.restoredSummariesOf.mockResolvedValue([
-      { sessionId: 'session-a', summary: { sessionId: 'session-a' } },
-      { sessionId: 'session-b', summary: { sessionId: 'session-b' } },
-    ])
     const base = await start(deps)
     await call(base, ROUTES.apply, {
       method: 'POST',
@@ -1007,7 +1095,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     })
     expect(host.unarchive).toHaveBeenCalledTimes(2)
     expect(host.archive).not.toHaveBeenCalled()
-    const announced = host.announceRestoredBatch.mock.invocationCallOrder[0]!
+    const announced = host.announceRestored.mock.invocationCallOrder[0]!
     expect(announced).toBeGreaterThan(Math.max(...host.unarchive.mock.invocationCallOrder))
   })
 
@@ -1022,8 +1110,8 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     await call(base, ROUTES.apply, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a')] },
     })
-    expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
-    const announced = host.announceRestoredBatch.mock.calls[0]?.[0]
+    expect(host.announceRestored).toHaveBeenCalledTimes(1)
+    const announced = host.announceRestored.mock.calls[0]?.[0]
     expect([...announced].sort()).toEqual(['session-a', 'session-kid'])
   })
 })
@@ -1051,7 +1139,23 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
       },
     })
     expect(fs.removeDir).not.toHaveBeenCalled()
+    // 连对账都不是：`/orphans` 只读清册 raw 索引，一次 `listDirs` 都不该发生。
+    expect(fs.listDirs).not.toHaveBeenCalled()
     expect(await manifest.list()).toEqual([])
+  })
+
+  // `/orphans` 声明为 pure ⇒ 它不许对账（对账会写清册行，那是写动作，必须排在到达序链上）。
+  // 清册里有一行而目录不在：raw 读仍把它交回来，`listDirs` 一次都不发生；真相读 `list()` 才会摘它。
+  it('GET /orphans 不对账：目录不在的种子行仍留在 raw 清册里，且不碰 listDirs', async () => {
+    const { deps, fs, host, manifest } = makeDeps({ seed: [entry('session-ghost-entry')] })
+    host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
+    fs.listDirs.mockResolvedValue([]) // 目录不在：若走 `list()` 这一行会被当场摘掉
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.orphans)
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, value: { roots: ['session-root'] } })
+    expect(fs.listDirs).not.toHaveBeenCalled()
+    expect((await manifest.list()).map((row) => row.sessionId)).toEqual(['session-ghost-entry'])
   })
 
   // 语料面缺席 ≠ "这个家没有孤儿"。回一份 `roots: []` 的空报告会让界面说一句"没有要清理的"，

@@ -16,7 +16,7 @@ import type {
  * 三条要求都是**编译期 + 运行期各钉一半**：
  *  - `createHostPort` 的返回对象可赋给每个角色（类型检查由 `pnpm typecheck` 跑，运行期是同一颗对象）；
  *  - 每个角色接口的键集合**恰好**是下面那三张表（`ExactKeys` 让"多一个/少一个"都编译不过）；
- *  - adapter 的 17 个方法 == 三张表的并集。
+ *  - adapter 的 15 个方法 == 三张表的并集。
  *
  * 另有一组**行为**用例：`subagentMembersOf` 的缺席 / 在场 / 空入参（`CorpusRead` 的判别）。
  * 两个语料读面的完整行为仍逐条钉在 `tests/assembly.test.ts`。
@@ -39,9 +39,7 @@ const IDENTITY_KEYS = [
   'workspaceOf', 'workspaceExists', 'projectDirOf', 'titleOf', 'isLive', 'isArchived',
   'archive', 'unarchive', 'attach', 'detach',
 ] as const
-const PRESENCE_KEYS = [
-  'evictLive', 'announceRemoved', 'announceRestored', 'restoredSummariesOf', 'announceRestoredBatch',
-] as const
+const PRESENCE_KEYS = ['evictLive', 'announceRemoved', 'announceRestored'] as const
 const CORPUS_KEYS = ['listSessions', 'subagentMembersOf'] as const
 
 const ROLE_KEYS = {
@@ -123,15 +121,15 @@ describe('宿主端口的角色接口', () => {
     expect(rebuilt).toEqual(port)
   })
 
-  it('三个角色拼起来恰好是 adapter 的 17 个方法', () => {
+  it('三个角色拼起来恰好是 adapter 的 15 个方法', () => {
     const actual = Object.keys(createHostPort(makeCtx())).sort()
-    expect(actual).toHaveLength(17)
+    expect(actual).toHaveLength(15)
     expect(actual).toEqual([...COMPOSITE_KEYS].sort())
   })
 
-  it('角色边界是 10 / 5 / 2，且接口键集合与实现集合在类型上逐一相等', () => {
+  it('角色边界是 10 / 3 / 2，且接口键集合与实现集合在类型上逐一相等', () => {
     expect(ROLE_KEYS.identity.keys).toHaveLength(10)
-    expect(ROLE_KEYS.presence.keys).toHaveLength(5)
+    expect(ROLE_KEYS.presence.keys).toHaveLength(3)
     expect(ROLE_KEYS.corpus.keys).toHaveLength(2)
     const declared = [...COMPOSITE_KEYS]
     expect(new Set(declared).size).toBe(declared.length) // 三张表互不重叠

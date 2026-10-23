@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyActions } from '../src/verbs/batch.js'
 import type { DeleteDeps } from '../src/deps.js'
+import type { TrashLedger } from '../src/trash/ledger.js'
 import type { ManifestPort } from '../src/trash/manifest.js'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createFakeDeps } from './support/fake-deps.js'
@@ -22,12 +23,13 @@ const kid: TrashEntry = {
   ...parent, id: makeEntryId(NOW, 'session-kid'), sessionId: 'session-kid', title: '孩', parentEntryId: parent.id,
 }
 
-/** 清册读的次数要能被数：包一层计数，其余照旧委给内存清单。 */
-function counting(manifest: ManifestPort): ManifestPort & { reads(): number } {
+/** 清册读的次数要能被数：包一层计数，其余照旧委给内存清单。`raw()` 不算「一次真相读」，不计数。 */
+function counting(manifest: ManifestPort): TrashLedger & { reads(): number } {
   let reads = 0
   return {
     reads: () => reads,
     list: async () => { reads += 1; return await manifest.list() },
+    raw: () => manifest.list(),
     add: (entry) => manifest.add(entry),
     remove: (id) => manifest.remove(id),
   }
@@ -35,9 +37,9 @@ function counting(manifest: ManifestPort): ManifestPort & { reads(): number } {
 
 function world(seed: TrashEntry[]) {
   const made = createFakeDeps({ seed, now: NOW, fs: { size: 0 } })
-  const manifest = counting(made.manifest)
-  const deps: DeleteDeps = { ...made.deps, manifest }
-  return { deps, host: made.host, fs: made.fs, manifest }
+  const ledger = counting(made.manifest)
+  const deps: DeleteDeps = { ...made.deps, ledger }
+  return { deps, host: made.host, fs: made.fs, manifest: ledger }
 }
 
 describe('批量层 · 一条 id 一条结果', () => {
@@ -90,8 +92,8 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
   it('restore：一批只会**发一次**通告，且带的是整组的会话 id', async () => {
     const { deps, host } = world([parent, kid])
     await applyActions(deps, 'restore', [parent.id, kid.id])
-    expect(host.announceRestoredBatch).toHaveBeenCalledTimes(1)
-    expect(host.announceRestoredBatch.mock.calls[0]?.[0]).toEqual(['session-parent', 'session-kid'])
+    expect(host.announceRestored).toHaveBeenCalledTimes(1)
+    expect(host.announceRestored.mock.calls[0]?.[0]).toEqual(['session-parent', 'session-kid'])
   })
 
   it('restore：先点孩子再点父 ⇒ 两条都成功，父那一组不再重放已经回来的孩子', async () => {
@@ -99,7 +101,7 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
     const outcomes = await applyActions(deps, 'restore', [kid.id, parent.id])
     expect(outcomes.map((item) => item.ok)).toEqual([true, true])
     // 第一条只回孩子、第二条只回父；不会把第一条已经恢复过的孩子再通告一遍
-    expect(host.announceRestoredBatch.mock.calls[0]?.[0]).toEqual(['session-kid', 'session-parent'])
+    expect(host.announceRestored.mock.calls[0]?.[0]).toEqual(['session-kid', 'session-parent'])
   })
 
   it('purge：同批第二个被带走的孩子回 {removed:0,freedBytes:0}，不是 trash-empty', async () => {

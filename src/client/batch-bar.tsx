@@ -17,7 +17,12 @@ import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { fetchCounts } from './batch-select.js'
 import { requestDeleteBatch } from './batch-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
-import { allVisibleSelected, selectAllVisible, useSelectionRowClickGuard } from './host-rows.js'
+import {
+  areAllVisibleRowsSelected,
+  selectAllVisible,
+  useSelectionRowClickGuard,
+  useVisibleSelectableRows,
+} from './host-rows.js'
 import type { SessionDeleteRemote } from './remote.js'
 import { clearPicks, exitSelection, getPicks, togglePick, useSelection } from './batch-selection-store.js'
 import { Button } from './ui/Button.js'
@@ -39,6 +44,9 @@ export function BatchBar({
   const { selecting, picks } = useSelection()
   // 模式内的整行点击（勾/取消、拦会话切换）挂在浮条这棵常驻宿主上：浮条是模式的可见形态。
   useSelectionRowClickGuard()
+  // 渲染期只读快照：DOM 观察与行登记留在适配器（host-rows.ts），这里不查 DOM。
+  // 浮条常驻，但行快照只在多选态订阅：模式外 body 的每次变更都不该把它叫醒。
+  const visibleRows = useVisibleSelectableRows(selecting)
   const [counts, setCounts] = useState<Map<string, number> | null>(null)
   const [expanded, setExpanded] = useState(false)
   const seqRef = useRef(0)
@@ -62,7 +70,7 @@ export function BatchBar({
   if (!selecting) return null
   // 只合计**当前名单**：退模式/清空后 counts 里可能还留着上一批的读数，不能拿它冒充这一批。
   const kids = counts === null ? 0 : picks.reduce((sum, item) => sum + (counts.get(item.sessionId) ?? 0), 0)
-  const allPicked = allVisibleSelected()
+  const allPicked = areAllVisibleRowsSelected(visibleRows, picks)
   return (
     <div className="sd-batch-bar" data-dsh-session-delete="batch-bar">
       {expanded && picks.length > 0 ? (

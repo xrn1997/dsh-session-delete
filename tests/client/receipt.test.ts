@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   failureMessage,
   isFailureVerdict,
+  landedEntryIds,
   missingOutcomeMessage,
   readReceipt,
   readSingleReceipt,
@@ -111,6 +112,25 @@ describe('readReceipt', () => {
       '坏了',
       missingOutcomeMessage('orphan-clean', 'c'),
     ])
+  })
+})
+
+describe('landedEntryIds', () => {
+  it('只收 ok 支的条目 id；already-gone / failed / purge 的聚合值都不算', () => {
+    const receipt = readReceipt('delete', ['a', 'b', 'c'], [entry('a'), gone('b'), failed('c')])
+    expect(landedEntryIds(receipt)).toEqual(['a'])
+
+    const purge = readReceipt('purge', ['p'], [
+      { id: 'p', action: 'purge', ok: true, value: { removed: 1, freedBytes: 1 } },
+    ])
+    expect(landedEntryIds(purge)).toEqual([])
+  })
+
+  it('restore 的 ok 支取条目 id（撤销名单与回盘的 sessionId 是两个域）', () => {
+    const receipt = readReceipt('restore', ['e1'], [
+      { id: 'e1', action: 'restore', ok: true, value: row('e1') },
+    ])
+    expect(landedEntryIds(receipt)).toEqual(['e1'])
   })
 })
 

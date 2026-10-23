@@ -37,9 +37,8 @@ import {
   type TrashEntryLike,
 } from './remote.js'
 import { forgetMainView } from './main-view.js'
-import { restoredSessionIds } from './receipt.js'
 import { dismissUndoNotice } from './undo-toast.js'
-import { runWrite } from './write.js'
+import { runWrite, type WriteOutcome } from './write.js'
 import type { PendingAction } from './trash-confirm.js'
 import { useTrashRevision } from './trash-store.js'
 import type { TrashDetailState } from './trash-detail.js'
@@ -252,8 +251,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 单条恢复：**先清掉这一行的旧失败**（再点一次不该还挂着上一次的原文），再把手势包进 `around`。
    * 成功要丢详情缓存 + 重读清单——缓存不失效的话，这条会话再被删回来时会直接摆出上一世的正文。
    * 失败也重读：组回滚可能自己失败（`details.rollbackFailures`），清单不能继续摆旧行。
-   * 露面的孩子（`parentEntryId` 非空）单独恢复会让它回到语料、可能变成新孤儿 ⇒ 这一格强制重扫残留。
    * `refreshAfterWrite` 留在 `around` 里：否则旧清单还在屏上，同一个动作能被再点一次。
+   * 单条恢复走 `single` 读法，`already-gone` 不可能出现，所以不传 `sessionIdOfEntry`（那条兜底只服务批量）。
    */
   const restore = useCallback(async (entry: TrashEntryLike): Promise<void> => {
     setActionFailure((current) => {
@@ -267,17 +266,17 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
         action: 'restore',
         ids: [entry.id],
         single: true,
-        commit: (success) => {
-          clearDetailCache(success.successIds)
-          // 信封成功不等于这条落地：失败时横幅还指着回收站里的那条，main-view 的记录也不能当成功结算掉。
-          if (!success.anySuccess) return
-          dismissUndoNotice([entry.id])
-          forgetMainView([entry.sessionId])
+        // 面板座位：成功支丢详情缓存、熄灭指向这条的撤销横幅，并只忘掉 main-view 记过的会话
+        // （不重开、不抢焦点）。信封成功不等于这条落地：settlement 只在 anySuccess 时跑这些钩子。
+        presentation: {
+          clearDetailCache,
+          dismissUndo: dismissUndoNotice,
+          forgetMainView,
         },
         // 无论信封还是逐条成败，都重读：顶层失败可能是"成了但响应断在路上"；逐条失败也可能是
         // restore 的组回滚自己失败留下的半套——服务端答"失败"不等于盘上没动。
-        // 露面的孩子（父行已摘）单独恢复后可能变成新孤儿；组根恢复会把孩子一起带回，不强制重扫。
-        refresh: () => refreshAfterWrite({ rescan: entry.parentEntryId !== undefined }),
+        // 要不要顺带重扫残留由 query 从 outcome 派生（露面的孩子 / 清单未知），这里只如实转交。
+        refresh: refreshAfterWrite,
       })
       const failure = outcome.failures.get(entry.id)
       if (failure !== undefined) failRow(entry.id, failure)
@@ -290,30 +289,26 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 不能断言哪几条落地：原文保守地铺到每一个 id（别让清单看起来"删成功了"），清单照样重读。
    */
   const confirmApply = useCallback(async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
-    // purge 在语料缺席时可能把盘上后代留下，父行没了就是新孤儿；恢复整组不新增孤儿，
-    // 但单独恢复一条露面的孩子（父行已摘）可能把它变成孤儿 ⇒ 只有这类恢复（清单未知时也保守）强制重扫。
-    const needsOrphanRescan = action === 'purge' || (action === 'restore' && (
-      entries === null || ids.some((id) => entries.find((entry) => entry.id === id)?.parentEntryId !== undefined)
-    ))
-    // 成败都走同一段收尾（写完框就收、清单就重读）；purge 与恢复的差异只有 rescan 那一格。
-    const settle = (): Promise<void> => {
+    // 成败都走同一段收尾（写完框就收、清单就重读）；要不要顺带重扫残留由 query 从 outcome 派生
+    // （purge 总要扫；restore 只在恢复露面的孩子或清单未知时扫），这里只如实转交。
+    const settle = (outcome: WriteOutcome<'purge' | 'restore'>): Promise<void> => {
       setPending(null)
-      return refreshAfterWrite({ rescan: needsOrphanRescan })
+      return refreshAfterWrite(outcome)
     }
     await gate.around(async () => {
       const outcome = await runWrite({
         deps,
         action,
         ids,
-        commit: (success) => {
-          clearDetailCache(success.successIds)
-          if (action !== 'restore') return
-          dismissUndoNotice(success.successIds)
-          // already-gone 的回执不带行（wire 只回 null），它的 sessionId 只能从面板当前清单取名；
-          // 取不到（清单刚被别的写换过版）就跳过：那条的旧重开 pending 由下一次删除/恢复按
-          // 「最新动作优先」作废，不会开着一条指向已恢复会话的横幅。
-          forgetMainView(restoredSessionIds(success.receipt, (entryId) =>
-            entries?.find((entry) => entry.id === entryId)?.sessionId))
+        // 面板座位：purge 只清成功条目的详情缓存；restore 另熄灭整批撤销横幅并忘掉 main-view 的
+        // closedByUs（只遗忘、不重开）。already-gone 的回执不带行（wire 只回 null），它的 sessionId
+        // 只能从面板当前清单取名；取不到（清单刚被别的写换过版）就跳过：那条的旧重开 pending 由下一次
+        // 删除/恢复按「最新动作优先」作废，不会开着一条指向已恢复会话的横幅。
+        presentation: {
+          clearDetailCache,
+          dismissUndo: dismissUndoNotice,
+          forgetMainView,
+          sessionIdOfEntry: (entryId) => entries?.find((entry) => entry.id === entryId)?.sessionId,
         },
         refresh: settle,
       })

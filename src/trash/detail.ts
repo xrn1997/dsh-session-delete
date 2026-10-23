@@ -4,8 +4,8 @@
  * 三层里的策略层——编解码在 `src/log/*`，这里只回答"给谁看、给多少、算不算失败"。
  *
  * 三条硬口径，都不是口味：
- * ① **寻址只认清册**：`entryId` 先在清单里查，目录一律由 `trashDirOf(record.id, home)` 推 ⇒ 外部
- *    输入进不了文件系统寻址（不给"传个路径就读任意目录"留缝）。
+ * ① **寻址只认清册（raw 索引）**：`entryId` 先在对账之外的 raw 索引里查，目录一律由 `trashDirOf(record.id, home)` 推
+ *    ⇒ 外部输入进不了文件系统寻址（不给"传个路径就读任意目录"留缝）。
  * ② **正文只认 `source.kind === "user"`**：`user/message` 里绝大多数是宿主注入的上下文
  *    （本机实测一条会话：真实提问 21 条、注入 241 条），不过滤就被淹掉；注入条数照样上线
  *    （`injectedCount`），让"为什么少了这么多条"能与页面上的数字对账。
@@ -17,7 +17,7 @@
  * 有文字的回复条数——不是一套判据算两遍，否则页面上会出现"计数 421、正文 200"这种对不上账的话。
  */
 import { trashDirOf, type TrashEntry } from './entry.js'
-import type { ManifestPort } from './manifest.js'
+import type { TrashLedger } from './ledger.js'
 import type { FsPort } from '../ports/fs-port.js'
 import type { TrashDetailMessageWire, TrashDetailWire } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
@@ -35,8 +35,11 @@ export type TrashDetailMessage = TrashDetailMessageWire
 export type TrashDetail = TrashDetailWire
 
 export type DetailDeps = {
+  /** 详情自己直接要的三件（判目录在不在、挑日志、读日志）。对账不在这条路上，所以不需要 `listDirs`。 */
   fs: Pick<FsPort, 'exists' | 'listFiles' | 'readFile'>
-  manifest: ManifestPort
+  /** 详情只读清册的 **raw 面**：`/detail` 声明为 pure，读一次不能顺手对账——对账会写清册行，那是写动作，
+   *  必须排在到达序链上。代价是有意的：只有目录、清册还没这一行的手工搬入条目读不到（`/list` 对账后可见）。 */
+  ledger: Pick<TrashLedger, 'raw'>
   home: string
 }
 
@@ -69,7 +72,7 @@ function textOf(content: unknown): string {
 
 export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT_LIMITS) {
   return async function readTrashDetail(entryId: string): Promise<TrashDetail> {
-    const all = await deps.manifest.list()
+    const all = await deps.ledger.raw()
     const record: TrashEntry | undefined = all.find((e) => e.id === entryId)
     if (record === undefined) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
 

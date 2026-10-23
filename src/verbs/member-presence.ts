@@ -8,15 +8,17 @@
  * 这条协议说错一次就是客户端留着假行、或删掉真行，所以只留一个家。
  *
  * 边界：
- * - 批量恢复的 `announceRestoredBatch` 不进来：一次预取、一批一次通告归 `verbs/batch.ts`（ADR-0002）。
+ * - 批量恢复自己发起的那次通告（`announceRestored(ids)`）归 `verbs/batch.ts`（ADR-0002）：同一个方法、
+ *   同一份预取，只是调用方是那一批的主人。这里只判单成员事实。
  * - 不直接读 journal 的 undo 结果：调用方把 `restored(key)` 读成事实再交进来，真值表住这里。
  * - 本模块用到的三条（`evictLive` / `announceRemoved` / `announceRestored`）按契约不抛（evictLive 三态、
  *   announce* 内部吞异常），这里不再叠 catch。
  */
 import type { EvictionOutcome, HostPresencePort } from '../ports/host-port.js'
 
-/** 本模块实际用到的三条宿主能力。取窄面而不是整个 `HostPresencePort`：那条协议里还有批量通告与
- *  摘要预取，它们各有自己的家（`verbs/batch.ts`），这里不该因为共用同一颗 adapter 就声明依赖。 */
+/** 本模块实际用到的三条宿主能力。`Pick` 此刻覆盖 `HostPresencePort` 的三条方法，仍留着它当闸：
+ *  将来端口多出第四条时，这里不会被动跟着变宽——这里是单成员协议，批量恢复由 `verbs/batch.ts`
+ *  自己发起，不该因为共用同一颗 adapter 就在类型上声明依赖。 */
 export type MemberPresenceHost = Pick<HostPresencePort, 'evictLive' | 'announceRemoved' | 'announceRestored'>
 
 export interface MemberBackFacts {
@@ -43,7 +45,7 @@ export function createMemberPresence(host: MemberPresenceHost): MemberPresence {
     },
     async memberBack(sessionId, facts) {
       if (!facts.diskBack || !facts.workspaceBack) return
-      await host.announceRestored(sessionId)
+      await host.announceRestored([sessionId])
     },
   }
 }

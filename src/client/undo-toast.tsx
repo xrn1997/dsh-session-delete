@@ -13,12 +13,11 @@
  * 不引 `@deepseek-ai/dsh-client-store`（它在平台表内，但这里用不着；React 就够，少一条平台依赖）。
  */
 import { zhTranslate, type Translate } from './copy.js'
-import { restoredSessionIds } from './receipt.js'
 import type { OneShotDeps } from './remote.js'
 import { createStore } from './store.js'
+import { invalidateTrash } from './trash-store.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
-import { commitExternalRestore } from './write-commit.js'
 import { runWrite } from './write.js'
 
 export type UndoToastDeps = OneShotDeps
@@ -127,11 +126,9 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
     action: 'restore',
     ids,
     single: current.kind === 'one',
-    commit: (success) => {
-      // 恢复成功后重开删除时被关掉的会话（只认 main-view 自己记过的），并让清单面板重读。
-      // 信封成功就收尾（哪怕逐条全失败）：成功的那几条回盘要重开；清单失效照发（回滚失败可能留半套）。
-      commitExternalRestore(restoredSessionIds(success.receipt))
-    },
+    // 外部恢复座位：settlement 负责重开删除时被关掉的会话（只认 main-view 自己记过的），
+    // 并让清单面板重读。信封成功就收尾（哪怕逐条全失败）：清单失效照发（回滚失败可能留半套）。
+    presentation: { invalidate: invalidateTrash },
   })
   if (!outcome.ok) {
     failNotice(current, outcome.failure.message)

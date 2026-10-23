@@ -11,7 +11,7 @@ function makeHost(opts: { evicted?: 'evicted' | 'not-live' | 'unknown' } = {}) {
     evicted: opts.evicted ?? 'not-live',
     log,
     logMethods: ['evictLive', 'announceRemoved', 'announceRestored'],
-    format: (method, args) => `${method}(${String(args[0])})`,
+    format: (method, args) => `${method}(${Array.isArray(args[0]) ? (args[0] as readonly string[]).join(',') : String(args[0])})`,
   })
   return { host, log }
 }
@@ -67,6 +67,7 @@ describe('成员在场', () => {
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
 const PRESENCE = 'src/verbs/member-presence.ts'
+const BATCH = 'src/verbs/batch.ts'
 const HOST_CALL = /\b(?:deps\.)?host\.(evictLive|announceRemoved|announceRestored)\s*\(/g
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -80,13 +81,15 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 describe('通告的唯一调用者', () => {
-  it('evictLive / announceRemoved / announceRestored 只在 member-presence 里被调用', () => {
+  it('evictLive / announceRemoved 只在 member-presence 里被调用；announceRestored 只另许批量恢复那一处', () => {
     const violations = walk(join(ROOT, 'src'))
       .map((file) => file.slice(ROOT.length + 1).replace(/\\/g, '/'))
       .filter((file) => file !== PRESENCE)
       .flatMap((file) => {
         const text = readFileSync(join(ROOT, file), 'utf8')
-        return [...text.matchAll(HOST_CALL)].map((match) => `${file}: ${match[0]}`)
+        return [...text.matchAll(HOST_CALL)]
+          .filter((match) => !(file === BATCH && match[1] === 'announceRestored'))
+          .map((match) => `${file}: ${match[0]}`)
       })
     expect(violations).toEqual([])
   })

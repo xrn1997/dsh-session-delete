@@ -4,7 +4,7 @@
 // `reset` 只给测试收场（回初值 + seq 清零）。`use()` 走 React 自带的 `useSyncExternalStore`。
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { createStore } from '../../src/client/store.js'
+import { createLazyStore, createStore } from '../../src/client/store.js'
 
 describe('createStore', () => {
   it('get() 回最初那一份引用（不是拷贝）', () => {
@@ -142,5 +142,46 @@ describe('createStore', () => {
       store.reset()
     })
     expect(result.current).toBe(1)
+  })
+})
+
+describe('createLazyStore', () => {
+  it('脏了才 read；干净时回同一个引用，invalidate 后重读并通告', () => {
+    const read = vi.fn((): readonly string[] => ['a'])
+    const store = createLazyStore<readonly string[]>([], read)
+    expect(read).not.toHaveBeenCalled()
+
+    const first = store.get()
+    expect(first).toEqual(['a'])
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(store.get()).toBe(first)
+    expect(read).toHaveBeenCalledTimes(1)
+
+    const listener = vi.fn()
+    store.subscribe(listener)
+    store.invalidate()
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(store.get()).toEqual(['a'])
+    expect(read).toHaveBeenCalledTimes(2)
+  })
+
+  it('首个订阅者接上观察者，最后一个退订时断开；退订后下一次 get 重读', () => {
+    const read = vi.fn((): readonly string[] => ['a'])
+    const onFirstSubscribe = vi.fn()
+    const onLastUnsubscribe = vi.fn()
+    const store = createLazyStore<readonly string[]>([], read, { onFirstSubscribe, onLastUnsubscribe })
+
+    const offOne = store.subscribe(() => {})
+    const offTwo = store.subscribe(() => {})
+    expect(onFirstSubscribe).toHaveBeenCalledTimes(1)
+    store.get()
+    expect(read).toHaveBeenCalledTimes(1)
+
+    offOne()
+    expect(onLastUnsubscribe).not.toHaveBeenCalled()
+    offTwo()
+    expect(onLastUnsubscribe).toHaveBeenCalledTimes(1)
+    store.get()
+    expect(read).toHaveBeenCalledTimes(2)
   })
 })

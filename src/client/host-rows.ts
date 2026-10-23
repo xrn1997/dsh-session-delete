@@ -1,21 +1,27 @@
 /**
- * 宿主会话行的**DOM 适配**（2026-10-20）：可见行解析、全选判定、模式内的整行点击守卫。
+ * 宿主会话行的**DOM 适配**：可见行解析、全选判定、模式内的整行点击守卫。
  *
  * 从 `batch-select.tsx` 拆出来的理由：选中集本身（模式 + 名单）只住 `batch-selection-store.ts`；
  * 本文件只回答**页面上**的两件事——"现在 DOM 里有哪些可选的会话行"与"在这个行上点一下算不算选中"。
  * 两边的唯一交界是 `data-row-key`（宿主会话行的稳定标记）和行尾兜底登记的那张 `rowInfo` 表。
  *
+ * **为什么渲染走快照**：可见行是组件树之外的状态（宿主的 DOM）。每个组件各自在渲染期查一遍，
+ * 同一帧看到什么就取决于副作用顺序，而且 DOM 变了也不会触发重渲染。这里交给 `useSyncExternalStore`：
+ * DOM 观察（`MutationObserver`）与行登记都留在本适配器里，只把缓存标脏并通告订阅者；组件读缓存快照，
+ * 干净时拿到同一个引用（React 的 snapshot 契约），脏了才重读。事件路径（全选）仍走 `readVisibleSelectableRows`
+ * 的当场读。裁决见 ADR-0015。
+ *
  * **为什么整行点击要抢在 document 捕获阶段**：宿主的会话行自己带 `onClick = open(sessionId)`，
  * 第三方没有官方的"别切会话"开关；模式内点行要变成"勾/取消"，只能抢在 React 根监听之前把事件吃掉。
  */
-import { useEffect } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import {
   addPicks,
-  getSelection,
   togglePick,
   useSelection,
   type PickItem,
 } from './batch-selection-store.js'
+import { createLazyStore } from './store.js'
 
 export interface HostRowInfo {
   /** 槽位投影的 `displayTitle`（行首槽只投 id，所以守卫靠行尾那颗常驻登记）。 */
@@ -31,15 +37,52 @@ export interface HostRowInfo {
  */
 const rowInfo = new Map<string, HostRowInfo>()
 
-/** 行尾兜底勾选开关登记一行：模式内与模式外都要登记（守卫进模式的那一帧就得有标题）。 */
+/**
+ * 渲染侧快照 + DOM 观察：订阅脚手架住 `store.ts` 的 `createLazyStore`；这里只提供读法与
+ * 观察者生命周期。宿主行的去留只体现在 `data-row-key` 节点上（增删、属性落定），文本变化
+ * 不算（标题只认 `rowInfo` 的登记值）。首个订阅者起开始观察，最后一个走了断开。
+ */
+const EMPTY_ROWS: readonly PickItem[] = []
+let observer: MutationObserver | undefined
+
+function startObserving(): void {
+  if (observer !== undefined || typeof MutationObserver === 'undefined') return
+  observer = new MutationObserver(() => visibleRows.invalidate())
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['data-row-key'],
+  })
+}
+
+function stopObserving(): void {
+  observer?.disconnect()
+  observer = undefined
+}
+
+const visibleRows = createLazyStore<readonly PickItem[]>(EMPTY_ROWS, readVisibleSelectableRows, {
+  onFirstSubscribe: startObserving,
+  onLastUnsubscribe: stopObserving,
+})
+
+/**
+ * 行尾兜底勾选开关登记一行：模式内与模式外都要登记（守卫进模式的那一帧就得有标题）。
+ * 只有标题／运行态**真的变了**才标脏：重渲染时的同值登记不该把快照翻新一遍。
+ */
 export function registerHostRowInfo(sessionId: string, info: HostRowInfo): void {
+  const current = rowInfo.get(sessionId)
+  if (current?.title === info.title && current.live === info.live) return
   rowInfo.set(sessionId, info)
+  visibleRows.invalidate()
 }
 
 /**
  * 「当前可见」的可选行：侧栏里**已渲染**的会话行（`data-row-key="session:…"`）——折叠组、
  * 归档过滤外的行不在 DOM 里，宿主隐藏的 subagent 也不在；在跑的行跳过（与置灰勾选框同口径）。
  * 标题/运行态来自行尾兜底登记的 `rowInfo`（模式内它对每个非空行都渲染）；DOM 序就是侧栏顺序。
+ *
+ * 这是**当场读**：事件路径（点「全选」那一刻的页面）与测试用它；渲染侧读下面的快照。
  */
 export function readVisibleSelectableRows(): PickItem[] {
   const rows: PickItem[] = []
@@ -57,6 +100,39 @@ export function readVisibleSelectableRows(): PickItem[] {
   return rows
 }
 
+/**
+ * 渲染侧的快照：脏了才查 DOM；干净时回同一个引用（React 的 `useSyncExternalStore` 契约）。
+ * 没变化时连续两次调用必须同引用，否则订阅方会被自己的快照更新推成死循环。
+ */
+export function getVisibleSelectableRowsSnapshot(): readonly PickItem[] {
+  return visibleRows.get()
+}
+
+/**
+ * `enabled === false` 时的稳定替身：同一个空表、不订阅、不读 DOM。
+ * 浮条是 `shell.overlay` 的常驻槽位，模式外若照常订阅，body 上每次变更（以及每次行登记）
+ * 都会白叫醒它重渲染一次。
+ */
+function getEmptyRowsSnapshot(): readonly PickItem[] {
+  return EMPTY_ROWS
+}
+
+function noopSubscribe(): () => void {
+  return () => {}
+}
+
+/**
+ * 渲染侧只读快照 + DOM 观察订阅；首个订阅者起开始观察，最后一个走了断开。
+ * `enabled === false` 不订阅也不读 DOM——行列表只随多选态存在，模式外不必付观察的成本。
+ */
+export function useVisibleSelectableRows(enabled: boolean): readonly PickItem[] {
+  return useSyncExternalStore(
+    enabled ? visibleRows.subscribe : noopSubscribe,
+    enabled ? visibleRows.get : getEmptyRowsSnapshot,
+    enabled ? visibleRows.get : getEmptyRowsSnapshot,
+  )
+}
+
 /** 全选：把当前可见可选行按 DOM 序追加；已在名单里的由 `addPicks` 自己跳过，原有选中保持在前。 */
 export function selectAllVisible(): void {
   addPicks(readVisibleSelectableRows())
@@ -68,10 +144,11 @@ export function selectAllVisible(): void {
  * - 有选中、但当前没有可见可选行（全折叠/过滤掉）⇒ 只能清空，也显示取消全选；
  * - 其余（含 0 条）⇒ 全选。
  */
-export function allVisibleSelected(): boolean {
-  const picks = getSelection().picks
+export function areAllVisibleRowsSelected(
+  rows: readonly PickItem[],
+  picks: readonly PickItem[],
+): boolean {
   if (picks.length === 0) return false
-  const rows = readVisibleSelectableRows()
   if (rows.length === 0) return true
   const chosen = new Set(picks.map((item) => item.sessionId))
   return rows.every((row) => chosen.has(row.sessionId))
@@ -119,7 +196,8 @@ export function useSelectionRowClickGuard(): void {
   }, [selecting])
 }
 
-/** 测试专用：登记表清空（会话 id 不跨用例复用，名字/运行态别串味）。 */
+/** 测试专用：登记表清空并标脏（会话 id 不跨用例复用，名字/运行态别串味）；观察者归订阅者管。 */
 export function resetHostRows(): void {
   rowInfo.clear()
+  visibleRows.invalidate()
 }

@@ -4,7 +4,7 @@ import { makeEntryId, sessionDirOf, trashDirOf } from '../src/trash/entry.js'
 import { createFakeDeps, type FakeDeps, type FakeDepsOptions, type FakeFs, type FakeHost } from './support/fake-deps.js'
 
 const HOME = '/h'
-/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：17 个宿主方法一次到位，用例只描述世界。
+/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：15 个宿主方法一次到位，用例只描述世界。
  *  日志按**发生顺序**记 fs 与 host 两端——删除的顺序（摘账本 → 搬目录 → 摘活体 → 通告）是一条断言。
  *  **删除不碰归档**：回收站与归档解耦；活体靠 `evictLive`（session + agent）离开宿主。 */
 function deps(over: {
@@ -272,8 +272,8 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     expect(rolled.length).toBe(2)
     expect(await d.manifest.list()).toEqual([])
     // 这两条已经收过"已移除"通告；回滚成功必须补"已恢复"，否则客户端那一行要等到重连才回来。
-    expect(d.host.announceRestored).toHaveBeenCalledWith('session-parent')
-    expect(d.host.announceRestored).toHaveBeenCalledWith('session-kidA')
+    expect(d.host.announceRestored).toHaveBeenCalledWith(['session-parent'])
+    expect(d.host.announceRestored).toHaveBeenCalledWith(['session-kidA'])
   })
 
   it('回滚本身失败 ⇒ 原错误保留，回滚失败进 details，且不发"已恢复"', async () => {
@@ -304,7 +304,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     expect(err.details).toMatchObject({
       rollbackFailures: expect.arrayContaining([expect.stringContaining('清册行摘除失败')]),
     })
-    expect(host.announceRestored).toHaveBeenCalledWith('session-parent')
-    expect(host.announceRestored).toHaveBeenCalledWith('session-kidA')
+    expect(host.announceRestored).toHaveBeenCalledWith(['session-parent'])
+    expect(host.announceRestored).toHaveBeenCalledWith(['session-kidA'])
   })
 })

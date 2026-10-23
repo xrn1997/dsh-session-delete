@@ -336,7 +336,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     const root = entry('session-a', { sizeBytes: 1 })
     const kid = entry('session-k', { parentEntryId: root.id, sizeBytes: 1 })
     const sizes = { [trashDirOf(root.id, HOME)]: 100, [trashDirOf(kid.id, HOME)]: 40 }
-    const { deps } = world({ rows: [root, kid], sizes })
+    const { deps, manifest } = world({ rows: [root, kid], sizes })
 
     const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
 
@@ -357,7 +357,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.unarchive).not.toHaveBeenCalled()
     expect(deps.host.detach).not.toHaveBeenCalled()
-    expect(await deps.manifest.list()).toHaveLength(2)
+    expect(await manifest.list()).toHaveLength(2)
   })
 
   it('盘上后代排除全部清册 id（按 bare 比）并按 bare id 全局去重；有目录的进 members 与 unarchive', async () => {
@@ -420,7 +420,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
 
   it('admission:live 下 target 在跑 ⇒ live，零写、清册不动', async () => {
     const root = entry('session-p')
-    const { deps } = world({ rows: [root], live: (id) => id === 'session-p' })
+    const { deps, manifest } = world({ rows: [root], live: (id) => id === 'session-p' })
 
     await expect(planTrashRemoval(deps, [root], [root], { admission: 'live' }))
       .rejects.toMatchObject({ code: 'sessiondelete/live' })
@@ -429,7 +429,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.unarchive).not.toHaveBeenCalled()
     expect(deps.host.detach).not.toHaveBeenCalled()
-    expect(await deps.manifest.list()).toHaveLength(1)
+    expect(await manifest.list()).toHaveLength(1)
   })
 
   it('admission:live 下盘上后代在跑 ⇒ live，target 与成员都逐个查、零写', async () => {

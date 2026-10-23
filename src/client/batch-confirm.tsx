@@ -19,8 +19,9 @@ import { createStore } from './store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
+import { landedEntryIds } from './receipt.js'
+import { invalidateTrash } from './trash-store.js'
 import { publishUndoBatchNotice } from './undo-toast.js'
-import { commitExternalDelete } from './write-commit.js'
 import { runWrite } from './write.js'
 
 export interface BatchDeleteRequest {
@@ -145,23 +146,14 @@ function BatchConfirmDialog({
         deps,
         action: 'delete',
         ids: pendingIds,
-        commit: (success) => {
+        presentation: {
+          invalidate: invalidateTrash,
           // 撤销名单只收 ok 支的条目 id：already-gone 是「已被同批前一条带走」的幂等条，
-          // 跟着组走（组里 ok 那条的 id 已经在名单里），不单列。
-          const moved: string[] = []
-          for (const verdict of success.receipt.verdicts) {
-            if (verdict.kind === 'ok') moved.push(verdict.value.id)
-          }
-          // `runWrite` 在信封成功时就跑 `commit`（成功名单可能为空）：清单失效照发，
-          // 但一条都没落地时不发布撤销横幅——没有落点的横幅是假按钮。
-          commitExternalDelete({
-            sessionIds: success.successIds,
-            publishUndo: () => {
-              if (success.successIds.length > 0) {
-                publishUndoBatchNotice({ entryIds: moved, n: success.successIds.length })
-              }
-            },
-          })
+          // 跟着组走（组里 ok 那条的 id 已经在名单里），不单列。一条都没落地时 settlement 不发布
+          // 撤销横幅——没有落点的横幅是假按钮；清单失效照发。
+          publishUndo: (success) => {
+            publishUndoBatchNotice({ entryIds: landedEntryIds(success.receipt), n: success.successIds.length })
+          },
         },
       })
       const failed = outcome.failures

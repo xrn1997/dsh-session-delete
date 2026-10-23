@@ -45,7 +45,7 @@
 ```
 ports/     端口与适配（HostPort / FsPort / Home）
    ▲
-trash/  ·  log/          ← 领域部件：条目形状、清册对账、storage-manifest（宿主 storage 域绑定）、组语义、日志走帧
+trash/  ·  log/          ← 领域部件：条目形状、清册 ledger（真相读 = 对账 + 读；pure 读面读 raw）与对账、storage-manifest（宿主 storage 域绑定）、组语义、日志走帧
    ▲
 verbs/     动词：delete / restore / purge / orphan-clean + permanent-removal + batch + batch-carried + move-group + member-journal + member-presence
    ▲
@@ -54,7 +54,7 @@ api/       两个投影面里的那个 Node 面：路由表 + dispatch + 行投�
 index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——只导出插件模块面（name / inject / apply）
 ```
 
-- deps.ts 的 CoreDeps 是动词与 API 共享的四项基础（fs / host / manifest / home）；DeleteDeps = CoreDeps & { now } 只给删除；装配只在 index.ts 一处；动词之间不再互相 import 依赖面 interface。
+- deps.ts 的 CoreDeps 是动词与 API 共享的四项基础（fs / host / ledger / home）；DeleteDeps = CoreDeps & { now } 只给删除；装配只在 index.ts 一处；动词之间不再互相 import 依赖面 interface。
 - **宿主端口按角色切三片**：身份与归属（`HostIdentityPort`）、在场通告（`HostPresencePort`）、会话语料（`HostCorpusPort`），同住 `src/ports/host-port.ts`；`HostPort` 是三者相交的复合别名，生产 adapter 只有 `createHostPort`。`evictLive` 的 agent handle 捕获住 `src/ports/agent-handles.ts`（adapter 内部，不进端口类型）。裁决见 ADR-0007。
 - **语料缺席是显式的**：两个语料读面都交 `CorpusRead<T>` = `{ available: true, value }` | `{ available: false }`，不带原因串；形状住 `src/ports/host-port.ts`。**缺席之后怎么办归调用方**：删除只删父、count 报 0、`/list` 与 purge 静默降级、`/orphans` 与经 `loadOrphanGroups` 的 `orphan-clean` 响亮失败。裁决见 ADR-0007。
 - **`verbs` 不 import `api`**：路由层只搬运，业务判据全在动词与部件。
@@ -67,7 +67,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - **通道探测决定入口出现与否**：注册任何贡献之前先探 `GET /ping`；探测不过 ⇒ 一个入口都不注册（"不可用"以入口不出现表达，不新造禁用态 UI——半吊子 UI 比没有 UI 更糟）。探测**过了**（哪怕回的是失败信封）就照常注册。
 - **客户端条目 pending = 宿主进程死**：可选服务（locale）走 `ctx.get` 而不是 `inject`。
 - 文案住 `src/client/copy.ts` 的命名空间字典（zh 真源 + en 逐键镜像），经宿主 locale 服务可选读，缺席降级内置 zh。**渠道错误原文除外**：`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale；它们是协议诊断原文，不是界面标签。
-- **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（快照 / 订阅 / 每实例 seq / `reset`）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与整行点击守卫住 `src/client/host-rows.ts`）。
+- **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与整行点击守卫住 `src/client/host-rows.ts`）。
 - 浏览器半**不持任何真相**：线上失败码与数据根目录名从 `wire.ts` 取常量（自己的未分类诊断码住 `receipt.ts`），"这次会释放多少"念服务端算好的 `releaseBytes`——它只做呈现。
 
 界面规格住 `docs/ui-spec.md`：入口与面板、六个基础状态、面板与清单、批量删除四态、残留维护三块。像素值、断点、文案键的唯一定义在 `src/client/` 与 `tests/client/`，那里不抄读数。
@@ -85,17 +85,18 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 组语义（谁能接住孩子、这一组有谁、`claimOf` 三态） | `src/trash/groups.ts` | 步骤与回滚；同批已带走集（`src/verbs/batch-carried.ts`） |
 | 「这一批」（去重保序 / 写动作共用一个循环与逐条信封 / 一批一次通告） | `src/verbs/batch.ts` | 单条动词的步骤；同批已带走集归 `src/verbs/batch-carried.ts`，三态谓词归 `src/trash/groups.ts`；`count` 是纯读、没有逐条失败，不走那个循环 |
 | 同批已带走集（entry / session 两种 id 域，各有 `claim` / `take`；entry 的 fresh 支带组，session 只回 fresh / carried；只读视图 `rows` 只在 entry 域） | `src/verbs/batch-carried.ts` | 组语义（`src/trash/groups.ts`）；单个动词的步骤 |
-| 成员离场 / 归位通告（摘 session + agent、三态、成对事件） | `src/verbs/member-presence.ts` | 批量通告（`announceRestoredBatch` 归 `src/verbs/batch.ts`） |
+| 成员离场 / 归位通告（摘 session + agent、三态、成对事件） | `src/verbs/member-presence.ts` | 批量恢复由 `src/verbs/batch.ts` 调同一个 `announceRestored(ids)` |
 | 一次成员移动的步骤、反向动作与逐步 undo 结果（`restored(key)`） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
-| 组级成员移动的顺序、按序结果与整组回滚 | `src/verbs/move-group.ts` | 单成员步骤（`src/verbs/member-journal.ts`）；谁算一组（`src/trash/groups.ts`） |
+| 组级成员移动的顺序、组根结果与整组回滚。调用方直接拿根结果，不索引数组；跟随者按序拿根结果。 | `src/verbs/move-group.ts` | 单成员步骤（`src/verbs/member-journal.ts`）；谁算一组（`src/trash/groups.ts`） |
 | 永久删除的计划与执行（成员 / 目录 / 字节 / live 准入 / 部分回执） | `src/verbs/permanent-removal.ts` | 组语义归 `src/trash/groups.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` | 对账 |
+| 清册读的两个读面（`list()` = 对账 + 读，供 `/list`、`/empty` 与写动词；`raw()` = 不对账、不写行，供 pure 的 `/orphans` 与 `/detail`） | `src/trash/ledger.ts` | 存储域绑定、对账的具体目录判据 |
 | 清册与 `session-trash/` 目录的对账 | `src/trash/reconcile.ts` | 目录里读哪一代日志 |
 | 会话日志的选代与走帧（多帧 zstd） | `src/log/session-log.ts` + `src/log/zstd-frames.ts` | 正文该显示什么 |
 | 详情给谁看、给多少（`source.kind` 过滤、载荷闸、计数与正文同源） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`） |
 | 正文怎么排版成 DOM（裸 HTML、链接与图片的收口） | `src/client/markdown.tsx` + `src/client/ui/markdown.css` | 抄来的宿主消息行样式 |
-| 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（`src/trash/manifest.ts`） |
-| 清册的读法（动词只认这个端口，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账 |
+| 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
+| 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/ledger.ts`） |
 | 盘与路径的适配（`FsPort`） | `src/ports/fs-port.ts` | 该删哪些目录（各动词的判据） |
 | 数据根的解析（`$DSH_HOME` / `~/.dsh`） | `src/ports/home.ts` | 宿主的显式配置（插件不可得） |
 | 恢复时「挂不挂账本」与那句「归入未分组」 | `src/verbs/restore-session.ts` 的 `attachableWorkspaceId` / `isWorkspaceMissing` | 工作区还在时的挂接失败 |
@@ -106,20 +107,20 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 宿主能力的生产 adapter（一颗对象同时满足三个角色） | `src/ports/host-port.ts` 的 `createHostPort` | 各动词的调用顺序 |
 | Node 半的依赖面（CoreDeps / DeleteDeps） | `src/deps.ts` | 各动词的调用顺序 |
 | 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开、面板恢复后忘掉） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量） |
-| 撤销横幅的现场、seq 与按条目熄灭 | `src/client/undo-toast.tsx` | 何时发布（各写入面）；停留时长（文件内 `UNDO_HOLD_MS`） |
-| 一次逐条 `/apply` 写入的生命周期（apply → 信封 → receipt → commit → refresh；含 orphan-clean；`/empty` 聚合回执仍归 `use-trash-query.ts`） | `src/client/write.ts` 的 `runWrite` | 回执判读（`src/client/receipt.ts`）、commit 本体（`src/client/write-commit.ts`）、各面的本地状态 |
-| 外部写入收尾的顺序（主视图收尾 → 失效回收站 → 撤销通告） | `src/client/write-commit.ts` | 关/开主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、什么时机跑（`src/client/write.ts`） |
+| 撤销横幅的现场、seq 与按条目熄灭 | `src/client/undo-toast.tsx` | 何时发布（归 `src/client/write-settlement.ts`）；停留时长（文件内 `UNDO_HOLD_MS`） |
+| 一次逐条 `/apply` 写入的生命周期（apply → 信封 → receipt → settlement → refresh；`orphan-clean` 也走这条但 settlement 不做事；`/empty` 聚合回执仍归 `use-trash-query.ts`） | `src/client/write.ts` 的 `runWrite` | 回执判读（`src/client/receipt.ts`）、按 action 的收尾顺序（`src/client/write-settlement.ts`）、各面的本地状态 |
+| 逐条 `/apply` 写入的收尾顺序（main-view 收尾 → 失效回收站 → 撤销通告 / 详情缓存，按 action 各一条，含 `anySuccess` 门与恢复的两个座位） | `src/client/write-settlement.ts` | 关/开/忘主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、什么时机跑（`src/client/write.ts`） |
 | 无主子会话的扫描与分组（谁算孤儿、传递闭包与去重） | `src/verbs/orphan-subagents.ts` | 删哪些目录、报多少字节、谁挡活体（归 `src/verbs/permanent-removal.ts`）；回收站里的组 |
 | 失败码的措辞与映射、回滚失败的措辞与合并（`details.rollbackFailures`；码本身住 `wire.ts`） | `src/verbs/errors.ts` + `src/remote/map-error.ts` | 上屏文案 |
 | 同源栅栏（桌面壳那条只留 Referer 的路） | `src/api/dispatch.ts` | 操作失败的信封（那是 `map-error`） |
 | 客户端可见文案 | `src/client/copy.ts` | 服务端错误原文；渠道错误原文除外（`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale） |
-| 清册与残留的取数编排、清空回收站的聚合回执（命名读 `reloadRows` / `rescanOrphans` / `refreshAll` / `refreshAfterWrite`；到达序号、在飞的旧响应不许盖新态、输给序号的读不清场；写后残留只在「已扫到过且为空」时省，报告未知 / 非空 / 强制重扫（输给后发读时由赢家补扫）；`refreshAll` / `refreshAfterWrite` 的清单读失败清空报告与提示并作废在飞扫描） | `src/client/use-trash-query.ts` | 服务端算的那个数 |
+| 清册与残留的取数编排、清空回收站的聚合回执（命名读 `reloadRows` / `rescanOrphans` / `refreshAll` / `refreshAfterWrite`；到达序号、在飞的旧响应不许盖新态、输给序号的读不清场；调用方不传 `rescan`，写后残留由 `refreshAfterWrite(outcome)` 从 action / ids / 当前 entries 派生——清单未知或找不到这个 id 时保守重扫，失效通告不带 outcome 时报告未知 / 非空才重扫，强制重扫输给后发读时由赢家补扫；`refreshAll` / `refreshAfterWrite` 的清单读失败清空报告与提示并作废在飞扫描） | `src/client/use-trash-query.ts` | 服务端算的那个数 |
 | 清单的选择面（多选态、勾选集合、组头三态派生） | `src/client/use-trash-selection.ts` | 谁能接住孩子（`src/trash/groups.ts`） |
 | 动过回收站之后谁重读（失效通告台，只有一个修订号） | `src/client/trash-store.ts` | 动了什么、谁动的（清单本体永远问宿主） |
-| 跨槽位现场脚手架（快照 / 订阅 / 每实例 seq / `reset`） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值与不变量 |
+| 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法 |
 | 批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
-| 宿主行读取与整行点击守卫（可见行 / 全选判定 / 捕获阶段拦行点击） | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
-| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 确认派发 / 自动选中 / 下钻回退 / 面板恢复的跨槽位结算） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、写入生命周期（`src/client/write.ts`） |
+| 宿主行快照订阅（DOM 观察 + 行登记；渲染侧只读快照）与整行点击守卫 | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
+| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 确认派发 / 自动选中 / 下钻回退 / 面板恢复的呈现素材） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`） |
 | 槽位贡献与注册 | `src/client/index.tsx` | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
 | 抄来的官方控件样式（`sd-` 前缀）与点名的自造差异 | `src/client/ui/ui.css` 文件头那张来源表 | token 的取值 |
@@ -127,7 +128,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 ## 5. 数据与生命周期
 
 - 运行时数据全住数据根（`~/.dsh/`）：会话本体 `sessions/<项目目录>/<会话目录>/`（宿主的），回收站本体 `session-trash/<条目 id>/` 与清册（宿主 storage 域，介质在 `storages/`）。**回收站必须与 `sessions/` 同卷**（搬移靠整目录 `rename`，原子）。
-- **`session-trash/` 目录是唯一需要手动动的地方**：每次读清单都先与目录对账（多出的目录重建出行、目录没了摘行、认不出的当外人）；`storages/` 那份是内部索引，外面改它要重启宿主才生效。
+- **`session-trash/` 目录是唯一需要手动动的地方**：真相读（`list()`）先与目录对账（多出的目录重建出行、目录没了摘行、认不出的当外人），由 `src/trash/ledger.ts` 保证；纯读面 `/orphans` 与 `/detail` 只读 `raw()`，不对账、不写行（`/detail` 遇到“行在、目录不在”照旧判 `io`，不靠对账摘行），`orphan-clean` 等写动作先 `list()` 再扫。`storages/` 那份是内部索引，外面改它要重启宿主才生效。
 - **清册只记文件里真有的事实**：随盘上随时变的数（还剩几个孩子、这次释放多少）一律现算现给、不落清册。
 - **会话列表不是磁盘投影**：`sessionQuery.listSessions()` 是磁盘持久化 **∪** 宿主内存里 attach 着的活体会话；摘账本挡不住活体，客户端会把它归入「未分组」。删除必须 `evictLive` 把 session 与 agent handle 一起摘掉（ADR-0008）。
 - **删除 = 移入回收站**（可恢复，不自动过期）；**永久删除**只有三条路：purge（单条或一批）、清空回收站、无主子会话清理，都要二次确认；界面文案可以叫「彻底删除」。

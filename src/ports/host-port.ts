@@ -53,20 +53,9 @@ export interface HostPresencePort {
   /** **如实通告**客户端"这个会话没了"：发宿主自己声明并转发的 `api-session/removed`，客户端当场删行。
    *  冷会话没有活体可摘，但同样需要这一条——否则那一行要等到重连（`handleConnected` → 重列）才消失。 */
   announceRemoved(sessionId: string): Promise<void>
-  /** **如实通告**客户端"这个会话回来了"：摘要取自宿主自己的会话列表，发 `api-session/added`。
-   *  正常恢复走 {@link HostPresencePort.announceRestoredBatch}（整批一次预取）；这一条单条路是**删除组回滚**
-   *  用的（成员已经收过"已移除"、退回原处后补发）。取不到摘要就不发。 */
-  announceRestored(sessionId: string): Promise<void>
-  /** 宿主会话表的一次预取：`[{ sessionId, summary }]`，`summary` 是宿主**原样**那一条。
-   *  给 {@link announceRestoredBatch} 当 `known` 用——整批只拉一次表。服务没挂回空表，不抛。 */
-  restoredSummariesOf(): Promise<readonly { readonly sessionId: string; readonly summary: unknown }[]>
-  /** 一组会话的通告（2026-10-17 批量重构）：`known` 是调用方**整批预取**的摘要表——给了就一次都不
-   *  再拉表（每条一次 `controller.list()` 在 100 条的批量里就是 100 遍全表扫，那是那次"恢复很慢"的
-   *  头号来源）；没给则自己拉一次。缺席 id 不发，不影响已完成的恢复。 */
-  announceRestoredBatch(
-    ids: readonly string[],
-    known?: readonly { readonly sessionId: string; readonly summary: unknown }[],
-  ): Promise<void>
+  /** 一组会话的「回来了」通告：implementation 拉一次宿主会话表，按 id 逐条发 added。
+   *  单条就是长度为 1 的批；批量只调一次。缺席 id 不发，不影响已完成的恢复。 */
+  announceRestored(sessionIds: readonly string[]): Promise<void>
 }
 
 /**
@@ -97,7 +86,7 @@ export interface HostCorpusPort {
   subagentMembersOf(parentIds: readonly string[]): Promise<CorpusRead<Record<string, readonly SubagentMember[]>>>
 }
 
-/** 复合别名：adapter（`createHostPort`）与调用方把这 17 个方法当一个端口用；三个角色是它的切面。 */
+/** 复合别名：adapter（`createHostPort`）与调用方把这 15 个方法当一个端口用；三个角色是它的切面。 */
 export type HostPort = HostIdentityPort & HostPresencePort & HostCorpusPort
 
 /* ------------------------------------------------------------------ *
@@ -571,50 +560,31 @@ export function createHostPort(ctx: unknown): HostPort {
     },
 
     /**
-     * 通告客户端"这个会话回来了"。
+     * 通告客户端"这组会话回来了"：**拉一次**宿主自己的会话列表，按 id 逐条发 `api-session/added`。
      *
      * 摘要**取自宿主自己的会话列表**（`ctx.sessionController.list()`），不自己造一行：客户端 `handleSessionAdded`
      * 要的是宿主 `summaryFor` 那套形状（sessionId / updatedAt / blank / projections…），照抄宿主的那一份最可靠。
      * 取不到（控制器缺席 / 列表里没有它 / 抛错）就**一条都不发**。
      *
-     * **这一条单条路是删除组回滚用的**：成员已经收过 `api-session/removed`，退回 `sessions/` 之后要补一条
-     * "added"，否则客户端那一行要等到重连才回来。正常恢复走 {@link announceRestoredBatch} + 一次预取——
-     * 100 条的批量用单条路就是 100 遍全表扫，那正是 2026-10-17 那次"恢复很慢"的头号来源。
+     * **取数从 interface 收进了 implementation**：单条就是长度为 1 的批，批量恢复与删除组回滚走同一条路。
+     * 一次预取由这里保证——100 条一组的批量若按条拉表就是 100 遍全表扫，那正是 2026-10-17 那次"恢复很慢"的头号来源。
      */
-    async announceRestored(sessionId) {
-      const summary = (await this.restoredSummariesOf()).find(item => item.sessionId === sessionId)?.summary
-      if (summary === undefined) return
-      try {
-        // 过一遍 JSON：转发器对转发事件做 lossless-JSON 断言（`assertJsonArgs`），
-        // `undefined` 字段在 stringify 时自然消失，正是客户端那一侧要的形状。
-        host.emit('api-session/added', JSON.parse(JSON.stringify(summary)))
-      } catch {
-        // 通告是收尾：某个监听者抛错不该把已经完成的恢复翻成失败
-      }
-    },
-
-    /** 整批预取一次会话表（`[{ sessionId, summary }]`）：通告的路径与单条一致，**拉表从每条一次抬成整批一次**。 */
-    async restoredSummariesOf() {
-      const out: { sessionId: string; summary: unknown }[] = []
+    async announceRestored(sessionIds) {
+      if (sessionIds.length === 0) return
+      const summaries: { sessionId: string; summary: unknown }[] = []
       for (const item of await controllerItems(host)) {
         const sessionId = (item as { sessionId?: unknown } | null)?.sessionId
-        if (typeof sessionId === 'string') out.push({ sessionId, summary: item })
+        if (typeof sessionId === 'string') summaries.push({ sessionId, summary: item })
       }
-      return out
-    },
-
-    /** 一组会话的通告（2026-10-17 批量重构）：`known` 给了就**一次都不拉表**，只按它筛。
-     *  与 {@link announceRestored} 同一判据、同一事件、同一载荷形状，只是取数由整批共享。 */
-    async announceRestoredBatch(ids, known) {
-      if (ids.length === 0) return
-      const summaries = known ?? await this.restoredSummariesOf()
-      for (const id of ids) {
+      for (const id of sessionIds) {
         const summary = summaries.find(item => item.sessionId === id)?.summary
         if (summary === undefined) continue
         try {
+          // 过一遍 JSON：转发器对转发事件做 lossless-JSON 断言（`assertJsonArgs`），
+          // `undefined` 字段在 stringify 时自然消失，正是客户端那一侧要的形状。
           host.emit('api-session/added', JSON.parse(JSON.stringify(summary)))
         } catch {
-          // 同 announceRestored：收尾失败不翻结果
+          // 通告是收尾：某个监听者抛错不该把已经完成的恢复翻成失败
         }
       }
     },

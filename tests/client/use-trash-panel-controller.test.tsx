@@ -613,36 +613,40 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
   })
 
-  it('单独恢复露面的孩子（父行已摘）⇒ 强制重扫孤儿；恢复组根不强制', async () => {
+  it('单条恢复把 outcome 交给 query：孩子与组根的差异由 query 判，控制器只转交', async () => {
     const child = mount({ entries: [CHILD] })
     child.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('child')])
     await act(async () => {
       await child.result.current.restore(CHILD)
     })
-    expect(child.refreshAfterWrite).toHaveBeenCalledWith({ rescan: true })
+    expect(child.refreshAfterWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'restore', ids: ['child'] }))
 
     const root = mount({ entries: [A] })
     root.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
     await act(async () => {
       await root.result.current.restore(A)
     })
-    expect(root.refreshAfterWrite).toHaveBeenCalledWith({ rescan: false })
+    expect(root.refreshAfterWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'restore', ids: ['a'] }))
   })
 
-  it('批量恢复里有露面的孩子 ⇒ 强制重扫；只有组根 ⇒ 不强制', async () => {
+  it('批量恢复把 outcome 交给 query：孩子与组根的差异由 query 判，控制器只转交', async () => {
     const withChild = mount({ entries: [A, CHILD] })
     withChild.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a'), restoreOk('child')])
     await act(async () => {
       await withChild.result.current.confirmApply('restore', ['a', 'child'])
     })
-    expect(withChild.refreshAfterWrite).toHaveBeenCalledWith({ rescan: true })
+    expect(withChild.refreshAfterWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'restore', ids: ['a', 'child'] }))
 
     const roots = mount({ entries: [A] })
     roots.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
     await act(async () => {
       await roots.result.current.confirmApply('restore', ['a'])
     })
-    expect(roots.refreshAfterWrite).toHaveBeenCalledWith({ rescan: false })
+    expect(roots.refreshAfterWrite).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'restore', ids: ['a'] }))
   })
 
   it('面板恢复结算跨槽位：熄灭撤销横幅，并忘掉 main-view 的 closedByUs', async () => {
@@ -763,7 +767,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.pending).toBeNull()
     expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
     expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
-    expect(m.refreshAfterWrite).toHaveBeenCalledWith({ rescan: true })
+    expect(m.refreshAfterWrite).toHaveBeenCalledWith(expect.objectContaining({ action: 'purge' }))
 
     // 成功的那条缓存已丢：再选它必须重读，否则会摆着已经被删掉的那一世的详情。
     const fresh = deferred<TrashDetailLike>()

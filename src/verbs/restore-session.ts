@@ -33,8 +33,11 @@ export function restoreSession(deps: CoreDeps) {
      *  `verbs/batch-carried.ts`，组语义归 `trash/groups.ts`。 */
     group: readonly TrashEntry[],
   ): Promise<TrashEntry> {
+    const [root, ...followers] = group
     const target = group.find(e => e.id === entryId)
-    if (!target) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
+    if (root === undefined || target === undefined) {
+      throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
+    }
 
     for (const entry of group) {
       const trashDir = trashDirOf(entry.id, deps.home)
@@ -47,9 +50,16 @@ export function restoreSession(deps: CoreDeps) {
 
     // 相反顺序退回去；某一步退不干净时**不能**让原错误独走——客户端只看 code 会以为已经回到回收站，
     // 实际那个成员半在 `sessions/` 半在回收站里，通告还会骗它把那一行删掉。
-    await moveGroup(group, async (entry) => {
-      const move = await memberRestore(deps, presence, entry)
-      return { journal: move.journal, result: undefined }
+    // `root` 只是**操作顺序上的根**（组的第一成员）：ghost / 降级组里它可能仍记着 `parentEntryId`
+    // （真正的组根已经不在），`moveGroup` 只负责先跑它；组语义仍归 `trash/groups.ts`。
+    await moveGroup<TrashEntry, undefined>({
+      root,
+      followers,
+      move: async (entry) => {
+        const move = await memberRestore(deps, presence, entry)
+        // 恢复不产出结果：根与跟随者都交回 `undefined`，没有按位置约定的占位结果。
+        return { journal: move.journal, result: undefined }
+      },
     })
     return target
   }
@@ -149,8 +159,8 @@ async function memberRestore(
     {
       key: 'manifest',
       label: '摘回收站条目失败',
-      run: async () => { await deps.manifest.remove(entry.id) },
-      undo: () => stepUndo('清册行写回失败', () => deps.manifest.add(entry)),
+      run: async () => { await deps.ledger.remove(entry.id) },
+      undo: () => stepUndo('清册行写回失败', () => deps.ledger.add(entry)),
     },
   ]
 

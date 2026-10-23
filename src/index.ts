@@ -4,6 +4,7 @@ import { createApiHandler } from './api/dispatch.js'
 import { createFsPort } from './ports/fs-port.js'
 import { createHostPort } from './ports/host-port.js'
 import { resolveHome } from './ports/home.js'
+import { createTrashLedger } from './trash/ledger.js'
 import { createHostStorageManifest } from './trash/storage-manifest.js'
 import type { DeleteDeps } from './deps.js'
 import { SESSION_DELETE_API_PREFIX } from './shared/wire.js'
@@ -29,7 +30,8 @@ export const name = '@xrn1997/dsh-session-delete'
  * `super(ctx, "webServer")`），服务名与 `register({kind:'prefix', path, handler})` 的形状按
  * `dsh-host-webserver/lib/index.js` 与 `README.md` 原文读实，不是猜的。
  *
- * 清单（storage domain 绑定）与数据根各有一个家：`src/trash/storage-manifest.ts`、`src/ports/home.ts`。
+ * 清册的三层各有各的家：raw 绑定 `src/trash/storage-manifest.ts`、读面（对账 + 读）`src/trash/ledger.ts`、
+ * 数据根 `src/ports/home.ts`。这里只把它们接起来，任何一层都不在组合根里长判据。
  */
 export const inject = ['workspaceRegistry', 'storageDomain', 'webServer']
 
@@ -54,11 +56,14 @@ interface WebServerLike {
  * 在 `register` 里直接抛（`webserver: duplicate prefix route "…"`），响亮失败而不是悄悄覆盖。
  */
 export function apply(ctx: Context): void {
+  const fs = createFsPort()
+  const home = resolveHome()
+  const rawManifest = createHostStorageManifest(ctx)
   const deps: DeleteDeps = {
-    fs: createFsPort(),
+    fs,
     host: createHostPort(ctx),
-    manifest: createHostStorageManifest(ctx),
-    home: resolveHome(),
+    ledger: createTrashLedger(rawManifest, fs, home),
+    home,
     now: () => Date.now(),
   }
   const webServer = (ctx as unknown as { webServer: WebServerLike }).webServer

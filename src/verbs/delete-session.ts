@@ -61,7 +61,8 @@ export function deleteSession(deps: DeleteDeps) {
     // 孩子的目录缺席**跳过它**：宿主记录与磁盘不一致是孩子的问题，不该让父删不掉。
     const parentDir = sessionDirOf(parentProjectDir, sessionId, deps.home)
     if (!(await deps.fs.exists(parentDir))) throw verbError('not-found', `会话目录不存在：${parentDir}`)
-    const members: Member[] = [{ sessionId, projectDir: parentProjectDir }]
+    const parent: Member = { sessionId, projectDir: parentProjectDir }
+    const members: Member[] = [parent]
     for (const kid of kids) {
       if (await deps.fs.exists(sessionDirOf(kid.projectDir, kid.sessionId, deps.home))) {
         members.push({ sessionId: kid.sessionId, projectDir: kid.projectDir })
@@ -71,14 +72,17 @@ export function deleteSession(deps: DeleteDeps) {
     const deletedAt = deps.now()
     // 相反顺序退回去（执行的最后一件先退）；某一步退不干净时**不能**让原错误独走——
     // 客户端只看 code 会以为已经回到删除前，实际半组还挂在回收站里。
-    const results = await moveGroup<Member, TrashEntry>(members, async (member, priorResults) => {
-      // members[0] 是父、moveGroup 保序：父自己排在最前（前面没有前序结果），孩子的首个前序结果就是父条目。
-      const parentEntryId = priorResults[0]?.id
-      const move = await memberMove(deps, presence, member, deletedAt, parentEntryId)
-      return { journal: move.journal, result: move.entry }
+    const rootEntry = await moveGroup<Member, TrashEntry>({
+      root: parent,
+      followers: members.slice(1),
+      move: async (member, rootResult) => {
+        // 组根（父）由 interface 直接交回；跟随者拿到的根结果就是父条目，孩子用它记 `parentEntryId`。
+        const parentEntryId = rootResult?.id
+        const move = await memberMove(deps, presence, member, deletedAt, parentEntryId)
+        return { journal: move.journal, result: move.entry }
+      },
     })
-    // members[0] 是父，moveGroup 保序；走到这里 results[0] 一定是父条目。
-    return { entry: results[0]!, movedSessionIds: members.map((member) => member.sessionId) }
+    return { entry: rootEntry, movedSessionIds: members.map((member) => member.sessionId) }
   }
 }
 
@@ -108,7 +112,7 @@ async function memberMove(
   const wasArchived = await deps.host.isArchived(sessionId)
   const trashDir = trashDirOf(makeEntryId(deletedAt, sessionId), deps.home)
 
-  // 标题与字节要靠第一步读回来；条目对象先建好，那一步就地补上（`manifest.add` 是最后一件写）。
+  // 标题与字节要靠第一步读回来；条目对象先建好，那一步就地补上（`ledger.add` 是最后一件写）。
   const entry: TrashEntry = {
     id: makeEntryId(deletedAt, sessionId), sessionId, projectDir, workspaceId: workspaceId ?? '',
     wasArchived, deletedAt, title: '', sizeBytes: 0,
@@ -145,7 +149,7 @@ async function memberMove(
         await deps.fs.rename(sessionDir, trashDir)
         moved = true
         try {
-          await deps.manifest.add(entry)
+          await deps.ledger.add(entry)
         } catch (error) {
           // 这一句的措辞承重（既有上屏原文），所以在这里就地给动词码，不走 journal 的默认折法
           throw verbError('io', `登记回收站条目失败：${String(error)}`, error)
@@ -156,7 +160,7 @@ async function memberMove(
         const directory = await stepUndo('目录搬回失败', () => deps.fs.rename(trashDir, sessionDir))
         const failures: string[] = [...directory.failures]
         if (directory.restored) {
-          failures.push(...await attempt('清册行摘除失败', () => deps.manifest.remove(entry.id)))
+          failures.push(...await attempt('清册行摘除失败', () => deps.ledger.remove(entry.id)))
         }
         // 键是 `dir`：目录回来就算归位；清册行是附属写，失败只进 failures（客户端仍要收到 added）。
         return { restored: directory.restored, failures }

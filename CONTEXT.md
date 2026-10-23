@@ -34,7 +34,11 @@ _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 _Avoid_: 索引、数据库（清册是宿主 storage 域里的内部索引，但不是一个可查询的数据库）。
 
 **对账**（reconcile）
-每次读清单前，把清册与 `session-trash/` 的目录修回一致：多出的目录重建出行、目录没了的行摘掉、认不出的当外人（不动也不列）。幂等，且**零漂移零写入**；判据住 `src/trash/reconcile.ts`。
+真相读由 `src/trash/ledger.ts` 的 `list()` 先与 `session-trash/` 的目录修回一致：多出的目录重建出行、目录没了的行摘掉、认不出的当外人（不动也不列）。幂等，且**零漂移零写入**；判据住 `src/trash/reconcile.ts`。谁走真相读、谁走 `raw()` 见 `docs/architecture.md` §4 与 ADR-0012。
+
+**清册读面**（trash ledger）
+清册的两条读法：**真相读** `list()` 先对账再交行；**raw 索引** `raw()` 只回清册、不对账也不写行。谁走哪条见 `docs/architecture.md` §4 与 ADR-0012。_唯一实现_：`src/trash/ledger.ts` 的 `TrashLedger`。
+_Avoid_: 账本（本仓「账本」指宿主工作区注册表；清册读面不要与它混用）。
 
 **同批已带走集**（batch carried set）
 同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记、恢复/彻底删除按条目 id 记，各一个 adapter；它决定这一条还该不该交给动词，entry 适配另交 purge 一份收缩中的当前只读视图（盘上后代要按清册里还在的 id 排除）。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
@@ -63,7 +67,7 @@ _Avoid_: 彻底删除与永久删除混用（本仓统一说「永久删除」�
 一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，只写、不再量、不再判活体。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。判据住 `src/verbs/permanent-removal.ts`，裁决见 ADR-0006。
 
 **成员在场**（member presence）
-一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；批量恢复的通告仍归 `src/verbs/batch.ts`。
+一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；批量恢复仍由 `src/verbs/batch.ts` 发起一次 `announceRestored(ids)`（单条就是长度为 1 的批，ADR-0014）。
 
 **归档**（archive）
 宿主「从分组面藏掉」那一档，只反映**用户自己**的归档状态；**回收站不使用它**（删除不调 `archiveSession`，见 ADR-0008）。旧版本删除留下的归档态条目在恢复时迁移式取消归档；`wasArchived` 只记删除前的事实。
@@ -72,3 +76,11 @@ _Avoid_: 隐藏、回收站（归档不是删除，回收站也不是归档）�
 **通告**（announce）
 让客户端**当场**删掉/加回一行的两条宿主事件（`api-session/removed` / `api-session/added`）。冷会话没有活体可摘，通告照样必须发。
 _Avoid_: 通知、事件（太泛；通告专指这两条成对的客户端事件）。
+
+**渲染侧快照**（visible-rows snapshot）
+宿主 DOM 这个组件树之外的事实源，在渲染期交出的读数：脏了才重读，干净时回同一个引用；变化由适配器里的观察者通告，不靠定时重读。判据与裁决见 ADR-0015。
+_Avoid_: 缓存（这里只讲「同一引用」这条 snapshot 契约，不是通用缓存）；轮询（没有定时器在重读 DOM）。_唯一实现_：`src/client/host-rows.ts` 的 `useVisibleSelectableRows`（订阅骨架住 `src/client/store.ts` 的 `createLazyStore`）。
+
+**写后重扫**（post-write orphan rescan）
+一次写入之后要不要重扫无主子会话：由这次的写入结果从动作、请求的 id 与发读前的清单派生，调用方不传标记。判据见 ADR-0016。
+_Avoid_: 强制刷新（那是面板上的手动动作）；把「报告为空」当成「不用扫」——报告 `null` 是未知，不是零。_唯一实现_：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`。

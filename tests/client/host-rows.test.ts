@@ -5,21 +5,24 @@
 //
 // 文件是 `.ts`（不是 `.tsx`）：守卫的 React 行替身用 `createElement` 造，省得为一个测试文件
 // 多开一种扩展名——扩展名跟着任务单的指名走。
-import { act, fireEvent, render } from '@testing-library/react'
+import { act, fireEvent, render, waitFor } from '@testing-library/react'
 import { createElement, Fragment, type ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  allVisibleSelected,
+  areAllVisibleRowsSelected,
+  getVisibleSelectableRowsSnapshot,
   readVisibleSelectableRows,
   registerHostRowInfo,
   resetHostRows,
   selectAllVisible,
   useSelectionRowClickGuard,
+  useVisibleSelectableRows,
 } from '../../src/client/host-rows.js'
 import {
   enterSelection,
   exitSelection,
   getPicks,
+  getSelection,
   isSelecting,
   resetSelection,
   togglePick,
@@ -79,6 +82,42 @@ function fakeRow(sessionId: string, titleText = 'A'): {
 
 const ids = (): string[] => getPicks().map((item) => item.sessionId)
 
+/** 渲染侧只读快照：行列表由订阅驱动重渲染，DOM 观察留在适配器里。 */
+function RowsHarness({ enabled = true }: { enabled?: boolean }): ReactElement {
+  const rows = useVisibleSelectableRows(enabled)
+  return createElement('div', { 'data-testid': 'rows' }, rows.map((item) => item.sessionId).join(','))
+}
+
+describe('useVisibleSelectableRows', () => {
+  it('DOM 里长出一行后重渲染；没有变化时快照引用稳定', async () => {
+    registerHostRowInfo('a', { title: 'A', live: false })
+    const { getByTestId } = render(createElement(RowsHarness))
+    await waitFor(() => expect(getByTestId('rows').textContent).toBe(''))
+
+    fakeRow('a')
+    await waitFor(() => expect(getByTestId('rows').textContent).toBe('a'))
+
+    const first = getVisibleSelectableRowsSnapshot()
+    expect(getVisibleSelectableRowsSnapshot()).toBe(first)
+  })
+
+  it('未启用时不订阅也不读 DOM；启用后立刻补上当前快照', async () => {
+    registerHostRowInfo('a', { title: 'A', live: false })
+    const { getByTestId, rerender } = render(createElement(RowsHarness, { enabled: false }))
+    expect(getByTestId('rows').textContent).toBe('')
+
+    fakeRow('a')
+    // MutationObserver 的回调是微任务：等过一轮宏任务，证明没有订阅把浮条叫醒
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(getByTestId('rows').textContent).toBe('')
+
+    rerender(createElement(RowsHarness, { enabled: true }))
+    await waitFor(() => expect(getByTestId('rows').textContent).toBe('a'))
+  })
+})
+
 describe('readVisibleSelectableRows', () => {
   it('按 DOM 序返回已登记、非在跑的行；空 id / 重复 / 未登记 / 在跑都跳过；标题取登记值', () => {
     registerHostRowInfo('b', { title: 'B', live: false })
@@ -136,7 +175,11 @@ describe('selectAllVisible', () => {
   })
 })
 
-describe('allVisibleSelected', () => {
+describe('areAllVisibleRowsSelected', () => {
+  // 渲染侧配快照；这里用 fresh 读把四态语义测穿。
+  const allVisibleSelected = (): boolean =>
+    areAllVisibleRowsSelected(readVisibleSelectableRows(), getSelection().picks)
+
   it('四态：0 条 → false；可见行全选 → true；漏一条 → false；没有可见行且名单非空 → true', () => {
     registerHostRowInfo('a', { title: 'A', live: false })
     fakeRow('a', 'A')

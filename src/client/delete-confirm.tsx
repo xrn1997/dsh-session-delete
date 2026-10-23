@@ -30,8 +30,9 @@ import { createStore } from './store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
+import { landedEntryIds } from './receipt.js'
+import { invalidateTrash } from './trash-store.js'
 import { publishUndoNotice } from './undo-toast.js'
-import { commitExternalDelete } from './write-commit.js'
 import { runWrite } from './write.js'
 
 /**
@@ -134,14 +135,13 @@ function ConfirmDialog({
         action: 'delete',
         ids: [current.sessionId],
         single: true,
-        commit: (success) => {
-          // N=1 只可能有一条 `ok`（单条读法把幂等空值折成了协议错），取到才收尾。
-          const landed = success.receipt.verdicts.find((verdict) => verdict.kind === 'ok')
-          if (landed?.kind !== 'ok') return
-          commitExternalDelete({
-            sessionIds: [current.sessionId],
-            publishUndo: () => publishUndoNotice({ entryId: landed.value.id, title: current.title }),
-          })
+        presentation: {
+          invalidate: invalidateTrash,
+          // N=1 只可能有一条 `ok`（单条读法把幂等空值折成了协议错）；settlement 只在 anySuccess 时发布。
+          publishUndo: (success) => {
+            const entryId = landedEntryIds(success.receipt)[0]
+            if (entryId !== undefined) publishUndoNotice({ entryId, title: current.title })
+          },
         },
       })
       const failure = outcome.failures.get(current.sessionId)

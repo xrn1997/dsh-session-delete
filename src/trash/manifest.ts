@@ -1,6 +1,7 @@
 import type { TrashEntry } from './entry.js'
 
-/** 回收站清单的**唯一**读法（动词只依赖这个端口，不认 storage domain 的形状）。 */
+/** 回收站清单的 **raw 索引端口**：只给 `src/trash/ledger.ts` 与对账实现；动词与路由只认 ledger，
+ *  不认 storage domain 的形状。`list()` 不保证与 `session-trash/` 目录一致（对账在 ledger 的 `list()`）。 */
 export interface ManifestPort {
   list(): Promise<TrashEntry[]>
   add(e: TrashEntry): Promise<void>

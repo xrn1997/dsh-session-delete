@@ -129,6 +129,22 @@ function isRestoreEntry(value: unknown): value is { readonly sessionId: string }
   return typeof value === 'object' && value !== null && 'sessionId' in value
 }
 
+function isEntryWithId(value: unknown): value is { readonly id: string } {
+  return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string'
+}
+
+/**
+ * `/apply` 成功支回执里的条目 id（delete / restore 的 `value.id`）；purge 的聚合值与 count 的数字值跳过。
+ * 撤销名单只收 `ok` 支的条目 id：already-gone 是「已被同批前一条带走」的幂等条，跟着组走，不单列。
+ */
+export function landedEntryIds<A extends ApplyAction>(receipt: Receipt<A>): string[] {
+  const ids: string[] = []
+  for (const verdict of receipt.verdicts) {
+    if (verdict.kind === 'ok' && isEntryWithId(verdict.value)) ids.push(verdict.value.id)
+  }
+  return ids
+}
+
 /**
  * restore 回执里真正回盘的会话 id：`ok` 支取条目上的 `sessionId`；`already-gone` 没有行，
  * 由调用方给条目查找兜底。purge / count 的 `ok` 值没有 `sessionId`，会被跳过。

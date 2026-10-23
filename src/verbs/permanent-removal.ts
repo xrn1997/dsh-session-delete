@@ -328,7 +328,7 @@ export async function executeRemoval(
       freedBytes += row.bytes
     }
     try {
-      await deps.manifest.remove(row.entry.id)
+      await deps.ledger.remove(row.entry.id)
     } catch (error) {
       fail('删除回收站目录失败', error, row.entry.sessionId)
     }

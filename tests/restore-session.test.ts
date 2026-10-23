@@ -26,19 +26,17 @@ function deps(over: { workspaceExists?: boolean; archived?: boolean; host?: Part
     workspaceExists: over.workspaceExists ?? true,
     archived: over.archived ?? true,
     log: calls,
-    logMethods: ['rename', 'attach', 'unarchive', 'archive', 'announceRestoredBatch'],
-    format: (method, args) => method === 'announceRestoredBatch'
-      ? `announceRestoredBatch(${(args[0] as readonly string[]).length})`
-      : method,
+    logMethods: ['rename', 'attach', 'unarchive', 'archive'],
   })
   Object.assign(made.host, over.host)
   Object.assign(made.fs, over.fs)
   return { calls, fs: made.fs, host: made.host, manifest: made.manifest, d: made.deps }
 }
 
-/** 直调路径自己按清册算组；批量层由 `batch-carried.ts` 递下来。 */
+/** 直调路径自己按清册算组（`ledger.list()` 先对账，与批量层走同一条读面）；批量层由
+ *  `batch-carried.ts` 递下来。 */
 async function restore(d: FakeDeps, entryId: string): Promise<TrashEntry> {
-  return await restoreSession(d)(entryId, groupOf(await d.manifest.list(), entryId))
+  return await restoreSession(d)(entryId, groupOf(await d.ledger.list(), entryId))
 }
 
 async function failureOf(d: FakeDeps, entryId: string) {
@@ -55,15 +53,15 @@ describe('恢复动词', () => {
   // 恢复时迁移式取消归档，把它放回树里；"原本已归档"的删前删后都在归档集里，恢复不该动它。
   // 新清单的删除不碰归档，见下面那条专门的用例。
   it('旧清单：rename → attach → unarchive（删前未归档、删除时被归档的）', async () => {
-    const { d, calls } = deps()
-    await d.manifest.add({ ...entry, wasArchived: false })
+    const { d, calls, manifest } = deps()
+    await manifest.add({ ...entry, wasArchived: false })
     await restore(d, entry.id)
     expect(calls).toEqual(['rename', 'attach', 'unarchive'])
   })
 
   it('新清单：删前未归档且当前未归档 ⇒ 恢复不碰归档', async () => {
-    const { d, calls, host } = deps({ archived: false })
-    await d.manifest.add({ ...entry, wasArchived: false })
+    const { d, calls, host, manifest } = deps({ archived: false })
+    await manifest.add({ ...entry, wasArchived: false })
     await restore(d, entry.id)
     expect(calls).toEqual(['rename', 'attach'])
     expect(host.unarchive).not.toHaveBeenCalled()
@@ -81,8 +79,7 @@ describe('恢复动词', () => {
 
   // 删除时就没有工作区账目的会话（未分组），清单里记空串 ⇒ 恢复没有账本可挂，只把文件放回。
   it('未分组会话（清单里工作区是空串）恢复时不挂账本', async () => {
-    const { d, calls } = deps()
-    const manifest = d.manifest
+    const { d, calls, manifest } = deps()
     await manifest.add({ ...entry, wasArchived: false, workspaceId: '' })
     await restore(d, entry.id)
     expect(calls).toEqual(['rename', 'unarchive'])
@@ -94,17 +91,17 @@ describe('恢复动词', () => {
   // 记下的 workspaceId 可能已经没有对应的工作区。恢复不该因此失败：文件照常回盘，会话落在「未分组」，
   // 与宿主自己处理这类会话的方式一致。
   it('原工作区已被删掉（账本里没有 ws-1）⇒ 照常恢复、不挂账本，归入未分组', async () => {
-    const { d, calls } = deps({ workspaceExists: false })
+    const { d, calls, manifest } = deps({ workspaceExists: false })
     const host = d.host
     await restore(d, entry.id)
     expect(calls).toEqual(['rename'])
     expect(host.attach).not.toHaveBeenCalled()
-    expect(await d.manifest.list()).toHaveLength(0)
+    expect(await manifest.list()).toHaveLength(0)
   })
 
   it('原工作区已不存在 + 原本未归档：取消归档照旧，恢复完成', async () => {
-    const { d, calls } = deps({ workspaceExists: false })
-    await d.manifest.add({ ...entry, wasArchived: false })
+    const { d, calls, manifest } = deps({ workspaceExists: false })
+    await manifest.add({ ...entry, wasArchived: false })
     await restore(d, entry.id)
     expect(calls).toEqual(['rename', 'unarchive'])
   })
@@ -149,8 +146,7 @@ describe('恢复动词', () => {
   })
 
   it('未分组 + 取消归档失败：回滚里没有摘账本那一步', async () => {
-    const { d, calls } = deps()
-    const manifest = d.manifest
+    const { d, calls, manifest } = deps()
     await manifest.add({ ...entry, wasArchived: false, workspaceId: '' })
     const host = d.host
     host.unarchive = vi.fn(async () => { throw new Error('unarchive boom') })
@@ -159,7 +155,7 @@ describe('恢复动词', () => {
     expect(calls).toEqual(['rename', 'archive', 'rename'])
     expect(host.detach).not.toHaveBeenCalled()
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
-    expect(await d.manifest.list()).toHaveLength(1)
+    expect(await manifest.list()).toHaveLength(1)
   })
 
   it('清单里没有该条目时报 trash-empty', async () => {
@@ -174,15 +170,15 @@ describe('恢复动词', () => {
   })
 
   it('恢复成功后清单里不再有它，账本挂回原工作区', async () => {
-    const { d } = deps()
+    const { d, manifest } = deps()
     await restore(d, entry.id)
-    expect(await d.manifest.list()).toHaveLength(0)
+    expect(await manifest.list()).toHaveLength(0)
     expect(d.host.attach)
       .toHaveBeenCalledWith('session-abc', 'ws-1')
   })
 
   it('attach 失败即把会话目录放回回收站，并把原始错误带出', async () => {
-    const { d } = deps()
+    const { d, manifest } = deps()
     ;d.host.attach =
       vi.fn(async () => { throw new Error('ledger boom') })
     const rename = d.fs.rename
@@ -190,12 +186,12 @@ describe('恢复动词', () => {
       code: 'sessiondelete/io', cause: expect.objectContaining({ message: 'ledger boom' }),
     })
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
-    expect(await d.manifest.list()).toHaveLength(1)
+    expect(await manifest.list()).toHaveLength(1)
   })
 
   it('取消归档失败即整体回退：重新归档（藏回去）+ 摘账本 + 目录回回收站，清单行仍留着', async () => {
-    const { d, calls } = deps()
-    await d.manifest.add({ ...entry, wasArchived: false })
+    const { d, calls, manifest } = deps()
+    await manifest.add({ ...entry, wasArchived: false })
     const host = d.host
     host.unarchive = vi.fn(async () => { throw new Error('unarchive boom') })
     const rename = d.fs.rename
@@ -206,14 +202,13 @@ describe('恢复动词', () => {
     expect(calls).toEqual(['rename', 'attach', 'archive', 'rename'])
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
-    expect(await d.manifest.list()).toHaveLength(1)
+    expect(await manifest.list()).toHaveLength(1)
   })
 
   // 摘清单行同样是最后一件写：它失败也要把前面几步退回去，否则回收站里会留一条
   // 「恢复不了也清不掉的幽灵行」（目录已经回了 `sessions/`，行却还在回收站里挂着）。
   it('摘清单行失败即整体回退：重新归档 + 摘账本 + 目录放回回收站', async () => {
-    const { d, calls } = deps()
-    const manifest = d.manifest
+    const { d, calls, manifest } = deps()
     await manifest.add({ ...entry, wasArchived: false })
     manifest.remove = vi.fn(async () => { throw new Error('storage boom') })
     const host = d.host
@@ -225,7 +220,7 @@ describe('恢复动词', () => {
     expect(calls).toEqual(['rename', 'attach', 'unarchive', 'archive', 'rename'])
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
-    expect(await d.manifest.list()).toHaveLength(1)
+    expect(await manifest.list()).toHaveLength(1)
   })
 })
 
@@ -251,9 +246,8 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
     const fromTrash = fs.rename.mock.calls.filter((c) => String(c[0]).includes('session-trash'))
     expect(fromTrash).toHaveLength(3)
     expect(await manifest.list()).toEqual([])
-    // 通告归批量层：一次批量只发一次 `api-session/added`、配一次预取的摘要表（ADR-0002）。
+    // 通告归批量层：一次批量只调一次 `announceRestored(ids)`（ADR-0002）。
     // 「一次调用交回整组的三个 id」那条断言搬去了 `tests/batch.test.ts`（契约还在，只是换了家）。
-    expect(host.announceRestoredBatch).not.toHaveBeenCalled()
     expect(host.announceRestored).not.toHaveBeenCalled()
   })
 

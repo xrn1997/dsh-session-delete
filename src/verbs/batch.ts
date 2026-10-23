@@ -10,8 +10,8 @@
  * 这一层拥有三件（每条批量语义都在这里）：
  * ① **去重保序**：输入顺序就是界面"清单从上往下"的读感；
  * ② **逐条信封**：一条失败不传染下一条，失败按 `map-error` 那张表折成 `{code,message,details?}`；
- * ③ **一批一次通告**：恢复的 `api-session/added` 攒到批尾、配一次预取的摘要表发（逐条发 = 每条一次
- *   宿主全表扫，那正是 2026-10-17 "恢复很慢"的头号来源）。
+ * ③ **一批一次通告**：恢复的 `api-session/added` 攒到批尾、调一次 `announceRestored(ids)`（预取与逐条
+ *   发送都在 adapter 里；逐条调 = 每条一次宿主全表扫，那正是 2026-10-17 "恢复很慢"的头号来源）。
  *
  * **同批已带走集**（整批只读一次"最初的样子"）住 `src/verbs/batch-carried.ts`；这里消费它的
  * `claim` / `take`，purge 另取 entry 域的 `rows()` 作为当前只读清册。
@@ -23,7 +23,6 @@
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../ports/host-port.js'
 import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../shared/wire.js'
-import { reconcileTrash } from '../trash/reconcile.js'
 import type { CoreDeps, DeleteDeps } from '../deps.js'
 import { createEntryCarried, createSessionCarried } from './batch-carried.js'
 import { deleteSession } from './delete-session.js'
@@ -89,8 +88,8 @@ async function applyDelete(deps: DeleteDeps, ids: readonly string[]): Promise<Ap
 /** 「这条是不是被同批前一条带走了」与视图收缩都归 `batch-carried.ts`；`apply` 整批只读一次清册，
  *  动词只拿它交回的只读组与当前清册。 */
 async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  // 整批一次清册读（"最初的样子"）+ 一份会收缩的同批已带走集；通告攒到批尾，配一次预取的摘要表发。
-  const carried = createEntryCarried(await deps.manifest.list())
+  // 整批一次清册读（"最初的样子"）+ 一份会收缩的同批已带走集；通告攒到批尾，一次发整组 id。
+  const carried = createEntryCarried(await deps.ledger.list())
   const run = restoreSession(deps)
   const restored: string[] = []
   const outcomes = await forEachId('restore', ids, async (entryId) => {
@@ -105,13 +104,13 @@ async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<App
     return entry
   })
   if (restored.length > 0) {
-    await deps.host.announceRestoredBatch(restored, await deps.host.restoredSummariesOf())
+    await deps.host.announceRestored(restored)
   }
   return outcomes
 }
 
 async function applyPurge(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  const carried = createEntryCarried(await deps.manifest.list())
+  const carried = createEntryCarried(await deps.ledger.list())
   const run = purgeTrash(deps)
   return forEachId('purge', ids, async (entryId) => {
     const claim = carried.claim(entryId)
@@ -140,16 +139,16 @@ async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<Apply
  * （父又被人放回回收站、组已被上一个请求带走，或另一处已经把目录清掉），不是"用户打错了一个 id"。
  * 根 id 两边都去 `session-` 前缀再比：报告原样回传是正常路径，外部调用带另一种写法也认。
  *
- * **这是写动作，排在到达序链上**，而且**先对账再扫**（2026-10-19）：判"父没了"用的是清册，而刚被人
- * 手工搬进 `session-trash/` 的那一格目录此刻可能还没有对应行——不对账就会把"父还在回收站里等着"的
- * 一组当成孤儿**直接删盘**，替用户做了一个没人点过的决定（那种组该跟着父恢复或彻底删除）。
- * 对账写在动词这一侧而不是只写在路由里，为的是 `apply` 的批量入口只有一个：链上的排队与这份快照
- * 谁也别想只占一半。
+ * **这是写动作，排在到达序链上**，而且**先对账再扫**：`loadOrphanGroups` 本身只扫描、不写清册；
+ * 这里先把 `ledger.list()` 对账后的行交给它——刚被人手工搬进 `session-trash/` 的那一格目录此刻可能还
+ * 没有对应行，拿 raw 索引扫就会把"父还在回收站里等着"的一组当成孤儿**直接删盘**，替用户做了一个没人
+ * 点过的决定（那种组该跟着父恢复或彻底删除）。
  */
 async function applyOrphanClean(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  await reconcileTrash(deps)
+  // 对账交回的行直接给扫描，不再读第二遍 raw 索引。
+  const trash = await deps.ledger.list()
   // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。
-  const groups = await loadOrphanGroups(deps)
+  const groups = await loadOrphanGroups(deps, trash)
   const byRoot = new Map(groups.map(group => [bareSessionId(group.root.sessionId), group]))
   // 组内没有回收站这一层可退：`cleanOrphanGroup` 的 live 准入在任何写之前（整组拒绝、零副作用）；
   // 删到一半失败时已删目录不回滚，失败错误的 `details` 带 `{ removed, freedBytes }` 作为部分回执，

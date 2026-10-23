@@ -20,38 +20,43 @@ function journal(id: string, log: string[], undoFailures: readonly string[] = []
 }
 
 describe('moveGroup', () => {
-  it('按成员顺序跑；失败时把已做成的按相反顺序退回去', async () => {
+  it('根先跑；跟随者拿到根结果；失败时把已做成的按相反顺序退回', async () => {
     const log: string[] = []
-    await expect(moveGroup(['a', 'b', 'c'], async (id) => {
-      if (id === 'c') throw new Error('C boom')
-      return { journal: journal(id, log), result: id }
-    })).rejects.toThrow('C boom')
-    expect(log).toEqual(['run:a', 'run:b', 'undo:b', 'undo:a'])
+    const seen: Array<string | undefined> = []
+    await expect(moveGroup<string, string>({
+      root: 'root',
+      followers: ['a', 'b'],
+      move: async (id, rootResult) => {
+        seen.push(rootResult)
+        if (id === 'b') throw new Error('B boom')
+        return { journal: journal(id, log), result: `result:${id}` }
+      },
+    })).rejects.toThrow('B boom')
+    expect(seen).toEqual([undefined, 'result:root', 'result:root'])
+    expect(log).toEqual(['run:root', 'run:a', 'undo:a', 'undo:root'])
   })
 
   it('回滚失败并进原错误的 details.rollbackFailures', async () => {
     const log: string[] = []
-    await expect(moveGroup(['a', 'b'], async (id) => {
-      if (id === 'b') throw new Error('B boom')
-      return { journal: journal(id, log, ['undo a failed']), result: id }
+    await expect(moveGroup<string, string>({
+      root: 'a',
+      followers: ['b'],
+      move: async (id) => {
+        if (id === 'b') throw new Error('B boom')
+        return { journal: journal(id, log, ['undo a failed']), result: id }
+      },
     })).rejects.toMatchObject({ details: { rollbackFailures: ['undo a failed'] } })
     expect(log).toEqual(['run:a', 'undo:a'])
   })
 
-  it('按成员顺序交回结果；下一位能看到已交回的结果', async () => {
+  it('根结果直接交回；跟随者拿到根结果，自己的结果不向上交回', async () => {
     const log: string[] = []
-    const seen: string[][] = []
-    const results = await moveGroup<string, string>(['a', 'b'], async (id, priorResults) => {
-      seen.push([...priorResults])
-      return { journal: journal(id, log), result: `result:${id}` }
+    const moved = await moveGroup<string, string>({
+      root: 'a',
+      followers: ['b', 'c'],
+      move: async (id, rootResult) => ({ journal: journal(id, log), result: `${rootResult ?? 'root'}:${id}` }),
     })
-    expect(results).toEqual(['result:a', 'result:b'])
-    expect(seen).toEqual([[], ['result:a']])
-  })
-
-  it('空成员表什么都不做', async () => {
-    const log: string[] = []
-    await moveGroup([], async (id) => ({ journal: journal(id, log), result: id }))
-    expect(log).toEqual([])
+    expect(moved).toBe('root:a')
+    expect(log).toEqual(['run:a', 'run:b', 'run:c'])
   })
 })

@@ -23,7 +23,9 @@ function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null
     listFiles: vi.fn(async () => over.files ?? ['session.v4.jsonl.zstd']),
     readFile: vi.fn(async () => log),
   }
-  const deps: DetailDeps = { fs, manifest: createMemoryManifest([entry()]), home: '/h' }
+  // 详情认的是 ledger 的 **raw 面**（`/detail` 是纯读，不对账）：假件照同一个 seam 造，不拿裸 raw 清单冒充。
+  const rows = createMemoryManifest([entry()])
+  const deps: DetailDeps = { fs, ledger: { raw: () => rows.list() }, home: '/h' }
   return { deps, fs }
 }
 
@@ -107,6 +109,23 @@ it('条目不在清册 ⇒ sessiondelete/trash-empty，且一次文件读都不�
   expect(fs.readFile).not.toHaveBeenCalled()
 })
 
+// `/detail` 声明为 pure：清册只走 raw 面（读索引、不对账）。这条钉的是 seam 本身——一次详情读只发生
+// 一次 `raw()`；`list()`（对账 + 写行）根本不在这条路上，那是 `/list` 与写动词的面。
+it('清册只走 raw 面：一次详情读只发生一次 raw()', async () => {
+  const raw = vi.fn(async () => [entry()])
+  const deps: DetailDeps = {
+    fs: {
+      exists: vi.fn(async () => true),
+      listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+      readFile: vi.fn(async () => body({ type: 'turn/start', time: 1 })),
+    },
+    ledger: { raw },
+    home: '/h',
+  }
+  await expect(readTrashDetail(deps)(id)).resolves.toMatchObject({ entryId: id })
+  expect(raw).toHaveBeenCalledTimes(1)
+})
+
 it('目录不在 / 目录里没有会话日志 ⇒ sessiondelete/io 带原文', async () => {
   const gone = makeDeps(body({ type: 'turn/start', time: 1 }), { exists: false })
   await expect(readTrashDetail(gone.deps)(id)).rejects.toMatchObject({ code: 'sessiondelete/io', message: /回收站目录不在/ })
@@ -120,7 +139,8 @@ it('读盘抛 ⇒ sessiondelete/io，原文留在 message 里', async () => {
     listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
     readFile: vi.fn(async () => { throw new Error('EACCES: permission denied') }),
   }
-  const deps: DetailDeps = { fs, manifest: createMemoryManifest([entry()]), home: '/h' }
+  const rows = createMemoryManifest([entry()])
+  const deps: DetailDeps = { fs, ledger: { raw: () => rows.list() }, home: '/h' }
   await expect(readTrashDetail(deps)(id)).rejects.toMatchObject({ code: 'sessiondelete/io', message: /EACCES/ })
 })
 
@@ -155,13 +175,14 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
     asstLine(16, [{ type: 'text', text: '第二轮' }]),
   )
   const readFile = vi.fn(async (path: string) => (path.endsWith('session.v3.jsonl.zstd') ? v3 : v4))
+  const rows = createMemoryManifest([entry()])
   const deps: DetailDeps = {
     fs: {
       exists: vi.fn(async () => true),
       listFiles: vi.fn(async () => ['session.v3.jsonl.zstd', 'session.v4.jsonl.zstd']),
       readFile,
     },
-    manifest: createMemoryManifest([entry()]),
+    ledger: { raw: () => rows.list() },
     home: '/h',
   }
 

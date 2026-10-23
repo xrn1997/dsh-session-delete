@@ -22,6 +22,7 @@ import type {
   SubagentMember,
 } from '../../src/ports/host-port.js'
 import type { TrashEntry } from '../../src/trash/entry.js'
+import { createTrashLedger, type TrashLedger } from '../../src/trash/ledger.js'
 import { createMemoryManifest, type ManifestPort } from '../../src/trash/manifest.js'
 import type { DeleteDeps } from '../../src/deps.js'
 
@@ -74,12 +75,10 @@ export interface FakeHostOptions extends CallLog {
   membersAvailable?: boolean
   /** 整个语料（live ∪ persisted）；`undefined` = `sessionQuery` 没挂——扫描必须响亮失败。 */
   corpus?: readonly SessionIdentity[] | undefined
-  /** 通告预取用的摘要表。 */
-  summaries?: readonly { readonly sessionId: string; readonly summary: unknown }[]
 }
 
 /**
- * 内存里的 `HostPort`：17 个方法全部实现。
+ * 内存里的 `HostPort`：15 个方法全部实现。
  *
  * **声明式的只读数**（`workspaceOf` / `projectDirOf` / `title` / `live` / `archived` / `members` …）
  * 是这一份 adapter 的 interface：用例说"这个世界长什么样"，而不是"第几行会被调到"。
@@ -120,11 +119,7 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
       return over.evicted ?? 'not-live'
     }),
     announceRemoved: vi.fn(async (sessionId: string) => { record('announceRemoved', [sessionId]) }),
-    announceRestored: vi.fn(async (sessionId: string) => { record('announceRestored', [sessionId]) }),
-    restoredSummariesOf: vi.fn(async () => over.summaries ?? []),
-    announceRestoredBatch: vi.fn(async (ids: readonly string[], known?: readonly { readonly sessionId: string; readonly summary: unknown }[]) => {
-      record('announceRestoredBatch', [ids, known])
-    }),
+    announceRestored: vi.fn(async (ids: readonly string[]) => { record('announceRestored', [ids]) }),
     unarchive: vi.fn(async (sessionId: string) => { record('unarchive', [sessionId]) }),
     detach: vi.fn(async (sessionId: string, workspaceId: string) => { record('detach', [sessionId, workspaceId]) }),
     attach: vi.fn(async (sessionId: string, workspaceId: string) => { record('attach', [sessionId, workspaceId]) }),
@@ -202,27 +197,48 @@ export type FakeDeps = Omit<DeleteDeps, 'fs' | 'host'> & {
 }
 
 /**
- * 一次装配出 `{ deps, host, fs, manifest }`：**返回值就是 `DeleteDeps`，没有强转**。
+ * 一次装配出 `{ deps, host, fs, ledger, manifest }`：**返回值就是 `DeleteDeps`，没有强转**。
  *
- * 这也是"端口窄到可以假"的量尺：这份文件比 `host-port.ts` 的 17 个方法短，说明那 17 个方法没有藏
+ * 这也是"端口窄到可以假"的量尺：这份文件比 `host-port.ts` 的 15 个方法短，说明那 15 个方法没有藏
  * 第二个概念。三个角色切面已就位（`HostIdentityPort` / `HostPresencePort` / `HostCorpusPort`，ADR-0007），
  * 这份假件仍实现复合面——因为它们共用一颗 adapter，用例也只交一个 `deps`。
+ *
+ * **raw 清单与 `fs.dirs` 是同一个世界**：行与回收站目录成对出现，`dirs` 缺省跟着 raw 清册的 id 走
+ * （删除新增一行、下一次 `/list` 对账就不会把它当幽灵摘掉）；用例给 `over.fs.dirs` 时就以它为准，
+ * 这是"要测漂移自己翻一格"的入口。`manifest` 露出来只给 raw 断言，动词与路由只认 `ledger`
+ * （真相读 `list()` 先对账，pure 读面（`/orphans` / `/detail`）走 `raw()` 不对账，见 `src/trash/ledger.ts`）。
  */
 export function createFakeDeps(over: FakeDepsOptions = {}): {
   deps: FakeDeps
   host: FakeHost
   fs: FakeFs
+  ledger: TrashLedger
   manifest: ManifestPort
 } {
   const callLog: CallLog = { log: over.log, logMethods: over.logMethods, format: over.format }
   const host = createFakeHost({ ...over, ...callLog })
-  const fs = createFakeFs({ ...over.fs, ...callLog })
-  const manifest = createMemoryManifest(over.seed ?? [])
+  const seed = over.seed ?? []
+  const rows = createMemoryManifest(seed)
+  const rowIds = new Set(seed.map((entry) => entry.id))
+  const manifest: ManifestPort = {
+    list: () => rows.list(),
+    add: async (entry) => { await rows.add(entry); rowIds.add(entry.id) },
+    remove: async (id) => { await rows.remove(id); rowIds.delete(id) },
+  }
+  const fsOver = over.fs ?? {}
+  const fs = createFakeFs({
+    ...fsOver,
+    dirs: fsOver.dirs ?? (() => [...rowIds]),
+    ...callLog,
+  })
+  const home = over.home ?? '/h'
+  const ledger = createTrashLedger(manifest, fs, home)
   const now = over.now
   return {
-    deps: { fs, host, manifest, home: over.home ?? '/h', now: typeof now === 'function' ? now : () => now ?? 0 },
+    deps: { fs, host, ledger, home, now: typeof now === 'function' ? now : () => now ?? 0 },
     host,
     fs,
+    ledger,
     manifest,
   }
 }

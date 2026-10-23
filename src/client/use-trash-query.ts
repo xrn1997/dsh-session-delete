@@ -15,8 +15,9 @@
 import { useCallback, useRef, useState } from 'react'
 import { callRemote, type OrphanReportWire, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
 import { failureMessage, isFailureVerdict } from './receipt.js'
-import { runWrite } from './write.js'
+import { runWrite, type WriteOutcome } from './write.js'
 import type { Translate } from './copy.js'
+import type { ApplyAction } from '../shared/wire.js'
 import { fileSizeText } from './ui/format.js'
 
 export type TrashQueryDeps = Pick<SessionDeleteRemote, 'list' | 'scanOrphans' | 'applyOutcomes' | 'emptyTrash'>
@@ -44,9 +45,10 @@ export interface TrashQuery {
   rescanOrphans(): Promise<void>
   /** 先读清单、成了再扫残留；挂载与显式「重试」用它。 */
   refreshAll(): Promise<void>
-  /** 写后/失效：只重读清单；报告未知（从未扫到 / 扫描失败）或非空时顺带重扫，已扫过且为空才省。
-   *  `rescan:true` 强制重扫（输给后发读时由赢家补扫）。清单读失败时清空报告与提示。 */
-  refreshAfterWrite(options?: { rescan?: boolean }): Promise<void>
+  /** 写后/失效：只重读清单；是否顺带重扫残留由这次的 `outcome` 从 action / ids / 当前清单自行派生
+   *  （判据住 `needsOrphanRescan`）。失效通告不带 outcome：报告未知或非空才重扫。输给后发读时由赢家补扫；
+   *  清单读失败时清空报告与提示。 */
+  refreshAfterWrite(outcome?: WriteOutcome<ApplyAction>): Promise<void>
   /** 清理那批无主子会话（一段 `/apply` 的第五个动作），逐条结果落成"已不在了 / N 组未清理"。 */
   cleanOrphans(): Promise<void>
   /** 清空回收站（聚合回执）：成功就重读，失败就把原文摆到清单那块。交回是否成功。 */
@@ -76,6 +78,10 @@ export function useTrashQuery({
     setOrphanReport(report)
   }, [])
 
+  /** 清单的同步只读镜像：`refreshAfterWrite` 要在发下一次读**之前**按"当前清单"判要不要强制重扫，
+   *  又不能让回调跟着渲染期 state 换代。 */
+  const entriesRef = useRef<readonly TrashEntryLike[] | null>(null)
+
   const reloadSeq = useRef(0)
   const reloadRows = useCallback(async (): Promise<ReloadResult> => {
     const seq = ++reloadSeq.current
@@ -84,10 +90,12 @@ export function useTrashQuery({
     if (seq !== reloadSeq.current) return 'stale'
     if (!outcome.ok) {
       setListFailure(outcome.failure.message)
+      entriesRef.current = null
       setEntries(null)
       return 'failed'
     }
     setListFailure(null)
+    entriesRef.current = outcome.value
     setEntries(outcome.value)
     return 'ok'
   }, [deps])
@@ -137,32 +145,37 @@ export function useTrashQuery({
   }, [clearOrphanState, reloadRows, rescanOrphans])
 
   /**
-   * 写后与失效通告：清单必重读；残留只在「已经扫到过且为空」时省。
-   * 删除 / 整组恢复把父带进/带出回收站时孩子跟着走，orphan-clean 连带盘上后代，报告为空时重扫只会得到
-   * 空报告——这一笔可以省。**报告 `null` 不是"空的"**：它表示从没扫到（挂载刷新被顶掉 / 扫描失败），
-   * 这时重扫是唯一能把未知变成已知的路。**例外**：purge / 清空在语料缺席（`available:false`）时故意
-   * 留下盘上后代，父行没了之后它们就是新孤儿；单独恢复一条露面的孩子（父行已摘）也可能把它变成孤儿。
-   * 这些写动作用 `rescan:true` 强制重扫。
-   * `rescan:true` 先记标记再读清单：若这次读输给后发的 refresh，赢家会看到标记并补扫，强制不丢。
+   * 写后与失效通告：清单必重读；要不要顺带重扫残留由 `needsOrphanRescan` 从这次的 outcome 派生：
+   * purge 与 orphan-clean 总要扫（撤掉的父、被带走的孩子都可能留下新孤儿，报告为空也只是这一拍为空）；
+   * delete 与组根恢复可以省——孩子跟着父走，报告为空时扫了也只会得到空报告。**报告 `null` 不是"空的"**：
+   * 它表示从没扫到（挂载刷新被顶掉 / 扫描失败），这时重扫是唯一能把未知变成已知的路；失效通告没有
+   * outcome，仍按报告未知或非空才扫。
+   * 强制重扫先记标记再读清单：若这次读输给后发的 refresh，赢家会看到标记并补扫，强制不丢。
    * 清单读失败时清空报告与提示：这一拍不知道盘上长什么样，旧读数不能继续当现状。
    */
-  const refreshAfterWrite = useCallback(async (options: { rescan?: boolean } = {}): Promise<void> => {
-    if (options.rescan === true) pendingForcedRescan.current = true
+  const refreshAfterWriteInternal = useCallback(async (forceRescan: boolean): Promise<void> => {
+    if (forceRescan) pendingForcedRescan.current = true
     const listed = await reloadRows()
     if (listed === 'stale') return
     if (listed === 'failed') {
       clearOrphanState()
       return
     }
-    const forced = pendingForcedRescan.current
+    const pending = pendingForcedRescan.current
     pendingForcedRescan.current = false
-    if (forced) {
+    if (pending) {
       await rescanOrphans()
       return
     }
     const current = orphanReportRef.current
     if (current === null || current.totalSessions > 0) await rescanOrphans()
   }, [clearOrphanState, reloadRows, rescanOrphans])
+
+  const refreshAfterWrite = useCallback(
+    (outcome?: WriteOutcome<ApplyAction>): Promise<void> =>
+      refreshAfterWriteInternal(outcome !== undefined && needsOrphanRescan(outcome, entriesRef.current)),
+    [refreshAfterWriteInternal],
+  )
 
   const emptyTrash = useCallback((): Promise<boolean> => around(async () => {
     const outcome = await callRemote(() => deps.emptyTrash())
@@ -171,9 +184,9 @@ export function useTrashQuery({
       setListFailure(outcome.failure.message)
       return false
     }
-    await refreshAfterWrite({ rescan: true })
+    await refreshAfterWriteInternal(true)
     return true
-  }), [around, deps, refreshAfterWrite])
+  }), [around, deps, refreshAfterWriteInternal])
 
   const cleanOrphans = useCallback((): Promise<void> => {
     if (orphanReport === null || orphanReport.roots.length === 0) {
@@ -184,9 +197,10 @@ export function useTrashQuery({
       setOrphanFailure(null)
       setOrphanNotice(null)
       // 先刷新再落提示：清完一批之后"还剩哪些残留"本身就是这次动作的后果，反过来会把旧报告摆在新盘上。
-      const settle = (): Promise<void> => {
+      // `orphan-clean` 的 outcome 总会强制重扫（连带盘上后代），不需要调用方另传标记。
+      const settle = (outcome: WriteOutcome<'orphan-clean'>): Promise<void> => {
         setOrphanConfirm(false)
-        return refreshAfterWrite({ rescan: true })
+        return refreshAfterWrite(outcome)
       }
       const outcome = await runWrite({
         deps,
@@ -246,4 +260,37 @@ export function useTrashQuery({
 function detailNumber(details: Record<string, unknown> | undefined, key: string): number {
   const value = details?.[key]
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+/**
+ * 写后要不要强制重扫残留：只看这次写的动作、它请求的 id 与**发读前**的清单。
+ * - purge / orphan-clean 总要扫：语料缺席时故意留下的盘上后代、被带走父行留下的孩子，报告为空也可能是新孤儿。
+ * - restore 只在清单未知（不知道恢复的是什么）、清单里已经找不到这个 id（这一拍不能断言它不是孩子），
+ *   或恢复的是露面的孩子（父行已摘，回到语料后可能无主）时扫；组根恢复把孩子一起带回，不新增孤儿。
+ * - delete / count 不扫。新动作必须在这里选一条，别静默落到"不扫"。裁决见 ADR-0016。
+ */
+function needsOrphanRescan(
+  outcome: WriteOutcome<ApplyAction>,
+  entries: readonly TrashEntryLike[] | null,
+): boolean {
+  switch (outcome.action) {
+    case 'purge':
+    case 'orphan-clean':
+      return true
+    case 'restore': {
+      if (entries === null) return true
+      const byId = new Map(entries.map((entry) => [entry.id, entry]))
+      return outcome.ids.some((id) => {
+        const entry = byId.get(id)
+        return entry === undefined || entry.parentEntryId !== undefined
+      })
+    }
+    case 'delete':
+    case 'count':
+      return false
+    default: {
+      const _never: never = outcome.action
+      return _never
+    }
+  }
 }

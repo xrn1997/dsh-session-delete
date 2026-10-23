@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createHostPort } from '../src/ports/host-port.js'
 import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
 import { unescapeProjectKey } from '../src/shared/wire.js'
@@ -98,7 +98,7 @@ function makeEnv(over: {
 }
 
 describe('宿主服务层端口的接线', () => {
-  it('十七个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
+  it('十五个方法都返回 Promise，且没有一个还停在 not wired yet', async () => {
     const { ctx } = makeEnv({ workspaces: [{ id: 'ws-1', sessionIds: ['s1'] }], headers: { s1: { cwd: 'C:/p' } } })
     const host = createHostPort(ctx)
     const results = [
@@ -106,13 +106,12 @@ describe('宿主服务层端口的接线', () => {
       host.isLive('s1'), host.isArchived('s1'), host.unarchive('s1'),
       host.detach('s1', 'ws-1'), host.attach('s1', 'ws-1'), host.archive('s1', 'ws-1'),
       host.workspaceExists('ws-1'),
-      // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 整批通告的预取/发送 + 清单的两个只读/取数面），
-      // 契约都是"不抛"
-      host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored('s1'),
-      host.restoredSummariesOf(), host.announceRestoredBatch(['s1']),
+      // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 清单的两个只读/取数面），契约都是"不抛"。
+      // 一组会话的通告只走一条路：单条就是长度为 1 的批。
+      host.evictLive('s1'), host.announceRemoved('s1'), host.announceRestored(['s1']),
       host.subagentMembersOf(['s1']), host.listSessions(),
     ]
-    expect(results.length).toBe(17)
+    expect(results.length).toBe(15)
     for (const r of results) expect(r).toBeInstanceOf(Promise)
     await expect(Promise.all(results)).resolves.toBeDefined()
   })
@@ -440,7 +439,14 @@ describe('宿主服务层端口的接线', () => {
         rename: forbidden('fs.rename'),
       },
       host: createHostPort(ctx),
-      manifest: { list: async () => [], add: forbidden('manifest.add'), remove: forbidden('manifest.remove') },
+      // 删除路径上不该有清册读：四个面一起设伏（`raw` 也在内——它是 pure 读面的事，删除动词不该碰）。
+      // 将来谁在删除路径上顺手读清册，这条用例会当场红（局部 fs 与这条不完整 ledger 靠下面的强转通过类型）。
+      ledger: {
+        list: forbidden('ledger.list'),
+        raw: forbidden('ledger.raw'),
+        add: forbidden('ledger.add'),
+        remove: forbidden('ledger.remove'),
+      },
       home: '/no-such-home',
       now: () => 0,
     } as unknown as DeleteDeps
@@ -653,7 +659,7 @@ describe('宿主服务层端口的接线', () => {
         emit: (name: string, ...args: unknown[]) => { events.push([name, args]) },
         sessionController: { list },
       })
-      await createHostPort(ctx).announceRestored('s1')
+      await createHostPort(ctx).announceRestored(['s1'])
       expect(events).toEqual([['api-session/added', [summary]]])
     }
   })
@@ -663,15 +669,34 @@ describe('宿主服务层端口的接线', () => {
     const emit = (name: string, ...args: unknown[]) => { events.push([name, args]) }
 
     const missing = makeEnv({ emit, sessionController: { list: async () => [] } })
-    await createHostPort(missing.ctx).announceRestored('s1')
+    await createHostPort(missing.ctx).announceRestored(['s1'])
 
     const absent = makeEnv({ emit })
-    await createHostPort(absent.ctx).announceRestored('s1')
+    await createHostPort(absent.ctx).announceRestored(['s1'])
 
     const boom = makeEnv({ emit, sessionController: { list: async () => { throw new Error('list boom') } } })
-    await createHostPort(boom.ctx).announceRestored('s1')
+    await createHostPort(boom.ctx).announceRestored(['s1'])
 
     expect(events).toEqual([])
+  })
+
+  it('announceRestored：一组 id 只拉一次会话表，按 id 逐条发 added', async () => {
+    const events: Array<[string, unknown[]]> = []
+    const list = vi.fn(async () => [
+      { sessionId: 's1', updatedAt: 1 },
+      { sessionId: 's2', updatedAt: 2 },
+      { sessionId: 'other', updatedAt: 3 },
+    ])
+    const { ctx } = makeEnv({
+      emit: (name, ...args) => { events.push([name, args]) },
+      sessionController: { list },
+    })
+    await createHostPort(ctx).announceRestored(['s1', 's2', 'missing'])
+    expect(list).toHaveBeenCalledTimes(1)
+    expect(events).toEqual([
+      ['api-session/added', [{ sessionId: 's1', updatedAt: 1 }]],
+      ['api-session/added', [{ sessionId: 's2', updatedAt: 2 }]],
+    ])
   })
 
   it('archive / unarchive 走 registry 的全局归档面（archive 不传 stopActivity）', async () => {
