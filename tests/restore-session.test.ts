@@ -4,14 +4,17 @@ import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/t
 import { groupOf } from '../src/trash/groups.js'
 import type { HostIdentityPort } from '../src/ports/host-port.js'
 import { createFakeDeps, type FakeDeps, type FakeFs, type FakeHost } from './support/fake-deps.js'
+import { createLogWorld, failureOf, trashEntry } from './support/world.js'
 
 const HOME = '/h'
-const entry: TrashEntry = {
-  id: '20260930T130500Z-session-abc', sessionId: 'session-abc',
-  projectDir: '--C-develop-GitHub-dsh-ebook--', workspaceId: 'ws-1', wasArchived: true,
+const entry: TrashEntry = trashEntry('20260930T130500Z-session-abc', {
+  sessionId: 'session-abc',
+  projectDir: '--C-develop-GitHub-dsh-ebook--',
+  wasArchived: true,
   deletedAt: Date.UTC(2026, 8, 30, 13, 5, 0),
-  title: '会话标题', sizeBytes: 2048,
-}
+  title: '会话标题',
+  sizeBytes: 2048,
+})
 const trashDir = trashDirOf(entry.id, HOME)
 const sessionDir = sessionDirOf(entry.projectDir, entry.sessionId, HOME)
 
@@ -20,32 +23,23 @@ const sessionDir = sessionDirOf(entry.projectDir, entry.sessionId, HOME)
  *  `archived` 缺省 true：`wasArchived:false` 的条目按**旧清单**处理（旧删除用归档藏会话），
  *  恢复时要迁移式取消归档；新清单用例显式传 false。 */
 function deps(over: { workspaceExists?: boolean; archived?: boolean; host?: Partial<FakeHost>; fs?: Partial<FakeFs> } = {}) {
-  const calls: string[] = []
-  const made = createFakeDeps({
+  const { host, fs, ...rest } = over
+  const made = createLogWorld({
     seed: [entry],
     workspaceExists: over.workspaceExists ?? true,
     archived: over.archived ?? true,
-    log: calls,
+    ...rest,
     logMethods: ['rename', 'attach', 'unarchive', 'archive'],
   })
-  Object.assign(made.host, over.host)
-  Object.assign(made.fs, over.fs)
-  return { calls, fs: made.fs, host: made.host, manifest: made.manifest, d: made.deps }
+  Object.assign(made.host, host)
+  Object.assign(made.fs, fs)
+  return { calls: made.calls, fs: made.fs, host: made.host, manifest: made.manifest, d: made.deps }
 }
 
 /** 直调路径自己按清册算组（`ledger.list()` 先对账，与批量层走同一条读面）；批量层由
  *  `batch-carried.ts` 递下来。 */
 async function restore(d: FakeDeps, entryId: string): Promise<TrashEntry> {
   return await restoreSession(d)(entryId, groupOf(await d.ledger.list(), entryId))
-}
-
-async function failureOf(d: FakeDeps, entryId: string) {
-  try {
-    await restore(d, entryId)
-  } catch (error) {
-    return error as Error & { code?: string; details?: { rollbackFailures?: string[] } }
-  }
-  throw new Error('expected restoreSession to reject')
 }
 
 describe('恢复动词', () => {
@@ -228,10 +222,9 @@ describe('恢复动词', () => {
 // 若恢复只回父，回收站里就留下一堆点不到的孩子行——既看不见也清不掉。
 describe('恢复动词 · 整组（父回则孩子一起回）', () => {
   const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
-  const parent: TrashEntry = {
-    id: makeEntryId(NOW, 'session-parent'), sessionId: 'session-parent', projectDir: '--p--',
-    workspaceId: 'ws-1', wasArchived: true, deletedAt: NOW, title: '父', sizeBytes: 10,
-  }
+  const parent: TrashEntry = trashEntry(makeEntryId(NOW, 'session-parent'), {
+    sessionId: 'session-parent', wasArchived: true, deletedAt: NOW, title: '父', sizeBytes: 10,
+  })
   const kidA: TrashEntry = { ...parent, id: makeEntryId(NOW, 'session-kidA'), sessionId: 'session-kidA', title: '甲', parentEntryId: parent.id }
   const kidB: TrashEntry = { ...parent, id: makeEntryId(NOW, 'session-kidB'), sessionId: 'session-kidB', title: '乙', parentEntryId: parent.id }
 
@@ -276,7 +269,7 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
     fs.rename = vi.fn(async (from: string, to: string) => {
       if (from.includes('/sessions/') && to.includes('session-trash')) throw new Error('EACCES')
     })
-    const err = await failureOf(d, parent.id)
+    const err = await failureOf(restore(d, parent.id))
     expect(err.details).toMatchObject({
       rollbackFailures: expect.arrayContaining([expect.stringContaining('EACCES')]),
     })
@@ -284,20 +277,18 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
   })
 
   it('组回滚里已经恢复的成员：目录退回回收站后发"已移除"，按相反顺序', async () => {
-    const calls: string[] = []
-    const made = createFakeDeps({
+    const made = createLogWorld({
       seed: [parent, kidA, kidB],
       fs: { exists: () => true, size: 0 },
-      log: calls,
       logMethods: ['evictLive', 'announceRemoved'],
       format: (method, args) => `${method}(${String(args[0])})`,
     })
     made.host.attach = vi.fn(async (id: string) => {
       if (id === 'session-kidB') throw new Error('attach boom')
     })
-    const err = await failureOf(made.deps, parent.id)
+    const err = await failureOf(restore(made.deps, parent.id))
     expect(err.code).toBe('sessiondelete/io')
-    expect(calls).toEqual([
+    expect(made.calls).toEqual([
       'evictLive(session-kidA)', 'announceRemoved(session-kidA)',
       'evictLive(session-parent)', 'announceRemoved(session-parent)',
     ])

@@ -23,22 +23,13 @@ import {
   planVisibleTrash,
   type RemovalPlan,
 } from '../src/verbs/permanent-removal.js'
-import { createFakeDeps } from './support/fake-deps.js'
+import { createLogWorld, failureOf, trashEntry } from './support/world.js'
 
 const HOME = '/h'
 
 /** 条目 id 按真实形状造（`<时间戳>-<会话目录名>`，单段）：`trashDirOf` 只接单段 id。 */
-const entry = (sessionId: string, over: Partial<TrashEntry> = {}): TrashEntry => ({
-  id: `20260101T000000Z-${sessionId}`,
-  sessionId,
-  projectDir: '--p--',
-  workspaceId: 'ws-1',
-  wasArchived: false,
-  deletedAt: 1,
-  title: '',
-  sizeBytes: 0,
-  ...over,
-})
+const entry = (sessionId: string, over: Partial<TrashEntry> = {}): TrashEntry =>
+  trashEntry(`20260101T000000Z-${sessionId}`, { sessionId, ...over })
 
 /**
  * 盘上世界：`sizes` 按**完整路径**给字节（缺省 0），`missing` 是盘上不存在的目录（缺省都在），
@@ -55,21 +46,19 @@ function world(over: {
   live?: boolean | ((sessionId: string) => boolean)
   workspaceOf?: string | undefined | ((sessionId: string) => string | undefined)
   evicted?: EvictionOutcome
-  log?: string[]
   logMethods?: readonly string[]
   format?: (method: string, args: readonly unknown[]) => string
 }) {
   const sizes = over.sizes ?? {}
   const absent = new Set(over.missing ?? [])
-  const made = createFakeDeps({
+  const made = createLogWorld({
     seed: [...over.rows],
     members: over.members,
     membersAvailable: over.membersAvailable,
     live: over.live,
     workspaceOf: over.workspaceOf,
     evicted: over.evicted,
-    log: over.log,
-    logMethods: over.logMethods,
+    logMethods: over.logMethods ?? [],
     format: over.format,
     fs: { exists: (p) => !absent.has(p), size: 0 },
   })
@@ -80,14 +69,11 @@ function world(over: {
 /** 执行器用例的盘上世界：把执行期真正会碰的那几件写进一条调用日志（fs 与 host 共用），
  *  路径去掉 `HOME/` 前缀，断言里逐条看得见顺序。 */
 function execWorld(over: Parameters<typeof world>[0]) {
-  const calls: string[] = []
-  const made = world({
+  return world({
     ...over,
-    log: calls,
     logMethods: ['unarchive', 'detach', 'removeDir', 'evictLive', 'announceRemoved'],
     format: (method, args) => `${method}(${args.map(shortPath).join(',')})`,
   })
-  return { ...made, calls }
 }
 
 function shortPath(arg: unknown): string {
@@ -338,7 +324,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     const sizes = { [trashDirOf(root.id, HOME)]: 100, [trashDirOf(kid.id, HOME)]: 40 }
     const { deps, manifest } = world({ rows: [root, kid], sizes })
 
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
 
     expect(plan).toEqual({
       kind: 'trash',
@@ -352,7 +338,6 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     })
     expect(deps.host.subagentMembersOf).toHaveBeenCalledTimes(1)
     expect(deps.host.subagentMembersOf).toHaveBeenCalledWith(['session-a', 'session-k'])
-    expect(deps.host.isLive).not.toHaveBeenCalled()
     // 计划只读：拿到计划之后才轮到执行器动盘/动宿主。
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.unarchive).not.toHaveBeenCalled()
@@ -376,7 +361,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
       },
     })
 
-    const plan = await planTrashRemoval(deps, [root, other], [root], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, other], [root])
 
     expect(plan.kind).toBe('trash')
     expect(plan.trash.map((row) => row.entry.id)).toEqual([root.id])
@@ -405,7 +390,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
       members: { 'session-p': [goneMember] },
     })
 
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
 
     expect(plan.trash).toEqual([
       { entry: root, dir: trashDirOf(root.id, HOME), present: true, bytes: 4096 },
@@ -418,11 +403,11 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     expect(deps.fs.sizeOfDir).not.toHaveBeenCalledWith(goneMemberDir)
   })
 
-  it('admission:live 下 target 在跑 ⇒ live，零写、清册不动', async () => {
+  it('target 在跑 ⇒ live，零写、清册不动', async () => {
     const root = entry('session-p')
     const { deps, manifest } = world({ rows: [root], live: (id) => id === 'session-p' })
 
-    await expect(planTrashRemoval(deps, [root], [root], { admission: 'live' }))
+    await expect(planTrashRemoval(deps, [root], [root]))
       .rejects.toMatchObject({ code: 'sessiondelete/live' })
 
     expect(deps.host.isLive).toHaveBeenCalledWith('session-p')
@@ -432,7 +417,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     expect(await manifest.list()).toHaveLength(1)
   })
 
-  it('admission:live 下盘上后代在跑 ⇒ live，target 与成员都逐个查、零写', async () => {
+  it('盘上后代在跑 ⇒ live，target 与成员都逐个查、零写', async () => {
     const root = entry('session-p')
     const { deps } = world({
       rows: [root],
@@ -440,7 +425,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
       live: (id) => id === 'session-x',
     })
 
-    await expect(planTrashRemoval(deps, [root], [root], { admission: 'live' }))
+    await expect(planTrashRemoval(deps, [root], [root]))
       .rejects.toMatchObject({ code: 'sessiondelete/live' })
 
     expect(deps.host.isLive).toHaveBeenCalledWith('session-p')
@@ -450,21 +435,16 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     expect(deps.host.detach).not.toHaveBeenCalled()
   })
 
-  it('admission:none 不调用 isLive（全世界都在跑也照样出计划）', async () => {
+  it('计划就是执行前的闸：没有跳过活体准入的开关', async () => {
     const root = entry('session-p')
-    const strandedDir = sessionDirOf('--p--', 'session-x', HOME)
-    const { deps } = world({
-      rows: [root],
-      sizes: { [trashDirOf(root.id, HOME)]: 10, [strandedDir]: 5 },
-      members: { 'session-p': [member('session-x')] },
-      live: true,
-    })
+    const { deps } = world({ rows: [root], live: true })
 
-    const plan = await planTrashRemoval(deps, [root], [root], { admission: 'none' })
+    await expect(planTrashRemoval(deps, [root], [root]))
+      .rejects.toMatchObject({ code: 'sessiondelete/live' })
 
-    expect(plan.members.map((item) => item.sessionId)).toEqual(['session-x'])
-    expect(plan.bytes).toBe(15)
-    expect(deps.host.isLive).not.toHaveBeenCalled()
+    expect(deps.host.isLive).toHaveBeenCalledWith('session-p')
+    expect(deps.fs.removeDir).not.toHaveBeenCalled()
+    expect(deps.host.unarchive).not.toHaveBeenCalled()
   })
 
   it('subagentMembersOf 缺席（available:false）⇒ members 为空、unarchive 只有 targets、不抛', async () => {
@@ -472,7 +452,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     const dir = trashDirOf(root.id, HOME)
     const { deps } = world({ rows: [root], sizes: { [dir]: 8 }, membersAvailable: false })
 
-    const plan = await planTrashRemoval(deps, [root], [root], { admission: 'live' })
+    const plan = await planTrashRemoval(deps, [root], [root])
 
     expect(plan.members).toEqual([])
     expect(plan.unarchive).toEqual(['session-p'])
@@ -537,16 +517,6 @@ describe('planOrphanRemoval：orphan-clean 的删除计划', () => {
 })
 
 describe('executeRemoval：执行器', () => {
-  /** 取失败的原文与结构：部分回执用例既看 message，也看 details 的有无。 */
-  async function failureOf(run: Promise<unknown>) {
-    try {
-      await run
-    } catch (error) {
-      return error as Error & { code?: string; details?: unknown }
-    }
-    throw new Error('expected executeRemoval to reject')
-  }
-
   it('按计划顺序执行：unarchive 全部 → detach 有账本的成员 → 回收站行 → 盘上成员', async () => {
     const root = entry('session-p')
     const kid = entry('session-k', { parentEntryId: root.id })
@@ -564,7 +534,7 @@ describe('executeRemoval：执行器', () => {
       members: { 'session-p': [x, y] },
       workspaceOf: (id) => (id === 'session-x' ? 'ws-1' : undefined),
     })
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
     deps.fs.exists.mockClear()
 
     const result = await executeRemoval(deps, plan)
@@ -588,6 +558,24 @@ describe('executeRemoval：执行器', () => {
     expect(deps.fs.exists).not.toHaveBeenCalled()
   })
 
+  it('成功回执的字节念计划里的 bytes（执行器不另算一遍）', async () => {
+    const root = entry('session-p')
+    const rootDir = trashDirOf(root.id, HOME)
+    const { deps } = execWorld({ rows: [root], sizes: { [rootDir]: 100 } })
+    // 只手造一份「计划合计 ≠ 逐条之和」的计划：两边各算一次时，只有它看得出谁说了算。
+    const plan: RemovalPlan = {
+      kind: 'trash',
+      trash: [{ entry: root, dir: rootDir, present: true, bytes: 100 }],
+      members: [],
+      unarchive: [root.sessionId],
+      bytes: 999,
+    }
+
+    const result = await executeRemoval(deps, plan)
+
+    expect(result).toEqual({ removed: 1, freedBytes: 999 })
+  })
+
   it('回收站目录缺席的行：不删目录、仍摘清册行、计 1 条 0 字节', async () => {
     const root = entry('session-p')
     const kid = entry('session-k', { parentEntryId: root.id })
@@ -595,7 +583,7 @@ describe('executeRemoval：执行器', () => {
     const goneDir = trashDirOf(kid.id, HOME)
     const { deps, manifest } = execWorld({ rows: [root, kid], sizes: { [rootDir]: 100 }, missing: [goneDir] })
 
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
     const result = await executeRemoval(deps, plan)
 
     expect(plan.trash.map((row) => row.present)).toEqual([true, false])
@@ -613,7 +601,7 @@ describe('executeRemoval：执行器', () => {
     const rootDir = trashDirOf(root.id, HOME)
     const kidDir = trashDirOf(kid.id, HOME)
     const { deps, manifest } = execWorld({ rows: [root, kid], sizes: { [rootDir]: 100, [kidDir]: 40 } })
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
     deps.fs.removeDir.mockImplementation(async (p: string) => {
       if (p === kidDir) throw new Error('boom')
     })
@@ -634,7 +622,7 @@ describe('executeRemoval：执行器', () => {
     const rootDir = trashDirOf(root.id, HOME)
     const kidDir = trashDirOf(kid.id, HOME)
     const { deps, manifest } = execWorld({ rows: [root, kid], sizes: { [rootDir]: 100, [kidDir]: 40 } })
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
     const remove = manifest.remove.bind(manifest)
     manifest.remove = async (id: string) => {
       if (id === kid.id) throw new Error('manifest boom')
@@ -666,7 +654,7 @@ describe('executeRemoval：执行器', () => {
       sizes: { [rootDir]: 100, [memberDir]: 20 },
       members: { 'session-p': [member('session-x')] },
     })
-    const plan = await planTrashRemoval(deps, [root], [root], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root], [root])
     deps.fs.removeDir.mockImplementation(async (p: string) => {
       if (p === memberDir) throw new Error('boom')
     })
@@ -730,7 +718,7 @@ describe('executeRemoval：执行器', () => {
   it('端口抛的已是本仓动词码：原样抛出，不折成 io、不改码', async () => {
     const root = entry('session-p')
     const { deps } = execWorld({ rows: [root], sizes: { [trashDirOf(root.id, HOME)]: 5 } })
-    const plan = await planTrashRemoval(deps, [root], [root], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root], [root])
     const coded = verbError('not-found', '这一组已经不在了')
     deps.host.unarchive.mockImplementation(async () => { throw coded })
 
@@ -745,7 +733,7 @@ describe('executeRemoval：执行器', () => {
       rows: [root, kid],
       sizes: { [trashDirOf(root.id, HOME)]: 100, [trashDirOf(kid.id, HOME)]: 40 },
     })
-    const plan = await planTrashRemoval(deps, [root, kid], [root, kid], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
     deps.host.unarchive.mockImplementation(async () => { throw new Error('archive boom') })
 
     const error = await failureOf(executeRemoval(deps, plan))
@@ -764,7 +752,7 @@ describe('executeRemoval：执行器', () => {
       sizes: { [trashDirOf(root.id, HOME)]: 100, [sessionDirOf('--p--', 'session-x', HOME)]: 20 },
       members: { 'session-p': [member('session-x')] },
     })
-    const plan = await planTrashRemoval(deps, [root], [root], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root], [root])
     deps.host.detach.mockImplementation(async () => { throw new Error('detach boom') })
 
     const error = await failureOf(executeRemoval(deps, plan))
@@ -803,7 +791,7 @@ describe('executeRemoval：执行器', () => {
       sizes: { [trashDirOf(root.id, HOME)]: 5 },
       evicted: 'unknown',
     })
-    const plan = await planTrashRemoval(deps, [root], [root], { admission: 'none' })
+    const plan = await planTrashRemoval(deps, [root], [root])
 
     const result = await executeRemoval(deps, plan)
 

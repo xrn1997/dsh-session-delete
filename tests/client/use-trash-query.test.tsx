@@ -1,32 +1,31 @@
 /**
  * 清册读数与孤儿扫描的**编排**（`use-trash-query.ts`）。
  *
- * 这一份直接测 hook，而不是绕过它去测面板：三条判据（到达序号、先清单后扫描、清理两种失败的分流）
+ * 这一份直接测 hook，而不是绕过它去测面板：三条判据（最新票、先清单后扫描、清理两种失败的分流）
  * 此前只能"整块渲染面板 + 造一个远程假件"才够得着，现在它们是这个 module 的 interface。
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { useTrashQuery, type ReloadResult, type TrashQueryDeps } from '../../src/client/use-trash-query.js'
+import type { BusyGate } from '../../src/client/busy-gate.js'
 import { zhTranslate } from '../../src/client/copy.js'
-import { readReceipt } from '../../src/client/receipt.js'
 import type { OrphanReportWire, TrashEntryLike } from '../../src/client/remote.js'
-import type { WriteOutcome } from '../../src/client/write.js'
+import { publishUndoNotice, resetUndoNotice, useUndoNotice } from '../../src/client/undo-toast.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
+import { outcomes, purgeOutcomes, restoreOutcomes, writeOutcome } from './support/outcomes.js'
 
 const rows: TrashEntryLike[] = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 10, releaseBytes: 10, title: 'A' },
 ]
 
-/** 一段合成的一次写入结局：写后重扫只看 `action` / `ids`，回执细节不影响这条判据。 */
-function outcome<A extends ApplyAction>(
-  action: A,
-  ids: readonly string[],
-  over: Partial<WriteOutcome<A>> = {},
-): WriteOutcome<A> {
-  return {
-    ok: true, action, ids, receipt: readReceipt(action, ids, []),
-    failures: new Map(), successIds: [], anySuccess: false, ...over,
-  } as WriteOutcome<A>
+/** 逐条 `/apply` 的默认回执：purge / restore 给各自"落地了"的那一支，其余动作按中性默认值。
+ *  这个文件只读动作与请求 id（写后重扫的判据），回执细节不参与断言。 */
+function applyReceipt(action: ApplyAction, ids: readonly string[]): ApplyOutcome[] {
+  switch (action) {
+    case 'purge': return purgeOutcomes(ids)
+    case 'restore': return restoreOutcomes(ids)
+    default: return outcomes(action, ids)
+  }
 }
 
 const EMPTY: OrphanReportWire = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
@@ -39,26 +38,25 @@ function deps(over: Partial<TrashQueryDeps> & Partial<Record<'list' | 'scanOrpha
   return {
     list: vi.fn(async () => rows),
     scanOrphans: vi.fn(async () => EMPTY),
-    applyOutcomes: vi.fn(async (action: string, ids: readonly string[]) =>
-      ids.map((id) => ({ id, action, ok: true as const, value: { removed: 1, freedBytes: 1 } })) as ApplyOutcome[]),
+    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => applyReceipt(action, ids)),
     emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
     ...over,
   } as TrashQueryDeps
 }
 
-/** 面板那枚 `busy` 闸的形状：把一次任务整个包进"这一趟还算忙"里。 */
-type Around = <T>(task: () => Promise<T>) => Promise<T>
+/** 闸的本体与形状住 `src/client/busy-gate.ts`；这里只借它的 `around` 签名搭替身。 */
+type Around = BusyGate['around']
 
 /** 这类编排测试不关心渲染期的禁用：替身直接放行。 */
-const around: Around = <T,>(task: () => Promise<T>): Promise<T> => task()
+const passThrough: Around = <T,>(task: () => Promise<T>): Promise<T> => task()
 
-function mount(over: Partial<TrashQueryDeps> = {}, wrap: Around = around) {
+function mount(over: Partial<TrashQueryDeps> = {}, around: Around = passThrough) {
   const d = deps(over)
-  const view = renderHook(() => useTrashQuery({ deps: d, t: zhTranslate, around: wrap }))
+  const view = renderHook(() => useTrashQuery({ deps: d, t: zhTranslate, gate: { busy: false, around } }))
   return { d, ...view }
 }
 
-describe('取数编排 · 到达序号', () => {
+describe('取数编排 · 最新票', () => {
   it('后发的读数先落地、先发的后落地 ⇒ 先发的那份不盖掉新的', async () => {
     const resolvers: Array<(value: TrashEntryLike[]) => void> = []
     const list = vi.fn(() => new Promise<readonly TrashEntryLike[]>((resolve) => {
@@ -95,7 +93,7 @@ describe('取数编排 · 到达序号', () => {
       mountRefresh = result.current.refreshAll()
       writeRefresh = result.current.refreshAfterWrite()
     })
-    // 后到的 reload 先落地：它抢到序号，挂载那次 reload 就作废了；报告仍未知，必须由它补扫。
+    // 后到的 reload 先落地：它签到新票，挂载那次 reload 就作废了；报告仍未知，必须由它补扫。
     await act(async () => {
       resolvers[1]!(rows)
       await writeRefresh
@@ -203,7 +201,7 @@ describe('取数编排 · 命名读', () => {
     const { d, result } = mount()
     await act(async () => { await result.current.refreshAll() })
     expect(d.scanOrphans).toHaveBeenCalledTimes(1)
-    await act(async () => { await result.current.refreshAfterWrite(outcome('purge', ['e1'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('purge', ['e1'])) })
     expect(d.list).toHaveBeenCalledTimes(2)
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
@@ -223,7 +221,7 @@ describe('取数编排 · 命名读', () => {
     let forced!: Promise<void>
     let winner!: Promise<void>
     act(() => {
-      forced = result.current.refreshAfterWrite(outcome('purge', ['e1']))
+      forced = result.current.refreshAfterWrite(writeOutcome('purge', ['e1']))
       winner = result.current.refreshAfterWrite()
     })
     await act(async () => {
@@ -304,25 +302,25 @@ describe('取数编排 · 写后重扫由 outcome 派生', () => {
     await act(async () => { await result.current.refreshAll() })
     expect(d.scanOrphans).toHaveBeenCalledTimes(1)
 
-    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['kid'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('restore', ['kid'])) })
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
 
-    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['root'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('restore', ['root'])) })
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
 
   it('purge / orphan-clean ⇒ 写后强制重扫', async () => {
     const { d, result } = mount()
     await act(async () => { await result.current.refreshAll() })
-    await act(async () => { await result.current.refreshAfterWrite(outcome('purge', ['e1'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('purge', ['e1'])) })
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
-    await act(async () => { await result.current.refreshAfterWrite(outcome('orphan-clean', ['r1'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('orphan-clean', ['r1'])) })
     expect(d.scanOrphans).toHaveBeenCalledTimes(3)
   })
 
   it('清单还未知时 restore 也强制重扫：未知不是"空的"', async () => {
     const { d, result } = mount()
-    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['a'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('restore', ['a'])) })
     expect(d.list).toHaveBeenCalledTimes(1)
     expect(d.scanOrphans).toHaveBeenCalledTimes(1)
   })
@@ -331,7 +329,7 @@ describe('取数编排 · 写后重扫由 outcome 派生', () => {
     const { d, result } = mount({ list: vi.fn(async () => []) as never })
     await act(async () => { await result.current.refreshAll() })
     expect(d.scanOrphans).toHaveBeenCalledTimes(1)
-    await act(async () => { await result.current.refreshAfterWrite(outcome('restore', ['gone'])) })
+    await act(async () => { await result.current.refreshAfterWrite(writeOutcome('restore', ['gone'])) })
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
   })
 })
@@ -398,7 +396,7 @@ describe('取数编排 · 清理那批无主子会话', () => {
 })
 
 describe('取数编排 · 清空走注入的闸', () => {
-  it('emptyTrash 的请求与清单重读都在 around 里跑：先开闸、再发请求、最后关闸', async () => {
+  it('emptyTrash 的请求与清单重读都在闸里跑：先开闸、再发请求、最后关闸', async () => {
     const order: string[] = []
     const wrap: Around = <T,>(task: () => Promise<T>): Promise<T> => {
       order.push('gate:enter')
@@ -422,5 +420,30 @@ describe('取数编排 · 清空走注入的闸', () => {
     expect(d.scanOrphans).toHaveBeenCalledTimes(1)
     await act(async () => { await result.current.emptyTrash() })
     expect(d.scanOrphans).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('取数编排 · 清空与撤销横幅', () => {
+  // 横幅的现场是模块级的：每个用例从干净的现场起，别让上一个用例的发布混进来。
+  beforeEach(() => { resetUndoNotice() })
+
+  it('清空成功：整条横幅一起收掉——落点全没了，留着就是一条注定失败的「撤销」', async () => {
+    publishUndoNotice({ entryId: 'a', title: 'A' })
+    const notice = renderHook(() => useUndoNotice())
+    // 先确认现场真的挂着：否则「收掉了」可能只是从没挂上过。
+    expect(notice.result.current?.kind).toBe('one')
+    const { result } = mount()
+
+    await act(async () => { expect(await result.current.emptyTrash()).toBe(true) })
+    expect(notice.result.current).toBeNull()
+  })
+
+  it('清空失败：横幅留着——回收站此刻还在，撤销仍是可做的动作', async () => {
+    publishUndoNotice({ entryId: 'a', title: 'A' })
+    const notice = renderHook(() => useUndoNotice())
+    const { result } = mount({ emptyTrash: vi.fn(async () => { throw new Error('盘上忙') }) as never })
+
+    await act(async () => { expect(await result.current.emptyTrash()).toBe(false) })
+    expect(notice.result.current?.kind).toBe('one')
   })
 })

@@ -11,7 +11,7 @@ import {
 } from '../src/verbs/orphan-subagents.js'
 import type { SessionIdentity } from '../src/ports/host-port.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
-import { createFakeDeps } from './support/fake-deps.js'
+import { createLogWorld } from './support/world.js'
 
 const HOME = '/h'
 const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdentity => ({
@@ -21,19 +21,17 @@ const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdent
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：`corpus` 就是"这一家有会话语料"的语法糖。
  *  日志只记清理会做的那四件，且带参数——顺序（unarchive → detach → 删目录 → 通告）是这批用例的主角。 */
 function deps(corpus: readonly SessionIdentity[], seed: TrashEntry[] = []) {
-  const calls: string[] = []
-  const made = createFakeDeps({
+  const made = createLogWorld({
     seed,
     corpus,
     fs: { size: 100 },
     workspaceOf: (id) => (id === 'session-kid' ? 'ws-1' : undefined),
-    log: calls,
     logMethods: ['detach', 'unarchive', 'evictLive', 'announceRemoved'],
     format: (method, args) => (method === 'detach'
       ? `detach(${String(args[0])},${String(args[1])})`
       : `${method}(${String(args[0])})`),
   })
-  return { fs: made.fs, host: made.host, calls, d: made.deps }
+  return { fs: made.fs, host: made.host, calls: made.calls, d: made.deps }
 }
 
 describe('孤儿分组（纯函数）', () => {

@@ -12,13 +12,13 @@ import type { TrashLedger } from '../src/trash/ledger.js'
 import type { ManifestPort } from '../src/trash/manifest.js'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createFakeDeps } from './support/fake-deps.js'
+import { trashEntry } from './support/world.js'
 
 const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
 
-const parent: TrashEntry = {
-  id: makeEntryId(NOW, 'session-parent'), sessionId: 'session-parent', projectDir: '--p--',
-  workspaceId: 'ws-1', wasArchived: false, deletedAt: NOW, title: '父', sizeBytes: 10,
-}
+const parent: TrashEntry = trashEntry(makeEntryId(NOW, 'session-parent'), {
+  sessionId: 'session-parent', deletedAt: NOW, title: '父', sizeBytes: 10,
+})
 const kid: TrashEntry = {
   ...parent, id: makeEntryId(NOW, 'session-kid'), sessionId: 'session-kid', title: '孩', parentEntryId: parent.id,
 }

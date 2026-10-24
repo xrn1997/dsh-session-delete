@@ -15,7 +15,8 @@
  * 边界：它只服务"成员在 `sessions/` 与 `session-trash/` 之间搬"这一件事。做成通用撤销框架就会吸进
  * 不属于它的知识（谁该通告、通告几次、哪些失败算成功）。
  */
-import { isVerbCodeError, rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
+import { isSessionDeleteCodeError } from '../shared/wire.js'
+import { rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
 
 /** 一步反向动作的结果：这一 step 的领域键（`key`）是否回到原样 + 没能退干净的原因。
  *  `restored` 只回答键所指的那件写；同一步里的附属写失败仍进 `failures`
@@ -133,6 +134,6 @@ export async function rollbackJournals(journals: readonly Journal[], error: unkn
  * 换一种拼法会让上屏原文跟着变。
  */
 function journalFailure(step: JournalStep, error: unknown): VerbError {
-  if (isVerbCodeError(error)) return error as VerbError
+  if (isSessionDeleteCodeError(error)) return error as VerbError
   return verbError('io', `${step.label}：${String(error)}`, error)
 }

@@ -1,29 +1,11 @@
-/** 五个码 / 三个路由自检码的**家都在 `shared/wire.ts`**（ADR-0003）：浏览器半也要认它们（比如
- *  `not-found` 在界面上是中性提示而不是失败），所以它们属于两半共同的契约，不属于 Node 半。
- *  这里只转出旧名，免得调用点全改一遍。 */
+/** 失败的**结构与措辞**。码本身、码的前缀读法与动词词表都住在 `shared/wire.ts`（ADR-0003）：
+ *  浏览器半也要认它们，它们属于两半共同的契约，不属于 Node 半。这里只做动词抛错与回滚措辞。 */
 import {
-  ROUTE_CODES as ROUTE_CODE_SUFFIXES,
   SESSION_DELETE_CODES,
-  SESSION_DELETE_ERROR_DOMAIN,
-  VERB_CODES as VERB_CODE_SUFFIXES,
+  verbCodeOf,
   type RouteCode,
   type VerbCode,
 } from '../shared/wire.js'
-
-export const VERB_CODES = VERB_CODE_SUFFIXES
-export const ROUTE_CODES = ROUTE_CODE_SUFFIXES
-export type { RouteCode, VerbCode }
-
-/** `sessiondelete/` 这个前缀——拆码用它，别在下面几处各写一遍字面量。 */
-const VERB_CODE_PREFIX = `${SESSION_DELETE_ERROR_DOMAIN}/`
-
-/** `error.code` 是不是本仓的动词码（`sessiondelete/<码>`）。**唯一判据**：`journalFailure` 与永久删除
- *  执行器要"已经是动词码就原样抛"时都问这一句。同文件的 `withRollbackFailures` 还要码的后缀，所以它
- *  就地 `slice` 一次——前缀仍只住 `VERB_CODE_PREFIX` 这一处，别在调用点另写一份字面量。 */
-export function isVerbCodeError(error: unknown): boolean {
-  const raw = (error as { code?: unknown } | undefined)?.code
-  return typeof raw === 'string' && raw.startsWith(VERB_CODE_PREFIX)
-}
 
 /** 一次失败的**结构**：码、上屏原文、可选 cause（`map-error` 沿 cause 链认宿主类型化错误）、
  *  可选的结构化附带物（对齐官方 `rpcErrorSchema` 的第三件 `details`）。 */
@@ -66,13 +48,7 @@ function carriedRollbackFailures(error: unknown): string[] {
  *  没有可继承的就落 io。**内层的回滚失败要并进来**：一个成员自己退失败、兄弟也退失败时，
  *  两份失败都得在 details 里，消息也不能出现第二个「回滚未完成」。 */
 export function withRollbackFailures(error: unknown, failures: readonly string[]): VerbError {
-  const raw = (error as { code?: unknown } | undefined)?.code
-  const reason = typeof raw === 'string' && raw.startsWith(VERB_CODE_PREFIX)
-    ? raw.slice(VERB_CODE_PREFIX.length)
-    : undefined
-  const code = reason !== undefined && (VERB_CODES as readonly string[]).includes(reason)
-    ? reason as VerbCode
-    : 'io'
+  const code = verbCodeOf(error) ?? 'io'
   const carried = carriedRollbackFailures(error)
   const merged = [...new Set([...carried, ...failures])]
   const base = error instanceof Error ? error.message : String(error)

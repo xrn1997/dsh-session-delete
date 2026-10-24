@@ -9,10 +9,10 @@ import {
   resetBatchConfirm,
   useDeleteBatchRequest,
 } from '../../src/client/batch-confirm.js'
-import type { ApplyOutcome } from '../../src/client/remote.js'
 import { getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
 import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast, resetUndoNotice } from '../../src/client/undo-toast.js'
+import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 
 beforeEach(() => {
   resetBatchConfirm()
@@ -27,25 +27,6 @@ afterEach(() => {
   resetUndoNotice()
   resetTrashStore()
 })
-
-function countOutcomes(ids: readonly string[], kids: Record<string, number> = {}): ApplyOutcome[] {
-  return ids.map(
-    (id) => ({ id, action: 'count', ok: true, value: kids[id] ?? 0 }) as ApplyOutcome,
-  )
-}
-
-function deleteOutcomes(ids: readonly string[], failIds: readonly string[] = []): ApplyOutcome[] {
-  return ids.map((id) =>
-    failIds.includes(id)
-      ? ({
-          id,
-          action: 'delete',
-          ok: false,
-          error: { code: 'sessiondelete/io', message: '会话目录不在盘上' },
-        } as ApplyOutcome)
-      : ({ id, action: 'delete', ok: true, value: { id: `entry-${id}` } } as ApplyOutcome),
-  )
-}
 
 describe('模块级现场', () => {
   it('每发一批请求 seq 递增（确认框靠它重挂载）；空名单不发框也不占 seq', () => {

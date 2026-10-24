@@ -5,6 +5,7 @@ import { unescapeProjectKey } from '../src/shared/wire.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import type { DeleteDeps } from '../src/deps.js'
 import type { TrashEntry } from '../src/trash/entry.js'
+import { trashEntry } from './support/world.js'
 
 /**
  * 两个「接线用例」的共用夹具：**默认的窄镜像 ctx**、不是宿主模拟器。
@@ -16,12 +17,6 @@ import type { TrashEntry } from '../src/trash/entry.js'
  * 夹具只声明被接线代码真正声明的东西（`host-port.ts` 的 `HostCtxLike`、`trash/storage-manifest.ts` 的 `StorageDomainCtxLike`），
  * 所以它不会替实现兜住一个不存在的宿主成员——写错的成员名会让用例红而不是被夹具喂绿。
  */
-
-const entry = (id: string, over: Partial<TrashEntry> = {}): TrashEntry => ({
-  id, sessionId: id, projectDir: '--p--', workspaceId: 'ws-1',
-  wasArchived: false, deletedAt: 1,
-  title: '', sizeBytes: 0, ...over,
-})
 
 /* ------------------------------------------------------------------ *
  * 宿主服务层端口（createHostPort）
@@ -801,17 +796,17 @@ describe('清单的 storage domain 绑定', () => {
     const env = makeStorageEnv()
     await createHostStorageManifest(env.ctx as never).list()
     const { parse } = env.spec.tables.entries.valueSchema
-    expect(parse(entry('a'))).toMatchObject({ id: 'a' })
+    expect(parse(trashEntry('a'))).toMatchObject({ id: 'a' })
     expect(() => parse({ id: 'a' })).toThrow(/sessionId/)
     expect(() => parse(null)).toThrow(/plain object/)
-    expect(() => parse(entry('a', { deletedAt: '1' as never }))).toThrow(/deletedAt/)
+    expect(() => parse(trashEntry('a', { deletedAt: '1' as never }))).toThrow(/deletedAt/)
   })
 
   it('list/add/remove 折成 domain.table("entries") 的 entries/put/delete，key = 条目 id', async () => {
-    const env = makeStorageEnv([entry('a', { deletedAt: 100 }), entry('b', { deletedAt: 200 })])
+    const env = makeStorageEnv([trashEntry('a', { deletedAt: 100 }), trashEntry('b', { deletedAt: 200 })])
     const m = createHostStorageManifest(env.ctx as never)
     expect((await m.list()).map(e => e.id)).toEqual(['b', 'a']) // 最近的在前
-    await m.add(entry('c', { deletedAt: 300 }))
+    await m.add(trashEntry('c', { deletedAt: 300 }))
     expect([...env.rows.keys()].sort()).toEqual(['a', 'b', 'c'])
     await m.remove('a')
     expect([...env.rows.keys()].sort()).toEqual(['b', 'c'])

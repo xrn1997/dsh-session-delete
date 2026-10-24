@@ -10,6 +10,7 @@
  * `shell.overlay` 上——它必须活在行开关那棵子树之外（槽位行随宿主重排而卸载，见 `delete-confirm.tsx` 头注）。
  */
 import { useEffect, useState, type ReactElement } from 'react'
+import { useBusyGate } from './busy-gate.js'
 import { fetchCounts } from './batch-select.js'
 import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
@@ -19,10 +20,7 @@ import { createStore } from './store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
-import { landedEntryIds } from './receipt.js'
-import { invalidateTrash } from './trash-store.js'
-import { publishUndoBatchNotice } from './undo-toast.js'
-import { runWrite } from './write.js'
+import { deleteSessionsFromBatch } from './write-seats.js'
 
 export interface BatchDeleteRequest {
   /** 每次发布递增：换一批就重挂载，busy / 失败面不带着上一批的记忆。 */
@@ -115,7 +113,8 @@ function BatchConfirmDialog({
   deps: BatchConfirmDeps
   t: Translate
 }) {
-  const [busy, setBusy] = useState(false)
+  /** 这一趟的闸：写入座位把 apply → 收尾 → 重读整趟包在里面，`busy` 期间主按钮按住。 */
+  const gate = useBusyGate()
   /** 逐条失败原文：`sessionId → 信封的 message`。失败**不关框**（与单删同款）。 */
   const [failures, setFailures] = useState<ReadonlyMap<string, string>>(new Map())
   /** 开框那一刻现问的子会话计数；`null` = 有一条读不到 ⇒ 那两半句整句不说（不许拿 0 冒充"没有"）。 */
@@ -123,8 +122,6 @@ function BatchConfirmDialog({
 
   const ids = current.items.map((item) => item.sessionId)
   const failedIds = [...failures.keys()]
-  /** 首轮发全部；重试轮只发失败的那些（成功的已经不在名单里了）。 */
-  const pendingIds = failedIds.length > 0 ? failedIds : ids
   const totalKids = counts === null ? 0 : [...counts.values()].reduce((sum, n) => sum + n, 0)
 
   useEffect(() => {
@@ -139,34 +136,16 @@ function BatchConfirmDialog({
   }, [deps, current.seq])
 
   const run = async (): Promise<void> => {
-    setBusy(true)
     setFailures(new Map())
-    try {
-      const outcome = await runWrite({
-        deps,
-        action: 'delete',
-        ids: pendingIds,
-        presentation: {
-          invalidate: invalidateTrash,
-          // 撤销名单只收 ok 支的条目 id：already-gone 是「已被同批前一条带走」的幂等条，
-          // 跟着组走（组里 ok 那条的 id 已经在名单里），不单列。一条都没落地时 settlement 不发布
-          // 撤销横幅——没有落点的横幅是假按钮；清单失效照发。
-          publishUndo: (success) => {
-            publishUndoBatchNotice({ entryIds: landedEntryIds(success.receipt), n: success.successIds.length })
-          },
-        },
-      })
-      const failed = outcome.failures
-      shrinkPicksToFailures([...failed.keys()])
-      if (failed.size === 0) {
-        clearDeleteBatchRequest()
-        return
-      }
-      setFailures(failed)
-      shrinkRequestToFailures([...failed.keys()])
-    } finally {
-      setBusy(false)
+    // 首轮发全部；重试轮只发失败的那些——上一轮已把请求现场收缩到失败名单，`current.items` 就是那一批。
+    const failed = await deleteSessionsFromBatch(deps, current.items.map((item) => item.sessionId), gate)
+    shrinkPicksToFailures([...failed.keys()])
+    if (failed.size === 0) {
+      clearDeleteBatchRequest()
+      return
     }
+    setFailures(failed)
+    shrinkRequestToFailures([...failed.keys()])
   }
 
   return (
@@ -182,7 +161,7 @@ function BatchConfirmDialog({
           <Button variant="outline" onClick={clearDeleteBatchRequest}>
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" disabled={busy} onClick={() => void run()}>
+          <Button variant="primary" disabled={gate.busy} onClick={() => void run()}>
             {failedIds.length > 0
               ? t('dialog.batch.retry', { n: failedIds.length })
               : t('batch.run', { n: ids.length })}

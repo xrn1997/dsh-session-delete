@@ -4,7 +4,7 @@
 // `reset` 只给测试收场（回初值 + seq 清零）。`use()` 走 React 自带的 `useSyncExternalStore`。
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { createLazyStore, createStore } from '../../src/client/store.js'
+import { createLatestWins, createLazyStore, createStore } from '../../src/client/store.js'
 
 describe('createStore', () => {
   it('get() 回最初那一份引用（不是拷贝）', () => {
@@ -183,5 +183,32 @@ describe('createLazyStore', () => {
     expect(onLastUnsubscribe).toHaveBeenCalledTimes(1)
     store.get()
     expect(read).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('createLatestWins', () => {
+  it('只有最新签发的票 current；再签发让旧票作废', () => {
+    const latest = createLatestWins()
+    const first = latest.issue()
+    const second = latest.issue()
+    expect(first.current).toBe(false)
+    expect(second.current).toBe(true)
+  })
+
+  it('invalidate 让当前票作废，且不签发新票', () => {
+    const latest = createLatestWins()
+    const ticket = latest.issue()
+    latest.invalidate()
+    expect(ticket.current).toBe(false)
+    const next = latest.issue()
+    expect(next.current).toBe(true)
+  })
+
+  it('两个实例互不影响', () => {
+    const one = createLatestWins()
+    const two = createLatestWins()
+    const a = one.issue()
+    two.issue()
+    expect(a.current).toBe(true)
   })
 })

@@ -10,10 +10,11 @@
  * all belong here"）。
  *
  * 那个 K 是**勾选变化后防抖 300ms 的一次批量 count**（`/apply` 的 `action:'count'`，一组 id 一次），
- * 并且带**序号守卫**：在飞的旧响应不许盖掉新名单的读数（与 2026-10-17 `c66f082` 那条 `reloadSeq` 同一个道理）。
+ * 并且带**最新票守卫**：在飞的旧响应不许盖掉新名单的读数（compare-and-set 住 `createLatestWins`，
+ * 防抖本身仍在下面这个 effect 里）。
  * 读不到就整句不说——K 是合计，缺一条就是假数（「不许拿 0 冒充没有」）。
  */
-import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import { fetchCounts } from './batch-select.js'
 import { requestDeleteBatch } from './batch-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
@@ -25,6 +26,7 @@ import {
 } from './host-rows.js'
 import type { SessionDeleteRemote } from './remote.js'
 import { clearPicks, exitSelection, getPicks, togglePick, useSelection } from './batch-selection-store.js'
+import { createLatestWins } from './store.js'
 import { Button } from './ui/Button.js'
 import { IconCloseOutlineRegular } from './ui/icons.js'
 
@@ -49,18 +51,18 @@ export function BatchBar({
   const visibleRows = useVisibleSelectableRows(selecting)
   const [counts, setCounts] = useState<Map<string, number> | null>(null)
   const [expanded, setExpanded] = useState(false)
-  const seqRef = useRef(0)
+  const [latest] = useState(createLatestWins)
 
   useEffect(() => {
     const ids = picks.map((item) => item.sessionId)
-    const seq = (seqRef.current += 1)
+    const ticket = latest.issue()
     const timer = setTimeout(() => {
       void fetchCounts(deps, ids).then((result) => {
-        if (seq === seqRef.current) setCounts(result)
+        if (ticket.current) setCounts(result)
       })
     }, COUNT_DEBOUNCE_MS)
     return () => clearTimeout(timer)
-  }, [deps, picks])
+  }, [deps, latest, picks])
 
   // 退出模式或名单清空后清单回到收起态；下次进来不沿用上一批的展开记忆。
   useEffect(() => {

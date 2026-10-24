@@ -15,6 +15,7 @@ import {
   resetSelection,
   togglePick,
 } from '../../src/client/batch-selection-store.js'
+import { countOutcomes } from './support/outcomes.js'
 
 beforeEach(() => {
   resetSelection()
@@ -32,12 +33,6 @@ afterEach(() => {
   resetTrashStore()
   document.body.replaceChildren()
 })
-
-function countOutcomes(ids: readonly string[], kids: Record<string, number> = {}): ApplyOutcome[] {
-  return ids.map(
-    (id) => ({ id, action: 'count', ok: true, value: kids[id] ?? 0 }) as ApplyOutcome,
-  )
-}
 
 function countOnly(): { applyOutcomes: ReturnType<typeof vi.fn> } {
   const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>

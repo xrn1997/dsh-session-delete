@@ -2,7 +2,7 @@
  * 清册读数与无主子会话的**取数编排**。
  *
  * 它从 `trash-panel.tsx` 的函数体里整块搬出来，连同三条承重规矩：
- * ① **到达序号**：在飞的 `list` / `orphans` 不保证按发起顺序落地（对账耗时随盘上条目数摆动），
+ * ① **最新票**：在飞的 `list` / `orphans` 不保证按发起顺序落地（对账耗时随盘上条目数摆动），
  *    后到的旧响应不许盖掉刚发生的动作带来的新状态；
  * ② **先清单后扫描**：`GET /orphans` 判"父没了"吃的是清册，而清册要由 `/list` 那次对账才与
  *    `session-trash/` 的目录持平——反过来接，刚被手工搬进回收站的父会被报成失踪父；
@@ -10,12 +10,16 @@
  *
  * 清理（`/apply` 的 `orphan-clean`）也住这里：它与扫描共用同一份报告与同一组提示，"读"与"写"分家
  * 会让 `busy` 与重读顺序那条判据劈成两半。`busy` 本身不归它管——那是面板的一枚全局闸，通过
- * `around` 传进来（`around` 里跑的就是"这一趟还算忙"）。
+ * `gate` 传进来（闸里跑的就是"这一趟还算忙"）。
  */
 import { useCallback, useRef, useState } from 'react'
+import type { BusyGate } from './busy-gate.js'
 import { callRemote, type OrphanReportWire, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
+import { clearUndoNotice } from './undo-toast.js'
 import { failureMessage, isFailureVerdict } from './receipt.js'
-import { runWrite, type WriteOutcome } from './write.js'
+import type { WriteOutcome } from './write.js'
+import { cleanOrphansFromPanel } from './write-seats.js'
+import { createLatestWins } from './store.js'
 import type { Translate } from './copy.js'
 import type { ApplyAction } from '../shared/wire.js'
 import { fileSizeText } from './ui/format.js'
@@ -51,19 +55,19 @@ export interface TrashQuery {
   refreshAfterWrite(outcome?: WriteOutcome<ApplyAction>): Promise<void>
   /** 清理那批无主子会话（一段 `/apply` 的第五个动作），逐条结果落成"已不在了 / N 组未清理"。 */
   cleanOrphans(): Promise<void>
-  /** 清空回收站（聚合回执）：成功就重读，失败就把原文摆到清单那块。交回是否成功。 */
+  /** 清空回收站（聚合回执）：成功就熄掉撤销横幅并重读，失败就把原文摆到清单那块。交回是否成功。 */
   emptyTrash(): Promise<boolean>
 }
 
 export function useTrashQuery({
   deps,
   t,
-  around,
+  gate,
 }: {
   deps: TrashQueryDeps
   t: Translate
-  /** 把"这一趟还算忙"的一枚全局闸套在一次动作外（面板的 `busy`）。 */
-  around: <T>(task: () => Promise<T>) => Promise<T>
+  /** 面板的一枚全局闸：清空与无主子会话清理这两条写动作把整趟包在里面（面板的 `busy`）。 */
+  gate: BusyGate
 }): TrashQuery {
   const [entries, setEntries] = useState<readonly TrashEntryLike[] | null>(null)
   const [listFailure, setListFailure] = useState<string | null>(null)
@@ -82,12 +86,12 @@ export function useTrashQuery({
    *  又不能让回调跟着渲染期 state 换代。 */
   const entriesRef = useRef<readonly TrashEntryLike[] | null>(null)
 
-  const reloadSeq = useRef(0)
+  const [reloadLatest] = useState(createLatestWins)
   const reloadRows = useCallback(async (): Promise<ReloadResult> => {
-    const seq = ++reloadSeq.current
+    const ticket = reloadLatest.issue()
     const outcome = await callRemote(() => deps.list())
     // 输给后发的读：这一次什么都没落地，别让调用方把它当"读失败"去清场。
-    if (seq !== reloadSeq.current) return 'stale'
+    if (!ticket.current) return 'stale'
     if (!outcome.ok) {
       setListFailure(outcome.failure.message)
       entriesRef.current = null
@@ -98,27 +102,27 @@ export function useTrashQuery({
     entriesRef.current = outcome.value
     setEntries(outcome.value)
     return 'ok'
-  }, [deps])
+  }, [deps, reloadLatest])
 
-  const orphanScanSeq = useRef(0)
+  const [orphanLatest] = useState(createLatestWins)
   /** 强制重扫标记：先记再读清单；这次读输给后发读时，由赢家消费，强制不丢。 */
   const pendingForcedRescan = useRef(false)
 
   /** 清单这一拍读失败：清掉报告与提示、作废在飞的旧扫描（晚到的读数不能把报告写回来），
    *  并丢掉挂起的强制重扫（报告已回 null，下一次成功刷新本来就会重扫）。 */
   const clearOrphanState = useCallback((): void => {
-    orphanScanSeq.current += 1
+    orphanLatest.invalidate()
     pendingForcedRescan.current = false
     setReport(null)
     setOrphanFailure(null)
     setOrphanNotice(null)
     setOrphanConfirm(false)
-  }, [setReport])
+  }, [orphanLatest, setReport])
 
   const rescanOrphans = useCallback(async (): Promise<void> => {
-    const seq = ++orphanScanSeq.current
+    const ticket = orphanLatest.issue()
     const outcome = await callRemote(() => deps.scanOrphans())
-    if (seq !== orphanScanSeq.current) return
+    if (!ticket.current) return
     if (!outcome.ok) {
       setReport(null)
       setOrphanNotice(null)
@@ -129,7 +133,7 @@ export function useTrashQuery({
     setReport(outcome.value)
     setOrphanFailure(null)
     setOrphanNotice(null)
-  }, [deps, setReport, t])
+  }, [deps, orphanLatest, setReport, t])
 
   /** 显式全量刷新：清单读失败时连残留报告一起清掉（这一拍不知道盘上长什么样）；被顶掉则让位。
    *  它总要扫残留，所以顺手消费掉之前挂起的强制重扫。 */
@@ -177,62 +181,65 @@ export function useTrashQuery({
     [refreshAfterWriteInternal],
   )
 
-  const emptyTrash = useCallback((): Promise<boolean> => around(async () => {
+  // 清空是**聚合回执**、不是 `/apply` 座位：`emptyTrash` 自己包闸（别在外面再套一层，双套会让外层 busy 提前落下）。
+  const emptyTrash = useCallback((): Promise<boolean> => gate.around(async () => {
     const outcome = await callRemote(() => deps.emptyTrash())
     if (!outcome.ok) {
       // 清空失败在这块界面上的落点就是"清单读不到"那一格：回收站此刻是什么样我们不知道
       setListFailure(outcome.failure.message)
       return false
     }
+    // 清空把所有落点一起清了：还挂着的横幅是一条注定失败的「撤销」，先收掉再重读（判据与现场住
+    // `undo-toast.tsx`；逐条 purge 那一路由 settlement 的 purge 支熄灭，ADR-0013）。失败不熄——
+    // 回收站还在，撤销仍是可做的动作。
+    clearUndoNotice()
     await refreshAfterWriteInternal(true)
     return true
-  }), [around, deps, refreshAfterWriteInternal])
+  }), [gate, deps, refreshAfterWriteInternal])
 
-  const cleanOrphans = useCallback((): Promise<void> => {
+  const cleanOrphans = useCallback(async (): Promise<void> => {
     if (orphanReport === null || orphanReport.roots.length === 0) {
       setOrphanConfirm(false)
-      return Promise.resolve()
+      return
     }
-    return around(async () => {
-      setOrphanFailure(null)
-      setOrphanNotice(null)
-      // 先刷新再落提示：清完一批之后"还剩哪些残留"本身就是这次动作的后果，反过来会把旧报告摆在新盘上。
-      // `orphan-clean` 的 outcome 总会强制重扫（连带盘上后代），不需要调用方另传标记。
-      const settle = (outcome: WriteOutcome<'orphan-clean'>): Promise<void> => {
-        setOrphanConfirm(false)
-        return refreshAfterWrite(outcome)
-      }
-      const outcome = await runWrite({
-        deps,
-        action: 'orphan-clean',
-        ids: orphanReport.roots,
-        refresh: settle,
-      })
-      if (!outcome.ok) {
-        setOrphanFailure(t('trash.orphans.failure', { message: outcome.failure.message }))
-        return
-      }
-      // 回执的判读只走 `runWrite` 交回的 receipt：`not-found` = 这一组已经不在了（中性提示，不计入未清理）；
-      // 真失败（含请求了却没回的 id）把服务端在 `details` 里给的部分计数说出来。
-      const receipt = outcome.receipt
-      const failures = receipt.verdicts.filter(isFailureVerdict)
-      const gone = failures.filter((verdict) => verdict.kind === 'neutral')
-      const failed = failures.filter((verdict) => verdict.kind !== 'neutral')
-      const partialRemoved = failed.reduce(
-        (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'removed'), 0)
-      const partialBytes = failed.reduce(
-        (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'freedBytes'), 0)
-      if (gone.length > 0) setOrphanNotice(t('trash.orphans.cleanGone', { count: gone.length }))
-      if (failed.length > 0) {
-        const message = failureMessage(failed[0]!)
-        const base = t('trash.orphans.cleanFailed', { count: failed.length, message })
-        const partial = partialRemoved > 0 || partialBytes > 0
-          ? ` ${t('trash.orphans.cleanPartial', { removed: partialRemoved, size: fileSizeText(partialBytes) })}`
-          : ''
-        setOrphanFailure(`${base}${partial}`)
-      }
+    setOrphanFailure(null)
+    setOrphanNotice(null)
+    // 先刷新再落提示：清完一批之后"还剩哪些残留"本身就是这次动作的后果，反过来会把旧报告摆在新盘上。
+    // `orphan-clean` 的 outcome 总会强制重扫（连带盘上后代），不需要调用方另传标记。
+    const settle = (outcome: WriteOutcome<'orphan-clean'>): Promise<void> => {
+      setOrphanConfirm(false)
+      return refreshAfterWrite(outcome)
+    }
+    // 闸与整趟（apply → 收尾 → 重读）归座位；本地仍判回执：`not-found` = 这一组已经不在了（中性提示，
+    // 不计入未清理）；真失败（含请求了却没回的 id）把服务端在 `details` 里给的部分计数说出来。
+    const outcome = await cleanOrphansFromPanel({
+      deps,
+      ids: orphanReport.roots,
+      gate,
+      refreshAfterWrite: settle,
     })
-  }, [around, deps, orphanReport, refreshAfterWrite, t])
+    if (!outcome.ok) {
+      setOrphanFailure(t('trash.orphans.failure', { message: outcome.failure.message }))
+      return
+    }
+    const receipt = outcome.receipt
+    const failures = receipt.verdicts.filter(isFailureVerdict)
+    const gone = failures.filter((verdict) => verdict.kind === 'neutral')
+    const failed = failures.filter((verdict) => verdict.kind !== 'neutral')
+    const partialRemoved = failed.reduce(
+      (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'removed'), 0)
+    const partialBytes = failed.reduce(
+      (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'freedBytes'), 0)
+    if (gone.length > 0) setOrphanNotice(t('trash.orphans.cleanGone', { count: gone.length }))
+    if (failed.length > 0) {
+      const message = failureMessage(failed[0]!)
+      const base = t('trash.orphans.cleanFailed', { count: failed.length, message })
+      const partial = partialRemoved > 0 || partialBytes > 0
+        ? ` ${t('trash.orphans.cleanPartial', { removed: partialRemoved, size: fileSizeText(partialBytes) })}`
+        : ''
+      setOrphanFailure(`${base}${partial}`)
+    }
+  }, [deps, gate, orphanReport, refreshAfterWrite, t])
 
   return {
     entries,

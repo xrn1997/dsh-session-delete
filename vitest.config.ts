@@ -14,7 +14,11 @@ export default defineConfig({
       {
         test: {
           name: 'node',
-          include: ['tests/*.test.ts'],
+          // 整棵 `tests/` 都算 Node 面，只把浏览器半那一支让给下面的 jsdom project：
+          // 逐目录点名（`tests/*.test.ts` + 各子目录）会在新加一层时悄悄漏跑整批用例。
+          // `exclude` 是**替换**默认表而不是往里加，所以 `node_modules` / `dist` 那两条得自己留着。
+          include: ['tests/**/*.test.ts'],
+          exclude: ['**/node_modules/**', '**/dist/**', 'tests/client/**'],
           environment: 'node',
         },
       },

@@ -4,6 +4,7 @@ import { expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
 import { PER_MESSAGE_CHAR_CAP, TOTAL_CHAR_CAP, readTrashDetail, type DetailDeps } from '../src/trash/detail.js'
+import { trashEntry } from './support/world.js'
 
 const DELETED_AT = Date.UTC(2026, 9, 14, 6, 56, 58)
 const id = makeEntryId(DELETED_AT, 'session-x')
@@ -12,10 +13,8 @@ const rec = (o: unknown) => JSON.stringify(o)
 const frame = (...lines: string[]) =>
   zlib.zstdCompressSync(Buffer.from(lines.join('\n') + '\n', 'utf8'))
 
-const entry = (): TrashEntry => ({
-  id, sessionId: 'session-x', projectDir: '--p--', workspaceId: 'ws', wasArchived: true,
-  deletedAt: DELETED_AT, title: '清册标题', sizeBytes: 1234,
-})
+const entry = (): TrashEntry =>
+  trashEntry(id, { sessionId: 'session-x', workspaceId: 'ws', wasArchived: true, deletedAt: DELETED_AT, title: '清册标题', sizeBytes: 1234 })
 
 function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null } = {}) {
   const fs = {

@@ -8,7 +8,8 @@
  * （缺省 0——"读不到就不说那半句"由调用方判，不在这里冒充）。
  */
 import { vi } from 'vitest'
-import type { ApplyAction, ApplyOutcome } from '../../../src/shared/wire.js'
+import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../../../src/shared/wire.js'
+import { failed, ok } from './outcomes.js'
 
 export type SingleAction = (id: string) => Promise<unknown>
 
@@ -16,24 +17,22 @@ export type SingleAction = (id: string) => Promise<unknown>
 export function fakeApply(over: Partial<Record<ApplyAction, SingleAction>> = {}) {
   return vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> => {
     const run: SingleAction = over[action] ?? (async () => (action === 'count' ? 0 : null))
-    const outcomes: ApplyOutcome[] = []
+    const receipts: ApplyOutcome[] = []
     for (const id of ids) {
       try {
-        const value = await run(id)
-        outcomes.push({ id, action, ok: true, value } as ApplyOutcome)
+        // 值由假实现自己保证与动作对得上（`over` 的签名就要求它交回那个动作的成功值）。
+        const value = await run(id) as ApplyValueByAction[ApplyAction]
+        receipts.push(ok(action, id, value))
       } catch (error) {
         const code = (error as { code?: unknown }).code
-        outcomes.push({
-          id,
+        receipts.push(failed(
           action,
-          ok: false,
-          error: {
-            code: typeof code === 'string' ? code : 'sessiondelete/io',
-            message: error instanceof Error ? error.message : String(error),
-          },
-        } as ApplyOutcome)
+          id,
+          error instanceof Error ? error.message : String(error),
+          typeof code === 'string' ? code : undefined,
+        ))
       }
     }
-    return outcomes
+    return receipts
   })
 }

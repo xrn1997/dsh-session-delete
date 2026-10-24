@@ -15,17 +15,16 @@
 import { zhTranslate, type Translate } from './copy.js'
 import type { OneShotDeps } from './remote.js'
 import { createStore } from './store.js'
-import { invalidateTrash } from './trash-store.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
-import { runWrite } from './write.js'
+import { restoreFromUndo } from './write-seats.js'
 
 export type UndoToastDeps = OneShotDeps
 
 /**
  * 一次待撤销的事。两形（2026-10-17 起）：单条删除（主语是会话名）／批量删除（主语是条数）。
- * 同一个 Toast 宿主、同一停留时长；撤销动作按形分派（单条 / 批量），两条都走 `runWrite` 的同一段；
- * 单条另带 `single: true` 的读法（null 是协议错，不冒充幂等成功）。
+ * 同一个 Toast 宿主、同一停留时长；撤销动作按形分派（单条 / 批量），两条都走同一个外部恢复座位
+ * （`write-seats.ts` 的 `restoreFromUndo`），单条带 `single: true` 的读法（null 是协议错，不冒充幂等成功）。
  */
 export type UndoNotice = {
   /** 每次发布递增：Toast 靠它重挂载，同一段文案连续出现两次也能重新计一次停留。 */
@@ -74,7 +73,9 @@ export function publishUndoBatchNotice(input: {
   }))
 }
 
-/** 撤销成功后把提示收掉（用户点「撤销」、或横幅自己走完停留时间）。 */
+/** 整条横幅不再留：撤销成了、停留时间走完，或清空回收站把所有落点一起清了。
+ *  与下面 `dismissUndoNotice` 的分别是「整条不再留」与「按条目匹配」——清空之后没有条目还能撤销，
+ *  所以那一路不需要名单。 */
 export function clearUndoNotice(): void {
   noticeStore.set(null)
 }
@@ -121,15 +122,10 @@ function failNotice(current: UndoNotice, message: string): void {
 async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
   const ids = current.kind === 'one' ? [current.entryId] : current.entryIds
   if (current.kind === 'one' && current.entryId === '') return
-  const outcome = await runWrite({
-    deps,
-    action: 'restore',
-    ids,
-    single: current.kind === 'one',
-    // 外部恢复座位：settlement 负责重开删除时被关掉的会话（只认 main-view 自己记过的），
-    // 并让清单面板重读。信封成功就收尾（哪怕逐条全失败）：清单失效照发（回滚失败可能留半套）。
-    presentation: { invalidate: invalidateTrash },
-  })
+  // 外部恢复座位：settlement 负责重开删除时被关掉的会话（只认 main-view 自己记过的）并让清单重读；
+  // 座位**不传 `dismissUndo`**——部分失败的回滚会让 settlement 先熄灭横幅，随后 `failNotice` 因
+  // `ownsNotice` 落空而吞掉失败原文。
+  const outcome = await restoreFromUndo(deps, { ids, single: current.kind === 'one' })
   if (!outcome.ok) {
     failNotice(current, outcome.failure.message)
     return

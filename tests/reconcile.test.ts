@@ -7,16 +7,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
 import { reconcileTrash } from '../src/trash/reconcile.js'
+import { trashEntry } from './support/world.js'
 
 const HOME = '/h'
 const ROOT = `${HOME}/session-trash`
 const DELETED_AT = Date.UTC(2026, 9, 16, 2, 0, 0)
 const idOf = (sessionDirName: string) => makeEntryId(DELETED_AT, sessionDirName)
 
-const row = (id: string, over: Partial<TrashEntry> = {}): TrashEntry => ({
-  id, sessionId: id, projectDir: '--p--', workspaceId: 'ws-1', wasArchived: true,
-  deletedAt: DELETED_AT, title: '标题', sizeBytes: 10, ...over,
-})
+const row = (id: string, over: Partial<TrashEntry> = {}): TrashEntry =>
+  trashEntry(id, { wasArchived: true, deletedAt: DELETED_AT, title: '标题', sizeBytes: 10, ...over })
 
 const headerLog = (header: Record<string, unknown>): Buffer =>
   zlib.zstdCompressSync(Buffer.from(`${JSON.stringify(header)}\n`, 'utf8'))

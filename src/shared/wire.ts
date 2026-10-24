@@ -238,6 +238,26 @@ export const SESSION_DELETE_CODES: Record<AllCodeSuffix, `sessiondelete/${AllCod
   'bad-request': 'sessiondelete/bad-request',
 }
 
+/** 失败码的前缀。读码只走下面两条，别在调用点各写一份字面量。 */
+const CODE_PREFIX = `${SESSION_DELETE_ERROR_DOMAIN}/`
+
+/** `error.code` 是不是本仓的失败形状（`sessiondelete/<后缀>`）。**只认前缀**：后缀在不在册是
+ *  {@link verbCodeOf} 的问题。任何要「已经是本仓的码就原样对待」的调用点都问这一句，不在调用点
+ *  再写一份前缀字面量。 */
+export function isSessionDeleteCodeError(error: unknown): boolean {
+  const raw = (error as { code?: unknown } | undefined)?.code
+  return typeof raw === 'string' && raw.startsWith(CODE_PREFIX)
+}
+
+/** `error.code` 折回那个动词词：前缀与后缀两件都成立才交回（后缀要在 {@link VERB_CODES} 册上）。
+ *  路由自检码、别域的码、非字符串 code 一律 `undefined`。 */
+export function verbCodeOf(error: unknown): VerbCode | undefined {
+  const raw = (error as { code?: unknown } | undefined)?.code
+  if (typeof raw !== 'string' || !raw.startsWith(CODE_PREFIX)) return undefined
+  const suffix = raw.slice(CODE_PREFIX.length)
+  return (VERB_CODES as readonly string[]).includes(suffix) ? suffix as VerbCode : undefined
+}
+
 /** 回收站目录名（相对宿主数据根）。Node 半拼路径，浏览器半在页脚念它——同一个字面量。 */
 export const TRASH_DIR_NAME = 'session-trash'
 

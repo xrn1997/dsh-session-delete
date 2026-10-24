@@ -38,6 +38,6 @@ export function purgeTrash(deps: CoreDeps) {
     // 计划只读：活体准入在**一切写之前**（任一在跑就整条拒绝、零副作用）。盘上后代按**清册里还在的 id**
     // 排除（跟着父进来的孩子不按"盘上残留"再删一遍）；`sessionQuery` 缺席时端口回 `{ available: false }`
     // ⇒ 这次只清清册里的那部分，盘上残留留给 `GET /orphans` 兜底（与 delete 的降级一致，不折成失败）。
-    return await executeRemoval(deps, await planTrashRemoval(deps, rows, selected, { admission: 'live' }))
+    return await executeRemoval(deps, await planTrashRemoval(deps, rows, selected))
   }
 }

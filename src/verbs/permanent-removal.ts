@@ -7,7 +7,9 @@ import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
 import { bareSessionId, type HostCorpusPort, type SubagentMember } from '../ports/host-port.js'
 import type { CoreDeps } from '../deps.js'
-import { isVerbCodeError, verbError } from './errors.js'
+import { isSessionDeleteCodeError } from '../shared/wire.js'
+import { verbError } from './errors.js'
+import { assertNoLive } from './live-admission.js'
 import { createMemberPresence } from './member-presence.js'
 
 export interface MeasuredMemberDir {
@@ -189,15 +191,8 @@ export interface RemovalPlan {
   readonly trash: readonly PlannedTrashRow[]
   readonly members: readonly PlannedMemberRemoval[]
   readonly unarchive: readonly string[]
+  /** 计划量到的合计；成功回执的 freedBytes 只念它。 */
   readonly bytes: number
-}
-
-/** 活体准入：逐个问，任一在跑就抛 `live`。**计划函数就是执行前的闸**——调用方拿到计划才允许写，
- *  所以这里必须发生在任何写之前（`admission:'none'` 的调用方自己承担这个风险，不进来）。 */
-async function assertNoLive(deps: CoreDeps, sessionIds: readonly string[]): Promise<void> {
-  for (const sessionId of sessionIds) {
-    if (await deps.host.isLive(sessionId)) throw verbError('live', `会话正在运行：${sessionId}`)
-  }
 }
 
 function totalBytes(items: readonly { readonly bytes: number }[]): number {
@@ -206,28 +201,27 @@ function totalBytes(items: readonly { readonly bytes: number }[]): number {
 
 /**
  * purge 的删除计划：`targets` 由调用方按组语义（`trash/groups.ts`）选好，这里只量、只筛、只查活体。
+ * **计划函数就是执行前的闸**——调用方拿到计划才允许写，所以准入必须发生在任何写之前。
  *
  * - `trash` 按 targets 原序逐个实测（目录缺席的行 `present:false` / 0 字节，但清册行仍要摘）。
  * - 盘上后代经 `selectStrandedMembers` 选出（一次问全部 targets、排除全部清册 id、bare id 全局只计划一次）。
  * - `members` 只收盘上还有目录的成员（目录缺席没有可删的字节）；`unarchive` = targets + 这些成员：
  *   只摘这一次真要碰的 id。
- * - `admission:'live'` 在量目录与任何写之前逐个查 targets 与**全部枚举到的**盘上后代；
- *   任一在跑就整条拒绝，零副作用。
+ * - 活体准入在量目录与任何写之前逐个查 targets 与**全部枚举到的**盘上后代；任一在跑就整条拒绝、
+ *   零副作用。没有跳过它的开关——计划就是执行前的闸（ADR-0006）。
  * - `sessionQuery` 缺席时端口回 `{ available: false }` ⇒ members 为空、不抛（盘上残留留给 `GET /orphans` 兜底）。
  */
 export async function planTrashRemoval(
   deps: CoreDeps,
   rows: readonly TrashEntry[],
   targets: readonly TrashEntry[],
-  options: { readonly admission: 'none' | 'live' },
 ): Promise<RemovalPlan> {
   const candidates = (await selectStrandedMembers(deps.host, rows, targets.map((entry) => entry.sessionId))).flat()
-  if (options.admission === 'live') {
-    await assertNoLive(deps, [
-      ...targets.map((entry) => entry.sessionId),
-      ...candidates.map((member) => member.sessionId),
-    ])
-  }
+  // 准入住在计划里、量目录与任何写之前（判据与那句原文住 `verbs/live-admission.ts`）。
+  await assertNoLive(deps.host, [
+    ...targets.map((entry) => entry.sessionId),
+    ...candidates.map((member) => member.sessionId),
+  ])
   const trash = await Promise.all(targets.map((entry) => measureTrashRow(deps, entry)))
   const members = await planMemberRemovals(deps, candidates)
   return {
@@ -252,7 +246,7 @@ export async function planOrphanRemoval(
   deps: CoreDeps,
   members: readonly { readonly sessionId: string; readonly projectDir: string }[],
 ): Promise<RemovalPlan> {
-  await assertNoLive(deps, members.map((member) => member.sessionId))
+  await assertNoLive(deps.host, members.map((member) => member.sessionId))
   const present = await planMemberRemovals(deps, members)
   return {
     kind: 'orphan',
@@ -264,7 +258,8 @@ export async function planOrphanRemoval(
 }
 
 /**
- * 按计划执行一次永久删除：只写、不再量、不再判活体（计划就是执行前的闸）。
+ * 按计划执行一次永久删除：只写、不再量、不再判活体（计划就是执行前的闸）。回执的字节念计划
+ * （`plan.bytes`），执行期不再累加一遍。
  *
  * 顺序（与迁移前的 purge / orphan-clean 一致）：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行
  * （在才删目录 → 摘清册行 → 通告成员离场）→ 逐条盘上成员（删目录 → 通告成员离场）。目录删掉就没有
@@ -283,14 +278,15 @@ export async function executeRemoval(
 ): Promise<{ removed: number; freedBytes: number }> {
   const presence = createMemberPresence(deps.host)
   let removed = 0
-  let freedBytes = 0
+  /** 删到这一刻已经腾出的**进度**：只喂 `orphan` 的部分回执；成功回执念计划的合计（`plan.bytes`）。 */
+  let freedSoFar = 0
 
   /** 删除途中失败的唯一出口：标签沿用旧措辞；部分回执只属于 `orphan`（由计划的 `kind` 派生）。
    *  已经是本仓动词码的错误原样抛（与 `member-journal.ts` 的 `journalFailure` 同一条判据）——
    *  `not-found` / `live` 之类不许在这里被折成 `io`。 */
   const fail = (label: string, error: unknown, failedSessionId: string): never => {
-    if (isVerbCodeError(error)) throw error
-    const details = plan.kind === 'orphan' ? { removed, freedBytes, failedSessionId } : undefined
+    if (isSessionDeleteCodeError(error)) throw error
+    const details = plan.kind === 'orphan' ? { removed, freedBytes: freedSoFar, failedSessionId } : undefined
     throw verbError('io', `${label}：${String(error)}`, error, details)
   }
 
@@ -325,7 +321,7 @@ export async function executeRemoval(
       } catch (error) {
         fail('删除回收站目录失败', error, row.entry.sessionId)
       }
-      freedBytes += row.bytes
+      freedSoFar += row.bytes
     }
     try {
       await deps.ledger.remove(row.entry.id)
@@ -345,9 +341,9 @@ export async function executeRemoval(
       fail(memberLabel, error, member.sessionId)
     }
     removed += 1
-    freedBytes += member.bytes
+    freedSoFar += member.bytes
     await presence.memberGone(member.sessionId)
   }
 
-  return { removed, freedBytes }
+  return { removed, freedBytes: plan.bytes }
 }

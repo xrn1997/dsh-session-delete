@@ -11,6 +11,10 @@
  * 另有一个**懒读快照**变体（`createLazyStore`）：值由组件树之外的事实源（宿主 DOM）现读，
  * 脏了才重读；订阅脚手架仍住这里，观察者生命周期由调用方挂 `onFirstSubscribe` / `onLastUnsubscribe`。
  *
+ * 还有一个**最新票句柄**（`createLatestWins`）：并发的异步读里"只有最新那次可以落地"原先在每个
+ * 调用方各写一遍自增序号，现在只住这一处。它只拥有 compare-and-set——防抖、轮询、焦点策略仍是
+ * 调用方的现场，不搬进来。
+ *
  * 语义（四条，别在调用方另算一遍）：
  * - `set` / `update` 用 `Object.is` 判"变过"：同一个引用不重渲染（React 的 snapshot 契约要求）。
  * - `publish(make)` 递增**本实例**的 seq（从 1 起）并**总是**通告——seq 是组件重挂载的 key
@@ -140,6 +144,39 @@ export function createLazyStore<T>(
         // 没人订阅时缓存不再自证新鲜（外部源可能在无观察期间变过）：下次挂载首帧先重读。
         dirty = true
       }
+    },
+  }
+}
+
+/**
+ * 最新票句柄：每张票记着签发时的序号，只有序号仍等于当前的那张才 `current`。
+ * 调用方在发起异步读时 `issue()` 一张票，落地前问 `ticket.current`——旧读因此不会盖掉新状态。
+ *
+ * 组件里要拿到**同一枚**句柄时用 `useState(createLatestWins)`，不要用 `useMemo`：React 允许丢 memo
+ * 缓存，丢了就是两张各自记数的票台，守卫静默失效。模块级现场（`main-view.ts`）直接建一颗，没这个问题。
+ */
+export interface LatestWinsTicket { readonly current: boolean }
+
+export interface LatestWins {
+  /** 签发一张新票；之前的票立刻作废。 */
+  issue(): LatestWinsTicket
+  /** 只作废当前票，不签发新票（用于"这一拍整体作废"）。 */
+  invalidate(): void
+}
+
+export function createLatestWins(): LatestWins {
+  let seq = 0
+  return {
+    issue(): LatestWinsTicket {
+      const token = ++seq
+      return {
+        get current(): boolean {
+          return token === seq
+        },
+      }
+    },
+    invalidate(): void {
+      seq += 1
     },
   }
 }

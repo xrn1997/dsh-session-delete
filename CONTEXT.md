@@ -56,15 +56,19 @@ _Avoid_: 批次、集合（组是删除时一起搬进来的成员关系；批�
 `origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录（投影缓存与附件不在范围内）；判据住 `src/verbs/orphan-subagents.ts`。
 
 **活体**（live session）
-宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**；删除时把 session 与它的 agent handle 一起摘掉（见 ADR-0008）。
+宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**；「在跑就整组拒绝」的判据住 `src/verbs/live-admission.ts`，删除时把 session 与它的 agent handle 一起摘掉（见 ADR-0008）。
 _Avoid_: 运行中（“运行中”可能指 agent 正在跑；活体指宿主内存里 attach 着的会话）。
+
+**活体准入**（live admission）
+一次写之前逐个问「这个会话在宿主内存里 attach 着吗」；任一在跑就整组拒绝、零副作用，原文点名那一个会话。**什么时候查、查哪些 id 归调用方**——永久删除仍把准入放在计划里、在任何写之前（ADR-0006）。_唯一实现_：`src/verbs/live-admission.ts` 的 `assertNoLive`。
+_Avoid_: 安全检查（太泛；这里专指写之前那一次逐个问活体）。
 
 **永久删除**（permanent removal）
 没有恢复路径的删除。仅有的三条路径是单条 / 批量 purge、清空回收站、无主子会话清理；都走 `/apply` 或 `/empty`，不自动过期。
 _Avoid_: 彻底删除与永久删除混用（本仓统一说「永久删除」；界面文案可以另说）。
 
 **永久删除计划**（permanent removal plan）
-一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，只写、不再量、不再判活体。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。判据住 `src/verbs/permanent-removal.ts`，裁决见 ADR-0006。
+一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，只写、不再量、不再判活体。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。计划与执行住 `src/verbs/permanent-removal.ts`（成功回执的字节念计划、执行期只记进度）；**活体准入的判据**住 `src/verbs/live-admission.ts`，计划只决定它在任何写之前跑。裁决见 ADR-0006。
 
 **成员在场**（member presence）
 一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；批量恢复仍由 `src/verbs/batch.ts` 发起一次 `announceRestored(ids)`（单条就是长度为 1 的批，ADR-0014）。
@@ -84,3 +88,11 @@ _Avoid_: 缓存（这里只讲「同一引用」这条 snapshot 契约，不是�
 **写后重扫**（post-write orphan rescan）
 一次写入之后要不要重扫无主子会话：由这次的写入结果从动作、请求的 id 与发读前的清单派生，调用方不传标记。判据见 ADR-0016。
 _Avoid_: 强制刷新（那是面板上的手动动作）；把「报告为空」当成「不用扫」——报告 `null` 是未知，不是零。_唯一实现_：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`。
+
+**写入座位**（write seat）
+一次 `/apply` 写入发生在哪个界面位置：菜单删除、批量删除、外部撤销恢复、面板恢复 / 永久删除、无主子会话清理。座位拥有自己的呈现材质、闸与重读通道；逐条收尾顺序与 `anySuccess` 门仍住 `src/client/write-settlement.ts`，busy 的生命周期住 `src/client/busy-gate.ts`。_唯一实现_：`src/client/write-seats.ts`。
+_Avoid_: 写入入口、按钮处理（座位说的是一个界面位置的整趟材质，不是某颗控件的回调）。
+
+**后发读赢**（latest-wins）
+同一类异步读里只有最新发起的那次允许落地；晚到的旧响应直接丢弃。它只做 compare-and-set，不拥有防抖、轮询、定时器或焦点策略。_唯一实现_：`src/client/store.ts` 的 `createLatestWins`。
+_Avoid_: 防抖、节流（后发读赢不改变发起时机，只裁决谁落地）。

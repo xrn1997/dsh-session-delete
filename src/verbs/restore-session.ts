@@ -3,7 +3,7 @@ import { isWorkspaceMissingError, type HostIdentityPort } from '../ports/host-po
 import type { CoreDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
-import { createMemberPresence, type MemberPresence } from './member-presence.js'
+import { createMemberPresence, withPresenceTail, type MemberPresence } from './member-presence.js'
 import { moveGroup } from './move-group.js'
 
 /**
@@ -166,14 +166,11 @@ async function memberRestore(
 
   const journal = createJournal(steps)
   return {
-    journal: {
-      run: () => journal.run(),
-      // 组级回滚：先把步骤按相反顺序退回，再交给成员在场 module 判「目录真的回到回收站了吗」。
-      async undo() {
-        const undo = await journal.undo()
-        await presence.memberGone(entry.sessionId, { backInTrash: undo.restored('dir') })
-        return undo
-      },
-    },
+    journal: withPresenceTail(presence, journal, {
+      sessionId: entry.sessionId,
+      // run 不动在场：恢复的「回到可见面」由批量层一次 `announceRestored(ids)` 发起（ADR-0002）。
+      // 组级回滚时目录真的退回回收站了才发 removed；没退回去就什么都别发。
+      onUndone: (undo) => ({ kind: 'leave', backInTrash: undo.restored('dir') }),
+    }),
   }
 }

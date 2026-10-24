@@ -1,7 +1,8 @@
 import {
   isDSHRemoteError,
+  isSessionDeleteCodeError,
   SESSION_DELETE_ERROR_DOMAIN,
-  VERB_CODES,
+  verbCodeOf,
   type RemoteFailure,
   type VerbCode,
 } from '../shared/wire.js'
@@ -111,16 +112,11 @@ export function toRemoteFailure(error: unknown): RemoteFailure {
   }
 
   const raw = (error as { code?: unknown } | undefined)?.code
-  if (typeof raw === 'string' && OFFICIAL_CODE.test(raw) && !raw.startsWith(`${DOMAIN}/`)) {
+  if (typeof raw === 'string' && OFFICIAL_CODE.test(raw) && !isSessionDeleteCodeError(error)) {
     const details = detailsOf(error)
     return { code: raw, message: messageOf(error), ...(details === undefined ? {} : { details }) }
   }
-  const reason = typeof raw === 'string' && raw.startsWith(`${DOMAIN}/`)
-    ? raw.slice(DOMAIN.length + 1)
-    : undefined
-  const fromVerb = reason !== undefined && (VERB_CODES as readonly string[]).includes(reason)
-    ? (reason as Code)
-    : undefined
+  const fromVerb = verbCodeOf(error)
 
   const host = hostErrorOf(error)
   // 「就近优先」：动词在抛出处挂的 details 比 cause 上的宿主字段更近，前者有就用前者。

@@ -3,7 +3,8 @@ import type { CoreDeps, DeleteDeps } from '../deps.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { verbError } from './errors.js'
 import { attempt, createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
-import { createMemberPresence, type MemberPresence } from './member-presence.js'
+import { assertNoLive } from './live-admission.js'
+import { createMemberPresence, withPresenceTail, type MemberPresence } from './member-presence.js'
 import { moveGroup } from './move-group.js'
 
 export interface DeleteResult {
@@ -46,16 +47,9 @@ export function deleteSession(deps: DeleteDeps) {
     const parentProjectDir = await deps.host.projectDirOf(sessionId)
     if (parentProjectDir === undefined) throw verbError('not-found', `宿主的持久化里没有这个会话：${sessionId}`)
 
-    // ① 准入：父与孩子逐个查活体（父的账本归属可以缺席——未分组的会话本来就是那种）
-    const candidates: Member[] = [
-      { sessionId, projectDir: parentProjectDir },
-      ...kids.map(k => ({ sessionId: k.sessionId, projectDir: k.projectDir })),
-    ]
-    for (const member of candidates) {
-      if (await deps.host.isLive(member.sessionId)) {
-        throw verbError('live', `会话正在运行：${member.sessionId}`)
-      }
-    }
+    // ① 准入：父与孩子逐个查活体（判据与那句原文住 `verbs/live-admission.ts`）。
+    //    查的是宿主报的全部孩子，**不是**后面按盘上目录筛过的 `members`——目录不在不代表它没在跑。
+    await assertNoLive(deps.host, [sessionId, ...kids.map((kid) => kid.sessionId)])
 
     // 父的目录必须在盘上（不在就是"账本说有、盘上没有"，与原来同一条 not-found）；
     // 孩子的目录缺席**跳过它**：宿主记录与磁盘不一致是孩子的问题，不该让父删不掉。
@@ -171,23 +165,18 @@ async function memberMove(
   const journal = createJournal(steps)
   return {
     entry,
-    journal: {
-      // 搬完之后才把"离开可见面"补上：摘活体与如实通告都不抛，且只在完全搬成之后有意义。
-      async run() {
-        await journal.run()
-        await presence.memberGone(sessionId)
-      },
-      /** 组级回滚：先把成员自己的步骤按相反顺序退回，再交给成员在场 module 判「目录与账本两件写都回去了吗」。
-       *  这一行此前已经收过 `api-session/removed`；不发"回来了"它就会在客户端消失到重连为止。
-       *  「退没退成」由 journal 的逐步结果交出来，这里不再自己累计布尔。 */
-      async undo() {
-        const undo = await journal.undo()
-        await presence.memberBack(sessionId, {
-          diskBack: undo.restored('dir'),
-          workspaceBack: workspaceId === undefined ? true : undo.restored('workspace'),
-        })
-        return undo
-      },
-    },
+    journal: withPresenceTail(presence, journal, {
+      sessionId,
+      // 搬完之后才把「离开可见面」补上：摘活体与如实通告都不抛，且只在完全搬成之后有意义。
+      onDone: 'leave',
+      /** 组级回滚：先按相反顺序退步骤，再判「目录与账本两件写都回去了吗」。
+       *  这一行此前已经收过 `api-session/removed`；不发「回来了」它就会在客户端消失到重连为止。
+       *  「退没退成」由 journal 的逐步结果交出来，这里只读键，不自己累计布尔。 */
+      onUndone: (undo) => ({
+        kind: 'return',
+        diskBack: undo.restored('dir'),
+        workspaceBack: workspaceId === undefined ? true : undo.restored('workspace'),
+      }),
+    }),
   }
 }

@@ -20,6 +20,7 @@ import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/t
 import type { DeleteDeps } from '../src/deps.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createFakeDeps } from './support/fake-deps.js'
+import { trashEntry } from './support/world.js'
 
 const HOME = '/h'
 const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
@@ -27,11 +28,8 @@ const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
 /** 条目 id 一律由 `makeEntryId` 产出（`恢复` 动词按 id 反推原目录名）⇒ 夹具照真实形状造，
  *  不拿 `'a'` 这种手写串冒充。 */
 const entryIdOf = (sessionDirName: string) => makeEntryId(NOW, sessionDirName)
-const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEntry => ({
-  id: entryIdOf(sessionDirName), sessionId: sessionDirName, projectDir: '--p--', workspaceId: 'ws-1',
-  wasArchived: false, deletedAt: 1,
-  title: '', sizeBytes: 0, ...over,
-})
+const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEntry =>
+  trashEntry(entryIdOf(sessionDirName), { sessionId: sessionDirName, ...over })
 
 /**
  * 六个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身

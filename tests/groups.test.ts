@@ -8,12 +8,10 @@
 import { describe, expect, it } from 'vitest'
 import type { TrashEntry } from '../src/trash/entry.js'
 import { claimOf, groupOf, visibleGroups } from '../src/trash/groups.js'
+import { trashEntry } from './support/world.js'
 
-const row = (id: string, parentEntryId?: string): TrashEntry => ({
-  id, sessionId: id, projectDir: '--p--', workspaceId: 'ws-1', wasArchived: false,
-  deletedAt: 1, title: id, sizeBytes: 10,
-  ...(parentEntryId === undefined ? {} : { parentEntryId }),
-})
+const row = (id: string, parentEntryId?: string): TrashEntry =>
+  trashEntry(id, { title: id, sizeBytes: 10, ...(parentEntryId === undefined ? {} : { parentEntryId }) })
 
 const ids = (rows: readonly TrashEntry[]): string[] => rows.map((entry) => entry.id)
 

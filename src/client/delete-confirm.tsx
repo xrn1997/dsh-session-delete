@@ -16,7 +16,7 @@
  *
  * - **菜单行只发请求**：`DeleteMenuItem` 把 `{ sessionId, title }` 写进本文件的模块级现场；
  * - **确认框由本文件的宿主渲染与提交**：`DeleteConfirmHost` 挂在 `shell.overlay` 上，从现场读请求，
- *   自己持有 busy / failure。于是「提交删除 → 失败原文上屏 → 再点一次重试 → 成功后发撤销提示」
+ *   自己持有这趟的闸与 failure。于是「提交删除 → 失败原文上屏 → 再点一次重试 → 成功后发撤销提示」
  *   整条链路都在菜单子树之外，菜单关不关都不影响它。
  *
  * 现场是**模块级**的（本仓既有的客户端模式：视图内路由与跨卸载的现场都住在模块级 store，
@@ -24,16 +24,14 @@
  * `useSyncExternalStore`）——不为此引新的状态库。
  */
 import { useEffect, useState } from 'react'
+import { useBusyGate } from './busy-gate.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { applyOne, callRemote, type DeleteConfirmDeps } from './remote.js'
 import { createStore } from './store.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
-import { landedEntryIds } from './receipt.js'
-import { invalidateTrash } from './trash-store.js'
-import { publishUndoNotice } from './undo-toast.js'
-import { runWrite } from './write.js'
+import { deleteSessionFromMenu } from './write-seats.js'
 
 /**
  * 被操作对象那张卡。`Modal`（`ui/Modal.tsx`，照官方抄的）的 `.sd-modal-body` 不设字号也不给层级 ⇒ 裸摆一行会话标题会和下面那句
@@ -106,7 +104,8 @@ function ConfirmDialog({
   deps: DeleteConfirmDeps
   t: Translate
 }) {
-  const [busy, setBusy] = useState(false)
+  /** 这一趟的闸：写入座位把 apply → 收尾 → 重读整趟包在里面，`busy` 期间主按钮按住。 */
+  const gate = useBusyGate()
   const [failure, setFailure] = useState<string | null>(null)
   /**
    * 这条会话在盘上带着多少个后代。删除是按组走的（组语义见 `src/trash/groups.ts`），而宿主的客户端本来就把孩子那几行
@@ -127,32 +126,17 @@ function ConfirmDialog({
   }, [deps, current.sessionId])
 
   const confirm = async (): Promise<void> => {
-    setBusy(true)
     setFailure(null)
-    try {
-      const outcome = await runWrite({
-        deps,
-        action: 'delete',
-        ids: [current.sessionId],
-        single: true,
-        presentation: {
-          invalidate: invalidateTrash,
-          // N=1 只可能有一条 `ok`（单条读法把幂等空值折成了协议错）；settlement 只在 anySuccess 时发布。
-          publishUndo: (success) => {
-            const entryId = landedEntryIds(success.receipt)[0]
-            if (entryId !== undefined) publishUndoNotice({ entryId, title: current.title })
-          },
-        },
-      })
-      const failure = outcome.failures.get(current.sessionId)
-      if (failure !== undefined) {
-        setFailure(failure)
-        return
-      }
-      clearDeleteRequest()
-    } finally {
-      setBusy(false)
+    const failure = await deleteSessionFromMenu(
+      deps,
+      { sessionId: current.sessionId, title: current.title },
+      gate,
+    )
+    if (failure !== null) {
+      setFailure(failure)
+      return
     }
+    clearDeleteRequest()
   }
 
   return (
@@ -166,7 +150,7 @@ function ConfirmDialog({
           <Button variant="outline" onClick={clearDeleteRequest}>
             {t('common.cancel')}
           </Button>
-          <Button variant="primary" disabled={busy} onClick={() => void confirm()}>
+          <Button variant="primary" disabled={gate.busy} onClick={() => void confirm()}>
             {t('dialog.confirm')}
           </Button>
         </>

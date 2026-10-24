@@ -9,8 +9,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
 import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
-import type { TrashDetailLike } from '../../src/client/remote.js'
+import type { ApplyAction, ApplyOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
+import { failed, outcomes, restoreOutcomes } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
 
 // 修订号是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
@@ -51,23 +52,22 @@ type Deps = {
   scanOrphans: ReturnType<typeof vi.fn>
 }
 
-/** 逐条成功的 `apply` 结果（按动作分派，判别联合的形状与 `shared/wire.ts` 一致）。 */
-function outcomesOf(action: string, ids: readonly string[], fail: Record<string, string> = {}) {
-  return ids.map((id) => {
-    const message = fail[id]
-    if (message !== undefined) return { id, action, ok: false, error: { code: 'sessiondelete/io', message } }
-    const value = action === 'purge' ? { removed: 1, freedBytes: 1 }
-      : action === 'count' ? 0
-      : action === 'orphan-clean' ? { removed: 1, freedBytes: 1 }
-      : {}
-    return { id, action, ok: true, value }
+/** 逐条 `/apply` 回执：面板的恢复走单条读法（N=1 的 `null` 是协议错）⇒ 成功支要让 support 给真行，
+ *  其余动作按动作的中性默认值；`fail` 里点名的 id 换成那一句失败原文。 */
+function outcomesOf(
+  action: ApplyAction, ids: readonly string[], fail: Readonly<Record<string, string>> = {},
+): ApplyOutcome[] {
+  const receipts = action === 'restore' ? restoreOutcomes(ids) : outcomes(action, ids)
+  return receipts.map((outcome) => {
+    const message = fail[outcome.id]
+    return message === undefined ? outcome : failed(action, outcome.id, message)
   })
 }
 
 function makeDeps(over: Partial<Omit<Deps, 'detail'>> & { detail?: ReturnType<typeof vi.fn> } = {}): Deps {
   return {
     list: vi.fn(async () => rows),
-    applyOutcomes: vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids)),
+    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
     emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
     scanOrphans: vi.fn(async () => EMPTY_ORPHANS),
     detail: vi.fn(async () => detailFixture),
@@ -116,6 +116,16 @@ describe('回收站面板', () => {
     const row = await screen.findByRole('option', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a']))
+  })
+
+  it('窄档点行内动作按钮不顺手下钻：按钮不冒泡成整行点击', async () => {
+    const deps = makeDeps()
+    renderNarrow(deps)
+    const row = await screen.findByRole('option', { name: /code-review/ })
+    fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
+    await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a']))
+    // 还在清单里；若按钮点击冒泡到整行，窄档会切到详情、这一行从 DOM 消失。
+    expect(screen.getByRole('option', { name: /code-review/ })).toBeInTheDocument()
   })
 
   // 原工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）⇒ 恢复照常回盘、落在「未分组」。
@@ -672,7 +682,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   ): Deps =>
     makeDeps({
       list: over.list ?? vi.fn(async () => three),
-      applyOutcomes: over.applyOutcomes ?? vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids)),
+      applyOutcomes: over.applyOutcomes ?? vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
     })
 
   const boxes = (container: HTMLElement) =>
@@ -728,7 +738,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('页脚那颗换成「彻底删除 N 条」：**一次** apply 带走整批（顺序仍是清单从上往下），并重读一次', async () => {
-    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids))
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids))
     const list = vi.fn(async () => three)
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
@@ -754,7 +764,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
       { ...rows[0], id: 'b', projectDir: '--P-two--', title: 'B1', deletedAt: 250 },
       { ...rows[0], id: 'c', projectDir: '--P-one--', title: 'A2', deletedAt: 100 },
     ]
-    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids))
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids))
     const list = vi.fn().mockResolvedValueOnce(crossed).mockResolvedValue([])
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('A1')
@@ -813,7 +823,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('批量恢复走确认框：列出条目、确认后**一次** apply 带回整批顺序，恢复成功的不留行', async () => {
-    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) => outcomesOf(action, ids))
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids))
     const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[2]])
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')

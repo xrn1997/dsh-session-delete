@@ -1,16 +1,14 @@
 import zlib from 'node:zlib'
 import { describe, expect, it } from 'vitest'
-import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
+import { makeEntryId } from '../src/trash/entry.js'
 import { createTrashLedger } from '../src/trash/ledger.js'
 import { createMemoryManifest } from '../src/trash/manifest.js'
 import { createFakeFs } from './support/fake-deps.js'
+import { trashEntry } from './support/world.js'
 
 const HOME = '/h'
 const id = makeEntryId(1, 'session-a')
-const row: TrashEntry = {
-  id, sessionId: 'session-a', projectDir: '--p--', workspaceId: '', wasArchived: false,
-  deletedAt: 1, title: '', sizeBytes: 1,
-}
+const row = trashEntry(id, { sessionId: 'session-a', workspaceId: '', sizeBytes: 1 })
 
 describe('TrashLedger', () => {
   it('list 先对账：目录没了的行当场摘掉', async () => {

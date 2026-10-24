@@ -55,17 +55,19 @@
  */
 import {
   type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
   useCallback,
   useMemo,
   useRef,
 } from 'react'
 import { TRASH_DIR_LABEL } from '../shared/wire.js'
+import { useBusyGate } from './busy-gate.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
 import { type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
+import { OrphanMaintenance } from './orphan-maintenance.js'
 import { TrashDetail } from './trash-detail.js'
 import { useColumnResize } from './use-column-resize.js'
 import { usePanelWidth } from './use-panel-width.js'
+import { useTrashNav } from './trash-nav.js'
 import { Button } from './ui/Button.js'
 import { Checkbox } from './ui/Checkbox.js'
 import { fileSizeText, relativeTime } from './ui/format.js'
@@ -78,8 +80,8 @@ import {
 } from './ui/icons.js'
 import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
-import { OrphanConfirm, TrashConfirm } from './trash-confirm.js'
-import { useTrashPanelController, useTrashPanelGate } from './use-trash-panel-controller.js'
+import { TrashConfirm } from './trash-confirm.js'
+import { useTrashPanelController } from './use-trash-panel-controller.js'
 import { useTrashQuery } from './use-trash-query.js'
 import { useTrashSelection } from './use-trash-selection.js'
 import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
@@ -233,16 +235,12 @@ function deletedAgo(at: number, now: number, t: Translate): string {
  * 头部合计与单条确认卡片都读它，于是同一屏不可能有两套口径，也就不再有"两行都算到同一个后代"那种偏差。 */
 
 export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
-  /** 面板唯一的一枚全局闸（写动作在飞时按住一排按钮）：本体住控制器 module，查询侧的写动作也吃它。 */
-  const gate = useTrashPanelGate()
+  /** 面板唯一的一枚全局闸（写动作在飞时按住一排按钮）：本体住 `busy-gate.ts`，查询侧的写动作也吃它。 */
+  const gate = useBusyGate()
 
   // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`。
-  const query = useTrashQuery({ deps, t, around: gate.around })
-  const {
-    entries, listFailure,
-    orphanReport, orphanFailure, orphanNotice, orphanConfirm, setOrphanConfirm,
-    refreshAll,
-  } = query
+  const query = useTrashQuery({ deps, t, gate })
+  const { entries, listFailure, refreshAll } = query
 
   const listRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -273,14 +271,14 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     toggleCheck, toggleGroupCheck, groupFullyChecked, groupPartiallyChecked,
   } = selection
 
-  /** 行的 DOM 查询留给面板；控制器只拿"把焦点还给哪一行"这个动作（不认选择器）。 */
+  /** 行的 DOM 查询留给面板；导航只拿"把焦点还给哪一行"这个动作（不认选择器）。 */
   const focusRow = useCallback((entryId: string): void => {
     const node = listRef.current?.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`)
     node?.focus()
   }, [])
 
   /**
-   * 选中 / 详情缓存 / 清单换版清场 / 宽档自动选中 / Esc 交还焦点 / 写动作与失败落点，整块住在
+   * 选中 / 详情缓存 / 清单换版清场 / 宽档自动选中 / 写动作与失败落点，整块住在
    * `use-trash-panel-controller.ts`。布局常量不搬进控制器：面板只交两样从布局算出来的面——
    * 屏幕上的顺序 `ordered`（只含展开的组）与"这一档要不要自动选中"（`canAutoSelect: split`）。
    */
@@ -290,38 +288,24 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     query,
     ordered,
     canAutoSelect: split,
+  })
+
+  /**
+   * 键盘导航（↑↓ 走环、Enter/Space、tab 落点、Esc 交还焦点）整块住在 `trash-nav.ts`。
+   * 屏幕顺序与四个动作从这里进去；它不查 DOM——`focusRow` 是面板交出去的那一动作。
+   */
+  const nav = useTrashNav({
+    ordered,
+    selectedId: controller.selectedId,
+    selectMode,
+    drillEnabled: !split,
+    drilled: controller.drilled,
+    select: controller.select,
+    toggleCheck,
+    exitDrill: controller.back,
     focusRow,
   })
 
-  const onListKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (ordered.length === 0) return
-    const index = ordered.findIndex((entry) => entry.id === controller.selectedId)
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-      event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      const next = index < 0 ? (step > 0 ? 0 : ordered.length - 1) : (index + step + ordered.length) % ordered.length
-      const target = ordered[next]!
-      void controller.select(target)
-      focusRow(target.id)
-      return
-    }
-    if (event.key === 'Enter' || event.key === ' ') {
-      if (index < 0) return
-      event.preventDefault()
-      // 多选态下 Enter/Space 说的是"勾上/取消这一条"，光标仍由 ↑↓ 移动（listbox 的常规分工）。
-      if (selectMode) {
-        toggleCheck(ordered[index]!.id)
-        return
-      }
-      void controller.select(ordered[index]!, { drill: true })
-    }
-  }
-
-  /** 清理那批无主子会话：整块住在 `useTrashQuery.cleanOrphans`（扫描的报告、两种失败的分流、先刷新后落提示
-   *  都在那一条里）；这里只负责把确认框收起来。 */
-  const confirmOrphans = async (): Promise<void> => {
-    await query.cleanOrphans()
-  }
   /**
    * 详细信息那块的选中集合：确认框要把"这一批有哪些、要去哪"摆出来，靠的全量条目是从勾选 id 反查
    * （顺序已经是"清单从上往下"）——清单里找不到的 id 是别的窗口刚动过，滤掉不等于丢动作
@@ -344,14 +328,6 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
    * 在准备批量恢复时是假话——那类具体警告归各自的确认框，这里只留两件事：回收站在哪、不自动过期。
    */
   const noteParts = splitOn(t('trash.footer.note', { dir: TRASH_DIR }), TRASH_DIR)
-  /** `aria-activedescendant` 只能指向**在 DOM 里**的那一行：折叠起来之后它就是不存在，指过去是假引用。 */
-  const activeDescendantId = ordered.some((entry) => entry.id === controller.selectedId) ? controller.selectedId : null
-  /**
-   * 清单里那个唯一的 tab 落点（roving tabindex）。它必须**永远有一行拿着**：窄档不自动选中，
-   * 只按"选中那行拿 0"来给的话，一次没点过时全行都是 `-1`，键盘根本进不来清单。
-   * 落点与 `aria-activedescendant` 同一条可见性规则——选中那行被折叠起来时落到第一条可见行。
-   */
-  const tabStopId = activeDescendantId ?? ordered[0]?.id ?? null
 
   /**
    * 清单容器（roving tabindex 那个唯一的 tab 巢）。`flex:'1 1 auto'` 是**空态居中链**的一节：
@@ -365,10 +341,10 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       data-dsh-session-delete="trash-list"
       role="listbox"
       aria-label={t('detail.list.label')}
-      aria-activedescendant={activeDescendantId === null ? undefined : `sd-trash-${activeDescendantId}`}
+      aria-activedescendant={nav.activeDescendantId === null ? undefined : `sd-trash-${nav.activeDescendantId}`}
       aria-multiselectable={selectMode ? true : undefined}
       tabIndex={-1}
-      onKeyDown={onListKeyDown}
+      onKeyDown={nav.onListKeyDown}
       style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: '1 1 auto', minWidth: 0 }}
     >
       {listFailure !== null ? (
@@ -501,7 +477,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   id={`sd-trash-${entry.id}`}
                   role="option"
                   aria-selected={selectMode ? isChecked : isSelected}
-                  tabIndex={entry.id === tabStopId ? 0 : -1}
+                  tabIndex={entry.id === nav.tabStopId ? 0 : -1}
                   data-dsh-session-delete="trash-row"
                   data-entry-id={entry.id}
                   style={isSelected ? CARD_SELECTED : CARD}
@@ -581,7 +557,10 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         variant="outline"
                         size="sm"
                         disabled={controller.busy}
-                        onClick={() => void controller.restore(entry)}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void controller.restore(entry)
+                        }}
                       >
                         {t('trash.row.restore')}
                       </Button>
@@ -591,7 +570,10 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         style={QUIET_DANGER}
                         icon={<IconTrashOutlineRegular size={13} />}
                         disabled={controller.busy}
-                        onClick={() => controller.setPending({ kind: 'entry', entry })}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          controller.setPending({ kind: 'entry', entry })
+                        }}
                       >
                         {t('trash.row.purge')}
                       </Button>
@@ -678,75 +660,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         </div>
       </div>
 
-      {/* 回收站之外的无主子会话（2026-10-19）。**只在报告非空时出现**——"检查过了，什么都没有"不是
-          要给用户看的东西，而那份报告读不到时走下面那块失败（不是这里，更不是"零条"）。
-          层级沿用页面上那一条：警告色的图标 + 一句话 + 一颗描边动作，实心红仍然只归「清空回收站…」
-          （确认框里那块是它的后续，与彻底删除同一个规矩）。 */}
-      {orphanReport !== null && orphanReport.totalSessions > 0 ? (
-        <div
-          data-dsh-session-delete="orphan-banner"
-          style={{ ...CARD, alignItems: 'flex-start', gap: 12, marginBottom: 10 }}
-        >
-          <span style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--dsw-alias-state-warn-primary)' }} aria-hidden="true">
-            <IconWarningOutlineRegular size={16} />
-          </span>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 auto', minWidth: 0 }}>
-            <div style={{ fontSize: 13, lineHeight: '19px' }}>
-              {t('trash.orphans.banner', { count: orphanReport.totalSessions })}
-            </div>
-            <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
-              {t('trash.orphans.meta', {
-                size: fileSizeText(orphanReport.totalBytes),
-                parents: orphanReport.missingParents,
-              })}
-            </div>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            style={{ flex: 'none' }}
-            disabled={controller.busy}
-            onClick={() => {
-              if (controller.busy) return
-              query.openOrphanPreview()
-            }}
-          >
-            {t('trash.orphans.open')}
-          </Button>
-        </div>
-      ) : null}
-
-      {/* 检查/清理自己失败：这是"我们没能回答有多少残留"，与"没有残留"是两件事 ⇒ 原位上屏 + 重试，
-          绝不静默折成一条都不出现（Task 4 交下来的那条判据）。 */}
-      {orphanFailure !== null ? (
-        <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}>
-          <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-state-error-primary)' }} aria-hidden="true">
-            <IconWarningOutlineRegular size={15} />
-          </span>
-          <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-state-error-primary)' }}>
-            {orphanFailure}
-          </span>
-          <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={controller.busy} onClick={() => void refreshAll()}>
-            {t('common.retry')}
-          </Button>
-        </div>
-      ) : null}
-
-      {/* 「已经不在」不是失败：别处清掉或父已回到清册。中性一条，下次扫描/刷新时自然消失。 */}
-      {orphanNotice !== null ? (
-        <div
-          data-dsh-session-delete="orphan-notice"
-          role="status"
-          style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}
-        >
-          <span style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--dsw-alias-label-tertiary)' }} aria-hidden="true">
-            <IconWarningOutlineRegular size={15} />
-          </span>
-          <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-secondary)' }}>
-            {orphanNotice}
-          </span>
-        </div>
-      ) : null}
+      {/* 回收站之外的无主子会话：警告条 / 失败块 / 中性提示 / 预览确认整块住在
+          `orphan-maintenance.tsx`，面板只留这一个插入点（header 之后、toolbar 之前）。 */}
+      <OrphanMaintenance query={query} busy={controller.busy} t={t} />
 
       {toolbar}
 
@@ -847,16 +763,6 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           onConfirmRestore={(ids) => void controller.confirmApply('restore', ids)}
         />
       )}
-
-      {orphanConfirm && orphanReport !== null ? (
-        <OrphanConfirm
-          report={orphanReport}
-          busy={controller.busy}
-          t={t}
-          onCancel={() => setOrphanConfirm(false)}
-          onConfirm={() => void confirmOrphans()}
-        />
-      ) : null}
     </div>
   )
 }

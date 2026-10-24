@@ -1,43 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import { makeEntryId, sessionDirOf, trashDirOf } from '../src/trash/entry.js'
-import { createFakeDeps, type FakeDeps, type FakeDepsOptions, type FakeFs, type FakeHost } from './support/fake-deps.js'
+import { createLogWorld, failureOf, type LogWorldOptions } from './support/world.js'
 
 const HOME = '/h'
-/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：15 个宿主方法一次到位，用例只描述世界。
+/** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）之上的一层：世界由声明式读数描述，
  *  日志按**发生顺序**记 fs 与 host 两端——删除的顺序（摘账本 → 搬目录 → 摘活体 → 通告）是一条断言。
  *  **删除不碰归档**：回收站与归档解耦；活体靠 `evictLive`（session + agent）离开宿主。 */
-function deps(over: {
-  host?: Partial<FakeHost>
-  fs?: Partial<FakeFs>
-  /** 父 → 盘上后代（`subagentMembersOf` 的值）；缺席的父回空表。 */
-  members?: FakeDepsOptions['members']
-  /** `false` = 语料看不见（`subagentMembersOf` 回 `{ available:false }`）。 */
-  membersAvailable?: boolean
-} = {}) {
-  const calls: string[] = []
-  const made = createFakeDeps({
+const deps = (over: Omit<LogWorldOptions, 'logMethods'> = {}) =>
+  createLogWorld({
     now: Date.UTC(2026, 8, 30, 13, 5, 0),
     projectDirOf: '--C-develop-GitHub-dsh-ebook--',
-    members: over.members,
-    membersAvailable: over.membersAvailable,
-    log: calls,
+    ...over,
     logMethods: ['archive', 'detach', 'unarchive', 'attach', 'evictLive', 'announceRemoved', 'announceRestored', 'rename'],
   })
-  Object.assign(made.host, over.host)
-  Object.assign(made.fs, over.fs)
-  return { calls, fs: made.fs, host: made.host, manifest: made.manifest, deps: made.deps }
-}
-
-// 回滚断言要能看见反向调用，所以把错误连 cause 一起取出来
-async function failureOf(d: FakeDeps, sessionId: string) {
-  try {
-    await deleteSession(d)(sessionId)
-  } catch (error) {
-    return error as Error & { code?: string; cause?: unknown; details?: { rollbackFailures?: string[] } }
-  }
-  throw new Error('expected deleteSession to reject')
-}
 
 describe('删除动词', () => {
   it('运行中的会话一律拒绝，且不产生任何写操作', async () => {
@@ -75,7 +51,7 @@ describe('删除动词', () => {
     const { deps: d, calls, fs } = deps()
     const boom = new Error('EXDEV')
     fs.rename = vi.fn(async () => { calls.push('rename'); throw boom })
-    const err = await failureOf(d, 'session-abc')
+    const err = await failureOf(deleteSession(d)('session-abc'))
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
     // 反向调用序：attach 挂回账本；归档没被碰过
@@ -89,7 +65,7 @@ describe('删除动词', () => {
     const { deps: d, calls, fs, manifest } = deps()
     const boom = new Error('storage boom')
     manifest.add = vi.fn(async () => { throw boom })
-    const err = await failureOf(d, 'session-abc')
+    const err = await failureOf(deleteSession(d)('session-abc'))
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
     expect(calls).toEqual(['detach', 'rename', 'rename', 'attach'])
@@ -106,7 +82,7 @@ describe('删除动词', () => {
     const { deps: d, calls, host, fs } = deps()
     const boom = new Error('detach boom')
     host.detach = vi.fn(async () => { calls.push('detach'); throw boom })
-    const err = await failureOf(d, 'session-abc')
+    const err = await failureOf(deleteSession(d)('session-abc'))
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
     expect(calls).toEqual(['detach'])
@@ -117,7 +93,7 @@ describe('删除动词', () => {
     const { deps: d, calls, host } = deps()
     const boom = new Error('读取标题失败')
     host.titleOf = vi.fn(async () => { throw boom })
-    const err = await failureOf(d, 'session-abc')
+    const err = await failureOf(deleteSession(d)('session-abc'))
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(err.cause).toBe(boom)
     expect(calls).toEqual([])
@@ -158,7 +134,7 @@ describe('删除动词', () => {
     host.workspaceOf = vi.fn(async () => undefined)
     const boom = new Error('EXDEV')
     fs.rename = vi.fn(async () => { calls.push('rename'); throw boom })
-    const err = await failureOf(d, 'session-abc')
+    const err = await failureOf(deleteSession(d)('session-abc'))
     expect(err).toMatchObject({ code: 'sessiondelete/io' })
     expect(calls).toEqual(['rename'])
     expect(host.attach).not.toHaveBeenCalled()
@@ -249,12 +225,8 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
   })
 
   it('孩子在跑 ⇒ 整组拒绝，一个字节都不动（不替用户终止正在跑的活）', async () => {
-    const d = deps({
-      members: { 'session-parent': [kidA, kidB] },
-      host: {
-        isLive: vi.fn(async (id: string) => id === 'session-kidB'),
-      },
-    })
+    const d = deps({ members: { 'session-parent': [kidA, kidB] } })
+    d.host.isLive = vi.fn(async (id: string) => id === 'session-kidB')
     await expect(deleteSession(d.deps)('session-parent')).rejects.toMatchObject({ code: 'sessiondelete/live' })
     expect(d.fs.rename).not.toHaveBeenCalled()
     expect(d.host.archive).not.toHaveBeenCalled()
@@ -284,7 +256,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
         if (from.includes('session-trash') && to.includes('/sessions/')) throw new Error('EACCES')
       },
     )
-    const err = await failureOf(d, 'session-parent')
+    const err = await failureOf(deleteSession(d)('session-parent'))
     expect(err.code).toBe('sessiondelete/io')
     expect(err.details).toMatchObject({
       rollbackFailures: expect.arrayContaining([expect.stringContaining('EACCES')]),
@@ -299,7 +271,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     })
     // 回滚里目录先回来、再摘清册行；这一步失败不该把已经回盘的会话继续藏在客户端里。
     manifest.remove = vi.fn(async () => { throw new Error('storage boom') })
-    const err = await failureOf(d, 'session-parent')
+    const err = await failureOf(deleteSession(d)('session-parent'))
     expect(err.code).toBe('sessiondelete/io')
     expect(err.details).toMatchObject({
       rollbackFailures: expect.arrayContaining([expect.stringContaining('清册行摘除失败')]),

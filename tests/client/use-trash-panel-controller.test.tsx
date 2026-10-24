@@ -1,10 +1,11 @@
 /**
  * 面板控制器（`use-trash-panel-controller.ts`）的状态机。
  *
- * 这一份直接测 hook，不经过面板：闸（`useTrashPanelGate`）、选中/详情缓存、清场/自动选中/
- * 失效重读、下钻/Esc 与写动作派发这几组判据此前只能"整块渲染面板 + 造一个远程假件"才够得着，
+ * 这一份直接测 hook，不经过面板：闸（`useBusyGate`，判据住 `busy-gate.test.tsx`）、选中/详情缓存、清场/自动选中/
+ * 失效重读、下钻与写动作派发这几组判据此前只能"整块渲染面板 + 造一个远程假件"才够得着，
  * 现在它们是这个 module 的 interface。替身只有三样：假的 query（entries + `refreshAll` /
  * `refreshAfterWrite` 计数 + emptyTrash）、假的闸、可控落地的 deferred。
+ * Esc 交还焦点那条判据住 `trash-nav.test.tsx`：控制器只管 `back()` 这一个入口，不查 DOM。
  *
  * 行为口径与 `trash-panel.tsx` 现有的函数体逐条对齐：命中缓存不重读、失败不缓存、清单换版时
  * 选中不见才让位、自动选中只认 `selectedId === null`、失效通告只戳一次重读、动作成功丢详情缓存、
@@ -26,12 +27,12 @@ import {
   resetUndoNotice,
   useUndoNotice,
 } from '../../src/client/undo-toast.js'
+import { useBusyGate, type BusyGate } from '../../src/client/busy-gate.js'
 import {
   useTrashPanelController,
-  useTrashPanelGate,
   type TrashPanelControllerInput,
-  type TrashPanelGate,
 } from '../../src/client/use-trash-panel-controller.js'
+import { outcomes, purgeOutcomes, restoreOutcomes } from './support/outcomes.js'
 
 // 模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
 beforeEach(() => {
@@ -88,24 +89,6 @@ function detailOf(id: string): TrashDetailLike {
   }
 }
 
-/** `/apply` 的逐条结果（形状按 `shared/wire.ts` 的判别联合：动作 + 成败各一支）。 */
-function restoreOk(id: string): ApplyOutcome {
-  // 单条恢复的 `runWrite`（single）把 `value: null` 当通道错（幂等空值只在批量里出现）⇒ 成功支要是真行。
-  return { id, action: 'restore', ok: true, value: { ...A, id, sessionId: `session-${id}`, title: id } }
-}
-
-function restoreFailed(id: string, message: string): ApplyOutcome {
-  return { id, action: 'restore', ok: false, error: { code: 'sessiondelete/io', message } }
-}
-
-function purgeOk(id: string): ApplyOutcome {
-  return { id, action: 'purge', ok: true, value: { removed: 1, freedBytes: 10 } }
-}
-
-function purgeFailed(id: string, message: string): ApplyOutcome {
-  return { id, action: 'purge', ok: false, error: { code: 'sessiondelete/io', message } }
-}
-
 /** 一段可以手动决定何时落地的 promise（测 loading 与到达顺序用）。 */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason: unknown) => void } {
   let resolve!: (value: T) => void
@@ -118,7 +101,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reje
 }
 
 /** 面板那枚闸的替身：放行、不占 busy（控制器用例不关心渲染期的禁用）。 */
-const openGate: TrashPanelGate = {
+const openGate: BusyGate = {
   busy: false,
   around: <T,>(task: () => Promise<T>): Promise<T> => task(),
 }
@@ -128,8 +111,8 @@ interface Over {
   ordered?: readonly TrashEntryLike[]
   canAutoSelect?: boolean
   busy?: boolean
-  /** 需要观察 `around` / 真实 busy 时换一枚自己的闸（缺省放行）。 */
-  gate?: TrashPanelGate
+  /** 需要观察闸 / 真实 busy 时换一枚自己的闸（缺省放行）。 */
+  gate?: BusyGate
 }
 
 function harness() {
@@ -142,7 +125,6 @@ function harness() {
   // `TrashQuery.emptyTrash` 交回的是"这一趟是否落地"，不是聚合回执（回执在 use-trash-query 里）。
   // 真实实现自己会套 `around` + `refreshAfterWrite`，所以控制器对 `kind:'all'` 不再补第二层。
   const emptyTrash = vi.fn(async (): Promise<boolean> => true)
-  const focusRow = vi.fn()
   const input = (over: Over = {}): TrashPanelControllerInput => ({
     // 控制器只读这两条：`detail` 给读详情，`applyOutcomes` 给恢复/批量的那一段 `/apply`。
     deps: deps as unknown as Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>,
@@ -150,9 +132,8 @@ function harness() {
     query: { entries: over.entries ?? null, refreshAll, refreshAfterWrite, emptyTrash },
     ordered: over.ordered ?? [],
     canAutoSelect: over.canAutoSelect ?? false,
-    focusRow,
   })
-  return { deps, refreshAll, refreshAfterWrite, emptyTrash, focusRow, input }
+  return { deps, refreshAll, refreshAfterWrite, emptyTrash, input }
 }
 
 function mount(over: Over = {}) {
@@ -166,41 +147,6 @@ function mount(over: Over = {}) {
   }
   return { ...h, ...view, update }
 }
-
-describe('useTrashPanelGate', () => {
-  it('任务在飞时 busy 为 true，落地后回到 false', async () => {
-    const { result } = renderHook(() => useTrashPanelGate())
-    const pending = deferred<string>()
-    let task!: Promise<string>
-    act(() => {
-      task = result.current.around(() => pending.promise)
-    })
-    expect(result.current.busy).toBe(true)
-
-    await act(async () => {
-      pending.resolve('done')
-      await task
-    })
-    expect(await task).toBe('done')
-    expect(result.current.busy).toBe(false)
-  })
-
-  it('任务抛错也把 busy 放回 false，错误继续抛给调用方', async () => {
-    const { result } = renderHook(() => useTrashPanelGate())
-    let task!: Promise<never>
-    act(() => {
-      task = result.current.around(async () => {
-        throw new Error('写动作失败')
-      })
-    })
-    expect(result.current.busy).toBe(true)
-
-    await act(async () => {
-      await expect(task).rejects.toThrow('写动作失败')
-    })
-    expect(result.current.busy).toBe(false)
-  })
-})
 
 describe('面板控制器 · 选中与详情缓存', () => {
   it('busy 跟着面板那枚闸走', () => {
@@ -353,22 +299,6 @@ describe('面板控制器 · 选中与详情缓存', () => {
     })
     expect(m.result.current.detail.kind).toBe('ready')
   })
-
-  it('back 退出下钻：选中与详情都留着，不交还焦点', async () => {
-    const m = mount({ entries: [A] })
-    await act(async () => {
-      await m.result.current.select(A, { drill: true })
-    })
-    expect(m.result.current.drilled).toBe(true)
-
-    act(() => {
-      m.result.current.back()
-    })
-    expect(m.result.current.drilled).toBe(false)
-    expect(m.result.current.selectedId).toBe('a')
-    expect(m.result.current.detail.kind).toBe('ready')
-    expect(m.focusRow).not.toHaveBeenCalled()
-  })
 })
 
 describe('面板控制器 · 清单换版后的清场', () => {
@@ -491,8 +421,10 @@ describe('面板控制器 · 自动选中', () => {
   })
 })
 
-describe('面板控制器 · 下钻与 Esc', () => {
-  it('Esc 退出下钻：选中不变、详情不重读、焦点交还给那一行', async () => {
+describe('面板控制器 · 下钻', () => {
+  // Esc 那条（下钻期间挂 document 监听、退回后把焦点交还那一行一次）已随 `trash-nav.ts` 一起搬走，
+  // 用例住 `trash-nav.test.tsx`；控制器这一侧只剩「← 返回清单」这一个入口。
+  it('back 退出下钻：选中与详情都留着', async () => {
     const m = mount({ entries: [A] })
     await act(async () => {
       await m.result.current.select(A, { drill: true })
@@ -500,48 +432,32 @@ describe('面板控制器 · 下钻与 Esc', () => {
     expect(m.result.current.drilled).toBe(true)
 
     act(() => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      m.result.current.back()
     })
     expect(m.result.current.drilled).toBe(false)
     expect(m.result.current.selectedId).toBe('a')
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
-    expect(m.focusRow).toHaveBeenCalledTimes(1)
-    expect(m.focusRow).toHaveBeenCalledWith('a')
-    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail.kind).toBe('ready')
   })
 
-  it('焦点只交还一次：Esc 落地后再按 Esc 不再调用 focusRow', async () => {
+  it('从窄档拖宽：残留的下钻状态收掉，选中与详情不动', async () => {
     const m = mount({ entries: [A] })
     await act(async () => {
       await m.result.current.select(A, { drill: true })
     })
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    })
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    })
-    expect(m.focusRow).toHaveBeenCalledTimes(1)
-  })
+    expect(m.result.current.drilled).toBe(true)
 
-  it('未下钻时 Esc 不动焦点，也不改状态', async () => {
-    const m = mount({ entries: [A] })
-    await act(async () => {
-      await m.result.current.select(A)
-    })
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    })
+    m.update({ entries: [A], ordered: [A], canAutoSelect: true })
+
     expect(m.result.current.drilled).toBe(false)
     expect(m.result.current.selectedId).toBe('a')
-    expect(m.focusRow).not.toHaveBeenCalled()
+    expect(m.result.current.detail.kind).toBe('ready')
   })
 })
 
 describe('面板控制器 · 恢复与确认动作', () => {
   it('restore 失败：原文落在这条的行上，清单照样重读（回滚失败可能留下半套）', async () => {
     const m = mount({ entries: [A, B] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '恢复失败：项目目录不存在')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a'], ['a'], '恢复失败：项目目录不存在'))
     const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
     await act(async () => {
@@ -568,13 +484,13 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('restore 再点一次先清旧失败：成功后就该没有那一行', async () => {
     const m = mount({ entries: [A] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '第一次失败')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a'], ['a'], '第一次失败'))
     await act(async () => {
       await m.result.current.restore(A)
     })
     expect(m.result.current.actionFailure).toEqual({ a: '第一次失败' })
 
-    m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
     const refreshBefore = m.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await m.result.current.restore(A)
@@ -590,7 +506,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
     expect(m.result.current.detail.kind).toBe('ready')
 
-    m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
     await act(async () => {
       await m.result.current.restore(A)
     })
@@ -615,7 +531,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('单条恢复把 outcome 交给 query：孩子与组根的差异由 query 判，控制器只转交', async () => {
     const child = mount({ entries: [CHILD] })
-    child.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('child')])
+    child.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['child']))
     await act(async () => {
       await child.result.current.restore(CHILD)
     })
@@ -623,7 +539,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
       expect.objectContaining({ action: 'restore', ids: ['child'] }))
 
     const root = mount({ entries: [A] })
-    root.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    root.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
     await act(async () => {
       await root.result.current.restore(A)
     })
@@ -633,7 +549,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('批量恢复把 outcome 交给 query：孩子与组根的差异由 query 判，控制器只转交', async () => {
     const withChild = mount({ entries: [A, CHILD] })
-    withChild.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a'), restoreOk('child')])
+    withChild.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a', 'child']))
     await act(async () => {
       await withChild.result.current.confirmApply('restore', ['a', 'child'])
     })
@@ -641,7 +557,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
       expect.objectContaining({ action: 'restore', ids: ['a', 'child'] }))
 
     const roots = mount({ entries: [A] })
-    roots.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    roots.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
     await act(async () => {
       await roots.result.current.confirmApply('restore', ['a'])
     })
@@ -665,7 +581,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     publishUndoNotice({ entryId: 'a', title: 'A' })
     const notice = renderHook(() => useUndoNotice())
     const m = mount({ entries: [A] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
 
     await act(async () => {
       await m.result.current.restore(A)
@@ -692,7 +608,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     publishUndoNotice({ entryId: 'a', title: 'A' })
     const notice = renderHook(() => useUndoNotice())
     const m = mount({ entries: [A] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([restoreFailed('a', '恢复失败')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a'], ['a'], '恢复失败'))
 
     await act(async () => {
       await m.result.current.restore(A)
@@ -721,10 +637,8 @@ describe('面板控制器 · 恢复与确认动作', () => {
     publishUndoBatchNotice({ entryIds: ['a', 'b'], n: 2 })
     const notice = renderHook(() => useUndoNotice())
     const m = mount({ entries: [A, B] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([
-      restoreOk('a'),
-      { id: 'b', action: 'restore', ok: true, value: null } as ApplyOutcome,
-    ])
+    // `b` 的 `null` = 已被同批前一条带走（批量幂等 no-op），它同样算落地、同样要熄灭横幅。
+    m.deps.applyOutcomes.mockResolvedValueOnce([...restoreOutcomes(['a']), ...outcomes('restore', ['b'])])
 
     await act(async () => {
       await m.result.current.confirmApply('restore', ['a', 'b'])
@@ -735,17 +649,18 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(openSession).not.toHaveBeenCalled()
   })
 
-  it('purge 不结算撤销横幅：永久删除没有可撤销的动作', async () => {
+  it('purge 结算撤销横幅：永久删除后指向这些条目的横幅熄灭（settlement 的 purge 支）', async () => {
     publishUndoNotice({ entryId: 'a', title: 'A' })
     const notice = renderHook(() => useUndoNotice())
     const m = mount({ entries: [A] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a']))
 
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a'])
     })
 
-    expect(notice.result.current).not.toBeNull()
+    // 留着就是一条注定失败的「撤销」：这条以前被静默忽略（见 write-settlement 的 purge 支）。
+    expect(notice.result.current).toBeNull()
   })
 
   it('confirmApply 成功：成功条目丢缓存、失败留行、pending 收起、清单只重读一次', async () => {
@@ -758,7 +673,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
     expect(m.result.current.pending).toEqual({ kind: 'entries', ids: ['a', 'b'] })
 
-    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeFailed('b', '第二条删不掉')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a', 'b'], ['b'], '第二条删不掉'))
     const refreshBefore = m.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a', 'b'])
@@ -781,7 +696,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('confirmApply 请求里的 id 没回：那条落 missing 原文，不静默', async () => {
     const m = mount({ entries: [A, B] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a']))
     const refreshBefore = m.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a', 'b'])
@@ -808,7 +723,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('失败原文按条目留着：切走再回来还在，别条的成败不串台', async () => {
     const m = mount({ entries: [A, B] })
-    m.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeFailed('b', '第二条删不掉')])
+    m.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a', 'b'], ['b'], '第二条删不掉'))
     await act(async () => {
       await m.result.current.confirmApply('purge', ['a', 'b'])
     })
@@ -827,9 +742,9 @@ describe('面板控制器 · 恢复与确认动作', () => {
   it('confirmPurge 按条目标：单条 / 多选 / 批量恢复都委托 confirmApply', async () => {
     const m = mount({ entries: [A, B] })
     m.deps.applyOutcomes
-      .mockResolvedValueOnce([purgeOk('a')])
-      .mockResolvedValueOnce([purgeOk('a'), purgeOk('b')])
-      .mockResolvedValueOnce([restoreOk('b')])
+      .mockResolvedValueOnce(purgeOutcomes(['a']))
+      .mockResolvedValueOnce(purgeOutcomes(['a', 'b']))
+      .mockResolvedValueOnce(restoreOutcomes(['b']))
 
     act(() => {
       m.result.current.setPending({ kind: 'entry', entry: A })
@@ -930,15 +845,15 @@ describe('面板控制器 · 恢复与确认动作', () => {
 })
 
 describe('面板控制器 · 动作期间 busy', () => {
-  it('busy 罩到清单重读落地：恢复的 around 在 refreshAfterWrite 完成前不落', async () => {
+  it('busy 罩到清单重读落地：恢复的闸在 refreshAfterWrite 完成前不落', async () => {
     const h = harness()
     const view = renderHook(() => {
-      const gate = useTrashPanelGate()
+      const gate = useBusyGate()
       return useTrashPanelController({ ...h.input({ entries: [A] }), gate })
     })
     await act(async () => {})
 
-    h.deps.applyOutcomes.mockResolvedValueOnce([restoreOk('a')])
+    h.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
     const refreshSettles = deferred<void>()
     h.refreshAfterWrite.mockImplementationOnce(() => refreshSettles.promise)
 
@@ -956,15 +871,15 @@ describe('面板控制器 · 动作期间 busy', () => {
     expect(view.result.current.busy).toBe(false)
   })
 
-  it('busy 罩到清单重读落地：批量的 around 在 refreshAfterWrite 完成前不落', async () => {
+  it('busy 罩到清单重读落地：批量的闸在 refreshAfterWrite 完成前不落', async () => {
     const h = harness()
     const view = renderHook(() => {
-      const gate = useTrashPanelGate()
+      const gate = useBusyGate()
       return useTrashPanelController({ ...h.input({ entries: [A, B] }), gate })
     })
     await act(async () => {})
 
-    h.deps.applyOutcomes.mockResolvedValueOnce([purgeOk('a'), purgeOk('b')])
+    h.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a', 'b']))
     const refreshSettles = deferred<void>()
     h.refreshAfterWrite.mockImplementationOnce(() => refreshSettles.promise)
 
