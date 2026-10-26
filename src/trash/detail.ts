@@ -17,7 +17,6 @@
  * 有文字的回复条数——不是一套判据算两遍，否则页面上会出现"计数 421、正文 200"这种对不上账的话。
  */
 import { trashDirOf, type TrashEntry } from './entry.js'
-import type { TrashLedger } from './ledger.js'
 import type { FsPort } from '../ports/fs-port.js'
 import type { TrashDetailMessageWire, TrashDetailWire } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
@@ -37,9 +36,10 @@ export type TrashDetail = TrashDetailWire
 export type DetailDeps = {
   /** 详情自己直接要的三件（判目录在不在、挑日志、读日志）。对账不在这条路上，所以不需要 `listDirs`。 */
   fs: Pick<FsPort, 'exists' | 'listFiles' | 'readFile'>
-  /** 详情只读清册的 **raw 面**：`/detail` 声明为 pure，读一次不能顺手对账——对账会写清册行，那是写动作，
-   *  必须排在到达序链上。代价是有意的：只有目录、清册还没这一行的手工搬入条目读不到（`/list` 对账后可见）。 */
-  ledger: Pick<TrashLedger, 'raw'>
+  /** 路由交来的清册 **raw 行**：`/detail` 声明为 pure，读一次不能顺手对账——对账会写清册行，那是写动作，
+   *  必须排在到达序链上。读面由路由记录选好（`read: 'raw'`），这里只消费行，不再自己挑 `list()` / `raw()`。
+   *  代价是有意的：只有目录、清册还没这一行的手工搬入条目读不到（`/list` 对账后可见）。 */
+  rows: () => Promise<readonly TrashEntry[]>
   home: string
 }
 
@@ -72,7 +72,7 @@ function textOf(content: unknown): string {
 
 export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT_LIMITS) {
   return async function readTrashDetail(entryId: string): Promise<TrashDetail> {
-    const all = await deps.ledger.raw()
+    const all = await deps.rows()
     const record: TrashEntry | undefined = all.find((e) => e.id === entryId)
     if (record === undefined) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
 

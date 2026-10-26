@@ -3,7 +3,8 @@ import { isWorkspaceMissingError, type HostIdentityPort } from '../ports/host-po
 import type { CoreDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
-import { createMemberPresence, withPresenceTail, type MemberPresence } from './member-presence.js'
+import { withPresenceTail } from './member-presence.js'
+import type { PresenceCapability } from '../ports/presence-port.js'
 import { moveGroup } from './move-group.js'
 
 /**
@@ -24,7 +25,7 @@ import { moveGroup } from './move-group.js'
  * "一个条目 id + 这一组进、回收站那一行出"，没有批量专用的开关。
  */
 export function restoreSession(deps: CoreDeps) {
-  const presence = createMemberPresence(deps.host)
+  const presence = deps.presence
   return async function restoreSession(
     entryId: string,
     /** 这一组（只读）：批量层由 `batch-carried.ts` 的 `claimOf` 给出，直调者按 `trash/groups.ts`
@@ -101,7 +102,7 @@ export async function isWorkspaceMissing(host: Pick<HostIdentityPort, 'workspace
  */
 async function memberRestore(
   deps: CoreDeps,
-  presence: MemberPresence,
+  presence: PresenceCapability,
   entry: TrashEntry,
 ): Promise<{ journal: Journal }> {
   const trashDir = trashDirOf(entry.id, deps.home)

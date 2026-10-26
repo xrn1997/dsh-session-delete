@@ -35,7 +35,7 @@ import { toRemoteFailure } from '../remote/map-error.js'
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { routeError } from '../verbs/errors.js'
 import type { DeleteDeps } from '../deps.js'
-import { routeOf, type BodyKind, type Purity } from './route-table.js'
+import { routeOf, type BodyKind, type Purity, type RouteRead } from './route-table.js'
 
 /** 请求体字节上限：这条通道只收几个 id，1MiB 是"够用且不给自己开一条内存放大器"的量级。 */
 const JSON_BODY_MAX_BYTES = 1024 * 1024
@@ -191,7 +191,16 @@ export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: 
       requireMethod(req.method ?? 'GET', spec.method, rest)
       // body 在这里读一次（`apply` 的纯读判断与处理共用这一份；流不能被消费两遍）
       const body = await readBodyFor(spec.body, req)
-      const task = (): Promise<unknown> => spec.run(deps, body)
+      const kind = spec.read
+      let rowsPromise: ReturnType<RouteRead['rows']> | undefined
+      const read: RouteRead = {
+        rows() {
+          if (kind === 'none') return Promise.reject(new Error('route read: none'))
+          rowsPromise ??= kind === 'list' ? deps.ledger.list() : deps.ledger.raw()
+          return rowsPromise
+        },
+      }
+      const task = (): Promise<unknown> => spec.run(deps, body, read)
       writeOk(res, await (isPure(spec.purity, body) ? task() : throughChain(task)))
     } catch (error) {
       writeFailure(res, error)

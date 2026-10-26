@@ -23,7 +23,7 @@
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../ports/host-port.js'
 import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../shared/wire.js'
-import type { CoreDeps, DeleteDeps } from '../deps.js'
+import type { CoreDeps, DeleteDeps, DeleteSessionDeps, RemovalDeps } from '../deps.js'
 import { createEntryCarried, createSessionCarried } from './batch-carried.js'
 import { deleteSession } from './delete-session.js'
 import { verbError } from './errors.js'
@@ -72,7 +72,7 @@ async function forEachId<A extends ApplyAction>(
   return outcomes
 }
 
-async function applyDelete(deps: DeleteDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyDelete(deps: DeleteSessionDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const run = deleteSession(deps)
   // 同批父先被删时，孩子是跟着父一起搬走的；后到的孩子 id 是一次幂等 no-op。
   // 这份名单**由动词的结果长出**（`movedSessionIds` = 这次真的搬走的整组），删除写完之后不再读一次清册。
@@ -104,12 +104,12 @@ async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<App
     return entry
   })
   if (restored.length > 0) {
-    await deps.host.announceRestored(restored)
+    await deps.presence.announceRestored(restored)
   }
   return outcomes
 }
 
-async function applyPurge(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyPurge(deps: RemovalDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const carried = createEntryCarried(await deps.ledger.list())
   const run = purgeTrash(deps)
   return forEachId('purge', ids, async (entryId) => {
@@ -144,7 +144,7 @@ async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<Apply
  * 没有对应行，拿 raw 索引扫就会把"父还在回收站里等着"的一组当成孤儿**直接删盘**，替用户做了一个没人
  * 点过的决定（那种组该跟着父恢复或彻底删除）。
  */
-async function applyOrphanClean(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+async function applyOrphanClean(deps: RemovalDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   // 对账交回的行直接给扫描，不再读第二遍 raw 索引。
   const trash = await deps.ledger.list()
   // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。

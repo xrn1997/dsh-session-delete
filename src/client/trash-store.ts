@@ -3,10 +3,10 @@
  *
  * 为什么需要它（真机反馈）：回收站面板是「挂载时取一次数」（`useEffect(refreshAll)`），而删除发生在
  * **侧栏菜单**那边（`delete-confirm.tsx` 的常驻宿主），两者没有共同的父组件——删完之后中央那个
- * 面板（如果正开着）不会自己重读，用户得切走再切回来（= 重新挂载）才看得见新条目。撤销（`undo-toast.tsx`）
+ * 面板（如果正开着）不会自己重读，用户得切走再切回来（= 重新挂载）才看得见新条目。撤销（`undo-notices.ts`）
  * 同理。
  *
- * 形状与两个邻居同款（`undo-toast.tsx` 的通知台、`delete-confirm.tsx` 的现场）：**模块级现场**，
+ * 形状与两个邻居同款（`undo-notices.ts` 的通知台、`delete-confirm.tsx` 的现场）：**模块级现场**，
  * 订阅/通告那套只住在 `store.ts` 的 `createStore` 里——这些现场都挂在 `shell.overlay`／`main`
  * 这些各不相邻的座位上，模块级是它们唯一的共同点。
  *

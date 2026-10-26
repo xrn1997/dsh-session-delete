@@ -4,7 +4,7 @@
  *
  * 面板接入后，这套语义只住这里；面板自己只留布局与行内动作。搬过来的判据一条不改：
  *
- * - **选中从全量条目里找**（`query.entries`，不是键盘序列 `ordered`）：把某一组折叠起来只是收掉
+ * - **选中从全量条目里找**（`query.list` 的 ready 行，不是键盘序列 `ordered`）：把某一组折叠起来只是收掉
  *   清单那一列，右栏读的那条不该跟着消失。
  * - **一条只读一次**：面板存活期内按条目 id 缓存成功读数；**失败不缓存**——「重试」与切走再切回
  *   都会重新读那一条（缓存里存一次失败，界面就再也等不到它自己好了）。
@@ -36,12 +36,19 @@ import {
   type TrashDetailLike,
   type TrashEntryLike,
 } from './remote.js'
-import type { PendingAction } from './trash-confirm.js'
 import { useTrashRevision } from './trash-store.js'
 import type { TrashDetailState } from './trash-detail.js'
-import type { TrashQuery } from './use-trash-query.js'
+import { listView, type TrashQuery } from './use-trash-query.js'
 import type { WriteOutcome } from './write.js'
 import { purgeFromPanel, restoreFromPanel } from './write-seats.js'
+
+/** 待确认的动作：一条记录、整个回收站、或多选挑出来的一批（`ids` 已按清单顺序排好）。
+ *  类型归状态机，视图只 import 它来渲染。 */
+export type PendingAction =
+  | { kind: 'entry'; entry: TrashEntryLike }
+  | { kind: 'all' }
+  | { kind: 'entries'; ids: readonly string[] }
+  | { kind: 'restore'; ids: readonly string[] }
 
 /**
  * 控制器要的面。`query` 取四样：清单（选中从它里面找）、`refreshAll`（挂载与显式重试）、
@@ -52,7 +59,7 @@ import { purgeFromPanel, restoreFromPanel } from './write-seats.js'
 export interface TrashPanelControllerInput {
   deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
   gate: BusyGate
-  query: Pick<TrashQuery, 'entries' | 'refreshAll' | 'refreshAfterWrite' | 'emptyTrash'>
+  query: Pick<TrashQuery, 'list' | 'refreshAll' | 'refreshAfterWrite' | 'emptyTrash'>
   ordered: readonly TrashEntryLike[]
   canAutoSelect: boolean
 }
@@ -65,12 +72,16 @@ export interface TrashPanelController {
   readonly detail: TrashDetailState
   /** 待确认的那一批（确认框的开合）；确认落地后由控制器收起。 */
   readonly pending: PendingAction | null
+  /** 恢复确认框要摆的这一批（按勾选顺序；清单里已找不到的 id 滤掉）。 */
+  readonly pendingEntries: readonly TrashEntryLike[]
   /** 恢复/彻底删除/批量 的失败原文，按条目 id 存：切走再回来还在。 */
   readonly actionFailure: Readonly<Record<string, string>>
   select(entry: TrashEntryLike, options?: { drill?: boolean }): Promise<void>
   retry(): void
   back(): void
-  setPending(pending: PendingAction | null): void
+  /** 构造待确认动作（唯一入口：新增一种确认只改 `PendingAction` 与确认框，不再加一串转调）。 */
+  request(action: PendingAction): void
+  cancelPending(): void
   /** 单条恢复（`/apply` 的 N=1）：成功后丢缓存，写完无论成败都重读清单，失败原文落回这一行。 */
   restore(entry: TrashEntryLike): Promise<void>
   /** 确认框上的「确认」：按 `pending.kind` 分派到空清或 `confirmApply`。 */
@@ -87,7 +98,8 @@ interface DetailFailure {
 
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
   const { deps, gate, query, ordered, canAutoSelect } = input
-  const { entries, refreshAll, refreshAfterWrite, emptyTrash } = query
+  const { list, refreshAll, refreshAfterWrite, emptyTrash } = query
+  const entries = listView(list).rows
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [drilled, setDrilled] = useState(false)
@@ -110,6 +122,12 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     }
     void refreshAfterWrite()
   }, [refreshAll, refreshAfterWrite, revision])
+
+  // 清单未知时，确认框不许留着：看不见的行不许继续被确认；写入在飞时不收（那一趟还在跑）。
+  // `pending` 也进依赖：打开那一刻清单已经未知时同样要收，不能只靠「进入 unknown」这一次迁移。
+  useEffect(() => {
+    if (pending !== null && !gate.busy && list.status === 'unknown') setPending(null)
+  }, [gate.busy, list.status, pending])
 
   /**
    * 选一条：命中缓存就直接摆（不经过 loading），没命中才去读那条会话自己的日志。
@@ -166,6 +184,14 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     [entries, selectedId],
   )
 
+  /** 恢复确认框要摆的这一批：按勾选顺序，清单里已经找不到的 id 滤掉
+   *  （别的窗口刚动过；重读会把勾选也剔掉）。单条与整站确认框不摆条目，各自念自己的那一句。 */
+  const pendingEntries = useMemo(() => {
+    if (pending?.kind !== 'restore') return []
+    const byId = new Map((entries ?? []).map((entry) => [entry.id, entry]))
+    return pending.ids.map((id) => byId.get(id)).filter((entry): entry is TrashEntryLike => entry !== undefined)
+  }, [entries, pending])
+
   const detail = useMemo<TrashDetailState>(() => {
     if (selected === null) return { kind: 'idle' }
     if (loadingId === selected.id) return { kind: 'loading', entry: selected }
@@ -187,6 +213,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   /** 退出下钻（「← 返回清单」）：选中留着，详情不清；焦点不动（Esc 那条归 `trash-nav.ts`）。 */
   const back = useCallback((): void => {
     setDrilled(false)
+  }, [])
+
+  const request = useCallback((action: PendingAction): void => {
+    setPending(action)
+  }, [])
+  const cancelPending = useCallback((): void => {
+    setPending(null)
   }, [])
 
   /** 一次动作的失败原文落回它自己那一行（按条目 id 存，别条目的成败不会串台）。 */
@@ -268,11 +301,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     drilled,
     detail,
     pending,
+    pendingEntries,
     actionFailure,
     select,
     retry,
     back,
-    setPending,
+    request,
+    cancelPending,
     restore,
     confirmPurge,
     confirmApply,

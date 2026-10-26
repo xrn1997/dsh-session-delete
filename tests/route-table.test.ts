@@ -55,6 +55,22 @@ describe('路由表 · 六个段名各一行', () => {
     expect(of(null)).toBe('chained')
   })
 
+  it('读面：每一段声明自己该拿到的清册读面', () => {
+    expect(routeOf(ROUTES.list)?.read).toBe('list')
+    expect(routeOf(ROUTES.empty)?.read).toBe('list')
+    expect(routeOf(ROUTES.orphans)?.read).toBe('raw')
+    expect(routeOf(ROUTES.detail)?.read).toBe('raw')
+    expect(routeOf(ROUTES.ping)?.read).toBe('none')
+    expect(routeOf(ROUTES.apply)?.read).toBe('none')
+  })
+
+  it('纯读段不拿对账读面：pure 只配 raw / none', () => {
+    for (const segment of SEGMENTS) {
+      const spec = routeOf(segment)
+      if (spec?.purity === 'pure') expect(spec.read).not.toBe('list')
+    }
+  })
+
   it('不认识的段名回 undefined（调用方据此 404，并带出原路径）', () => {
     expect(routeOf('/nope')).toBeUndefined()
     expect(routeOf('')).toBeUndefined()

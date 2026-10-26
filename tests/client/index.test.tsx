@@ -25,7 +25,7 @@ import { apply, inject } from '../../src/client/index.js'
 import { resetMainView } from '../../src/client/main-view.js'
 import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { enterSelection, resetSelection } from '../../src/client/batch-selection-store.js'
-import { resetUndoNotice } from '../../src/client/undo-toast.js'
+import { resetUndoNotice } from '../../src/client/undo-notices.js'
 import { ROUTES, SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
 
 // 撤销提示与删除请求都是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。

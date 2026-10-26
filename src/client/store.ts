@@ -2,7 +2,7 @@
  * 客户端**模块级快照 store** 的唯一实现（2026-10-20）。
  *
  * 为什么要有它：浏览器半有一批"跨卸载的现场"——回收站修订号（`trash-store.ts`）、单删请求
- * （`delete-confirm.tsx`）、批量删除请求（`batch-confirm.tsx`）、撤销提示（`undo-toast.tsx`）、
+ * （`delete-confirm.tsx`）、批量删除请求（`batch-confirm.tsx`）、撤销提示（`undo-notices.ts`）、
  * 批量选中集（`batch-selection-store.ts`）等。它们都挂在 `shell.overlay` / `main` / 菜单行这些
  * 互不相邻的座位上，模块级是唯一的共同点。
  * 在这之前每个文件各写一遍「`let` 现场 + `Set<() => void>` + `notify` + `useSyncExternalStore`」，

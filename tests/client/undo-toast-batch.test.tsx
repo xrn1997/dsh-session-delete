@@ -1,17 +1,20 @@
 // 批量撤销横幅（2026-10-17）：「N 条会话已移入回收站 · 撤销」，撤销 = 一次批量 restore。
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { afterDelete, bindMainView, resetMainView } from '../../src/client/main-view.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
 import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
+import { UndoToast } from '../../src/client/undo-toast.js'
 import {
-  UndoToast,
   dismissUndoNotice,
   publishUndoBatchNotice,
   publishUndoNotice,
   resetUndoNotice,
   useUndoNotice,
-} from '../../src/client/undo-toast.js'
+} from '../../src/client/undo-notices.js'
+import { createFakeRemote } from './support/fake-remote.js'
 
 beforeEach(() => {
   resetUndoNotice()
@@ -29,6 +32,27 @@ function restoreOutcomes(ids: readonly string[]): ApplyOutcome[] {
     (id) => ({ id, action: 'restore', ok: true, value: { id: `entry-${id}` } }) as ApplyOutcome,
   )
 }
+
+describe('通知台的 module 边界', () => {
+  it('现场与发布住在 undo-notices，Toast 组件不在那里', async () => {
+    const notices = await import('../../src/client/undo-notices.js')
+    expect(typeof notices.publishUndoNotice).toBe('function')
+    expect('UndoToast' in notices).toBe(false)
+  })
+
+  it('write-seats 与 use-trash-query 只依赖通知台，通知台不反向依赖 Toast 组件（ADR-0018 的环不再存在）', () => {
+    // jsdom 下的 `import.meta.url` 不是 file:，按仓库根拼路径（Vitest 的 cwd 是仓库根）。
+    const writeSeats = readFileSync(join(process.cwd(), 'src/client/write-seats.ts'), 'utf8')
+    const notices = readFileSync(join(process.cwd(), 'src/client/undo-notices.ts'), 'utf8')
+    // 两个数据 module 都曾从 `undo-toast.tsx` 取熄灭 / 发布入口；只扫其中一个会漏掉另一个的回归。
+    const trashQuery = readFileSync(join(process.cwd(), 'src/client/use-trash-query.ts'), 'utf8')
+    expect(writeSeats).not.toMatch(/from '\.\/undo-toast\.js'/)
+    expect(notices).not.toMatch(/from '\.\/undo-toast\.js'/)
+    expect(trashQuery).not.toMatch(/from '\.\/undo-toast\.js'/)
+    // 通知台是无 JSX 的数据 module：不 import React，也不把现场交给组件层。
+    expect(notices).not.toMatch(/from 'react'/)
+  })
+})
 
 describe('通知台 seq', () => {
   it('单条与批量共用一个逐次递增的 seq（Toast 靠它重挂载、重新计停留）', () => {
@@ -49,7 +73,7 @@ describe('通知台 seq', () => {
     })
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
     const view = renderHook(() => useUndoNotice())
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     expect(view.result.current?.seq).toBe(1)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     await waitFor(() => expect(view.result.current?.seq).toBe(2))
@@ -81,7 +105,7 @@ describe('按条目熄灭撤销横幅', () => {
     }))
     publishUndoNotice({ entryId: 'e1', title: 'T' })
     const view = renderHook(() => useUndoNotice())
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
 
     act(() => { dismissUndoNotice(['e1']) })
@@ -100,7 +124,7 @@ describe('按条目熄灭撤销横幅', () => {
     }))
     publishUndoNotice({ entryId: 'e1', title: 'T' })
     const view = renderHook(() => useUndoNotice())
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
 
     act(() => { publishUndoNotice({ entryId: 'e2', title: 'U' }) })
@@ -115,7 +139,7 @@ describe('批量撤销横幅', () => {
     const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => restoreOutcomes(ids))
     const restore = vi.fn(async () => ({}))
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 })
-    render(<UndoToast deps={{ applyOutcomes, restore } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     expect(screen.getByText('2 条会话已移入回收站')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
@@ -129,7 +153,7 @@ describe('批量撤销横幅', () => {
       throw Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' })
     })
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(await screen.findByText(/原项目目录已不在/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument()
@@ -141,7 +165,7 @@ describe('批量撤销横幅', () => {
     ])
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
     const view = renderHook(() => useUndoNotice())
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     await waitFor(() => expect(view.result.current?.failure).toBe('项目目录不在'))
     expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument()
@@ -171,7 +195,7 @@ describe('批量撤销横幅', () => {
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 })
     const notice = renderHook(() => useUndoNotice())
     const revision = renderHook(() => useTrashRevision())
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     expect(revision.result.current).toBe(0)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(await screen.findByText('项目目录不在')).toBeInTheDocument()
@@ -207,7 +231,7 @@ describe('批量撤销横幅', () => {
     afterDelete(['session-a'])
     publishUndoBatchNotice({ entryIds: ['session-a'], n: 1 })
     const revision = renderHook(() => useTrashRevision())
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     expect(revision.result.current).toBe(0)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(await screen.findByText('项目目录不在')).toBeInTheDocument()
@@ -251,7 +275,7 @@ describe('批量撤销横幅', () => {
     // 删除时关掉当前视图（main-view 由此记住 session-a）。
     afterDelete(['session-a'])
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 })
-    render(<UndoToast deps={{ applyOutcomes } as never} />)
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     expect(await screen.findByText('项目目录不在')).toBeInTheDocument()
     // e2 失败不许连坐 e1 的重开：横幅报原文、主视图照样回到 e1。

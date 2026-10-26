@@ -56,7 +56,7 @@ describe('runWrite', () => {
     expect(outcome.ok).toBe(true)
     expect(outcome.action).toBe('delete')
     expect(outcome.ids).toEqual(['a', 'b'])
-    expect(outcome.ok && outcome.anySuccess).toBe(true)
+    expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     expect([...outcome.failures.entries()]).toEqual([['b', '删不动']])
     expect(publishUndo).toHaveBeenCalledTimes(1)
     // settlement 算好落地条目与请求名单再交座位：座位不再自己读回执。
@@ -83,7 +83,7 @@ describe('runWrite', () => {
       deps: { applyOutcomes }, action: 'delete', ids: ['e1'], presentation: { publishUndo }, refresh,
     })
     expect(outcome.ok).toBe(true)
-    expect(outcome.ok && outcome.anySuccess).toBe(false)
+    expect(outcome.ok && outcome.summary.anySuccess).toBe(false)
     // 信封成功 ⇒ 跨槽位收尾照跑：批量删除的失效通告不能漏；空成功名单是合法输入。
     // 呈现钩子按 anySuccess 门拦住：一条都没落地时不发布撤销。
     expect(publishUndo).not.toHaveBeenCalled()
@@ -99,7 +99,7 @@ describe('runWrite', () => {
     const outcome = await runWrite({
       deps: { applyOutcomes }, action: 'delete', ids: ['a', 'b'], presentation: { publishUndo },
     })
-    expect(outcome.ok && outcome.anySuccess).toBe(true)
+    expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     // `b` 被同批前一条带走（幂等 null）：算条数、不算撤销落点。
     expect(publishUndo).toHaveBeenCalledWith({ entryIds: ['entry-a'], n: 2 })
   })
@@ -113,7 +113,7 @@ describe('runWrite', () => {
     const outcome = await runWrite({
       deps: { applyOutcomes }, action: 'delete', ids: ['a', 'b'], presentation: { publishUndo },
     })
-    expect(outcome.ok && outcome.anySuccess).toBe(true)
+    expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     expect(publishUndo).not.toHaveBeenCalled()
   })
 
@@ -124,9 +124,9 @@ describe('runWrite', () => {
       deps: { applyOutcomes }, action: 'delete', ids: ['a'], single: true, presentation: { publishUndo },
     })
     expect(outcome.ok).toBe(true)
-    expect(outcome.ok && outcome.anySuccess).toBe(false)
+    expect(outcome.ok && outcome.summary.anySuccess).toBe(false)
     expect(outcome.failures.get('a')).toContain('单条动作回了幂等空值')
-    expect(outcome.ok && outcome.successIds).toEqual([])
+    expect(outcome.ok && outcome.summary.successIds).toEqual([])
     expect(publishUndo).not.toHaveBeenCalled()
   })
 
@@ -138,7 +138,7 @@ describe('runWrite', () => {
     const outcome = await runWrite({
       deps: { applyOutcomes }, action: 'delete', ids: ['a', 'b'], single: true,
     })
-    expect(outcome.ok && outcome.anySuccess).toBe(true)
+    expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     expect(outcome.failures.has('a')).toBe(false)
   })
 
@@ -151,6 +151,6 @@ describe('runWrite', () => {
     expect(outcome.ok).toBe(true)
     expect(outcome.action).toBe('delete')
     expect(outcome.ids).toEqual(['a'])
-    if (outcome.ok) expect(outcome.receipt.verdicts).toHaveLength(1)
+    if (outcome.ok) expect(outcome.summary.successIds).toHaveLength(1)
   })
 })

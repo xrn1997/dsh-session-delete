@@ -816,6 +816,9 @@ const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
 
 /** 唯一允许删目录的家。 */
 const REMOVE_DIR_HOME = 'src/verbs/permanent-removal.ts'
+/** 比 `deps.fs.removeDir(` 宽一格：换个接收者（`fs.removeDir(`、`io.fs.removeDir(`）也躲不过。 */
+const REMOVE_DIR_CALL = /\bfs\.removeDir\s*\(/
+
 /** 唯一允许开 journal 的三个家：定义处，与删除 / 恢复这两条要逆序回滚的动词。 */
 const JOURNAL_HOMES = [
   'src/verbs/member-journal.ts',
@@ -823,8 +826,6 @@ const JOURNAL_HOMES = [
   'src/verbs/restore-session.ts',
 ] as const
 
-/** 比 `deps.fs.removeDir(` 宽一格：换个接收者（`fs.removeDir(`、`io.fs.removeDir(`）也躲不过。 */
-const REMOVE_DIR_CALL = /\bfs\.removeDir\s*\(/
 const CREATE_JOURNAL_CALL = /\bcreateJournal\s*\(/
 
 interface SourceHit {
@@ -864,23 +865,33 @@ function filesWithHits(hits: readonly SourceHit[]): string[] {
 }
 
 /**
- * 源码护栏：永久删除只有**一个**执行器。别的动词要删目录，只能把计划交给 `executeRemoval`——
- * 自己再调 `fs.removeDir` 就是同一件写又有第二个家（ADR-0002 的延长线）。
- * journal 只服务"一次成员移动"（有反向动作）；永久删除没有可回滚的那一半，所以不许再开一个。
- *
- * 两件事分开钉：先扫"有没有第二处"，再钉"第一处还在"——少了后者，把执行器整个删掉也能变绿。
+ * 删目录在动词面由 `RemovalDeps` 收口（`CoreDeps` / `DeleteSessionDeps` 上都没有 `removeDir`），
+ * 但组合根与路由持有全量的 `DeleteDeps`，类型面挡不住那里新长出的第二处调用——「唯一调用处」
+ * 继续扫源码。
  */
 describe('永久删除是唯一的删目录者', () => {
   it('fs.removeDir 只在 permanent-removal 里被调用', () => {
     expect(violations(scanSrc(REMOVE_DIR_CALL), [REMOVE_DIR_HOME])).toEqual([])
   })
 
+  it('扫描不是空转：允许的家还命中着（删空执行器不会让上一条变绿）', () => {
+    expect(filesWithHits(scanSrc(REMOVE_DIR_CALL))).toContain(REMOVE_DIR_HOME)
+  })
+})
+
+/**
+ * journal 只服务"一次成员移动"（有反向动作）；永久删除没有可回滚的那一半，所以不许再开一个。
+ *
+ * 在场通告已由 `PresenceCapability` 在依赖面收口（`CoreDeps.host` 是 `HostCorePort`，不含在场三件，
+ * `tests/deps.test.ts` 钉住）；journal 的 import confinement 无法用类型表达，只能继续扫源码。
+ * purge / orphan-clean 的「委托给执行器」结构同理（各自的用例里扫）。
+ */
+describe('journal 只服务可回滚的成员移动', () => {
   it('createJournal( 只在 member-journal 定义、delete / restore 调用', () => {
     expect(violations(scanSrc(CREATE_JOURNAL_CALL), JOURNAL_HOMES)).toEqual([])
   })
 
   it('扫描不是空转：每个允许的家都还命中着（删空一个文件不会让它变绿）', () => {
-    expect(filesWithHits(scanSrc(REMOVE_DIR_CALL))).toContain(REMOVE_DIR_HOME)
     const journalFiles = filesWithHits(scanSrc(CREATE_JOURNAL_CALL))
     for (const home of JOURNAL_HOMES) {
       expect(journalFiles).toContain(home)

@@ -1,5 +1,5 @@
 /**
- * **路由表**（ADR-0004）：段名 → `{ 方法, 纯度, body, 处理 }`。一条记录，两个消费者。
+ * **路由表**（ADR-0004）：段名 → `{ 方法, 纯度, 读面, body, 处理 }`。一条记录，两个消费者。
  *
  * 此前"同一条请求该过哪几道判断"的知识散在两个函数里：`dispatch()` 里六个 `if` 各调一次
  * `requireMethod`，`purityOf()` 里另一组 `if` 决定"要不要进到达序链"，两处靠**注释**维持一致。
@@ -14,6 +14,7 @@
  */
 import { PARAMS, ROUTES, type ApplyAction } from '../shared/wire.js'
 import type { DeleteDeps } from '../deps.js'
+import type { TrashEntry } from '../trash/entry.js'
 import { applyActions } from '../verbs/batch.js'
 import { routeError } from '../verbs/errors.js'
 import { reportOrphans, loadOrphanGroups } from '../verbs/orphan-subagents.js'
@@ -25,13 +26,22 @@ import { assembleTrashRows } from './trash-rows.js'
 export type BodyKind = 'none' | 'json'
 /** 到达序：`pure` 不进链；`chained` 进链；函数形式给 `/apply` 用（`count` 是纯读）。 */
 export type Purity = 'pure' | 'chained' | ((body: JsonBody) => 'pure' | 'chained')
+/** 清册读面：`none` = 不读；`list` = 真相读（先对账）；`raw` = 索引快照（不对账）。
+ *  它与纯度是两条独立的轴：`count` 是 pure/不读，`detail` 是 pure/raw，`ping` 是 pure/不读。 */
+export type ReadKind = 'none' | 'list' | 'raw'
 type JsonBody = Record<string, unknown> | null
+
+/** 路由交给处理函数的读能力：读段与 `/empty` 只能从这一面取行，不能自己挑 `list()` / `raw()`（`/apply` 的写动词读面归动词自己）。 */
+export interface RouteRead {
+  rows(): Promise<readonly TrashEntry[]>
+}
 
 export interface RouteSpec {
   readonly method: 'GET' | 'POST'
   readonly body: BodyKind
   readonly purity: Purity
-  run(deps: DeleteDeps, body: JsonBody): Promise<unknown>
+  readonly read: ReadKind
+  run(deps: DeleteDeps, body: JsonBody, read: RouteRead): Promise<unknown>
 }
 
 /** 必填的非空字符串字段（缺、空串、类型不对都是**同一句话**：说清是哪个字段）。 */
@@ -83,13 +93,16 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     method: 'GET',
     body: 'none',
     purity: 'chained',
-    // 「读清单」=「对账 + 读」：语义归 `src/trash/ledger.ts` 的 `list()`（清单以 `session-trash/` 里的目录为准）
-    run: async (deps) => assembleTrashRows(deps, await deps.ledger.list()),
+    read: 'list',
+    // 「读清单」=「对账 + 读」：语义归 `src/trash/ledger.ts` 的 `list()`（清单以 `session-trash/` 里的目录为准）。
+    // 读面由这一行选好，处理函数只消费 `read`，不再自己挑 `list()` / `raw()`。
+    run: async (deps, _body, read) => assembleTrashRows(deps, await read.rows()),
   },
   [ROUTES.ping]: {
     method: 'GET',
     body: 'none',
     purity: 'pure',
+    read: 'none',
     // 客户端探测专用的最便宜一问：不碰清册、不碰盘、不进链。它的**信封**就是答案（"路由在、
     // 依赖接上了、映射生效了"），不是清单里此刻有几条——拿它当健康检查等于每次页面加载都跑一遍对账。
     run: async () => 'pong',
@@ -98,31 +111,34 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     method: 'GET',
     body: 'none',
     purity: 'pure',
+    read: 'raw',
     // 纯读的第六段：扫语料（`sessionQuery.listSessions`，live ∪ 持久化）+ 读清册 **raw 索引**，把"父既不在
     // 语料也不在回收站"的那些组量一遍字节。**不动任何一个字节**（不对账、不写行），也不排队。
     // 清理走 `/apply` 的 `orphan-clean`：那条先对账再扫（写动作必须排在到达序链上）。
-    run: async (deps) => reportOrphans(await loadOrphanGroups(deps)),
+    run: async (deps, _body, read) => reportOrphans(await loadOrphanGroups(deps, await read.rows())),
   },
   [ROUTES.apply]: {
     method: 'POST',
     body: 'json',
+    purity: (body) => (body?.[PARAMS.action] === 'count' ? 'pure' : 'chained'),
+    read: 'none',
     // `count` 不碰清册也不动文件（它问的是**还在盘上**的会话），和详情一样走豁免；
     // 其余四个都是写动作（`delete` / `restore` / `purge` / `orphan-clean`）——前三个动清册，
     // `orphan-clean` 先对账、再摘归档/账本并删盘上那些没有清册行的目录——都必须排在链上。
-    purity: (body) => (body?.[PARAMS.action] === 'count' ? 'pure' : 'chained'),
-    // 一组 id 上的同一个动作：单条就是长度为 1 的批量，逐条回结果。
+    // 写动词的读面归动词自己（谁写谁读），路由只在读动作上选面。
     run: async (deps, body) => applyActions(deps, requireAction(body), requireIdArray(body)),
   },
   [ROUTES.empty]: {
     method: 'POST',
     body: 'none',
     purity: 'chained',
+    read: 'list',
     // 清空回收站：聚合回执，不按条回——这是它与 `/apply` 唯一的区别，也是它单独一段的理由。
     // **先对账再清**：手工搬进 `session-trash/` 的那一格在清册里还没有行，只按 raw 索引清就会
-    // 在它走后仍留一个点不开的目录；`ledger.list()` 交回的那一份就是"这里此刻真的有的一切"。
-    run: async (deps) => {
+    // 在它走后仍留一个点不开的目录；`read` 交回的那一份就是"这里此刻真的有的一切"。
+    run: async (deps, _body, read) => {
       // 直接把这一份当快照递给 purge，不再读第二遍清册。
-      const rows = await deps.ledger.list()
+      const rows = await read.rows()
       return await purgeTrash(deps)(undefined, rows)
     },
   },
@@ -130,12 +146,14 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     method: 'POST',
     body: 'json',
     purity: 'pure',
+    read: 'raw',
     // 读单条详情也走 POST：`requireString`、同源栅栏、错误映射这一整套都挂在同一张路由表上
     // （`body:'json'` 决定它在处理前预读一次请求体）；改成 GET query 只是把同一道栅栏再写一遍
-    // （栅栏只写一遍——段名的方法 / 纯度 / body 就住这张表，ADR-0004）。
-    // 读的是清册 **raw 索引**（`ledger.raw()`），**不对账**：本段声明为 pure、不进到达序链，而对账会写
+    // （栅栏只写一遍——段名的方法 / 纯度 / 读面 / body 就住这张表，ADR-0004）。
+    // 读的是清册 **raw 索引**（`read` 的 raw 面），**不对账**：本段声明为 pure、不进到达序链，而对账会写
     // 清册行（写动作必须排在链上）。行在 raw 里而目录不在时详情自己判 `io`，不靠对账把行摘掉。
-    run: async (deps, body) => readTrashDetail(deps)(requireString(body, PARAMS.entryId)),
+    run: async (deps, body, read) =>
+      readTrashDetail({ fs: deps.fs, rows: () => read.rows(), home: deps.home })(requireString(body, PARAMS.entryId)),
   },
 }
 

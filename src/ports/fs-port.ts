@@ -18,6 +18,9 @@ export interface FsPort {
   readFile(p: string): Promise<Buffer>
 }
 
+/** 动词的基础面：读与搬移都有，**不拿删除**。删目录只挂在 `RemovalDeps` 上（ADR-0006）。 */
+export type CoreFsPort = Omit<FsPort, 'removeDir'>
+
 /** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
  *  `this` 变成 undefined）。所以端口只做转发，递归在模块作用域里自调。 */
 async function sizeOfDir(p: string): Promise<number> {

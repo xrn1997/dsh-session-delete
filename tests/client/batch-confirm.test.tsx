@@ -11,7 +11,10 @@ import {
 } from '../../src/client/batch-confirm.js'
 import { getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
 import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
-import { UndoToast, resetUndoNotice } from '../../src/client/undo-toast.js'
+import { UndoToast } from '../../src/client/undo-toast.js'
+import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import { createFakeRemote } from './support/fake-remote.js'
+import type { ApplyOutcome } from '../../src/client/remote.js'
 import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 
 beforeEach(() => {
@@ -51,7 +54,7 @@ describe('模块级现场', () => {
     togglePick({ sessionId: 'b', title: 'B' })
     requestDeleteBatch()
     const view = renderHook(() => useDeleteBatchRequest())
-    render(<BatchConfirmHost deps={{ applyOutcomes } as never} />)
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
     await waitFor(() =>
       expect(view.result.current?.items.map((item) => item.sessionId)).toEqual(['b']),
@@ -63,12 +66,28 @@ describe('模块级现场', () => {
 })
 
 describe('批量确认框', () => {
+  it('写入在飞时取消/关闭都拦住（busy 关框规则）', async () => {
+    let release: (value: ApplyOutcome[]) => void = () => {}
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<ApplyOutcome[]> => {
+      if (action === 'count') return countOutcomes(ids)
+      return new Promise<ApplyOutcome[]>((resolve) => { release = resolve })
+    })
+    requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '取消' })).toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    release(deleteOutcomes(['a']))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('标题随条数：1 条是单删那句，多条是「删除这些 N 个会话？」', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
       action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids),
     )
     requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
-    render(<BatchConfirmHost deps={{ applyOutcomes } as never} />)
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
     expect(await screen.findByRole('heading', { name: '删除这个会话？' })).toBeInTheDocument()
   })
 
@@ -80,7 +99,7 @@ describe('批量确认框', () => {
       { sessionId: 'a', title: 'A' },
       { sessionId: 'b', title: 'B' },
     ])
-    const first = render(<BatchConfirmHost deps={{ applyOutcomes } as never} />)
+    const first = render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
     expect(await screen.findByText('删除这些 2 个会话？')).toBeInTheDocument()
     expect(screen.getByText('含 2 个子会话')).toBeInTheDocument()
     expect(screen.queryByText('含 0 个子会话')).not.toBeInTheDocument()
@@ -93,7 +112,7 @@ describe('批量确认框', () => {
       throw Object.assign(new Error('读不到'), { code: 'sessiondelete/io' })
     })
     requestDeleteBatch([{ sessionId: 'c', title: 'C' }])
-    render(<BatchConfirmHost deps={{ applyOutcomes: failing } as never} />)
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes: failing })} />)
     expect(await screen.findByText('删除这个会话？')).toBeInTheDocument()
     expect(screen.queryByText(/将一起移入回收站/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '移入回收站 1 条' })).toBeEnabled()
@@ -103,7 +122,7 @@ describe('批量确认框', () => {
     const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => countOutcomes(ids))
     const items = Array.from({ length: 80 }, (_, i) => ({ sessionId: `s${i}`, title: `S${i}` }))
     requestDeleteBatch(items)
-    render(<BatchConfirmHost deps={{ applyOutcomes } as never} />)
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
 
     const card = document.querySelector('[data-dsh-session-delete="batch-target-card"]')
     expect(card).not.toBeNull()
@@ -123,8 +142,8 @@ describe('批量确认框', () => {
     requestDeleteBatch()
     render(
       <>
-        <BatchConfirmHost deps={{ applyOutcomes } as never} />
-        <UndoToast deps={{ applyOutcomes } as never} />
+        <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
+        <UndoToast deps={createFakeRemote({ applyOutcomes })} />
       </>,
     )
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
@@ -143,8 +162,8 @@ describe('批量确认框', () => {
     requestDeleteBatch()
     render(
       <>
-        <BatchConfirmHost deps={{ applyOutcomes } as never} />
-        <UndoToast deps={{ applyOutcomes } as never} />
+        <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
+        <UndoToast deps={createFakeRemote({ applyOutcomes })} />
       </>,
     )
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
@@ -165,8 +184,8 @@ describe('批量确认框', () => {
     const revision = renderHook(() => useTrashRevision())
     render(
       <>
-        <BatchConfirmHost deps={{ applyOutcomes } as never} />
-        <UndoToast deps={{ applyOutcomes } as never} />
+        <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
+        <UndoToast deps={createFakeRemote({ applyOutcomes })} />
       </>,
     )
     expect(revision.result.current).toBe(0)

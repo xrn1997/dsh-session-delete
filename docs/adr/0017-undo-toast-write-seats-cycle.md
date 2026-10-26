@@ -1,6 +1,6 @@
 # 撤销横幅与写入座位之间的 import 环按 init-safe 收下
 
-Status: accepted
+Status: superseded by 0018
 
 `src/client/undo-toast.tsx` 要调 `src/client/write-seats.ts` 的恢复座位（`restoreFromUndo`），`write-seats.ts` 要调 `undo-toast.tsx` 的横幅发布与熄灭（`publishUndoNotice` / `publishUndoBatchNotice` / `dismissUndoNotice`）——两端互为依赖，成环。决定：**收下这条环**，约束是两边都不得在模块求值期读对方绑定。它是 init-safe 的：`write-seats.ts` 的顶层只有 import、类型与函数声明，`undo-toast.tsx` 的顶层只调 `store.ts` 的 `createStore`，且浏览器半打成一颗 CJS 工厂、函数声明提升，环先转起来也撞不上未初始化的绑定。
 

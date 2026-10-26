@@ -23,14 +23,8 @@ import { fileSizeText } from './ui/format.js'
 import { ELLIPSIS } from './ui/recipe.js'
 import { Modal } from './ui/Modal.js'
 import { BULK_DANGER, CARD, projectLabel } from './trash-view.js'
-
-/** 待确认的动作：一条记录、整个回收站、或多选挑出来的一批（`ids` 已按清单顺序排好）。
- *  `purge` 与 `restore` 的确认框共用这一个壳——两者都是"点之前先说清这一批有哪些、要去哪"。 */
-export type PendingAction =
-  | { kind: 'entry'; entry: TrashEntryLike }
-  | { kind: 'all' }
-  | { kind: 'entries'; ids: readonly string[] }
-  | { kind: 'restore'; ids: readonly string[] }
+import { useIdleClose } from './confirm-close.js'
+import type { PendingAction } from './use-trash-panel-controller.js'
 
 /** 弹出的一批卡片（逐条说清这一批有哪些）：长清单在框内滚，标题与动作行留在框里。 */
 const CARD_LIST: CSSProperties = {
@@ -65,16 +59,17 @@ export function TrashConfirm({
   onConfirmPurge: () => void
   onConfirmRestore: (ids: readonly string[]) => void
 }) {
+  const { close, closeDisabled } = useIdleClose(busy, onCancel)
   if (pending.kind === 'restore') {
     return (
       <Modal
         open
-        onClose={() => { if (!busy) onCancel() }}
+        onClose={close}
         title={t('trash.confirm.restore', { count: pending.ids.length })}
         closeLabel={t('common.close')}
         footer={
           <>
-            <Button variant="outline" disabled={busy} onClick={onCancel}>
+            <Button variant="outline" disabled={closeDisabled} onClick={close}>
               {t('common.cancel')}
             </Button>
             <Button variant="primary" disabled={busy} onClick={() => onConfirmRestore(pending.ids)}>
@@ -117,12 +112,12 @@ export function TrashConfirm({
   return (
     <Modal
       open
-      onClose={() => { if (!busy) onCancel() }}
+      onClose={close}
       title={title}
       closeLabel={t('common.close')}
       footer={
         <>
-          <Button variant="outline" disabled={busy} onClick={onCancel}>
+          <Button variant="outline" disabled={closeDisabled} onClick={close}>
             {t('common.cancel')}
           </Button>
           <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirmPurge}>
@@ -180,15 +175,16 @@ export function OrphanConfirm({
   onCancel: () => void
   onConfirm: () => void
 }) {
+  const { close, closeDisabled } = useIdleClose(busy, onCancel)
   return (
     <Modal
       open
-      onClose={() => { if (!busy) onCancel() }}
+      onClose={close}
       title={t('trash.orphans.confirm', { count: report.totalSessions })}
       closeLabel={t('common.close')}
       footer={
         <>
-          <Button variant="outline" disabled={busy} onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button variant="outline" disabled={closeDisabled} onClick={close}>{t('common.cancel')}</Button>
           <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirm}>
             {t('trash.orphans.clean')}
           </Button>

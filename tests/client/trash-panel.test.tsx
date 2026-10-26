@@ -11,6 +11,7 @@ import { TrashPanel } from '../../src/client/trash-panel.js'
 import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
 import type { ApplyAction, ApplyOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
+import { createFakeRemote, EMPTY_ORPHANS, type FakeRemote } from './support/fake-remote.js'
 import { failed, outcomes, restoreOutcomes } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
 
@@ -23,10 +24,9 @@ const rows = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 224 * 1024, releaseBytes: 224 * 1024, title: '/code-review' },
 ]
 
-/** 扫描报告的两份读数：`EMPTY_ORPHANS` = 盘上干净，`ORPHANS` = 有一组两个孩子的残留。
+/** `ORPHANS` = 有一组两个孩子的残留（`EMPTY_ORPHANS` 从假远端拿，盘上干净那一份只留一个定义）。
  *  形状就是 `shared/wire.ts` 的 `OrphanReportWire`，`roots` 是**每组那个"父没了"的 subagent 自己**的 id
  *  ——清理时原样发给 `/apply` 的 `orphan-clean`，界面上不重新推导（推导一遍就是第二套判据）。 */
-const EMPTY_ORPHANS = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
 const ORPHANS = {
   roots: ['session-root'], totalSessions: 2, totalBytes: 2 * 1024, missingParents: 1,
   groups: [{ projectDir: '--p--', sessions: 2, bytes: 2 * 1024 }],
@@ -42,16 +42,6 @@ const detailFixture: TrashDetailLike = {
   ],
 }
 
-type Deps = {
-  list: ReturnType<typeof vi.fn>
-  detail: ReturnType<typeof vi.fn>
-  /** 2026-10-17 批量重构：写动作一段一接口——批量与单条都打 `applyOutcomes`，逐条结果回。 */
-  applyOutcomes: ReturnType<typeof vi.fn>
-  emptyTrash: ReturnType<typeof vi.fn>
-  /** 2026-10-19 残留条：一次纯读扫描，回 `OrphanReportWire`（失败就 throw，不拿空报告冒充"干净"）。 */
-  scanOrphans: ReturnType<typeof vi.fn>
-}
-
 /** 逐条 `/apply` 回执：面板的恢复走单条读法（N=1 的 `null` 是协议错）⇒ 成功支要让 support 给真行，
  *  其余动作按动作的中性默认值；`fail` 里点名的 id 换成那一句失败原文。 */
 function outcomesOf(
@@ -64,36 +54,36 @@ function outcomesOf(
   })
 }
 
-function makeDeps(over: Partial<Omit<Deps, 'detail'>> & { detail?: ReturnType<typeof vi.fn> } = {}): Deps {
-  return {
+function makeDeps(over: Partial<FakeRemote> = {}): FakeRemote {
+  return createFakeRemote({
     list: vi.fn(async () => rows),
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
     emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
     scanOrphans: vi.fn(async () => EMPTY_ORPHANS),
     detail: vi.fn(async () => detailFixture),
     ...over,
-  }
+  })
 }
 
 /** 宽档：RO 交回 1100 ⇒ 左右两栏（清单默认 420 + 详情吃余下）。 */
-function renderWide(deps: Deps) {
+function renderWide(deps: FakeRemote) {
   const observer: WidthObserver = installWidthObserver()
-  const view = render(<TrashPanel deps={deps as never} />)
+  const view = render(<TrashPanel deps={deps} />)
   act(() => { observer.pump(1100) })
   return { ...view, observer }
 }
 
 /** 窄档：RO 交回 400 ⇒ 点行下钻。 */
-function renderNarrow(deps: Deps) {
+function renderNarrow(deps: FakeRemote) {
   const observer: WidthObserver = installWidthObserver()
-  const view = render(<TrashPanel deps={deps as never} />)
+  const view = render(<TrashPanel deps={deps} />)
   act(() => { observer.pump(400) })
   return { ...view, observer }
 }
 
 describe('回收站面板', () => {
   it('空回收站显示空态且没有清空按钮', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) })} />)
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '清空回收站…' })).not.toBeInTheDocument()
   })
@@ -102,7 +92,7 @@ describe('回收站面板', () => {
   // 空态块自己的 `flex:1` + `justifyContent:center` 才有高度可居。2026-10-16 真机回归：
   // 两栏改造在清单容器那节把链断在"内容高"上 ⇒ 空态图标贴到左上角。
   it('空态的居中链：单列外壳与清单容器都是 flex:1 1 auto', async () => {
-    const { container } = render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) }) as never} />)
+    const { container } = render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) })} />)
     await screen.findByText('回收站是空的')
     const listBox = container.querySelector('[data-dsh-session-delete="trash-list"]') as HTMLElement
     expect((listBox.parentElement as HTMLElement).style.flex).toBe('1 1 auto')
@@ -132,30 +122,44 @@ describe('回收站面板', () => {
   // 这句话必须在**点之前**就看得见：它不是某次动作的失败，是这一条要去哪。
   it('原工作区已不存在：行上先说恢复后归入未分组；工作区还在时没有这句', async () => {
     const gone = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0]!, workspaceMissing: true }]) }) as never} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0]!, workspaceMissing: true }]) })} />,
     )
     const row = await screen.findByRole('option', { name: /code-review/ })
     expect(within(row).getByText('原工作区已不存在，恢复后归入未分组')).toBeInTheDocument()
     gone.unmount()
 
-    render(<TrashPanel deps={makeDeps() as never} />)
+    render(<TrashPanel deps={makeDeps()} />)
     await screen.findByRole('option', { name: /code-review/ })
     expect(screen.queryByText(/原工作区已不存在/)).toBeNull()
   })
 
   it('清空要先二次确认，确认后才调清空（一段一次）', async () => {
     const deps = makeDeps()
-    render(<TrashPanel deps={deps as never} />)
+    render(<TrashPanel deps={deps} />)
     fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
     expect(deps.emptyTrash).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
     await waitFor(() => expect(deps.emptyTrash).toHaveBeenCalledTimes(1))
   })
 
+  it('清空失败 ⇒ 清单失败块上屏，旧行的页脚动作不再出现', async () => {
+    const deps = makeDeps({
+      emptyTrash: vi.fn(async () => {
+        throw Object.assign(new Error('清空失败'), { code: 'sessiondelete/io' })
+      }),
+    })
+    render(<TrashPanel deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
+    fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
+    expect(await screen.findByText(/清空失败/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '清空回收站…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^彻底删除/ })).not.toBeInTheDocument()
+  })
+
   // 动作住在行内 ⇒ 它的失败也就留在行内（与 2026-10-01 那条"失败写在该行上"同一条规则）。
   it('恢复失败的原因写在那一行上，不弹全局错误', async () => {
     const deps = makeDeps({
-      applyOutcomes: vi.fn(async (action: string, ids: readonly string[]) => ids.map((id) => ({
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> => ids.map((id) => ({
         id, action, ok: false as const,
         error: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' },
       }))),
@@ -289,14 +293,14 @@ describe('回收站面板 · 键盘', () => {
 
 describe('回收站面板 · 其余行为', () => {
   it('头部给出条数与合计占用（官方 fileSizeText 口径）', async () => {
-    render(<TrashPanel deps={makeDeps() as never} />)
+    render(<TrashPanel deps={makeDeps()} />)
     expect(await screen.findByText('1 个会话 · 共 224KB')).toBeInTheDocument()
   })
 
   // 「刷新」图标 2026-10-16 按用户裁定删除（清单每次读都对账，它没有别人替代不了的活）；
   // 这里钉住"它确实没了"，免得哪天又被顺手加回来。
   it('那一排只有「全部折叠」「多选」两颗钮（「刷新」已删）', async () => {
-    const { container } = render(<TrashPanel deps={makeDeps() as never} />)
+    const { container } = render(<TrashPanel deps={makeDeps()} />)
     await screen.findByText('/code-review')
     const toolbar = container.querySelector('[data-dsh-session-delete="trash-toolbar"]') as HTMLElement
     expect(within(toolbar).getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['全部折叠', '多选'])
@@ -306,7 +310,7 @@ describe('回收站面板 · 其余行为', () => {
   // 真机反馈：删完在别处（侧栏菜单），面板是"挂载时取一次数"，不切走再回来就看不见新条目。
   it('别处动过回收站（失效通告）时立刻重读清单，不用切走再回来', async () => {
     const deps = makeDeps({ list: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(rows) })
-    render(<TrashPanel deps={deps as never} />)
+    render(<TrashPanel deps={deps} />)
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
 
     act(() => {
@@ -356,7 +360,7 @@ describe('回收站面板 · 其余行为', () => {
 
   it('清空的确认框里点名不可恢复；取消一个字节都不动', async () => {
     const deps = makeDeps({ emptyTrash: vi.fn() })
-    render(<TrashPanel deps={deps as never} />)
+    render(<TrashPanel deps={deps} />)
     fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
@@ -371,7 +375,7 @@ describe('回收站面板 · 其余行为', () => {
         throw Object.assign(new Error('回收站清单损坏'), { code: 'sessiondelete/io' })
       }),
     })
-    render(<TrashPanel deps={deps as never} />)
+    render(<TrashPanel deps={deps} />)
     expect(await screen.findByText(/回收站清单损坏/)).toBeInTheDocument()
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
   })
@@ -383,7 +387,7 @@ describe('回收站面板 · 其余行为', () => {
         .mockRejectedValueOnce(Object.assign(new Error('回收站清单损坏'), { code: 'sessiondelete/io' }))
         .mockResolvedValueOnce(rows),
     })
-    render(<TrashPanel deps={deps as never} />)
+    render(<TrashPanel deps={deps} />)
     // 清单没读成 ⇒ 残留扫描一次都不发：`/orphans` 判"父没了"吃的是对账后的清册，
     // 拿旧清册扫会把刚被手工搬进回收站的父报成失踪父。
     await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(1))
@@ -398,7 +402,7 @@ describe('回收站面板 · 其余行为', () => {
   it('首读未回时不是空态（不拿「回收站是空的」骗人）', async () => {
     let release: (value: typeof rows) => void = () => {}
     const deps = makeDeps({ list: vi.fn(() => new Promise<typeof rows>((resolve) => { release = resolve })) })
-    render(<TrashPanel deps={deps as never} />)
+    render(<TrashPanel deps={deps} />)
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
     expect(screen.getByText('正在读回收站…')).toBeInTheDocument()
     release(rows)
@@ -418,7 +422,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('按项目分组：组头只出现一次，名字是摘掉 `--…--` 裹边的目录名', async () => {
     const { container } = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => twoProjects) }) as never} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => twoProjects) })} />,
     )
     await screen.findByText('书源解析回归')
     const groups = groupsOf(container)
@@ -433,7 +437,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('组按最新一条倒序，组内也按删除时间倒序', async () => {
     const { container } = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => twoProjects) }) as never} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => twoProjects) })} />,
     )
     await screen.findByText('书源解析回归')
     const groups = groupsOf(container)
@@ -443,13 +447,13 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('时间走官方 relativeTime 的分桶，绝对时间留在 title 里', async () => {
     const at = Date.now() - (3 * 3600 + 60) * 1000
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: at }]) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: at }]) })} />)
     const meta = await screen.findByTitle(new Date(at).toLocaleString())
     expect(meta.textContent).toBe(`删除于 3小时前 · ${fileSizeText(rows[0]!.sizeBytes)}`)
   })
 
   it('now 桶说「刚刚删除」，不写出「删除于 刚刚前」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: Date.now() }]) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: Date.now() }]) })} />)
     expect(await screen.findByText(/刚刚删除 · 224KB/)).toBeInTheDocument()
     expect(screen.queryByText(/删除于 刚刚/)).not.toBeInTheDocument()
   })
@@ -458,7 +462,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // 还剩多少孩子，用户从界面上**一个字都看不见**。这一栏就是把那个数说出来；没有计数时（宿主服务没挂、
   // 或这一条确实没孩子）半句都不许出现——不许拿「含 0 个」冒充「不知道」。
   it('行上如实显示「含 N 个子会话」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 3 }]) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 3 }]) })} />)
     expect(await screen.findByText(/含 3 个子会话/)).toBeInTheDocument()
   })
 
@@ -474,13 +478,13 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // `strandedSubagents` 是**还留在盘上没被带走**的（级联落地之前删掉的那些存量）。
   // 后者说"含"就成了假话——用户会以为回收站里有它们、恢复能捞回来。
   it('盘上还剩的孩子说「还剩」，不许说成「含」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], strandedSubagents: 4 }]) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], strandedSubagents: 4 }]) })} />)
     expect(await screen.findByText(/盘上还剩 4 个子会话/)).toBeInTheDocument()
     expect(screen.queryByText(/含 4 个子会话/)).not.toBeInTheDocument()
   })
 
   it('两组都有 ⇒ 先说带进来的，再说还剩的（两个数各自站开）', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 2, strandedSubagents: 4 }]) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 2, strandedSubagents: 4 }]) })} />)
     const line = await screen.findByText(/含 2 个子会话/)
     expect(line.textContent).toContain('含 2 个子会话')
     expect(line.textContent).toContain('还剩 4 个')
@@ -489,7 +493,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   it('头部合计要把组里孩子的字节算上（孩子不单独列行，只加父那一格就会少报）', async () => {
     render(<TrashPanel deps={makeDeps({
       list: vi.fn(async () => [{ ...rows[0], sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]),
-    }) as never} />)
+    })} />)
     expect(await screen.findByText(/1.5KB/)).toBeInTheDocument()
   })
 
@@ -511,7 +515,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
       { ...rows[0], id: 'b', projectDir: '_no-cwd', title: '无 cwd' },
       { ...rows[0], id: 'c', projectDir: '', title: '空串' },
     ]
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => odd) }) as never} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => odd) })} />)
     expect(await screen.findByText('D-develop-中文')).toBeInTheDocument()
     expect(screen.getAllByText('未记录项目')).toHaveLength(2)
   })
@@ -555,7 +559,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
     { ...rows[0], id: 'b', projectDir: '--P-one--', title: '甲组第二条', deletedAt: 200 },
     { ...rows[0], id: 'c', projectDir: '--P-two--', title: '乙组第一条', deletedAt: 100 },
   ]
-  const depsOf = (): Deps => makeDeps({ list: vi.fn(async () => twoProjects) })
+  const depsOf = (): FakeRemote => makeDeps({ list: vi.fn(async () => twoProjects) })
   const heads = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-dsh-session-delete="trash-group-head"]')] as HTMLElement[]
   const columnOf = (container: HTMLElement): HTMLElement =>
@@ -679,7 +683,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
       restore?: ReturnType<typeof vi.fn>
       applyOutcomes?: ReturnType<typeof vi.fn>
     } = {},
-  ): Deps =>
+  ): FakeRemote =>
     makeDeps({
       list: over.list ?? vi.fn(async () => three),
       applyOutcomes: over.applyOutcomes ?? vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
@@ -946,7 +950,7 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () =>
     { ...rows[0], id: 'b', projectDir: '--P-one--', title: '第二条', deletedAt: 200 },
     { ...rows[0], id: 'c', projectDir: '--P-two--', title: '第三条', deletedAt: 100 },
   ]
-  const depsOf = (): Deps => makeDeps({ list: vi.fn(async () => grouped) })
+  const depsOf = (): FakeRemote => makeDeps({ list: vi.fn(async () => grouped) })
   const heads = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-dsh-session-delete="trash-group-head"]')] as HTMLElement[]
   // 组头那一行里的勾选框（行内的另一颗住在条目行里，选择器带 trash-group 才分得开）
@@ -1024,12 +1028,12 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
     { ...rows[0]!, id: 'b', title: '乙组第一条', projectDir: '--P-two--' },
     { ...rows[0]!, id: 'c', title: '丙组第一条', projectDir: '--P-three--' },
   ]
-  const depsOfThree = (): Deps => makeDeps({ list: vi.fn(async () => threeRows) })
+  const depsOfThree = (): FakeRemote => makeDeps({ list: vi.fn(async () => threeRows) })
   const listColumn = (container: HTMLElement): HTMLElement =>
     container.querySelector('[data-dsh-session-delete="trash-list"]')!.parentElement as HTMLElement
-  const renderAt = (width: number, deps: Deps) => {
+  const renderAt = (width: number, deps: FakeRemote) => {
     const observer: WidthObserver = installWidthObserver()
-    const view = render(<TrashPanel deps={deps as never} />)
+    const view = render(<TrashPanel deps={deps} />)
     act(() => { observer.pump(width) })
     return { ...view, observer }
   }

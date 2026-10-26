@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   failureMessage,
-  isFailureVerdict,
   landedEntryIds,
   missingOutcomeMessage,
   readReceipt,
   readSingleReceipt,
   restoredSessionIds,
+  summarizeReceipt,
 } from '../../src/client/receipt.js'
-import type { ApplyOutcome } from '../../src/shared/wire.js'
+import { SESSION_DELETE_CODES, type ApplyOutcome } from '../../src/shared/wire.js'
 
 const row = (id: string) => ({
   id, sessionId: `session-${id}`, projectDir: '--p--', workspaceId: 'ws',
@@ -106,12 +106,52 @@ describe('readReceipt', () => {
       error: { code: 'sessiondelete/io', message: '坏了' },
     }
     const failures = readReceipt('orphan-clean', ['a', 'b', 'c'], [neutral, broken])
-      .verdicts.filter(isFailureVerdict)
+      .verdicts.filter((verdict) => verdict.kind !== 'ok' && verdict.kind !== 'already-gone')
     expect(failures.map((verdict) => failureMessage(verdict))).toEqual([
       '不在了',
       '坏了',
       missingOutcomeMessage('orphan-clean', 'c'),
     ])
+  })
+})
+
+describe('summarizeReceipt', () => {
+  it('中性、失败与部分计数一次算好，座位不再自己 walk verdict', () => {
+    const receipt = readReceipt('orphan-clean', ['a', 'b', 'c'], [
+      { id: 'a', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 2 } },
+      { id: 'b', action: 'orphan-clean', ok: false, error: { code: SESSION_DELETE_CODES['not-found'], message: 'gone' } },
+      { id: 'c', action: 'orphan-clean', ok: false, error: { code: SESSION_DELETE_CODES.io, message: 'boom', details: { removed: 3, freedBytes: 9 } } },
+    ])
+    const { summary, failures } = summarizeReceipt(receipt)
+    expect(summary.successIds).toEqual(['a'])
+    expect(summary.neutralIds).toEqual(['b'])
+    expect(summary.failed.map((item) => item.id)).toEqual(['c'])
+    expect(summary.partial).toEqual({ removed: 3, freedBytes: 9 })
+    expect(failures.get('b')).toBe('gone')
+    expect(failures.get('c')).toBe('boom')
+    expect(summary.anySuccess).toBe(true)
+  })
+
+  it('restore 的 already-gone 仍由条目查找补 sessionId', () => {
+    const receipt = readReceipt('restore', ['e1', 'e2'], [
+      { id: 'e1', action: 'restore', ok: true, value: row('e1') },
+      { id: 'e2', action: 'restore', ok: true, value: null },
+    ])
+    const { summary } = summarizeReceipt(receipt, (id) => (id === 'e2' ? 'session-e2' : undefined))
+    expect(summary.landedIds).toEqual(['session-e1', 'session-e2'])
+  })
+
+  it('delete 的成功行也带 sessionId，但落地名单只收条目 id：域由 action 定', () => {
+    const { summary } = summarizeReceipt(readReceipt('delete', ['a'], [entry('a')]))
+    // 成功值里的 sessionId 是 `session-a`：拿它冒充落地条目就会撤销到不存在的条目。
+    expect(summary.landedIds).toEqual(['a'])
+  })
+
+  it('purge / orphan-clean 没有可撤销的落地 id', () => {
+    const purge = summarizeReceipt(readReceipt('purge', ['p'], [
+      { id: 'p', action: 'purge', ok: true, value: { removed: 1, freedBytes: 1 } },
+    ]))
+    expect(purge.summary.landedIds).toEqual([])
   })
 })
 

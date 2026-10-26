@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createHostPort } from '../src/ports/host-port.js'
+import { createMemberPresence } from '../src/verbs/member-presence.js'
 import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
 import { unescapeProjectKey } from '../src/shared/wire.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
@@ -427,13 +428,14 @@ describe('宿主服务层端口的接线', () => {
     const { ctx } = makeEnv({})
     const touched: string[] = []
     const forbidden = (name: string) => async () => { touched.push(name); return undefined }
+    const host = createHostPort(ctx)
     const deps = {
       fs: {
         exists: forbidden('fs.exists'), sizeOfDir: forbidden('fs.sizeOfDir'),
         ensureDir: forbidden('fs.ensureDir'),
         rename: forbidden('fs.rename'),
       },
-      host: createHostPort(ctx),
+      host,
       // 删除路径上不该有清册读：四个面一起设伏（`raw` 也在内——它是 pure 读面的事，删除动词不该碰）。
       // 将来谁在删除路径上顺手读清册，这条用例会当场红（局部 fs 与这条不完整 ledger 靠下面的强转通过类型）。
       ledger: {
@@ -443,6 +445,7 @@ describe('宿主服务层端口的接线', () => {
         remove: forbidden('ledger.remove'),
       },
       home: '/no-such-home',
+      presence: createMemberPresence(host),
       now: () => 0,
     } as unknown as DeleteDeps
     await expect(deleteSession(deps)('ghost')).rejects.toMatchObject({ code: 'sessiondelete/not-found' })

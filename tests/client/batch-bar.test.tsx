@@ -7,7 +7,8 @@ import { BatchConfirmHost, resetBatchConfirm } from '../../src/client/batch-conf
 import { resetHostRows } from '../../src/client/host-rows.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
 import { resetTrashStore } from '../../src/client/trash-store.js'
-import { resetUndoNotice } from '../../src/client/undo-toast.js'
+import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import { createFakeRemote } from './support/fake-remote.js'
 import {
   enterSelection,
   getPicks,
@@ -60,13 +61,13 @@ function fakeRow(sessionId: string, titleText = 'A'): {
 
 describe('浮条', () => {
   it('不在多选态整个不渲染', () => {
-    render(<BatchBar deps={{ applyOutcomes: vi.fn() } as never} />)
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes: vi.fn() })} />)
     expect(screen.queryByText(/已选/)).not.toBeInTheDocument()
   })
 
   it('多选态 0 条也渲染：只剩提示、全选、禁用运行与退出', () => {
     enterSelection()
-    render(<BatchBar deps={{ applyOutcomes: vi.fn() } as never} />)
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes: vi.fn() })} />)
     expect(screen.queryByText(/已选 /)).not.toBeInTheDocument()
     expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '移入回收站 0 条' })).toBeDisabled()
@@ -86,7 +87,7 @@ describe('浮条', () => {
     // 不手动 registerHostRowInfo：标题与"可不可选"只能来自 BatchPickButton 的登记 effect。
     render(
       <>
-        <BatchBar deps={{ applyOutcomes: vi.fn() } as never} />
+        <BatchBar deps={createFakeRemote({ applyOutcomes: vi.fn() })} />
         <BatchPickButton sessionId="s1" title="A" />
         <BatchPickButton sessionId="s2" title="B" />
       </>,
@@ -113,7 +114,7 @@ describe('浮条', () => {
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
-    render(<BatchBar deps={{ applyOutcomes } as never} />)
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
     expect(screen.getByRole('button', { name: '移入回收站 2 条' })).toBeInTheDocument()
     expect(screen.queryByText('已选 2 条')).not.toBeInTheDocument()
     expect(screen.queryByText(/跟着整组走/)).not.toBeInTheDocument()
@@ -129,7 +130,7 @@ describe('浮条', () => {
     })
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
-    render(<BatchBar deps={{ applyOutcomes } as never} />)
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
     expect(screen.getByText('已选 1 条')).toBeInTheDocument()
     await new Promise((resolve) => setTimeout(resolve, 400))
@@ -144,7 +145,7 @@ describe('浮条', () => {
     )
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
-    const view = render(<BatchBar deps={{ applyOutcomes } as never} />)
+    const view = render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
     togglePick({ sessionId: 'b', title: 'B' })
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
@@ -167,7 +168,7 @@ describe('浮条', () => {
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
-    render(<BatchBar deps={{ applyOutcomes } as never} />)
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
 
     expect(screen.queryByText('A')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
@@ -188,7 +189,7 @@ describe('浮条', () => {
   it('清单里移除最后一条：留在多选态，浮条显示 0 条', () => {
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
-    render(<BatchBar deps={{ applyOutcomes: vi.fn() } as never} />)
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes: vi.fn() })} />)
     fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
     fireEvent.click(screen.getByRole('button', { name: '取消勾选「A」' }))
     expect(getPicks()).toEqual([])
@@ -202,7 +203,7 @@ describe('浮条', () => {
     const { applyOutcomes } = countOnly()
     render(
       <>
-        <BatchBar deps={{ applyOutcomes } as never} />
+        <BatchBar deps={createFakeRemote({ applyOutcomes })} />
         <BatchPickButton sessionId="s1" title="A" />
       </>,
     )
@@ -223,8 +224,8 @@ describe('浮条', () => {
     togglePick({ sessionId: 'a', title: 'A' })
     render(
       <>
-        <BatchBar deps={{ applyOutcomes } as never} />
-        <BatchConfirmHost deps={{ applyOutcomes } as never} />
+        <BatchBar deps={createFakeRemote({ applyOutcomes })} />
+        <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
       </>,
     )
     fireEvent.click(screen.getByRole('button', { name: '移入回收站 1 条' }))

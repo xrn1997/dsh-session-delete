@@ -11,7 +11,7 @@ import {
 } from '../src/verbs/orphan-subagents.js'
 import type { SessionIdentity } from '../src/ports/host-port.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
-import { createLogWorld } from './support/world.js'
+import { createLogWorld, trashEntry } from './support/world.js'
 
 const HOME = '/h'
 const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdentity => ({
@@ -31,7 +31,7 @@ function deps(corpus: readonly SessionIdentity[], seed: TrashEntry[] = []) {
       ? `detach(${String(args[0])},${String(args[1])})`
       : `${method}(${String(args[0])})`),
   })
-  return { fs: made.fs, host: made.host, calls: made.calls, d: made.deps }
+  return { fs: made.fs, host: made.host, calls: made.calls, d: made.deps, seed }
 }
 
 describe('孤儿分组（纯函数）', () => {
@@ -63,7 +63,7 @@ describe('扫描报告与清理', () => {
       s('session-root', { parentSessionId: 'session-gone' }),
       s('session-kid', { parentSessionId: 'session-root', subagent: false, projectDir: '--q--' }),
     ])
-    const groups = await loadOrphanGroups(d)
+    const groups = await loadOrphanGroups(d, [])
     expect(groups).toHaveLength(1)
     expect(groups[0]!.members.reduce((n, m) => n + m.bytes, 0)).toBe(200)
     expect(reportOrphans(groups)).toMatchObject({
@@ -72,15 +72,29 @@ describe('扫描报告与清理', () => {
     })
   })
 
+  it('清册行由调用方交：传进来的行决定谁是孤儿，动词不再自己挑 raw', async () => {
+    const { d } = deps([s('session-root', { parentSessionId: 'session-trashed' })])
+    expect(await loadOrphanGroups(d, [])).toHaveLength(1)
+    expect(await loadOrphanGroups(d, [trashEntry('session-trashed')])).toEqual([])
+  })
+
+  it('清册行是必填：不交行在类型面就过不去（读面由调用方选好）', () => {
+    const { d } = deps([])
+    if (false) {
+      // @ts-expect-error `trash` 不是可选的：扫描不许自己回落到 `ledger.raw()`
+      void loadOrphanGroups(d)
+    }
+  })
+
   it('sessionQuery 没挂 ⇒ { available:false } ⇒ io，不拿空语料冒充没有孤儿', async () => {
     const { d } = deps([])
     d.host.listSessions = vi.fn(async () => ({ available: false as const }))
-    await expect(loadOrphanGroups(d)).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    await expect(loadOrphanGroups(d, [])).rejects.toMatchObject({ code: 'sessiondelete/io' })
   })
 
   it('非单段 session id 不拼路径：扫描响亮失败，绝不把递归删除带出 sessions/', async () => {
     const { d, fs } = deps([s('../escape', { parentSessionId: 'gone' })])
-    await expect(loadOrphanGroups(d)).rejects.toThrow(/不是单段路径/)
+    await expect(loadOrphanGroups(d, [])).rejects.toThrow(/不是单段路径/)
     expect(fs.removeDir).not.toHaveBeenCalled()
   })
 
@@ -89,7 +103,7 @@ describe('扫描报告与清理', () => {
       s('session-root', { parentSessionId: 'session-gone' }),
       s('session-kid', { parentSessionId: 'session-root', subagent: false }),
     ])
-    const [group] = await loadOrphanGroups(d)
+    const [group] = await loadOrphanGroups(d, [])
     const result = await cleanOrphanGroup(d, group as OrphanGroup)
     expect(result).toEqual({ removed: 2, freedBytes: 200 })
     expect(calls).toEqual([
@@ -110,7 +124,7 @@ describe('扫描报告与清理', () => {
       s('session-root', { parentSessionId: 'session-gone' }),
       s('session-kid', { parentSessionId: 'session-root', subagent: false }),
     ])
-    const [group] = await loadOrphanGroups(d)
+    const [group] = await loadOrphanGroups(d, [])
     fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith('session-kid'))
     const result = await cleanOrphanGroup(d, group as OrphanGroup)
     expect(result).toEqual({ removed: 1, freedBytes: 100 })
@@ -124,7 +138,7 @@ describe('扫描报告与清理', () => {
       s('session-root', { parentSessionId: 'session-gone' }),
       s('session-kid', { parentSessionId: 'session-root', subagent: false }),
     ])
-    const [group] = await loadOrphanGroups(d)
+    const [group] = await loadOrphanGroups(d, [])
     fs.removeDir.mockImplementation(async (...args: unknown[]) => {
       if (String(args[0]).endsWith('session-kid')) throw new Error('boom')
     })
@@ -139,7 +153,7 @@ describe('扫描报告与清理', () => {
       s('session-root', { parentSessionId: 'session-gone' }),
       s('session-kid', { parentSessionId: 'session-root', subagent: false }),
     ])
-    const [group] = await loadOrphanGroups(d)
+    const [group] = await loadOrphanGroups(d, [])
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')
     await expect(cleanOrphanGroup(d, group as OrphanGroup)).rejects.toMatchObject({ code: 'sessiondelete/live' })
     expect(host.unarchive).not.toHaveBeenCalled()
@@ -148,25 +162,17 @@ describe('扫描报告与清理', () => {
 })
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
-const VERB = 'src/verbs/orphan-subagents.ts'
 
 /**
- * 源码断言：这条动词只剩"扫出一组 + 拿计划交给执行器"。量目录、退归档集、摘账本、删目录与通告都归
- * `verbs/permanent-removal.ts`——在这里再长一段手写 preflight/循环，就等于同一个顺序又有第二个家
- * （与 purge 的源码护栏同一条规矩）。
+ * 委托结构护栏：删目录与在场通告已由能力面守住；这里只钉 orphan-clean 把删除序列交给执行器，
+ * 不再自己调归档集 / 账本 / 删目录（能力面给不了「不要自己调」这条）。
  */
-describe('orphan-clean 的实现面：删除顺序归执行器', () => {
-  const source = () => readFileSync(join(ROOT, VERB), 'utf8')
-
-  it('不再自己调 deps.fs.removeDir / deps.host.unarchive / deps.host.detach', () => {
-    const text = source()
+describe('orphan-clean 把删除顺序交给执行器', () => {
+  it('扫出一组之后直接接上计划与执行器', () => {
+    const text = readFileSync(join(ROOT, 'src/verbs/orphan-subagents.ts'), 'utf8')
     expect(text).not.toContain('deps.fs.removeDir')
     expect(text).not.toContain('deps.host.unarchive')
     expect(text).not.toContain('deps.host.detach')
-  })
-
-  it('扫出一组之后直接接上计划与执行器', () => {
-    const text = source()
     expect(text).toContain('planOrphanRemoval(')
     expect(text).toContain('executeRemoval(')
   })

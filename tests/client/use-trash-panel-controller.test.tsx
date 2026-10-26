@@ -3,7 +3,7 @@
  *
  * 这一份直接测 hook，不经过面板：闸（`useBusyGate`，判据住 `busy-gate.test.tsx`）、选中/详情缓存、清场/自动选中/
  * 失效重读、下钻与写动作派发这几组判据此前只能"整块渲染面板 + 造一个远程假件"才够得着，
- * 现在它们是这个 module 的 interface。替身只有三样：假的 query（entries + `refreshAll` /
+ * 现在它们是这个 module 的 interface。替身只有三样：假的 query（`list` + `refreshAll` /
  * `refreshAfterWrite` 计数 + emptyTrash）、假的闸、可控落地的 deferred。
  * Esc 交还焦点那条判据住 `trash-nav.test.tsx`：控制器只管 `back()` 这一个入口，不查 DOM。
  *
@@ -15,7 +15,6 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   ApplyOutcome,
-  SessionDeleteRemote,
   TrashDetailLike,
   TrashEntryLike,
 } from '../../src/client/remote.js'
@@ -26,12 +25,14 @@ import {
   publishUndoNotice,
   resetUndoNotice,
   useUndoNotice,
-} from '../../src/client/undo-toast.js'
+} from '../../src/client/undo-notices.js'
 import { useBusyGate, type BusyGate } from '../../src/client/busy-gate.js'
 import {
   useTrashPanelController,
   type TrashPanelControllerInput,
 } from '../../src/client/use-trash-panel-controller.js'
+import type { TrashListState } from '../../src/client/use-trash-query.js'
+import { createFakeRemote } from './support/fake-remote.js'
 import { outcomes, purgeOutcomes, restoreOutcomes } from './support/outcomes.js'
 
 // 模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
@@ -108,6 +109,8 @@ const openGate: BusyGate = {
 
 interface Over {
   entries?: readonly TrashEntryLike[] | null
+  /** 直接给清单状态（要表达 `unknown` 时用它；`entries` 只够表达 ready / loading）。 */
+  list?: TrashListState
   ordered?: readonly TrashEntryLike[]
   canAutoSelect?: boolean
   busy?: boolean
@@ -116,10 +119,10 @@ interface Over {
 }
 
 function harness() {
-  const deps = {
+  const deps = createFakeRemote({
     detail: vi.fn(async (id: string) => detailOf(id)),
     applyOutcomes: vi.fn(async () => [] as ApplyOutcome[]),
-  }
+  })
   const refreshAll = vi.fn(async (): Promise<void> => {})
   const refreshAfterWrite = vi.fn(async (): Promise<void> => {})
   // `TrashQuery.emptyTrash` 交回的是"这一趟是否落地"，不是聚合回执（回执在 use-trash-query 里）。
@@ -127,9 +130,16 @@ function harness() {
   const emptyTrash = vi.fn(async (): Promise<boolean> => true)
   const input = (over: Over = {}): TrashPanelControllerInput => ({
     // 控制器只读这两条：`detail` 给读详情，`applyOutcomes` 给恢复/批量的那一段 `/apply`。
-    deps: deps as unknown as Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>,
+    deps,
     gate: over.gate ?? (over.busy === true ? { ...openGate, busy: true } : openGate),
-    query: { entries: over.entries ?? null, refreshAll, refreshAfterWrite, emptyTrash },
+    query: {
+      list: over.list ?? (over.entries === null || over.entries === undefined
+        ? { status: 'loading' as const }
+        : { status: 'ready' as const, rows: over.entries }),
+      refreshAll,
+      refreshAfterWrite,
+      emptyTrash,
+    },
     ordered: over.ordered ?? [],
     canAutoSelect: over.canAutoSelect ?? false,
   })
@@ -663,13 +673,54 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(notice.result.current).toBeNull()
   })
 
+  it('pending 归控制器：request 构造待确认，setPending 不再出现在 interface', () => {
+    const m = mount({ entries: [A, B] })
+    act(() => { m.result.current.request({ kind: 'restore', ids: ['b', 'a'] }) })
+    expect(m.result.current.pending).toEqual({ kind: 'restore', ids: ['b', 'a'] })
+    expect(m.result.current.pendingEntries.map((entry) => entry.id)).toEqual(['b', 'a'])
+    // 只有恢复框要摆条目：彻底删除框只念条数/单条自带的那一格。
+    act(() => { m.result.current.request({ kind: 'entries', ids: ['a', 'b'] }) })
+    expect(m.result.current.pendingEntries).toEqual([])
+    expect('setPending' in m.result.current).toBe(false)
+    act(() => { m.result.current.cancelPending() })
+    expect(m.result.current.pending).toBeNull()
+  })
+
+  it('清单 unknown 时收起 pending：看不见的行不许继续确认', () => {
+    const m = mount({ entries: [A] })
+    act(() => { m.result.current.request({ kind: 'restore', ids: ['a'] }) })
+    act(() => {
+      m.update({ list: { status: 'unknown', failure: '清单坏了' }, entries: null })
+    })
+    expect(m.result.current.pending).toBeNull()
+  })
+
+  it('清单已经 unknown 时再请求确认也不会留下 pending（状态级判据，不靠迁移那一次）', () => {
+    const m = mount({ list: { status: 'unknown', failure: '清单坏了' }, entries: null })
+    act(() => { m.result.current.request({ kind: 'restore', ids: ['a'] }) })
+    expect(m.result.current.pending).toBeNull()
+  })
+
+  it('清单 unknown 但写入在飞：pending 先留着，忙完再收', () => {
+    const m = mount({ entries: [A] })
+    act(() => { m.result.current.request({ kind: 'restore', ids: ['a'] }) })
+    act(() => {
+      m.update({ list: { status: 'unknown', failure: '清单坏了' }, entries: null, busy: true })
+    })
+    expect(m.result.current.pending).not.toBeNull()
+    act(() => {
+      m.update({ list: { status: 'unknown', failure: '清单坏了' }, entries: null, busy: false })
+    })
+    expect(m.result.current.pending).toBeNull()
+  })
+
   it('confirmApply 成功：成功条目丢缓存、失败留行、pending 收起、清单只重读一次', async () => {
     const m = mount({ entries: [A, B] })
     await act(async () => {
       await m.result.current.select(A)
     })
     act(() => {
-      m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+      m.result.current.request({ kind: 'entries', ids: ['a', 'b'] })
     })
     expect(m.result.current.pending).toEqual({ kind: 'entries', ids: ['a', 'b'] })
 
@@ -708,7 +759,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
   it('confirmApply 顶层失败：每个 id 落同一句原文，pending 收起，清单照样重读', async () => {
     const m = mount({ entries: [A, B] })
     act(() => {
-      m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+      m.result.current.request({ kind: 'entries', ids: ['a', 'b'] })
     })
     m.deps.applyOutcomes.mockRejectedValueOnce(new Error('路由自检失败'))
     const refreshBefore = m.refreshAfterWrite.mock.calls.length
@@ -747,7 +798,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
       .mockResolvedValueOnce(restoreOutcomes(['b']))
 
     act(() => {
-      m.result.current.setPending({ kind: 'entry', entry: A })
+      m.result.current.request({ kind: 'entry', entry: A })
     })
     await act(async () => {
       await m.result.current.confirmPurge()
@@ -756,7 +807,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.pending).toBeNull()
 
     act(() => {
-      m.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+      m.result.current.request({ kind: 'entries', ids: ['a', 'b'] })
     })
     await act(async () => {
       await m.result.current.confirmPurge()
@@ -765,7 +816,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.pending).toBeNull()
 
     act(() => {
-      m.result.current.setPending({ kind: 'restore', ids: ['b'] })
+      m.result.current.request({ kind: 'restore', ids: ['b'] })
     })
     await act(async () => {
       await m.result.current.confirmPurge()
@@ -787,7 +838,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
       await m.result.current.select(A)
     })
     act(() => {
-      m.result.current.setPending({ kind: 'all' })
+      m.result.current.request({ kind: 'all' })
     })
     const refreshBefore = m.refreshAfterWrite.mock.calls.length
 
@@ -817,7 +868,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
     m.emptyTrash.mockResolvedValueOnce(false)
     act(() => {
-      m.result.current.setPending({ kind: 'all' })
+      m.result.current.request({ kind: 'all' })
     })
 
     await act(async () => {
@@ -884,7 +935,7 @@ describe('面板控制器 · 动作期间 busy', () => {
     h.refreshAfterWrite.mockImplementationOnce(() => refreshSettles.promise)
 
     act(() => {
-      view.result.current.setPending({ kind: 'entries', ids: ['a', 'b'] })
+      view.result.current.request({ kind: 'entries', ids: ['a', 'b'] })
     })
     let task!: Promise<void>
     act(() => {

@@ -12,9 +12,9 @@
  * - **面板恢复用 `panelSeat: true` 明说**（「缺席」不再承载语义）：外部恢复（撤销横幅）由 settlement
  *   调 `afterRestore` 重开；面板恢复自带「回来」的结算，只 `forgetMainView`、不重开、不抢焦点。
  *   判据住 `src/client/main-view.ts` 的 `forgetMainView`。
- * - **撤销名单由 settlement 算、座位发布**：delete 支把 `landedEntryIds` 与 `successIds.length` 算成
- *   `{ entryIds, n }` 交给座位，座位只决定发布哪一形（单条带标题、批量带条数）——那句文案与它的键
- *   住 `undo-toast.tsx` 与 `copy.ts`；purge 支在
+ * - **撤销名单由摘要给、座位发布**：delete 支从 `summary.landedIds`（域是条目 id）取名单、用
+ *   `summary.successIds.length` 作条数，组成 `{ entryIds, n }` 交给座位，座位只决定发布哪一形
+ *   （单条带标题、批量带条数）——那句文案与它的键住 `undo-toast.tsx` 与 `copy.ts`；purge 支在
  *   `anySuccess` 时熄灭指向这些条目的横幅——留着就是一条注定失败的「撤销」。
  * - **`count` 不结算**；`orphan-clean` 没有跨槽位收尾（清完由 query 自己的写后刷新收尾）。
  *   不直接读 DOM、不问宿主：主视图收尾只经 `main-view.ts` 的 `afterDelete` / `afterRestore`
@@ -22,22 +22,18 @@
  */
 import type { ApplyAction } from '../shared/wire.js'
 import { afterDelete, afterRestore, forgetMainView } from './main-view.js'
-import { landedEntryIds, restoredSessionIds, type Receipt } from './receipt.js'
+import type { ReceiptSummary } from './receipt.js'
 
-/** 一次写入里与渲染无关的那部分：动作、请求 id、回执、成功名单与“至少一条落地”。 */
+/** 一次写入里与渲染无关的那部分：动作、请求 id、以及唯一的那份回执摘要。 */
 export interface SettledFacts<A extends ApplyAction> {
   readonly action: A
   readonly ids: readonly string[]
-  readonly receipt: Receipt<A>
-  /** 成功支（`ok` / `already-gone`）的请求 id，按请求顺序。 */
-  readonly successIds: readonly string[]
-  /** 至少一条真的落地（`ok` / `already-gone`；N=1 的协议空值不算）。 */
-  readonly anySuccess: boolean
+  readonly summary: ReceiptSummary
 }
 
 /**
  * 按 action 切开的一族呈现材质：每个座位只能拿到自己动作那几手，形状对不上的钩子在类型面就不存在。
- * - `delete` 的 `publishUndo` 存在即「这个座位要发撤销横幅」；它拿到的是 settlement 算好的落地名单。
+ * - `delete` 的 `publishUndo` 存在即「这个座位要发撤销横幅」；它拿到的是 settlement 从摘要取出并组好的落地名单。
  * - `restore` 的 `panelSeat: true` 才是「面板已替这条完成『回来』的结算」，不再靠缺席某个钩子暗示。
  * - `count` / `orphan-clean` 没有呈现材质（用 `noPresentation`）。
  * 钩子都是同步的：settlement 在 `refresh` 前一次跑完，不 await。
@@ -46,8 +42,8 @@ export type WritePresentationByAction = {
   delete: {
     /** 外部写入座位：让回收站面板重读。面板写不传（自己的 `refreshAfterWrite` 就是重读）。 */
     invalidate?(): void
-    /** 撤销发布：settlement 把落地的条目 id 与请求名单算好后交来；名单**非空**——全被同批前一条带走时
-     *  没有落点，settlement 不发布没有可撤销动作的横幅。座位只决定发布哪一形与那一形带的标题。 */
+    /** 撤销发布：settlement 从回执摘要取出落地条目 id 与请求名单、组好形之后交来；名单**非空**——
+     *  全被同批前一条带走时没有落点，settlement 不发布没有可撤销动作的横幅。座位只决定发布哪一形与那一形带的标题。 */
     publishUndo?(landed: { readonly entryIds: readonly [string, ...string[]]; readonly n: number }): void
   }
   restore: {
@@ -56,8 +52,6 @@ export type WritePresentationByAction = {
     panelSeat?: true
     dismissUndo?(entryIds: readonly string[]): void
     clearDetailCache?(entryIds: readonly string[]): void
-    /** already-gone 的回执不带行，它的 sessionId 只能由调用方从当前清单里查。 */
-    sessionIdOfEntry?(entryId: string): string | undefined
   }
   purge: {
     dismissUndo?(entryIds: readonly string[]): void
@@ -86,35 +80,36 @@ export function settleWrite<A extends ApplyAction>(
     case 'delete': {
       // `success.action` 已是判别式，但 TS 不会顺着它把 type 参数一起收窄；三支各做一次具名窄化。
       const seat = presentation as WritePresentationByAction['delete']
-      afterDelete(success.successIds)
+      afterDelete(success.summary.successIds)
       seat.invalidate?.()
-      if (success.anySuccess) {
-        const [first, ...rest] = landedEntryIds(success.receipt)
+      if (success.summary.anySuccess) {
+        const [first, ...rest] = success.summary.landedIds
         // 全部被同批前一条带走时没有落点：不发布一条没有可撤销动作的横幅。
         if (first !== undefined) {
           const entryIds: [string, ...string[]] = [first, ...rest]
-          seat.publishUndo?.({ entryIds, n: success.successIds.length })
+          seat.publishUndo?.({ entryIds, n: success.summary.successIds.length })
         }
       }
       return
     }
     case 'restore': {
       const seat = presentation as WritePresentationByAction['restore']
-      const restored = restoredSessionIds(success.receipt, seat.sessionIdOfEntry)
+      // restore 的落地名单域是会话 id（回盘名单），与 delete 的条目 id 不混用。
+      const restored = success.summary.landedIds
       if (seat.panelSeat !== true) afterRestore(restored)
       seat.invalidate?.()
-      if (!success.anySuccess) return
-      seat.dismissUndo?.(success.successIds)
+      if (!success.summary.anySuccess) return
+      seat.dismissUndo?.(success.summary.successIds)
       if (seat.panelSeat === true) forgetMainView(restored)
-      seat.clearDetailCache?.(success.successIds)
+      seat.clearDetailCache?.(success.summary.successIds)
       return
     }
     case 'purge': {
       const seat = presentation as WritePresentationByAction['purge']
-      if (success.anySuccess) {
+      if (success.summary.anySuccess) {
         // 永久删除也让指向这些条目的撤销横幅熄灭：留着就是一条注定失败的「撤销」。
-        seat.dismissUndo?.(success.successIds)
-        seat.clearDetailCache?.(success.successIds)
+        seat.dismissUndo?.(success.summary.successIds)
+        seat.clearDetailCache?.(success.summary.successIds)
       }
       return
     }

@@ -15,8 +15,7 @@
 import { useCallback, useRef, useState } from 'react'
 import type { BusyGate } from './busy-gate.js'
 import { callRemote, type OrphanReportWire, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
-import { clearUndoNotice } from './undo-toast.js'
-import { failureMessage, isFailureVerdict } from './receipt.js'
+import { clearUndoNotice } from './undo-notices.js'
 import type { WriteOutcome } from './write.js'
 import { cleanOrphansFromPanel } from './write-seats.js'
 import { createLatestWins } from './store.js'
@@ -27,12 +26,36 @@ import { fileSizeText } from './ui/format.js'
 export type TrashQueryDeps = Pick<SessionDeleteRemote, 'list' | 'scanOrphans' | 'applyOutcomes' | 'emptyTrash'>
 
 /** 一次清单读的结局：`stale` = 被后发的读顶掉（什么都没落地，调用方不许拿它当失败清场）。 */
-export type ReloadResult = 'ok' | 'failed' | 'stale'
+type ReloadResult = 'ok' | 'failed' | 'stale'
+
+/** 清单的唯一状态：加载中 / 有行 / 未知。`unknown` 不向下游交出任何行——旧行不许继续可操作。 */
+export type TrashListState =
+  | { readonly status: 'loading' }
+  | { readonly status: 'ready'; readonly rows: readonly TrashEntryLike[] }
+  | { readonly status: 'unknown'; readonly failure: string }
+
+/** 清单状态对视图的**唯一解读**：行、失败原文、加载中与空态一次交出。
+ *  面板与控制器不再各自从 `status` 反推——"未知"不是"空"，也不许把失败折成空态。 */
+export interface TrashListView {
+  readonly rows: readonly TrashEntryLike[] | null
+  readonly failure: string | null
+  readonly loading: boolean
+  readonly empty: boolean
+}
+
+export function listView(list: TrashListState): TrashListView {
+  switch (list.status) {
+    case 'loading':
+      return { rows: null, failure: null, loading: true, empty: false }
+    case 'unknown':
+      return { rows: null, failure: list.failure, loading: false, empty: false }
+    case 'ready':
+      return { rows: list.rows, failure: null, loading: false, empty: list.rows.length === 0 }
+  }
+}
 
 export interface TrashQuery {
-  /** `null` = 还没读到（第一次读或读失败）；与"空的"是两件事。 */
-  readonly entries: readonly TrashEntryLike[] | null
-  readonly listFailure: string | null
+  readonly list: TrashListState
   /** `null` = 还没扫到；失败时也置回 `null`（不拿空报告冒充干净）。 */
   readonly orphanReport: OrphanReportWire | null
   readonly orphanFailure: string | null
@@ -42,11 +65,6 @@ export interface TrashQuery {
   setOrphanConfirm(open: boolean): void
   /** 「查看并清理」：把上一条失败/中性提示清掉再开预览框（旧提示不该跟新一次预览并排出现）。 */
   openOrphanPreview(): void
-  /** 只重读清单（对账 + 读）。交回**这一次读的结局**：落地 / 读失败 / 被后发的读顶掉。
-   *  残留报告与提示的联动不在这里；组合清场归 `refreshAll` / `refreshAfterWrite`。 */
-  reloadRows(): Promise<ReloadResult>
-  /** 只扫残留。调用方负责先让清单对过账（`refreshAll` / `refreshAfterWrite` 已经排好序）。 */
-  rescanOrphans(): Promise<void>
   /** 先读清单、成了再扫残留；挂载与显式「重试」用它。 */
   refreshAll(): Promise<void>
   /** 写后/失效：只重读清单；是否顺带重扫残留由这次的 `outcome` 从 action / ids / 当前清单自行派生
@@ -55,7 +73,7 @@ export interface TrashQuery {
   refreshAfterWrite(outcome?: WriteOutcome<ApplyAction>): Promise<void>
   /** 清理那批无主子会话（一段 `/apply` 的第五个动作），逐条结果落成"已不在了 / N 组未清理"。 */
   cleanOrphans(): Promise<void>
-  /** 清空回收站（聚合回执）：成功就熄掉撤销横幅并重读，失败就把原文摆到清单那块。交回是否成功。 */
+  /** 清空回收站（聚合回执）：成功就熄掉撤销横幅并重读，失败就把清单置为未知并摆上原文。交回是否成功。 */
   emptyTrash(): Promise<boolean>
 }
 
@@ -69,8 +87,7 @@ export function useTrashQuery({
   /** 面板的一枚全局闸：清空与无主子会话清理这两条写动作把整趟包在里面（面板的 `busy`）。 */
   gate: BusyGate
 }): TrashQuery {
-  const [entries, setEntries] = useState<readonly TrashEntryLike[] | null>(null)
-  const [listFailure, setListFailure] = useState<string | null>(null)
+  const [list, setList] = useState<TrashListState>({ status: 'loading' })
   const [orphanReport, setOrphanReport] = useState<OrphanReportWire | null>(null)
   const [orphanFailure, setOrphanFailure] = useState<string | null>(null)
   const [orphanNotice, setOrphanNotice] = useState<string | null>(null)
@@ -84,7 +101,11 @@ export function useTrashQuery({
 
   /** 清单的同步只读镜像：`refreshAfterWrite` 要在发下一次读**之前**按"当前清单"判要不要强制重扫，
    *  又不能让回调跟着渲染期 state 换代。 */
-  const entriesRef = useRef<readonly TrashEntryLike[] | null>(null)
+  const listRef = useRef<TrashListState>({ status: 'loading' })
+  const setListState = useCallback((next: TrashListState): void => {
+    listRef.current = next
+    setList(next)
+  }, [])
 
   const [reloadLatest] = useState(createLatestWins)
   const reloadRows = useCallback(async (): Promise<ReloadResult> => {
@@ -93,16 +114,12 @@ export function useTrashQuery({
     // 输给后发的读：这一次什么都没落地，别让调用方把它当"读失败"去清场。
     if (!ticket.current) return 'stale'
     if (!outcome.ok) {
-      setListFailure(outcome.failure.message)
-      entriesRef.current = null
-      setEntries(null)
+      setListState({ status: 'unknown', failure: outcome.failure.message })
       return 'failed'
     }
-    setListFailure(null)
-    entriesRef.current = outcome.value
-    setEntries(outcome.value)
+    setListState({ status: 'ready', rows: outcome.value })
     return 'ok'
-  }, [deps, reloadLatest])
+  }, [deps, reloadLatest, setListState])
 
   const [orphanLatest] = useState(createLatestWins)
   /** 强制重扫标记：先记再读清单；这次读输给后发读时，由赢家消费，强制不丢。 */
@@ -176,8 +193,10 @@ export function useTrashQuery({
   }, [clearOrphanState, reloadRows, rescanOrphans])
 
   const refreshAfterWrite = useCallback(
-    (outcome?: WriteOutcome<ApplyAction>): Promise<void> =>
-      refreshAfterWriteInternal(outcome !== undefined && needsOrphanRescan(outcome, entriesRef.current)),
+    (outcome?: WriteOutcome<ApplyAction>): Promise<void> => {
+      const current = listView(listRef.current).rows
+      return refreshAfterWriteInternal(outcome !== undefined && needsOrphanRescan(outcome, current))
+    },
     [refreshAfterWriteInternal],
   )
 
@@ -185,17 +204,20 @@ export function useTrashQuery({
   const emptyTrash = useCallback((): Promise<boolean> => gate.around(async () => {
     const outcome = await callRemote(() => deps.emptyTrash())
     if (!outcome.ok) {
-      // 清空失败在这块界面上的落点就是"清单读不到"那一格：回收站此刻是什么样我们不知道
-      setListFailure(outcome.failure.message)
+      // 清空失败在这块界面上的落点就是"清单未知"：回收站此刻是什么样我们不知道，旧行也不能继续可操作。
+      // 同时作废在飞的清单读——晚到的旧读不能把这一拍又盖回 ready。
+      reloadLatest.invalidate()
+      setListState({ status: 'unknown', failure: outcome.failure.message })
+      clearOrphanState()
       return false
     }
     // 清空把所有落点一起清了：还挂着的横幅是一条注定失败的「撤销」，先收掉再重读（判据与现场住
-    // `undo-toast.tsx`；逐条 purge 那一路由 settlement 的 purge 支熄灭，ADR-0013）。失败不熄——
+    // `undo-notices.ts`；逐条 purge 那一路由 settlement 的 purge 支熄灭，ADR-0013）。失败不熄——
     // 回收站还在，撤销仍是可做的动作。
     clearUndoNotice()
     await refreshAfterWriteInternal(true)
     return true
-  }), [gate, deps, refreshAfterWriteInternal])
+  }), [gate, deps, clearOrphanState, refreshAfterWriteInternal, reloadLatest, setListState])
 
   const cleanOrphans = useCallback(async (): Promise<void> => {
     if (orphanReport === null || orphanReport.roots.length === 0) {
@@ -222,28 +244,22 @@ export function useTrashQuery({
       setOrphanFailure(t('trash.orphans.failure', { message: outcome.failure.message }))
       return
     }
-    const receipt = outcome.receipt
-    const failures = receipt.verdicts.filter(isFailureVerdict)
-    const gone = failures.filter((verdict) => verdict.kind === 'neutral')
-    const failed = failures.filter((verdict) => verdict.kind !== 'neutral')
-    const partialRemoved = failed.reduce(
-      (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'removed'), 0)
-    const partialBytes = failed.reduce(
-      (sum, verdict) => sum + detailNumber(verdict.kind === 'failed' ? verdict.error.details : undefined, 'freedBytes'), 0)
+    const summary = outcome.summary
+    const gone = summary.neutralIds
+    const failed = summary.failed
     if (gone.length > 0) setOrphanNotice(t('trash.orphans.cleanGone', { count: gone.length }))
     if (failed.length > 0) {
-      const message = failureMessage(failed[0]!)
+      const message = failed[0]!.error.message
       const base = t('trash.orphans.cleanFailed', { count: failed.length, message })
-      const partial = partialRemoved > 0 || partialBytes > 0
-        ? ` ${t('trash.orphans.cleanPartial', { removed: partialRemoved, size: fileSizeText(partialBytes) })}`
+      const partial = summary.partial.removed > 0 || summary.partial.freedBytes > 0
+        ? ` ${t('trash.orphans.cleanPartial', { removed: summary.partial.removed, size: fileSizeText(summary.partial.freedBytes) })}`
         : ''
       setOrphanFailure(`${base}${partial}`)
     }
   }, [deps, gate, orphanReport, refreshAfterWrite, t])
 
   return {
-    entries,
-    listFailure,
+    list,
     orphanReport,
     orphanFailure,
     orphanNotice,
@@ -254,19 +270,11 @@ export function useTrashQuery({
       setOrphanNotice(null)
       setOrphanConfirm(true)
     },
-    reloadRows,
-    rescanOrphans,
     refreshAll,
     refreshAfterWrite,
     cleanOrphans,
     emptyTrash,
   }
-}
-
-/** 失败 `details` 里的非负数字（`orphan-clean` 的部分回执 `removed` / `freedBytes`）；其余一律当 0。 */
-function detailNumber(details: Record<string, unknown> | undefined, key: string): number {
-  const value = details?.[key]
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
 /**

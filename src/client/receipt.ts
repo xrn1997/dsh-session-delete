@@ -25,6 +25,8 @@ export type ReceiptVerdict<A extends ApplyAction> =
   | { readonly kind: 'missing'; readonly id: string; readonly message: string }
 
 export interface Receipt<A extends ApplyAction> {
+  /** 产生这份回执的动作：摘要据此只派发该动作真的有的那几种落地 id。 */
+  readonly action: A
   readonly verdicts: readonly ReceiptVerdict<A>[]
   readonly byId: ReadonlyMap<string, ReceiptVerdict<A>>
 }
@@ -57,10 +59,6 @@ export type FailureVerdict<A extends ApplyAction> = Extract<
   ReceiptVerdict<A>,
   { kind: 'failed' | 'neutral' | 'missing' }
 >
-
-export function isFailureVerdict<A extends ApplyAction>(verdict: ReceiptVerdict<A>): verdict is FailureVerdict<A> {
-  return verdict.kind === 'failed' || verdict.kind === 'neutral' || verdict.kind === 'missing'
-}
 
 /** failed / neutral 取服务端原文 `error.message`；missing 取通道自己写的那句。 */
 export function failureMessage<A extends ApplyAction>(verdict: FailureVerdict<A>): string {
@@ -108,7 +106,7 @@ export function readReceipt<A extends ApplyAction>(
   }
   const verdicts = wanted.map((id): ReceiptVerdict<A> =>
     byId.get(id) ?? { kind: 'missing', id, message: missingOutcomeMessage(action, id) })
-  return { verdicts, byId: new Map(verdicts.map((verdict) => [verdict.id, verdict])) }
+  return { action, verdicts, byId: new Map(verdicts.map((verdict) => [verdict.id, verdict])) }
 }
 
 /**
@@ -123,6 +121,86 @@ export function readSingleReceipt<A extends ApplyAction>(
   const verdicts = readReceipt(action, [id], outcomes, { single: true }).verdicts
     .filter((verdict): verdict is SingleReceiptVerdict<A> => verdict.kind !== 'already-gone')
   return { verdicts, byId: new Map(verdicts.map((verdict) => [verdict.id, verdict])) }
+}
+
+/** 一次写入回执的**一个读法**：成功、失败、中性、部分计数与落地 id 都从这里出。
+ *  座位与收尾不再自己 walk `verdicts`——那会把同一套判据在调用点再组装一遍。 */
+export interface ReceiptSummary {
+  readonly successIds: readonly string[]
+  readonly neutralIds: readonly string[]
+  /** failed + missing（通道没回）；neutral 单独在 `neutralIds`，部分计数只从 failed 的 details 取。 */
+  readonly failed: readonly { readonly id: string; readonly error: RemoteFailure }[]
+  readonly partial: { readonly removed: number; readonly freedBytes: number }
+  /** 这次动作真正落地的 id。**域由 `action` 定**：delete 是条目 id（撤销名单），restore 是会话 id
+   *  （回盘名单）；purge / count / orphan-clean 没有可撤销的落地 id，恒为空。
+   *  两个域不混在一个数组里靠调用方猜，也不各留一个永远为空的字段。 */
+  readonly landedIds: readonly string[]
+  readonly anySuccess: boolean
+}
+
+/** 一次摘要派生的两样产物：聚合摘要与逐条失败原文。
+ *  失败表只挂在 `WriteSuccess` 上（成败两支的统一读法），摘要自己不再留第二份。 */
+export interface ReceiptRead {
+  readonly summary: ReceiptSummary
+  readonly failures: ReadonlyMap<string, string>
+}
+
+function detailNumber(details: Record<string, unknown> | undefined, key: string): number {
+  const value = details?.[key]
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+/** 成功支（含批量幂等 `already-gone`）：筛选与逐条归并共用这一条，防止两处判据漂移。 */
+type SuccessVerdict<A extends ApplyAction> = Extract<ReceiptVerdict<A>, { kind: 'ok' | 'already-gone' }>
+
+function isSuccessVerdict<A extends ApplyAction>(
+  verdict: ReceiptVerdict<A>,
+): verdict is SuccessVerdict<A> {
+  return verdict.kind === 'ok' || verdict.kind === 'already-gone'
+}
+
+export function summarizeReceipt<A extends ApplyAction>(
+  receipt: Receipt<A>,
+  sessionIdOfEntry?: (entryId: string) => string | undefined,
+): ReceiptRead {
+  const successIds = receipt.verdicts.filter(isSuccessVerdict).map((verdict) => verdict.id)
+  const failures = new Map<string, string>()
+  const neutralIds: string[] = []
+  const failed: { id: string; error: RemoteFailure }[] = []
+  let partial = { removed: 0, freedBytes: 0 }
+  for (const verdict of receipt.verdicts) {
+    if (isSuccessVerdict(verdict)) continue
+    failures.set(verdict.id, failureMessage(verdict))
+    if (verdict.kind === 'neutral') {
+      neutralIds.push(verdict.id)
+      continue
+    }
+    if (verdict.kind === 'missing') {
+      failed.push({ id: verdict.id, error: { code: CLIENT_UNKNOWN_CODE, message: verdict.message } })
+      continue
+    }
+    failed.push({ id: verdict.id, error: verdict.error })
+    partial = {
+      removed: partial.removed + detailNumber(verdict.error.details, 'removed'),
+      freedBytes: partial.freedBytes + detailNumber(verdict.error.details, 'freedBytes'),
+    }
+  }
+  const landedIds = receipt.action === 'delete'
+    ? landedEntryIds(receipt)
+    : receipt.action === 'restore'
+      ? restoredSessionIds(receipt, sessionIdOfEntry)
+      : []
+  return {
+    summary: {
+      successIds,
+      neutralIds,
+      failed,
+      partial,
+      landedIds,
+      anySuccess: successIds.length > 0,
+    },
+    failures,
+  }
 }
 
 function isRestoreEntry(value: unknown): value is { readonly sessionId: string } {

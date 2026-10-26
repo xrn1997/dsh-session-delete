@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
   afterRestore: vi.fn(),
 }))
 vi.mock('../../src/client/trash-store.js', () => ({ invalidateTrash: mocks.invalidateTrash }))
-vi.mock('../../src/client/undo-toast.js', () => ({
+vi.mock('../../src/client/undo-notices.js', () => ({
   publishUndoNotice: mocks.publishUndoNotice,
   publishUndoBatchNotice: mocks.publishUndoBatchNotice,
   dismissUndoNotice: mocks.dismissUndoNotice,

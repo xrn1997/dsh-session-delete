@@ -208,24 +208,16 @@ describe('彻底删除', () => {
 })
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
-const VERB = 'src/verbs/purge-trash.ts'
 
 /**
- * 源码断言：这条动词只剩"选目标 + 拿计划交给执行器"。步骤顺序、量目录、删目录与通告都归
- * `verbs/permanent-removal.ts`——在这里再长出一段手写 journal 或自己调 `removeDir`，
- * 就等于同一个顺序又有第二个家（ADR-0002 那条"一次移动只有一个家"的延长线）。
+ * 委托结构护栏：删目录与在场通告已由能力面守住；这里只钉「选完目标后把顺序交给执行器」，
+ * 防止 purge 再长出一段自己的删除序列（能力面给不了「不要自己调」这条）。
  */
-describe('purge 的实现面：删除顺序归执行器', () => {
-  const source = () => readFileSync(join(ROOT, VERB), 'utf8')
-
-  it('不再 import createJournal，也不自己调 deps.fs.removeDir', () => {
-    const text = source()
-    expect(text).not.toContain('createJournal')
-    expect(text).not.toContain('deps.fs.removeDir')
-  })
-
+describe('purge 把删除顺序交给执行器', () => {
   it('选完目标之后直接接上计划与执行器', () => {
-    const text = source()
+    const text = readFileSync(join(ROOT, 'src/verbs/purge-trash.ts'), 'utf8')
+    expect(text).not.toContain('deps.fs.removeDir')
+    expect(text).not.toContain('createJournal')
     expect(text).toContain('planTrashRemoval(')
     expect(text).toContain('executeRemoval(')
   })

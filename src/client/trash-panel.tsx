@@ -62,7 +62,7 @@ import {
 import { TRASH_DIR_LABEL } from '../shared/wire.js'
 import { useBusyGate } from './busy-gate.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
-import { type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
+import { type SessionDeleteRemote } from './remote.js'
 import { OrphanMaintenance } from './orphan-maintenance.js'
 import { TrashDetail } from './trash-detail.js'
 import { useColumnResize } from './use-column-resize.js'
@@ -82,7 +82,7 @@ import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
 import { TrashConfirm } from './trash-confirm.js'
 import { useTrashPanelController } from './use-trash-panel-controller.js'
-import { useTrashQuery } from './use-trash-query.js'
+import { listView, useTrashQuery } from './use-trash-query.js'
 import { useTrashSelection } from './use-trash-selection.js'
 import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
 
@@ -240,7 +240,10 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
 
   // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`。
   const query = useTrashQuery({ deps, t, gate })
-  const { entries, listFailure, refreshAll } = query
+  const { list: listState, refreshAll } = query
+  // 清单状态的解读只住 `use-trash-query.ts`：面板不再自己从 status 反推失败/加载/空态。
+  const view = listView(listState)
+  const entries = view.rows
 
   const listRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -306,16 +309,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     focusRow,
   })
 
-  /**
-   * 详细信息那块的选中集合：确认框要把"这一批有哪些、要去哪"摆出来，靠的全量条目是从勾选 id 反查
-   * （顺序已经是"清单从上往下"）——清单里找不到的 id 是别的窗口刚动过，滤掉不等于丢动作
-   * （重读会把它从勾选里也剔掉）。
-   */
-  const byIdEntries = useMemo(() => new Map((entries ?? []).map((entry) => [entry.id, entry])), [entries])
+  // 恢复确认框要摆的条目由控制器从勾选与当前清单派生（顺序与"清单从上往下"一致）。
   const pending = controller.pending
-  const restoreEntries = pending?.kind === 'restore'
-    ? pending.ids.map((id) => byIdEntries.get(id)).filter((entry): entry is TrashEntryLike => entry !== undefined)
-    : []
+  const restoreEntries = controller.pendingEntries
 
   // 头部合计要把组里孩子与盘上后代的字节都算上：它们不单独列行，只加父那一格就会少报（少报的就是那 74.6 MB 那一类）
   const totalBytes = (entries ?? []).reduce((sum, entry) => sum + entry.releaseBytes, 0)
@@ -347,7 +343,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       onKeyDown={nav.onListKeyDown}
       style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: '1 1 auto', minWidth: 0 }}
     >
-      {listFailure !== null ? (
+      {view.failure !== null ? (
         <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 12, padding: '14px' }}>
           <span
             style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--dsw-alias-state-error-primary)' }}
@@ -358,16 +354,16 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 auto', minWidth: 0 }}>
             <div style={{ fontSize: 13, lineHeight: '19px' }}>{t('trash.readFailed')}</div>
             <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-word' }}>
-              {listFailure}
+              {view.failure}
             </div>
           </div>
           <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void refreshAll()}>
             {t('common.retry')}
           </Button>
         </div>
-      ) : entries === null ? (
+      ) : view.loading ? (
         <div style={{ padding: '20px 2px', fontSize: 12.5, color: 'var(--dsw-alias-label-tertiary)' }}>{t('trash.loading')}</div>
-      ) : entries.length === 0 ? (
+      ) : view.empty ? (
         <div
           style={{
             display: 'flex',
@@ -572,7 +568,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         disabled={controller.busy}
                         onClick={(event) => {
                           event.stopPropagation()
-                          controller.setPending({ kind: 'entry', entry })
+                          controller.request({ kind: 'entry', entry })
                         }}
                       >
                         {t('trash.row.purge')}
@@ -715,7 +711,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       variant="outline"
                       size="sm"
                       disabled={checkedIds.length === 0 || controller.busy}
-                      onClick={() => controller.setPending({ kind: 'restore', ids: checkedIds })}
+                      onClick={() => controller.request({ kind: 'restore', ids: checkedIds })}
                     >
                       {t('trash.select.restore', { count: checkedIds.length })}
                     </Button>
@@ -729,7 +725,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       style={BULK_DANGER}
                       icon={<IconTrashOutlineRegular size={13} />}
                       disabled={checkedIds.length === 0 || controller.busy}
-                      onClick={() => controller.setPending({ kind: 'entries', ids: checkedIds })}
+                      onClick={() => controller.request({ kind: 'entries', ids: checkedIds })}
                     >
                       {t('trash.select.purge', { count: checkedIds.length })}
                     </Button>
@@ -743,7 +739,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                 style={BULK_DANGER}
                 icon={<IconTrashOutlineRegular size={13} />}
                 disabled={controller.busy}
-                onClick={() => controller.setPending({ kind: 'all' })}
+                onClick={() => controller.request({ kind: 'all' })}
               >
                 {t('trash.emptyAll')}
               </Button>
@@ -758,7 +754,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           restoreEntries={restoreEntries}
           busy={controller.busy}
           t={t}
-          onCancel={() => controller.setPending(null)}
+          onCancel={controller.cancelPending}
           onConfirmPurge={() => void controller.confirmPurge()}
           onConfirmRestore={(ids) => void controller.confirmApply('restore', ids)}
         />

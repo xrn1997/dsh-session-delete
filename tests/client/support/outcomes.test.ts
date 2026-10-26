@@ -34,9 +34,10 @@ describe('测试回执构造器', () => {
   it('writeOutcome / writeFailed 造出 query 层要的两种形状', () => {
     const success = writeOutcome('purge', ['e1'])
     expect(success.ok).toBe(true)
-    expect(success.failures.size).toBe(0)
-    expect(success.successIds).toEqual([])
-    expect(success.anySuccess).toBe(false)
+    // 空 outcomes ⇒ 逐条 missing：摘要与 failures 是同一份，不再出现"空失败表 + missing 回执"两套说法。
+    expect(success.failures.size).toBe(1)
+    expect(success.summary.successIds).toEqual([])
+    expect(success.summary.anySuccess).toBe(false)
 
     const failedWrite = writeFailed('delete', ['a', 'b'], '通道断了')
     expect(failedWrite.ok).toBe(false)

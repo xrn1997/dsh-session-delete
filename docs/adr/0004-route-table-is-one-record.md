@@ -23,8 +23,8 @@ Status: accepted
 ## 决定
 
 1. 新增 `src/api/route-table.ts`（Node 半私有——浏览器半要 import `wire.ts`，值 import 会把 Node 半拖进 bundle）：
-   每个段名一行，声明 `{ method, body, purity, run }`。
-2. `dispatch()` 读这一条记录：方法、纯度、body 预读三件事**只有一处定义**（原先分居 `dispatch()` 与
+   每个段名一行，声明 `{ method, body, purity, read, run }`。
+2. `dispatch()` 读这一条记录：方法、纯度、读面、body 预读四件事**只有一处定义**（原先分居 `dispatch()` 与
    `purityOf()` 两处的判断已并进这张表）。
 3. `APPLY_ACTIONS` 由 `ApplyAction` **派生**（`Record<ApplyAction, …>` + `satisfies`）：
    少一个动作就编译不过，多一个动作也是。

@@ -12,7 +12,7 @@
  * ③ **调用日志按需**：只有调用方点名的方法（`logMethods`）才往 `log` 里写，默认格式就是方法名——
  *    想带上参数就自己给 `format`。读口一律不写日志（否则每个用例的日志里都塞满 `workspaceOf`）。
  */
-import { vi, type Mock } from 'vitest'
+import { vi } from 'vitest'
 import type { FsPort } from '../../src/ports/fs-port.js'
 import type {
   CorpusRead,
@@ -25,13 +25,8 @@ import type { TrashEntry } from '../../src/trash/entry.js'
 import { createTrashLedger, type TrashLedger } from '../../src/trash/ledger.js'
 import { createMemoryManifest, type ManifestPort } from '../../src/trash/manifest.js'
 import type { DeleteDeps } from '../../src/deps.js'
-
-/** 把端口上的每个方法换成 `vi.fn`（保参数与返回值类型——强转换不来这一点）。
- *  成员**可写**：用例经常"翻一格"（`host.isLive = vi.fn(...)`）来表达"这一条在跑"，那是这份假件的
- *  interface 的一部分，不该逼人绕回强转。 */
-type Mocked<T> = {
-  -readonly [K in keyof T]: T[K] extends (...args: infer A) => infer R ? Mock<(...args: A) => R> : never
-}
+import { createMemberPresence } from '../../src/verbs/member-presence.js'
+import type { Mocked } from './mocked.js'
 
 export type FakeHost = Mocked<HostPort>
 export type FakeFs = Mocked<FsPort>
@@ -235,7 +230,14 @@ export function createFakeDeps(over: FakeDepsOptions = {}): {
   const ledger = createTrashLedger(manifest, fs, home)
   const now = over.now
   return {
-    deps: { fs, host, ledger, home, now: typeof now === 'function' ? now : () => now ?? 0 },
+    deps: {
+      fs,
+      host,
+      ledger,
+      home,
+      presence: createMemberPresence(host),
+      now: typeof now === 'function' ? now : () => now ?? 0,
+    },
     host,
     fs,
     ledger,

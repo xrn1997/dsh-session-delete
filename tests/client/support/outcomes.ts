@@ -14,7 +14,7 @@
  *
  * 本 module 只造数据、不碰宿主：`readReceipt` 是浏览器半的纯读法，所以这里也只用它起空回执。
  */
-import { readReceipt } from '../../../src/client/receipt.js'
+import { readReceipt, summarizeReceipt, type ReceiptRead } from '../../../src/client/receipt.js'
 import type { WriteFailure, WriteSuccess } from '../../../src/client/write.js'
 import {
   SESSION_DELETE_CODES,
@@ -114,19 +114,22 @@ export function purgeOutcomes(
 }
 
 /** `runWrite` 的**信封成功**那一支：回执照 `readReceipt` 的读法起（空 outcomes ⇒ 逐条 missing），
- *  失败表留空、成功名单为空；查询编排只认动作与 id，逐条判读另有用例。`over` 覆盖这一层的判据。
- *  返回值收在成功支（`WriteSuccess` 可当 `WriteOutcome` 用，失败支由 `writeFailed` 造）。 */
+ *  失败表就是那一份 missing 原文、成功名单为空；查询编排只认动作与 id，逐条判读另有用例。
+ *  `over` 覆盖这一层的判据。返回值收在成功支（`WriteSuccess` 可当 `WriteOutcome` 用，失败支由 `writeFailed` 造）。 */
+function summarizeOutcomes<A extends ApplyAction>(action: A, ids: readonly string[]): ReceiptRead {
+  return summarizeReceipt(readReceipt(action, ids, []))
+}
+
 export function writeOutcome<A extends ApplyAction>(
   action: A, ids: readonly string[], over: Partial<WriteSuccess<A>> = {},
 ): WriteSuccess<A> {
+  const read = summarizeOutcomes(action, ids)
   const success: WriteSuccess<A> = {
     ok: true,
     action,
     ids,
-    receipt: readReceipt(action, ids, []),
-    failures: new Map(),
-    successIds: [],
-    anySuccess: false,
+    summary: read.summary,
+    failures: read.failures,
     ...over,
   }
   return success

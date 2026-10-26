@@ -6,11 +6,10 @@
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
 import { bareSessionId, type HostCorpusPort, type SubagentMember } from '../ports/host-port.js'
-import type { CoreDeps } from '../deps.js'
+import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { isSessionDeleteCodeError } from '../shared/wire.js'
 import { verbError } from './errors.js'
 import { assertNoLive } from './live-admission.js'
-import { createMemberPresence } from './member-presence.js'
 
 export interface MeasuredMemberDir {
   readonly dir: string
@@ -273,10 +272,10 @@ export async function planOrphanRemoval(
  * 通告只经 `member-presence`（摘活体三态 + `api-session/removed`），不在这里另写一份。
  */
 export async function executeRemoval(
-  deps: CoreDeps,
+  deps: RemovalDeps,
   plan: RemovalPlan,
 ): Promise<{ removed: number; freedBytes: number }> {
-  const presence = createMemberPresence(deps.host)
+  const presence = deps.presence
   let removed = 0
   /** 删到这一刻已经腾出的**进度**：只喂 `orphan` 的部分回执；成功回执念计划的合计（`plan.bytes`）。 */
   let freedSoFar = 0

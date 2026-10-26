@@ -8,37 +8,24 @@
  * 这条协议说错一次就是客户端留着假行、或删掉真行，所以只留一个家。
  *
  * 边界：
- * - 批量恢复自己发起的那次通告（`announceRestored(ids)`）归 `verbs/batch.ts`（ADR-0002）：同一个方法、
- *   同一份预取，只是调用方是那一批的主人。这里只判单成员事实。
+ * - 批量恢复的编排（攒 id、批尾一次发）归 `verbs/batch.ts`（ADR-0002）；它经同一份能力面调
+ *   `announceRestored(ids)`，本模块只实现这条批量通告（ADR-0019）。
  * - 本模块不决定哪个键算归位：动词在 `tail.onUndone` 里把 `restored(key)` 读成事实再交进来，真值表住这里；
  *   `run` / `undo` 之后补一条通告的**形状**由 {@link withPresenceTail} 拥有。
  * - 本模块用到的三条（`evictLive` / `announceRemoved` / `announceRestored`）按契约不抛（evictLive 三态、
  *   announce* 内部吞异常），这里不再叠 catch。
  */
 import type { EvictionOutcome, HostPresencePort } from '../ports/host-port.js'
+import type { PresenceCapability } from '../ports/presence-port.js'
 import type { Journal, JournalUndo } from './member-journal.js'
 
 /** 本模块实际用到的三条宿主能力。`Pick` 此刻覆盖 `HostPresencePort` 的三条方法，仍留着它当闸：
- *  将来端口多出第四条时，这里不会被动跟着变宽——这里是单成员协议，批量恢复由 `verbs/batch.ts`
- *  自己发起，不该因为共用同一颗 adapter 就在类型上声明依赖。 */
+ *  将来端口多出第四条时，这里不会被动跟着变宽——能力面只暴露这三条，批量通告的编排归 `verbs/batch.ts`。 */
 export type MemberPresenceHost = Pick<HostPresencePort, 'evictLive' | 'announceRemoved' | 'announceRestored'>
 
-export interface MemberBackFacts {
-  /** 目录搬回原处了吗。 */
-  readonly diskBack: boolean
-  /** 账本挂回去了吗（本来没有账目时算 true）。 */
-  readonly workspaceBack: boolean
-}
-
-export interface MemberPresence {
-  /** 成员已经不在宿主可见列表：摘活体；三态不是 unknown 时发 removed。
-   *  `backInTrash: false` 表示目录没退回回收站（恢复回滚失败），此时什么都不做。 */
-  memberGone(sessionId: string, facts?: { readonly backInTrash?: boolean }): Promise<void>
-  /** 成员已经回到原来的可见状态：目录与账本两件写都回去才发 added。 */
-  memberBack(sessionId: string, facts: MemberBackFacts): Promise<void>
-}
-
-export function createMemberPresence(host: MemberPresenceHost): MemberPresence {
+/** 本仓的在场能力实现：端口形状住 `src/ports/presence-port.ts`，这里只做三态与真值表。
+ *  `announceRestored` 直接交宿主那一手：能力面与宿主面同名同签名，再包一层只会多一个转调。 */
+export function createMemberPresence(host: MemberPresenceHost): PresenceCapability {
   return {
     async memberGone(sessionId, facts = {}) {
       if (facts.backInTrash === false) return
@@ -49,6 +36,7 @@ export function createMemberPresence(host: MemberPresenceHost): MemberPresence {
       if (!facts.diskBack || !facts.workspaceBack) return
       await host.announceRestored([sessionId])
     },
+    announceRestored: host.announceRestored,
   }
 }
 
@@ -76,7 +64,7 @@ export interface PresenceTail {
  * 边界：`memberGone` 的 `backInTrash:false` 早退与 `memberBack` 的两件齐备真值表仍归 `createMemberPresence`；
  * 这里只把事实原样递过去，不替它判断。
  */
-export function withPresenceTail(presence: MemberPresence, journal: Journal, tail: PresenceTail): Journal {
+export function withPresenceTail(presence: PresenceCapability, journal: Journal, tail: PresenceTail): Journal {
   const announce = async (undo: JournalUndo): Promise<void> => {
     const fact = tail.onUndone(undo)
     if (fact.kind === 'leave') {

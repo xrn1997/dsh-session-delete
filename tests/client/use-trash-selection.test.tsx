@@ -100,4 +100,19 @@ describe('选择面 · 清单换了', () => {
     expect(result.current.checkedIds).toEqual(['b1'])
     void groups
   })
+
+  it('清单未知（null）⇒ 勾选保留：未知只是不知道，不拿它当"没了"；读数回来再剔掉真不在的', () => {
+    const { result, rerender } = renderHook(
+      ({ entries }: { entries: readonly TrashEntryLike[] | null }) =>
+        useTrashSelection({ entries, groups: groupByProject(entries ?? [], zhTranslate) }),
+      { initialProps: { entries: rows as readonly TrashEntryLike[] | null } },
+    )
+    act(() => { result.current.toggleCheck('a1') })
+    act(() => { result.current.toggleCheck('b1') })
+    rerender({ entries: null })
+    // 未知这一拍清单不交行，`checkedIds` 自然无从派生；要看的是现场本身有没有被清掉。
+    expect([...result.current.checked].sort()).toEqual(['a1', 'b1'])
+    rerender({ entries: rows.filter((entry) => entry.id !== 'a1') })
+    expect(result.current.checkedIds).toEqual(['b1'])
+  })
 })

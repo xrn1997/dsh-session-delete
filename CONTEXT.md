@@ -40,6 +40,10 @@ _Avoid_: 索引、数据库（清册是宿主 storage 域里的内部索引，�
 清册的两条读法：**真相读** `list()` 先对账再交行；**raw 索引** `raw()` 只回清册、不对账也不写行。谁走哪条见 `docs/architecture.md` §4 与 ADR-0012。_唯一实现_：`src/trash/ledger.ts` 的 `TrashLedger`。
 _Avoid_: 账本（本仓「账本」指宿主工作区注册表；清册读面不要与它混用）。
 
+**路由读面**（route read）
+路由记录上的一格：`none` / `list`（真相读，先对账）/ `raw`（索引快照，不对账）。读段与 `/empty` 的处理函数只消费路由交来的 `RouteRead`，不自己挑 `ledger.list()` / `raw()`；`/apply` 的写动词读面归动词自己（谁写谁读）。_唯一实现_：`src/api/route-table.ts` 的 `RouteSpec.read` 与 `RouteRead`（由 `src/api/dispatch.ts` 交出去）。
+_Avoid_: 纯度（纯度管是否进到达序链；`count` 是 pure/不读，`detail` 是 pure/raw）。
+
 **同批已带走集**（batch carried set）
 同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记、恢复/彻底删除按条目 id 记，各一个 adapter；它决定这一条还该不该交给动词，entry 适配另交 purge 一份收缩中的当前只读视图（盘上后代要按清册里还在的 id 排除）。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
 _唯一实现_：`src/verbs/batch-carried.ts`
@@ -71,7 +75,8 @@ _Avoid_: 彻底删除与永久删除混用（本仓统一说「永久删除」�
 一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，只写、不再量、不再判活体。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。计划与执行住 `src/verbs/permanent-removal.ts`（成功回执的字节念计划、执行期只记进度）；**活体准入的判据**住 `src/verbs/live-admission.ts`，计划只决定它在任何写之前跑。裁决见 ADR-0006。
 
 **成员在场**（member presence）
-一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；批量恢复仍由 `src/verbs/batch.ts` 发起一次 `announceRestored(ids)`（单条就是长度为 1 的批，ADR-0014）。
+一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；动词经 `CoreDeps.presence` 的 `PresenceCapability` 调用（端口形状住 `src/ports/presence-port.ts`）。批量恢复仍由 `src/verbs/batch.ts` 发起一次 `announceRestored(ids)`（单条就是长度为 1 的批，ADR-0014）。
+_唯一实现_：`src/verbs/member-presence.ts` 的 `createMemberPresence`（动词面形状住 `src/ports/presence-port.ts`）。
 
 **归档**（archive）
 宿主「从分组面藏掉」那一档，只反映**用户自己**的归档状态；**回收站不使用它**（删除不调 `archiveSession`，见 ADR-0008）。旧版本删除留下的归档态条目在恢复时迁移式取消归档；`wasArchived` 只记删除前的事实。
@@ -85,6 +90,10 @@ _Avoid_: 通知、事件（太泛；通告专指这两条成对的客户端事�
 宿主 DOM 这个组件树之外的事实源，在渲染期交出的读数：脏了才重读，干净时回同一个引用；变化由适配器里的观察者通告，不靠定时重读。判据与裁决见 ADR-0015。
 _Avoid_: 缓存（这里只讲「同一引用」这条 snapshot 契约，不是通用缓存）；轮询（没有定时器在重读 DOM）。_唯一实现_：`src/client/host-rows.ts` 的 `useVisibleSelectableRows`（订阅骨架住 `src/client/store.ts` 的 `createLazyStore`）。
 
+**清单状态**（trash list state）
+`useTrashQuery` 交出的唯一清单真相：`loading`（还没读到）/ `ready(rows)`（有行）/ `unknown(failure)`（读不到）。`unknown` 不向下游交出任何行——选择、导航、分组与页脚动作都不再读旧行；清空失败同样落 `unknown`。_唯一实现_：`src/client/use-trash-query.ts`。
+_Avoid_: 缓存、空清单（`unknown` 不是空，`ready([])` 才是空）。
+
 **写后重扫**（post-write orphan rescan）
 一次写入之后要不要重扫无主子会话：由这次的写入结果从动作、请求的 id 与发读前的清单派生，调用方不传标记。判据见 ADR-0016。
 _Avoid_: 强制刷新（那是面板上的手动动作）；把「报告为空」当成「不用扫」——报告 `null` 是未知，不是零。_唯一实现_：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`。
@@ -92,6 +101,14 @@ _Avoid_: 强制刷新（那是面板上的手动动作）；把「报告为空�
 **写入座位**（write seat）
 一次 `/apply` 写入发生在哪个界面位置：菜单删除、批量删除、外部撤销恢复、面板恢复 / 永久删除、无主子会话清理。座位拥有自己的呈现材质、闸与重读通道；逐条收尾顺序与 `anySuccess` 门仍住 `src/client/write-settlement.ts`，busy 的生命周期住 `src/client/busy-gate.ts`。_唯一实现_：`src/client/write-seats.ts`。
 _Avoid_: 写入入口、按钮处理（座位说的是一个界面位置的整趟材质，不是某颗控件的回调）。
+
+**回执摘要**（receipt summary）
+一次写 `/apply` 回执的唯一派生物：成功 id、失败表、中性 id、失败 verdict、部分计数、按动作取的相关落地 id（delete 的条目 id / restore 的回盘会话 id）与 `anySuccess`。写入座位与收尾只消费摘要，不再各自 walk `verdicts`。_唯一实现_：`src/client/receipt.ts` 的 `summarizeReceipt`。
+_Avoid_: 回执（写回执的原始 `Receipt` 仍住 `receipt.ts`，是摘要的输入，不是调用方的读法）；`count` 的逐条数值仍由 `src/client/batch-select.tsx` 的 `fetchCounts` 读 `verdicts`，它不产摘要。
+
+**待确认动作**（pending action）
+面板状态机里等待确认的一条 / 一批 / 整站动作；控制器拥有 `pending`、`pendingEntries` 与 request 意图，确认框只渲染。_唯一实现_：`src/client/use-trash-panel-controller.ts`。
+_Avoid_: 确认框状态（框只管呈现；开合与关框规则不在视图里）。
 
 **后发读赢**（latest-wins）
 同一类异步读里只有最新发起的那次允许落地；晚到的旧响应直接丢弃。它只做 compare-and-set，不拥有防抖、轮询、定时器或焦点策略。_唯一实现_：`src/client/store.ts` 的 `createLatestWins`。

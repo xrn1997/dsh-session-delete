@@ -1,7 +1,7 @@
 import { bareSessionId, type SessionIdentity } from '../ports/host-port.js'
 import type { TrashEntry } from '../trash/entry.js'
 import type { OrphanCleanStatsWire, OrphanReportWire } from '../shared/wire.js'
-import type { CoreDeps } from '../deps.js'
+import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { executeRemoval, measureMemberDir, planOrphanRemoval } from './permanent-removal.js'
 
@@ -77,26 +77,25 @@ export function orphanGroupsOf(
   return groups
 }
 
-/** **本函数是纯扫描，不对账、不写清册行**（`/orphans` 声明为 pure，一次扫描不能顺手写行）。清册默认读
- *   `ledger.raw()`；写路径（`orphan-clean`）可以在调它之前先 `ledger.list()` 对账，并把交回的行递进来，
- *  免得同一份索引再读一遍——否则刚被人手工搬进 `session-trash/` 的父目录还没有行，会被当成"父没了"
- *  直接删盘。
+/** **本函数是纯扫描，不对账、不写清册行**（`/orphans` 声明为 pure，一次扫描不能顺手写行）。
+ *  清册行由调用方选好再交进来：`/orphans` 交 `read.rows()`（raw 索引），`orphan-clean` 交
+ *  `ledger.list()`（对账后的行）——否则刚被人手工搬进 `session-trash/` 的父目录还没有行，会被当成
+ *  "父没了"直接删盘。扫描不再自己回落到 `ledger.raw()`：读面归属住路由记录（ADR-0004 / ADR-0012）。
  *
  *  `listSessions()` 回 `{ available: false }` 时**必须抛**：那是宿主的会话语料服务没挂，不是"这个家没有孤儿"。
  *  拿缺席当空语料 ⇒ 报告说"零条孤儿"、界面上一句"没有要清理的"，而盘上真有几百 MB——那是假话，
  *  所以这里按 `io` 响亮失败（AGENTS.md：`available: false` 意味着服务缺席，扫描方不许冒充读数）。 */
 export async function loadOrphanGroups(
   deps: CoreDeps,
-  /** 调用方已对账过的清册行（`ledger.list()`）；缺席则读 `ledger.raw()`。 */
-  trash?: readonly TrashEntry[],
+  /** 调用方选好并交来的清册行：`/orphans` 交 `read.rows()`，`orphan-clean` 交 `ledger.list()`。 */
+  trash: readonly TrashEntry[],
 ): Promise<readonly OrphanGroup[]> {
   const read = await deps.host.listSessions()
   if (!read.available) {
     throw verbError('io', '无主子会话扫描需要宿主的 sessionQuery.listSessions')
   }
   const corpus = read.value
-  const rows = trash ?? await deps.ledger.raw()
-  const groups = orphanGroupsOf(corpus, rows.map((entry) => entry.sessionId))
+  const groups = orphanGroupsOf(corpus, trash.map((entry) => entry.sessionId))
   const out: OrphanGroup[] = []
   for (const group of groups) {
     const members: OrphanMember[] = []
@@ -154,7 +153,7 @@ export function reportOrphans(groups: readonly OrphanGroup[]): OrphanReportWire 
  * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 本来就是「未分组」，不是故障）。
  */
 export async function cleanOrphanGroup(
-  deps: CoreDeps,
+  deps: RemovalDeps,
   group: OrphanGroup,
 ): Promise<OrphanCleanStatsWire> {
   return await executeRemoval(deps, await planOrphanRemoval(deps, group.members))

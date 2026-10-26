@@ -1,6 +1,6 @@
 # ADR-0005 — 成员离场 / 归位通告只有一个家：`src/verbs/member-presence.ts`
 
-Status: accepted
+Status: superseded by 0019
 
 ## 背景
 

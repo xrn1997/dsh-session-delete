@@ -7,6 +7,7 @@ import { resolveHome } from './ports/home.js'
 import { createTrashLedger } from './trash/ledger.js'
 import { createHostStorageManifest } from './trash/storage-manifest.js'
 import type { DeleteDeps } from './deps.js'
+import { createMemberPresence } from './verbs/member-presence.js'
 import { SESSION_DELETE_API_PREFIX } from './shared/wire.js'
 
 export const name = '@xrn1997/dsh-session-delete'
@@ -49,7 +50,7 @@ interface WebServerLike {
 }
 
 /**
- * 装配顺序：**清单 → 端口 → 动词依赖 → 前缀路由**（`DeleteDeps` 就是前两者的合一）。
+ * 装配顺序：**清单 → 端口 → 在场能力 → 动词依赖 → 前缀路由**（`DeleteDeps` 把这些依赖面合成一颗）。
  *
  * 路由用 `ctx.effect` 挂、disposer 归装载它的那根 fiber：插件卸载即摘路由（`register` 返回的
  * disposer 是官方契约）。**同一进程里只注册一次**这件事由宿主把住：重复的 `(kind, path)`
@@ -59,11 +60,13 @@ export function apply(ctx: Context): void {
   const fs = createFsPort()
   const home = resolveHome()
   const rawManifest = createHostStorageManifest(ctx)
+  const host = createHostPort(ctx)
   const deps: DeleteDeps = {
     fs,
-    host: createHostPort(ctx),
+    host,
     ledger: createTrashLedger(rawManifest, fs, home),
     home,
+    presence: createMemberPresence(host),
     now: () => Date.now(),
   }
   const webServer = (ctx as unknown as { webServer: WebServerLike }).webServer

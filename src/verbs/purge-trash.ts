@@ -1,5 +1,5 @@
 import type { TrashEntry } from '../trash/entry.js'
-import type { CoreDeps } from '../deps.js'
+import type { RemovalDeps } from '../deps.js'
 import { verbError } from './errors.js'
 import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
 
@@ -19,7 +19,7 @@ import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
  * 带部分计数的 `details` 回执只属于 `orphan-clean`，purge 的 `removed` / `freedBytes` 仍只在成功回执里给）。
  * 对应地，`kind:'trash'` 的计划失败时执行器只抛那一步的 `io` 与原文、不带 details。
  */
-export function purgeTrash(deps: CoreDeps) {
+export function purgeTrash(deps: RemovalDeps) {
   return async function purgeTrash(
     /** 这一组（只读）；`undefined` = 清空。批量层由 `batch-carried.ts` 的 `claimOf` 给出，直调者
      *  按 `trash/groups.ts` 的 `groupOf` 自己算；ghost 父的组只有孩子（不含 `requestedId`），照样清

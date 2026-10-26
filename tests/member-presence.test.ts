@@ -1,6 +1,3 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { createLogWorld } from './support/world.js'
 import { createMemberPresence, withPresenceTail } from '../src/verbs/member-presence.js'
@@ -62,41 +59,11 @@ describe('成员在场', () => {
     await createMemberPresence(host).memberBack('s1', { diskBack: true, workspaceBack: true })
     expect(host.evictLive).not.toHaveBeenCalled()
   })
-})
 
-const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
-const PRESENCE = 'src/verbs/member-presence.ts'
-const BATCH = 'src/verbs/batch.ts'
-const HOST_CALL = /\b(?:deps\.)?host\.(evictLive|announceRemoved|announceRestored)\s*\(/g
-
-function walk(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir)) {
-    if (entry === 'node_modules' || entry === 'lib' || entry === '.git') continue
-    const p = join(dir, entry)
-    if (statSync(p).isDirectory()) walk(p, out)
-    else if (/\.(ts|tsx)$/.test(entry)) out.push(p)
-  }
-  return out
-}
-
-describe('通告的唯一调用者', () => {
-  it('evictLive / announceRemoved 只在 member-presence 里被调用；announceRestored 只另许批量恢复那一处', () => {
-    const violations = walk(join(ROOT, 'src'))
-      .map((file) => file.slice(ROOT.length + 1).replace(/\\/g, '/'))
-      .filter((file) => file !== PRESENCE)
-      .flatMap((file) => {
-        const text = readFileSync(join(ROOT, file), 'utf8')
-        return [...text.matchAll(HOST_CALL)]
-          .filter((match) => !(file === BATCH && match[1] === 'announceRestored'))
-          .map((match) => `${file}: ${match[0]}`)
-      })
-    expect(violations).toEqual([])
-  })
-
-  it('扫描不是空转：member-presence 里三件都还命中着（删空它不会让上一条变绿）', () => {
-    const text = readFileSync(join(ROOT, PRESENCE), 'utf8')
-    const hits = new Set([...text.matchAll(HOST_CALL)].map((match) => match[1]))
-    expect(hits).toEqual(new Set(['evictLive', 'announceRemoved', 'announceRestored']))
+  it('announceRestored：一批归位只发一次通告', async () => {
+    const { host, log } = makeHost()
+    await createMemberPresence(host).announceRestored(['s1', 's2'])
+    expect(log).toEqual(['announceRestored(s1,s2)'])
   })
 })
 

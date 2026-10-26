@@ -1,10 +1,11 @@
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
-import type { CoreDeps, DeleteDeps } from '../deps.js'
+import type { CoreDeps, DeleteSessionDeps } from '../deps.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { verbError } from './errors.js'
 import { attempt, createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
 import { assertNoLive } from './live-admission.js'
-import { createMemberPresence, withPresenceTail, type MemberPresence } from './member-presence.js'
+import { withPresenceTail } from './member-presence.js'
+import type { PresenceCapability } from '../ports/presence-port.js'
 import { moveGroup } from './move-group.js'
 
 export interface DeleteResult {
@@ -37,8 +38,8 @@ interface Member {
  * 组语义归 `trash/groups.ts`）。
  * 结果带回这次真的搬走的整组（`movedSessionIds`）——它是动词交回的内部数据，不再靠回调借用动词的手。
  */
-export function deleteSession(deps: DeleteDeps) {
-  const presence = createMemberPresence(deps.host)
+export function deleteSession(deps: DeleteSessionDeps) {
+  const presence = deps.presence
   return async function deleteSession(sessionId: string): Promise<DeleteResult> {
     // 语料看不见（`available: false`）⇒ 只删父：写侧只许降级，盘上残留留给 `GET /orphans` 兜底。
     const read = await deps.host.subagentMembersOf([sessionId])
@@ -95,7 +96,7 @@ export function deleteSession(deps: DeleteDeps) {
  */
 async function memberMove(
   deps: CoreDeps,
-  presence: MemberPresence,
+  presence: PresenceCapability,
   member: Member,
   deletedAt: number,
   parentEntryId: string | undefined,

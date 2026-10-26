@@ -11,7 +11,7 @@
 import type { BusyGate } from './busy-gate.js'
 import type { OneShotDeps, TrashEntryLike } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
-import { dismissUndoNotice, publishUndoBatchNotice, publishUndoNotice } from './undo-toast.js'
+import { dismissUndoNotice, publishUndoBatchNotice, publishUndoNotice } from './undo-notices.js'
 import { runWrite, type WriteOutcome } from './write.js'
 
 /** 会话行菜单的单删座位：一条会话、`single` 读法、成功发单条撤销横幅。交回这条会话的失败原文。 */
@@ -91,13 +91,13 @@ export function restoreFromPanel(input: PanelRestoreInput): Promise<WriteOutcome
     action: 'restore',
     ids: input.ids,
     single: input.single,
+    // already-gone 的回执不带行；它的 sessionId 只能从面板当前清单里取，取不到就跳过（那条的旧重开
+    // pending 由下一次删除/恢复按「最新动作优先」作废）。
+    sessionIdOfEntry: (entryId) => input.entries?.find((entry) => entry.id === entryId)?.sessionId,
     presentation: {
       panelSeat: true,
       dismissUndo: dismissUndoNotice,
       clearDetailCache: input.clearDetailCache,
-      // already-gone 的回执不带行；它的 sessionId 只能从面板当前清单里取，取不到就跳过（那条的旧重开
-      // pending 由下一次删除/恢复按「最新动作优先」作废）。
-      sessionIdOfEntry: (entryId) => input.entries?.find((entry) => entry.id === entryId)?.sessionId,
     },
     gate: input.gate,
     refresh: input.refreshAfterWrite,

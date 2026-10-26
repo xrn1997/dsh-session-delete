@@ -54,6 +54,8 @@ export function useTrashSelection({
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set())
 
   // 清单换了 ⇒ 勾着的那条可能已经不存在了（别处删了 / 恢复了 / 彻底删了）：剔掉它。
+  // 清单未知（null）不算“没了”：这一拍只是不知道，勾选留着；读数回来 effect 会再跑一次，
+  // 把真不在的行剔掉。与控制器“未知不算清场”同一条判据。
   useEffect(() => {
     if (entries === null) return
     setChecked((current) => {

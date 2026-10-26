@@ -1,6 +1,6 @@
 # ADR-0007 — 宿主端口按角色切成三片：身份、在场、语料（缺席显式成 `CorpusRead`）
 
-Status: accepted
+Status: superseded by 0019
 
 ## 背景
 
@@ -62,4 +62,4 @@ Status: accepted
 - **required / optional 双语料 interface**（`HostCorpusPort` 与一个可选变体）：服务在不在是运行期事实，不是 adapter 的类型；那样会把"这一趟有没有语料"提前固化到装配期选中的接口上，调用方仍要分支，还多一层"我拿到的是哪一种"。
 - **拆成三个 adapter 对象**：三者共享同一个 ctx，且彼此调用（`announceRestored` 要会话表，语料 BFS 要用 `projectKey` 与 `bareSessionId`）——拆开要么变成对象间自调、要么再抽第四个共享对象；假件也得为每条用例拼三个对象，比一个复合面更重。
 
-锚点：`CONTEXT.md`（角色端口 / 语料缺席）；`src/ports/host-port.ts`；ADR-0002（批量归 `src/verbs/batch.ts`）、ADR-0005（成员通告归 `src/verbs/member-presence.ts`）、ADR-0006（永久删除计划与执行）、ADR-0014（恢复通告收成一条按 id 的方法）
+锚点：`docs/architecture.md` §2（角色端口 / 语料缺席）；`src/ports/host-port.ts`；ADR-0002（批量归 `src/verbs/batch.ts`）、ADR-0005（成员通告归 `src/verbs/member-presence.ts`）、ADR-0006（永久删除计划与执行）、ADR-0014（恢复通告收成一条按 id 的方法）

@@ -19,7 +19,7 @@ Status: accepted
 3. **live 准入住计划里、在任何写之前**：purge 查 targets 与全部枚举到的盘上后代；orphan-clean 查整组（含目录已不在的成员）。任一在跑就整条拒绝、零副作用。
 4. **部分回执由 `kind` 决定，只覆盖删目录那一段**（**2026-10-20 就地订正**：计划上曾有一个 `receipt:'none' | 'partial'` 字段，与 `kind` 在生产里 1:1、等于同一件事记了两份，已删除）：`kind:'trash'`（purge）失败只抛那一步的 `io` 与原文、不带 details；`kind:'orphan'`（orphan-clean）在**删目录阶段**失败时另带 `{removed, freedBytes, failedSessionId}`。删目录之前的 `unarchive` / `detach` 一步不套这层回执：purge 照旧折成带标签的 `io`、仍不带 details，orphan-clean **原样抛出**那个错误（不包 `io`、不带 details）——与迁移前的错误形状一致。同一执行器两种回执，由 `kind` 决定，执行器不猜。
 5. **通告仍归 `member-presence`**：执行器逐条调 `memberGone`（摘活体三态 + `api-session/removed`），不另写一份（ADR-0005）。
-6. **journal 不参与永久删除**：它只服务有反向动作的一次移动；永久删除的步骤顺序由执行器拥有。源码护栏把 `createJournal(` 的允许名单钉在 `src/verbs/member-journal.ts`（定义）与 `src/verbs/delete-session.ts` / `src/verbs/restore-session.ts`（调用）。
+6. **journal 不参与永久删除**：它只服务有反向动作的一次移动；永久删除的步骤顺序由执行器拥有。源码护栏把 `createJournal(` 的允许名单钉在 `src/verbs/member-journal.ts`（定义）与 `src/verbs/delete-session.ts` / `src/verbs/restore-session.ts`（调用）；删目录与在场通告在动词面已由 `RemovalDeps` / `PresenceCapability` 守住。
 
 ## 边界
 
@@ -34,7 +34,7 @@ Status: accepted
 - **回收站目录不在的行报 0 字节、清册行照样摘**：`measureTrashRow` 回 `present:false` / 0，执行器不再问盘，`removed` 照样 +1——否则永远多一条点不开的行。
 - **盘上后代按全部清册 id 排除**（不再只按这次的 targets）：跟着任一条进回收站的孩子都不会按「盘上残留」再算或再删一遍；同一个 bare id 全局只计划一次。
 - **`/list` ↔ purge ↔ 清空 三处同一条口径**：`planVisibleTrash` 与 `planTrashRemoval` 共用 `selectStrandedMembers` / `measureTrashRow` / `planMemberRemovals`；行上说的释放量就是清空真删的合计（只剩两次读之间的盘上变化）。
-- **源码护栏**：`fs.removeDir` 只许在 `src/verbs/permanent-removal.ts` 出现；`createJournal(` 的允许名单照旧。两条分开钉（「有没有第二处」+「第一处还在」）。
+- **能力面 + 源码护栏**：`fs.removeDir` 由 `RemovalDeps` 在类型面收口到动词——会话删除拿 `DeleteSessionDeps`（`CoreDeps` + 时钟），恢复与计划函数拿 `CoreDeps`；这三类都不含 `removeDir`（`presence` 是另一条能力面，见 ADR-0019）。执行器 `executeRemoval` 与把能力交给它的永久删除分发层拿 `RemovalDeps`。组合根与路由仍持有全量的 `DeleteDeps`，所以「除执行器外没有第二处 `removeDir` 调用」继续用源码护栏钉住；`createJournal(` 的允许名单、以及 purge / orphan-clean 的「委托给执行器」结构同理（import confinement 与「不要自己调」无法用类型表达）。这些护栏彼此分开钉（「有没有第二处」+「第一处还在」）。
 - 新增词条「永久删除计划」与 `docs/architecture.md` §4 的主人行。
 
 ## 行为差异（迁移时有意接受的六处）

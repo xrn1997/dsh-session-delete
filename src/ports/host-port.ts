@@ -89,6 +89,10 @@ export interface HostCorpusPort {
 /** 复合别名：adapter（`createHostPort`）与调用方把这 15 个方法当一个端口用；三个角色是它的切面。 */
 export type HostPort = HostIdentityPort & HostPresencePort & HostCorpusPort
 
+/** 动词的宿主面：身份与语料两片；不含在场三件。摘活体与通告只经 `CoreDeps.presence`（`PresenceCapability`）。
+ *  用交集而不是 `Omit` 黑名单：`HostPresencePort` 将来长出新方法时，不会自动漏进每个动词的 `host`。 */
+export type HostCorePort = HostIdentityPort & HostCorpusPort
+
 /* ------------------------------------------------------------------ *
  * 宿主服务的**窄镜像**：只声明本端口用到的成员（AGENTS.md：不装宿主类型包、不做 declare module）。
  * 每一处成员的来历都附在它自己的注释里（asar 原文切片）——镜像的判据是原文，不是包名。

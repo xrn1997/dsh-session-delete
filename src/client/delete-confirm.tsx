@@ -20,11 +20,12 @@
  *   整条链路都在菜单子树之外，菜单关不关都不影响它。
  *
  * 现场是**模块级**的（本仓既有的客户端模式：视图内路由与跨卸载的现场都住在模块级 store，
- * 见 `undo-toast.tsx`），状态源是 `store.ts` 的 `createStore`（内部用 React 自带的
+ * 见 `undo-notices.ts`），状态源是 `store.ts` 的 `createStore`（内部用 React 自带的
  * `useSyncExternalStore`）——不为此引新的状态库。
  */
 import { useEffect, useState } from 'react'
 import { useBusyGate } from './busy-gate.js'
+import { useIdleClose } from './confirm-close.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { applyOne, callRemote, type DeleteConfirmDeps } from './remote.js'
 import { createStore } from './store.js'
@@ -106,6 +107,7 @@ function ConfirmDialog({
 }) {
   /** 这一趟的闸：写入座位把 apply → 收尾 → 重读整趟包在里面，`busy` 期间主按钮按住。 */
   const gate = useBusyGate()
+  const { close, closeDisabled } = useIdleClose(gate.busy, clearDeleteRequest)
   const [failure, setFailure] = useState<string | null>(null)
   /**
    * 这条会话在盘上带着多少个后代。删除是按组走的（组语义见 `src/trash/groups.ts`），而宿主的客户端本来就把孩子那几行
@@ -142,12 +144,12 @@ function ConfirmDialog({
   return (
     <Modal
       open
-      onClose={clearDeleteRequest}
+      onClose={close}
       title={t('dialog.title')}
       closeLabel={t('common.close')}
       footer={
         <>
-          <Button variant="outline" onClick={clearDeleteRequest}>
+          <Button variant="outline" disabled={closeDisabled} onClick={close}>
             {t('common.cancel')}
           </Button>
           <Button variant="primary" disabled={gate.busy} onClick={() => void confirm()}>
