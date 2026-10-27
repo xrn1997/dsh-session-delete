@@ -14,6 +14,14 @@ const glue = (tail: boolean) =>
 
 const rangesOf = (raw: Buffer) => frameRanges(raw).map(({ start, end }) => [start, end])
 
+/** 块头：bit0 last，bit1-2 type，bit3-23 size。 */
+const blockHeader = (type: number, size: number, last: number) => {
+  const v = last | (type << 1) | (size << 3)
+  return Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
+}
+/** 合法帧头（RFC 8878 表 3）：descriptor 0x00 ⇒ 非单段、只带 1 字节 Window、无 FCS、**不承诺校验和**。 */
+const HEADER = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00])
+
 describe('frameRanges · 无尾（帧帧相接）', () => {
   it('无缝铺满整段，片数与压缩段数相同', () => {
     const raw = glue(false)
@@ -62,39 +70,51 @@ describe('frameRanges · 一帧多块（真实产物里每帧 1～120 块都有�
   it('按块头的 last 位收帧，两块之间的边界不再靠猜', () => {
     const a = Buffer.from('first block\n', 'utf8')
     const b = Buffer.from('second block\n', 'utf8')
-    const block = (size: number, last: number) => {
-      const v = last | (0 << 1) | (size << 3) // type=0 Raw：后面直接跟 size 个字节
-      return Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
-    }
-    const raw = Buffer.concat([
-      Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x04, a.length + b.length]), // desc=0x04：单段、FCS 1 字节、无字典
-      block(a.length, 0),
-      a,
-      block(b.length, 1),
-      b,
-    ])
+    // 帧头不照生产写 0x04：那一位是「校验和在场」的声明，手搓不出合法的 XXH32 尾巴，
+    // 严格的解压端（Node 24 / Linux）会直接报 EOF——测块界用不着赌这一位。
+    const raw = Buffer.concat([HEADER, blockHeader(0, a.length, 0), a, blockHeader(0, b.length, 1), b])
     expect(rangesOf(raw)).toEqual([[0, raw.length]])
-    expect(zlib.zstdDecompressSync(raw.subarray(0, raw.length)).toString('utf8')).toBe('first block\nsecond block\n')
+    expect(zlib.zstdDecompressSync(raw).toString('utf8')).toBe('first block\nsecond block\n')
+  })
+})
+
+describe('frameRanges · 描述符不止生产那一种', () => {
+  // 生产恒 0x04，头长 6 字节——位段取错在这一种上恰好也凑对（凑对是运气、不是判据，见
+  // `src/log/zstd-frames.ts` 的计数）。Node 自己写帧用的是另外的形状：
+  // 单段 + FCS，明文越大 FCS 越宽（12B⇒0x20、4000B⇒0x60、70000B⇒0xa0，头长 6/7/9）。
+  // 换个宿主或换个写帧的 zstd 版本走到这几档，头长算错的帧就会切歪、日志读不出来。
+  const sizes = [12, 4000, 70000]
+  const packed = sizes.map((n) => zlib.zstdCompressSync(Buffer.alloc(n, 65)))
+
+  it.each(sizes)('%i 字节明文那一帧整帧收住，且解得回同样长度', (n) => {
+    const raw = packed[sizes.indexOf(n)]
+    expect(raw[4]).toBeLessThan(0xc0)
+    expect(rangesOf(raw)).toEqual([[0, raw.length]])
+    expect(zlib.zstdDecompressSync(raw.subarray(0, raw.length)).length).toBe(n)
+  })
+
+  it('三种头长混排的帧序列照样逐帧相接（错一位就不是切歪就是抛）', () => {
+    const raw = Buffer.concat(packed)
+    let at = 0
+    const expected = packed.map((f) => {
+      const range = [at, at + f.length]
+      at += f.length
+      return range
+    })
+    expect(rangesOf(raw)).toEqual(expected)
   })
 })
 
 describe('frameRanges · 块类型按各自的块体长度走', () => {
-  /** 块头：bit0 last，bit1-2 type，bit3-23 size。 */
-  const header = (type: number, size: number, last: number) => {
-    const v = last | (type << 1) | (size << 3)
-    return Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
-  }
-  const WINDOW = Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x00])
-
   it('Raw(0) 跟 size 字节、RLE(1) 只跟 1 字节：混在一帧里边界照样准，且对面解出同一句明文', () => {
-    const raw = Buffer.concat([WINDOW, header(0, 6, 0), Buffer.from('abc123', 'utf8'), header(1, 3, 1), Buffer.from([0x21])])
+    const raw = Buffer.concat([HEADER, blockHeader(0, 6, 0), Buffer.from('abc123', 'utf8'), blockHeader(1, 3, 1), Buffer.from([0x21])])
     expect(rangesOf(raw)).toEqual([[0, raw.length]])
     // 对面（Node 的解压端）认这帧并解出「6 字节 + 3 个 !」⇒ 块体长度算的是规范那套，不是我们把形状喂给自家解析器。
     expect(zlib.zstdDecompressSync(raw).toString('utf8')).toBe('abc123!!!')
   })
 
   it('type 3 是规范的 Reserved 位：不照 Raw 那样吞块体，直接抛（Node 对同一帧也是拒解）', () => {
-    const raw = Buffer.concat([WINDOW, header(3, 6, 1), Buffer.from('abc123', 'utf8')])
+    const raw = Buffer.concat([HEADER, blockHeader(3, 6, 1), Buffer.from('abc123', 'utf8')])
     expect(() => frameRanges(raw)).toThrow(/保留块类型/)
     expect(() => zlib.zstdDecompressSync(raw)).toThrow(/corruption/)
   })
@@ -102,9 +122,7 @@ describe('frameRanges · 块类型按各自的块体长度走', () => {
 
 describe('frameRanges · 坏输入响亮失败', () => {
   it('块头把块体指向文件之外 ⇒ 抛（而不是在块循环里空转）', () => {
-    const blockHeader = Buffer.alloc(3)
-    blockHeader.writeUIntLE(0 | (9999 << 3), 0, 3) // last=0, type=0 Raw, 声称块体 9999 字节
-    const raw = Buffer.concat([Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x04, 10]), blockHeader, Buffer.from('0123456789')])
+    const raw = Buffer.concat([HEADER, blockHeader(0, 9999, 0), Buffer.from('0123456789')]) // 声称块体 9999 字节
     expect(() => frameRanges(raw)).toThrow(/越界/)
   })
 

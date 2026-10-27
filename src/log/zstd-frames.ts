@@ -8,15 +8,21 @@
  * 帧 = `magic(4) + Frame_Header_Descriptor(1) + [Window 1B 若 !single] + [DID 0/1/2/4] + [FCS]
  *       + 若干块（3B 块头 + 块体）+ [4B 尾巴]`。
  *
- * **真实产物的形态是量出来的**（本机 125 个文件 / 36 904 帧）：descriptor **恒 `0x04`**（单段 ⇒ 无
- * Window，FCS 1 字节，无字典，校验位没置位），块类型只有 `Compressed`(36 630) 与 `Raw`(620)，
- * 每帧 **1～120 块**（多数 1 块）——所以多块循环与 Raw 两条路都在生产上跑着，不是纸面分支。
+ * **真实产物的形态是量出来的**（本机 125 个文件 / 36 904 帧）：descriptor **恒 `0x04`**，按 RFC 8878
+ * 表 3 读作「非单段（带 1 字节 Window）+ 无 FCS + 无字典 + **校验位置位**」⇒ 帧头 6 字节，帧尾那 4 字节
+ * 就是声明好的 XXH32 Content_Checksum（实测：动它一个位，对面解不通过）。块类型只有
+ * `Compressed`(36 630) 与 `Raw`(620)，每帧 **1～120 块**（多数 1 块）——所以多块循环与 Raw 两条路都在
+ * 生产上跑着，不是纸面分支。
  * 类型 3 是规范的 Reserved 位（不是"未压缩块"）：产物里没出现过，Node 也当场拒解 ⇒ 遇到就抛。
  *
- * **尾巴那 4 字节按实测处理，不按 descriptor 的 bit5**：校验位从未置位，却每帧都带 4 字节；
- * 判"读不读这 4 字节"用的是「跳过去必须正好撞上下一帧的 magic 或到 EOF」——猜错不会静默切歪：
- * 末尾的自证与块界护栏会抛（护栏是必需的：块头越界时 `|` 读回 0，而 0 的 `Last_Block` 位没置位，
- * 少了它块循环每圈只 +3 字节却永不 break，整个进程会卡死；用例覆盖这一条）。
+ * **位段必须照表 3 取**（1-0 字典 / 2 校验 / 5 单段 / 7-6 FCS 尺寸）：Descriptor 的 64 个合法取值里，
+ * 取错位段会算错头长的有 48 个，剩下 16 个凑对纯属巧合——在产的 `0x04` 就在其中。换个宿主、换个写帧
+ * 的 zstd 版本（明文一大、FCS 上到 4 字节的 `0xa0` 就会算错），帧就切歪，会话日志直接读不出来。
+ *
+ * **尾巴那 4 字节按实测判据收，不按 descriptor 的 bit2**：规则是「跳过去必须正好撞上下一帧的 magic
+ * 或到 EOF」——猜错不会静默切歪：末尾的自证与块界护栏会抛（护栏是必需的：块头越界时 `|` 读回 0，
+ * 而 0 的 `Last_Block` 位没置位，少了它块循环每圈只 +3 字节却永不 break，整个进程会卡死；
+ * 用例覆盖这一条）。
  */
 
 export interface FrameRange {
@@ -35,13 +41,17 @@ const BLOCK_SIZE_MASK = 0x1f_ff_ff
 const BLOCK_RAW = 0
 const BLOCK_RLE = 1
 const BLOCK_COMRESSED = 2
+/** RFC 8878 表 3 的帧头描述符位段：1-0 字典 ID、2 校验和、5 单段、7-6 FCS 尺寸。 */
+const DESC_DID_FLAG = 0x3
+const DESC_SINGLE_SHIFT = 5
+const DESC_FCS_SHIFT = 6
 /** 规范（RFC 8878 表 4）里 3 是 **Reserved**，不是"未压缩块"：见到就抛，别照 Raw 吞块体。 */
 const BLOCK_RESERVED = 3
 /** descriptor 各字段的取值 → 字段字节数（zstd 帧头的两张尺寸表）。 */
 const DID_SIZES = [0, 1, 2, 4]
 const FCS_SIZES_SINGLE = [1, 2, 4, 8]
 const FCS_SIZES_MULTI = [0, 2, 4, 8]
-/** 实测的帧尾长度（校验和位置；bit5 没置位也照样带，见文件头注）。 */
+/** 实测的帧尾长度（规范里就是 descriptor 校验位声明的 XXH32；收不收由文件头注的自证判据决定）。 */
 const FRAME_TAIL_BYTES = 4
 
 function isMagicAt(raw: Buffer, at: number): boolean {
@@ -73,10 +83,11 @@ export function frameRanges(raw: Buffer): FrameRange[] {
     }
     const descriptor = raw[at + 4]
     if (descriptor === undefined) throw new Error(`zstd 帧头不完整：偏移 ${at} 之后不足 ${AFTER_DESCRIPTOR} 字节`)
-    const fcsFlag = descriptor & 0x3
-    const singleSegment = (descriptor >> 2) & 0x1
-    const didFlag = (descriptor >> 6) & 0x3
+    const didFlag = descriptor & DESC_DID_FLAG
+    const singleSegment = (descriptor >> DESC_SINGLE_SHIFT) & 0x1
+    const fcsFlag = (descriptor >> DESC_FCS_SHIFT) & 0x3
     let cursor = at + AFTER_DESCRIPTOR
+    // 单段 ⇒ 没有 Window 字节；FCS 的尺寸还要看单段位（表 4 的两列）
     if (!singleSegment) cursor += 1
     cursor += DID_SIZES[didFlag] as number
     cursor += (singleSegment ? FCS_SIZES_SINGLE : FCS_SIZES_MULTI)[fcsFlag] as number

@@ -263,7 +263,9 @@ it('日志解不开 ⇒ io 带"第 N 帧"那句原文，绝不回半条正文', 
     return Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
   }
   const needsDictionary = Buffer.concat([
-    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x44, 0x07, payload.length & 255]),
+    // desc=0x01：DID 1 字节（字典 7，本机没有）+ 非单段带 Window + 无 FCS + 不承诺校验和
+    // ⇒ 帧边界算得出来，内容必然解不开，正好走"第 N 帧解压失败"那条路
+    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x00, 0x07]),
     blockHeader(payload.length),
     payload,
   ])

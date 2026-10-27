@@ -14,14 +14,15 @@ const collect = (...logs: Buffer[]) => {
 
 const rec = (o: unknown) => JSON.stringify(o)
 
-/** 边界算得出、内容解不开的帧：带 Dictionary_ID（没字典必然失败），帧头按 descriptor 走。
+/** 边界算得出、内容解不开的帧：带 Dictionary_ID（没字典必然失败），帧头按 RFC 8878 表 3 走。
  *  早停用例用它证明"header 之后的部分根本没被解到"。 */
 const undecodableFrame = (line: string = rec({ type: 'tool/call' })): Buffer => {
   const payload = Buffer.from(line + '\n', 'utf8')
   const v = 1 | (0 << 1) | (payload.length << 3) // last=1, type=0 Raw
   const block = Buffer.from([v & 255, (v >>> 8) & 255, (v >>> 16) & 255])
   return Buffer.concat([
-    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x44, 0x07, payload.length & 255]), // desc=0x44：单段 + DID 1 字节 + FCS 1 字节
+    // desc=0x01：DID 1 字节 + 非单段（带 Window 字节）+ 无 FCS + 不承诺校验和
+    Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0x01, 0x00, 0x07]),
     block,
     payload,
   ])
