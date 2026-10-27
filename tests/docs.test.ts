@@ -387,11 +387,15 @@ describe('文档门 · 兼容性事实单源', () => {
   const manifest = JSON.parse(read('package.json')) as CompatibilityManifest
   const releases = Object.keys(manifest.dsh.compatibility.dshReleases)
 
+  /** 徽章只投影首末代次：全量枚举会随每次实测变长，完整名单由下面的正文片段钉住。 */
+  const badgeVersions = releases.length > 1 ? [releases[0], releases[releases.length - 1]] : releases
+  const badge = `DSH-${badgeVersions.map((version) => version.replaceAll('-', '--')).join('%20%E2%80%A6%20')}`
+
   const projectionDrift = (readme: string): string[] => {
     const snippets = [
       `窗口是 **\`${manifest.engines.dsh}\`**`,
       `**DSH Desktop ${releases.join('、')}**`,
-      `DSH%20Desktop-${releases.map((version) => version.replaceAll('-', '--')).join('%20%7C%20')}-brightgreen`,
+      `${badge}-brightgreen`,
     ]
     return snippets.filter((snippet) => !readme.includes(snippet))
   }

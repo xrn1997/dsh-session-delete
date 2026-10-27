@@ -1,9 +1,9 @@
 # @xrn1997/dsh-session-delete
 
-[![CI](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml/badge.svg)](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml)
+[![CI](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-session-delete.svg)](https://www.npmjs.com/package/@xrn1997/dsh-session-delete)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Tested with DSH Desktop 0.2.0-rc.2 / 0.2.1-rc.1 / 0.2.1-rc.2 / 0.2.1-rc.3](https://img.shields.io/badge/DSH%20Desktop-0.2.0--rc.2%20%7C%200.2.1--rc.1%20%7C%200.2.1--rc.2%20%7C%200.2.1--rc.3-brightgreen)
+[![Tested with DSH 0.2.0-rc.2 … 0.2.1-rc.3](https://img.shields.io/badge/DSH-0.2.0--rc.2%20%E2%80%A6%200.2.1--rc.3-brightgreen)](#安装)
 
 给 DeepSeek Harness（DSH）加一个**删除会话**的能力。DSH 官方有归档、没有删除——归档只是把会话从列表里挪走，文件还在。本插件补上删除，并且让删除可恢复：删除 = 移入回收站，另有一个显式的「彻底删除」。
 
