@@ -1,5 +1,6 @@
 import type { TrashEntry } from '../trash/entry.js'
 import type { RemovalDeps } from '../deps.js'
+import type { AttachmentCleanupWire } from '../shared/wire.js'
 import { trashEmpty } from './errors.js'
 import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
 
@@ -18,6 +19,9 @@ import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
  * **这条动词不做回滚**：目录删掉就没有"退回去"这回事（删到一半失败时已删目录不回滚；
  * 带部分计数的 `details` 回执只属于 `orphan-clean`，purge 的 `removed` / `freedBytes` 仍只在成功回执里给）。
  * 对应地，`kind:'trash'` 的计划失败时执行器只抛那一步的 `io` 与原文、不带 details。
+ *
+ * 回执里的 `attachments` 原样来自执行器：独占图片在会话目录删完之后才清，附件失败只计数、不改
+ * `removed` / `freedBytes`（`skipped` = 有候选或剩余引用源读不出、这一轮部分或整体没清，原因上屏）。
  */
 export function purgeTrash(deps: RemovalDeps) {
   return async function purgeTrash(
@@ -29,7 +33,7 @@ export function purgeTrash(deps: RemovalDeps) {
     rows: readonly TrashEntry[],
     /** 只用于 `trash-empty` 的原文要点名用户点的那一条；不参与任何判据（批量语义归 `batch-carried.ts`）。 */
     requestedId?: string,
-  ): Promise<{ removed: number; freedBytes: number }> {
+  ): Promise<{ removed: number; freedBytes: number; attachments: AttachmentCleanupWire }> {
     const selected = targets ?? rows
     if (targets !== undefined && selected.length === 0) {
       throw trashEmpty(requestedId)

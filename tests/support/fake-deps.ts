@@ -26,6 +26,7 @@ import { createTrashLedger, type TrashLedger } from '../../src/trash/ledger.js'
 import { createMemoryManifest, type ManifestPort } from '../../src/trash/manifest.js'
 import type { DeleteDeps } from '../../src/deps.js'
 import { createMemberPresence } from '../../src/verbs/member-presence.js'
+import { TRASH_DIR_NAME } from '../../src/shared/wire.js'
 import type { Mocked } from './mocked.js'
 
 export type FakeHost = Mocked<HostPort>
@@ -136,13 +137,17 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
 export interface FakeFsOptions extends CallLog {
   exists?: boolean | ((p: string) => boolean)
   size?: number
-  files?: string[]
+  /** 目录下的文件名：数组，或按路径算（附件扫描要按目录喂不同日志）。 */
+  files?: string[] | ((p: string) => string[])
   /** 子目录名：数组，或按路径算（对账用例要"这个根下有哪些条目目录"）。 */
   dirs?: string[] | ((p: string) => string[])
   readFile?: (p: string) => Buffer | Promise<Buffer>
+  fileSize?: number | ((p: string) => number)
+  statFile?: (p: string) => { size: number } | Promise<{ size: number }>
+  removeFile?: (p: string) => void | Promise<void>
 }
 
-/** 内存里的 `FsPort`：8 个方法；缺省是"目录都在、字节可量、什么都不真的动"。 */
+/** 内存里的 `FsPort`：10 个方法；缺省是"目录都在、字节可量、什么都不真的动"。 */
 export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
   const record = recorder(over)
   const exists = (p: string): boolean => (typeof over.exists === 'function' ? over.exists(p) : over.exists ?? true)
@@ -152,7 +157,10 @@ export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
     rename: vi.fn(async (from: string, to: string) => { record('rename', [from, to]) }),
     removeDir: vi.fn(async (p: string) => { record('removeDir', [p]) }),
     sizeOfDir: vi.fn(async (p: string) => { record('sizeOfDir', [p]); return over.size ?? 1024 }),
-    listFiles: vi.fn(async (p: string) => { record('listFiles', [p]); return over.files ?? [] }),
+    listFiles: vi.fn(async (p: string) => {
+      record('listFiles', [p])
+      return typeof over.files === 'function' ? over.files(p) : over.files ?? []
+    }),
     listDirs: vi.fn(async (p: string) => {
       record('listDirs', [p])
       return typeof over.dirs === 'function' ? over.dirs(p) : over.dirs ?? []
@@ -161,6 +169,16 @@ export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
       record('readFile', [p])
       if (over.readFile === undefined) throw new Error(`fake fs: 没有为 ${p} 准备 readFile`)
       return over.readFile(p)
+    }),
+    statFile: vi.fn(async (p: string) => {
+      record('statFile', [p])
+      if (over.statFile !== undefined) return await over.statFile(p)
+      const size = typeof over.fileSize === 'function' ? over.fileSize(p) : over.fileSize ?? 0
+      return { size }
+    }),
+    removeFile: vi.fn(async (p: string) => {
+      record('removeFile', [p])
+      await over.removeFile?.(p)
     }),
   }
 }
@@ -198,8 +216,9 @@ export type FakeDeps = Omit<DeleteDeps, 'fs' | 'host'> & {
  * 第二个概念。三个角色切面已就位（`HostIdentityPort` / `HostPresencePort` / `HostCorpusPort`，ADR-0007），
  * 这份假件仍实现复合面——因为它们共用一颗 adapter，用例也只交一个 `deps`。
  *
- * **raw 清单与 `fs.dirs` 是同一个世界**：行与回收站目录成对出现，`dirs` 缺省跟着 raw 清册的 id 走
- * （删除新增一行、下一次 `/list` 对账就不会把它当幽灵摘掉）；用例给 `over.fs.dirs` 时就以它为准，
+ * **raw 清单与 `fs.dirs` 是同一个世界**：行与回收站目录成对出现，`dirs` 缺省只让清册条目出现在
+ * `${home}/session-trash` 这一层（删除新增一行、下一次 `/list` 对账就不会把它当幽灵摘掉；其余目录
+ * 按"没有子目录"作答，会话/派生存储由用例自己声明）；用例给 `over.fs.dirs` 时就以它为准，
  * 这是"要测漂移自己翻一格"的入口。`manifest` 露出来只给 raw 断言，动词与路由只认 `ledger`
  * （真相读 `list()` 先对账，pure 读面（`/orphans` / `/detail`）走 `raw()` 不对账，见 `src/trash/ledger.ts`）。
  */
@@ -220,13 +239,14 @@ export function createFakeDeps(over: FakeDepsOptions = {}): {
     add: async (entry) => { await rows.add(entry); rowIds.add(entry.id) },
     remove: async (id) => { await rows.remove(id); rowIds.delete(id) },
   }
+  const home = over.home ?? '/h'
+  const trashRoot = `${home}/${TRASH_DIR_NAME}`
   const fsOver = over.fs ?? {}
   const fs = createFakeFs({
     ...fsOver,
-    dirs: fsOver.dirs ?? (() => [...rowIds]),
+    dirs: fsOver.dirs ?? ((p: string) => (p === trashRoot ? [...rowIds] : [])),
     ...callLog,
   })
-  const home = over.home ?? '/h'
   const ledger = createTrashLedger(manifest, fs, home)
   const now = over.now
   return {

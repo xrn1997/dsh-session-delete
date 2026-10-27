@@ -25,7 +25,7 @@ vi.mock('../../src/client/main-view.js', () => ({
 import type { BusyGate } from '../../src/client/busy-gate.js'
 import { outcomes, trashRow } from './support/outcomes.js'
 import {
-  cleanOrphansFromPanel, deleteSessionFromMenu, deleteSessionsFromBatch,
+  deleteSessionFromMenu, deleteSessionsFromBatch,
   purgeFromPanel, restoreFromPanel, restoreFromUndo,
 } from '../../src/client/write-seats.js'
 
@@ -124,20 +124,5 @@ describe('面板座位', () => {
     expect(mocks.dismissUndoNotice).toHaveBeenCalledWith(['e1'])
     expect(clearDetailCache).toHaveBeenCalledWith(['e1'])
     expect(mocks.forgetMainView).not.toHaveBeenCalled()
-  })
-
-  it('无主子会话清理：闸 + refresh，不碰回收站失效/撤销', async () => {
-    const deps = {
-      applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [
-        outcomes('orphan-clean', ['r1'], { r1: { value: { removed: 1, freedBytes: 1 } } })[0]!,
-      ]),
-    }
-    const g = gate()
-    const refreshAfterWrite = vi.fn(async () => {})
-    await cleanOrphansFromPanel({ deps, ids: ['r1'], gate: g, refreshAfterWrite })
-    expect(g.around).toHaveBeenCalledTimes(1)
-    expect(mocks.invalidateTrash).not.toHaveBeenCalled()
-    expect(mocks.dismissUndoNotice).not.toHaveBeenCalled()
-    expect(refreshAfterWrite).toHaveBeenCalledTimes(1)
   })
 })

@@ -13,21 +13,28 @@
  *    本机存量一条都触发不了（量级随盘上会话数摆动，不在这里钉数）⇒ 它们是防异常
  *    膨胀的；**不设"文件太大就拒绝"**，那种阈值只会把真读得出来的正文挡在外面。
  *
- * 计数与正文**同源过滤、各过各的闸**：`user/message` 先要求 `source.kind === 'user'`，两类都过空文本
- * 过滤；`userMessageCount` / `assistantMessageCount` 数的是通过过滤的条数，**不受载荷闸影响**。正文再受
+ * 计数与正文**同源过滤、各过各的闸**：`user/message` 先要求 `source.kind === 'user'`，两类都过"空文本**且**
+ * 无附件"过滤；`userMessageCount` / `assistantMessageCount` 数的是通过过滤的条数，**不受载荷闸影响**。正文再受
  * 单条/累计两个闸：单条超限截断并把那一条标成 `truncated`，累计到上限后剩下的整条不再收、只累进
  * `omittedByPayloadCap`——所以计数可以大于正文条数，详情里两件事分开说。
+ * 附件随消息一起收（`attachmentsInContent`），也有两个闸：每条 20、总量 200；超出的**静默丢**，
+ * 不累进 `omittedByPayloadCap`——那个计数说的是"整条正文没进来"，拿它兼报少了几张附件会让两个数都对不上。
  */
 import { trashDirOf, type TrashEntry } from './entry.js'
 import type { FsPort } from '../ports/fs-port.js'
-import type { TrashDetailWire } from '../shared/wire.js'
+import type { TrashDetailAttachmentWire, TrashDetailWire } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { attachmentsInContent } from './attachments.js'
 import { trashEmpty, verbError } from '../verbs/errors.js'
 
 /** 每条文字的上限（字符）。超出即截断并置 `truncated`。 */
 export const PER_MESSAGE_CHAR_CAP = 3_000
 /** 一次回信的正文总量上限（字符）。 */
 export const TOTAL_CHAR_CAP = 500_000
+/** 一条消息带多少张附件上线。 */
+const MAX_ATTACHMENTS_PER_MESSAGE = 20
+/** 一次回信的附件总量上限。 */
+const MAX_ATTACHMENTS_TOTAL = 200
 
 export type TrashDetail = TrashDetailWire
 
@@ -68,6 +75,20 @@ function textOf(content: unknown): string {
     .trim()
 }
 
+/** 一条记录的 `content[]` 里的附件块，映射成线上读数（形状只映射，不改判据——闸在 `attachmentsInContent` 里）。 */
+function attachmentWires(content: unknown): TrashDetailAttachmentWire[] {
+  return attachmentsInContent(content).map((ref) => ({
+    attachmentId: ref.id,
+    kind: ref.kind,
+    ...(ref.name === undefined ? {} : { name: ref.name }),
+    // 文件的 `mediaType` / 宽高不是它的读数：按 kind 分开给，别让 file 也带着空壳字段。
+    ...(ref.kind === 'image' && ref.mediaType !== undefined ? { mediaType: ref.mediaType } : {}),
+    bytes: ref.bytes,
+    ...(ref.kind === 'image' && ref.width !== undefined ? { width: ref.width } : {}),
+    ...(ref.kind === 'image' && ref.height !== undefined ? { height: ref.height } : {}),
+  }))
+}
+
 export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT_LIMITS) {
   return async function readTrashDetail(entryId: string): Promise<TrashDetail> {
     const all = await deps.rows()
@@ -96,10 +117,11 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
     }
     const models = new Set<string>()
     let usedChars = 0
+    let usedAttachments = 0
     let capped = false
 
-    /** 收进正文，顺带管两个闸：截到单条上限，累计到总量就停。 */
-    function push(role: 'user' | 'assistant', time: number, text: string): void {
+    /** 收进正文，顺带管两个闸：截到单条上限，累计到总量就停；附件另有 20/200 两道闸。 */
+    function push(role: 'user' | 'assistant', time: number, text: string, attachments: TrashDetailAttachmentWire[]): void {
       if (capped) {
         detail.omittedByPayloadCap += 1
         return
@@ -112,7 +134,10 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
         return
       }
       usedChars += kept.length
-      detail.messages.push({ role, time, text: kept, truncated })
+      const room = Math.max(0, Math.min(MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENTS_TOTAL - usedAttachments))
+      const keptAttachments = attachments.slice(0, room)
+      usedAttachments += keptAttachments.length
+      detail.messages.push({ role, time, text: kept, truncated, attachments: keptAttachments })
     }
 
     // 解压或帧边界一旦不对，**整条判失败**：半截正文比"读不出来"更坏（用户会照着它决定删不删）
@@ -146,9 +171,10 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
             return
           }
           const text = textOf(data.content)
-          if (text === '') return
+          const attachments = attachmentWires(data.content)
+          if (text === '' && attachments.length === 0) return
           detail.userMessageCount += 1
-          push('user', r.time ?? 0, text)
+          push('user', r.time ?? 0, text, attachments)
           return
         }
         case 'assistant/message': {
@@ -156,9 +182,10 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
           const source = (message.source ?? {}) as Record<string, unknown>
           if (typeof source.model === 'string') models.add(source.model)
           const text = textOf(message.content)
-          if (text === '') return
+          const attachments = attachmentWires(message.content)
+          if (text === '' && attachments.length === 0) return
           detail.assistantMessageCount += 1
-          push('assistant', r.time ?? 0, text)
+          push('assistant', r.time ?? 0, text, attachments)
           return
         }
         default:

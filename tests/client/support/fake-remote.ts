@@ -6,13 +6,14 @@
  */
 import { vi } from 'vitest'
 import type {
+  AttachmentOrphanReportWire,
   OrphanReportWire,
   PurgeResultLike,
   SessionDeleteRemote,
   TrashDetailLike,
   TrashEntryLike,
 } from '../../../src/client/remote.js'
-import type { ApplyAction, ApplyOutcome } from '../../../src/shared/wire.js'
+import type { ApplyAction, ApplyOutcome, AttachmentCleanupWire } from '../../../src/shared/wire.js'
 import { outcomes } from './outcomes.js'
 import type { Mocked } from '../../support/mocked.js'
 
@@ -37,6 +38,8 @@ export function createFakeRemote(over: Partial<FakeRemote> = {}): FakeRemote {
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
       outcomes(action, ids)),
     emptyTrash: vi.fn(async (): Promise<PurgeResultLike> => ({ removed: 0, freedBytes: 0 })),
+    scanAttachmentOrphans: vi.fn(async (): Promise<AttachmentOrphanReportWire> => ({ count: 0, totalBytes: 0, items: [] })),
+    cleanAttachmentOrphans: vi.fn(async (): Promise<AttachmentCleanupWire> => ({ removed: 0, freedBytes: 0, failed: 0 })),
   }
   return Object.assign(remote, over)
 }

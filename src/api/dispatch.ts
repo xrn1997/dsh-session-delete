@@ -14,7 +14,7 @@ import { toRemoteFailure } from '../remote/map-error.js'
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { routeError } from '../verbs/errors.js'
 import type { DeleteDeps } from '../deps.js'
-import { routeOf, type BodyKind, type JsonBody, type Purity, type RouteRead } from './route-table.js'
+import { routeOf, type BinaryResponse, type BodyKind, type JsonBody, type Purity, type RouteRead } from './route-table.js'
 
 /** 请求体字节上限：这条通道只收几个 id，1MiB 是"够用且不给自己开一条内存放大器"的量级。 */
 const JSON_BODY_MAX_BYTES = 1024 * 1024
@@ -60,6 +60,32 @@ function writeOk(res: ServerResponse, value: unknown): void {
   writeJson(res, 200, { ok: true, value })
 }
 
+/**
+ * 二进制响应（`/attachment` 专用）。四道头都是判据不是口味：
+ * - `content-type` 由处理函数给（图片按魔数认，文件一律 octet-stream）；
+ * - `content-length` 与字节数同源；
+ * - `cache-control: private, no-store`：附件可能来自已删除会话，不许被任何中间层留下；
+ * - `nosniff` + `attachment` 下载名：字节内容与类型不一致时浏览器不许改猜。
+ *
+ * **失败不走这里**：处理函数抛出的错误仍由 `writeFailure` 写 JSON 信封（图片的 `onError` 会换成
+ * 占位；普通文件走 `<a download>`，没有页面内失败面）。
+ */
+function writeBinary(res: ServerResponse, body: BinaryResponse): void {
+  const headers: Record<string, string> = {
+    'content-type': body.contentType,
+    'content-length': String(body.body.length),
+    'cache-control': 'private, no-store',
+    'x-content-type-options': 'nosniff',
+  }
+  if (body.filename !== undefined) {
+    headers['content-disposition'] = `${body.disposition}; filename*=UTF-8''${encodeURIComponent(body.filename)}`
+  } else if (body.disposition === 'attachment') {
+    headers['content-disposition'] = 'attachment'
+  }
+  res.writeHead(200, headers)
+  res.end(body.body)
+}
+
 /** 失败信封：码与原文都来自 `toRemoteFailure`（本插件唯一的错误映射表）。
  *  **状态语义**：**请求本身不对**不再伪装成 200——请求体不对 400、方法不对 405、
  *  未知路由 404、栅栏拒 403（它们不是"一次办成的操作"，是"这条请求不归我办/你没资格办"）。
@@ -81,9 +107,14 @@ function writeFailure(res: ServerResponse, error: unknown, status?: number): voi
  * 壳把 `Origin` 删掉了、只留下 Referer，见 {@link isDesktopShellUrl}）。两者都缺席 = 本机工具 /
  * curl（注释即此承诺）。**恶意网页拿不到 ②③ 里的任何一个**：那两个头都是 forbidden header、
  * 页面伪造不了；而**写口（POST）在任何跨源形态下都必带 Origin** ⇒ 两个头全缺席就等于本机工具。
- * 唯一的缝是跨源 `no-cors` 的 **GET**（Referer 被 `no-referrer` 掐掉、Origin 也不带）——它够得到
- * 那几个 GET（`list` 会先对账写清册，`ping` / `orphans` 才是纯读），而 no-cors 的回包是 opaque、
- * 页面读不出内容 ⇒ 不构成泄露（`orphans` 那份报告也只报数量/字节，不含正文）。
+ * 唯一的缝是跨源 `no-cors` 的 **GET**（Referer 被 `no-referrer` 掐掉、Origin 也不带；栅栏第一行
+ * 仍要求来源是本机回环）——它够得到那几个 GET（`list` 会先对账写清册，`ping` / `orphans` /
+ * `attachment-orphans` 才是纯读），而 no-cors 的回包是 opaque、页面读不出内容 ⇒ 不构成泄露
+ * （`orphans` 只报数量/字节；`attachment-orphans` 虽带对象哈希清单，跨源也读不出正文）。
+ * **二进制段 `/attachment` 是这条缝上的例外**：图片响应不是 opaque 的"读不出内容"，页面若已知道
+ * 某个 `sha256:…` 内容哈希，就能把它当 `<img src>` 跨源渲染出来。但 id 是内容哈希、不可枚举，
+ * 同源读面不会把它交给跨源页面，写口（POST）仍必带 Origin ⇒ 泄露面只是"已知哈希的那一张图"，
+ * 不改栅栏。
  */
 function isTrustedRequest(req: IncomingMessage): boolean {
   if (!LOOPBACK.includes(req.socket.remoteAddress ?? '')) return false
@@ -177,8 +208,11 @@ export function createApiHandler(deps: DeleteDeps): (req: IncomingMessage, res: 
           return rowsPromise
         },
       }
-      const task = (): Promise<unknown> => spec.run(deps, body, read)
-      writeOk(res, await (isPure(spec.purity, body) ? task() : throughChain(task)))
+      const task = (): Promise<unknown> => spec.run(deps, body, read, url.searchParams)
+      const result = await (isPure(spec.purity, body) ? task() : throughChain(task))
+      // 只有处理函数成功返回才走二进制；抛错一律落上面那个 catch 的 JSON 信封。
+      if (spec.response === 'binary') writeBinary(res, result as BinaryResponse)
+      else writeOk(res, result)
     } catch (error) {
       writeFailure(res, error)
     }

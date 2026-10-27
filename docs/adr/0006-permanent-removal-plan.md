@@ -25,7 +25,7 @@ Status: accepted
 
 - 不改组语义（`src/trash/groups.ts`，ADR-0001）：`planTrashRemoval` 的 `targets` 由调用方选好，计划只量、只筛、只查活体。
 - 不改批量（`src/verbs/batch.ts`，ADR-0002）与线上形状（`src/shared/wire.ts`，ADR-0003）；不新增段名或动作。
-- 不碰投影缓存与附件（孤儿清理的既有边界照旧）。
+- 不碰投影缓存；附件只按 ADR-0020 清独占的图片副本，计划与执行的其余边界照旧。
 - `sessionQuery` 缺席仍按原降级：purge 只清清册那部分，计划回空 members、不抛。盘上残留要等 `sessionQuery` 在时由 `GET /orphans` 兜底——`/orphans` 自己也缺 `sessionQuery` 时**响亮失败**（`io`），绝不拿零条假报告冒充；「兜底」说的是服务回来后看得到，不是缺席时看得到。
 
 ## 后果
@@ -53,4 +53,4 @@ Status: accepted
 - **purge 继续用 journal**（只把两个动词的序列抽成共享 steps）：把一条没有 `undo` 的序列塞进「每步自带反向动作」的 interface，ADR-0002 的边界会被「journal 也能跑单向步骤」抹掉。
 - **计划与执行器拆成两个 module**：两者共享同一份形状（`RemovalPlan` / `PlannedTrashRow` / `PlannedMemberRemoval`），执行器每一步都在解释计划里的字段；拆开只会让「计划就是执行前的闸」这条不变量跨文件维护。
 
-锚点：`CONTEXT.md`（永久删除计划）；`src/verbs/permanent-removal.ts`；ADR-0002（journal 只服务有反向动作的一次移动）、ADR-0005（成员通告）
+锚点：`CONTEXT.md`（永久删除计划）；`src/verbs/permanent-removal.ts`；ADR-0002（journal 只服务有反向动作的一次移动）、ADR-0005（成员通告）、ADR-0020（附件边界）

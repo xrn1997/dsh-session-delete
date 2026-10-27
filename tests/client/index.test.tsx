@@ -3,7 +3,7 @@
 // 这一层用**假的 `ctx`**（只给槽位注册表）与**假的 `fetch`**（我们自己的前缀路由）跑真的 `apply`，
 // 再把注册表里的贡献按**真宿主的形状**装起来（`Scene`：菜单槽的行渲染在一个假 `Menu` 里，
 // overlay 槽的贡献全挂上）。钉住四件事：
-// 1. **取数通道的探测是注册的前提**：探测通过才八次 `slots.inject`（槽位名、插件专属 id、order、
+// 1. **取数通道的探测是注册的前提**：探测通过才十一次 `slots.inject`（槽位名、插件专属 id、order、
 //    以及 `main` 的 key 与 `sidebar.panellist` 的 id 同字）；探测不过 ⇒ 零注册、零抛错、`apply` 正常返回；
 // 2. **deps 装配**：HTTP 回的是我们的信封（`{ ok: true, value }` / `{ ok: false, error }`，与官方
 //    unary 面同形），失败支必须在注入面被展开成 throw——《remote.test.ts》钉形状，这里钉**端到端的
@@ -56,6 +56,8 @@ const ROW_ACTION_SLOT = 'sidebar.workspaces.session.row.action'
 const OVERLAY_SLOT = 'shell.overlay'
 const PANEL_SLOT = 'sidebar.panellist'
 const MAIN_SLOT = 'main'
+/** 插件设置页的子槽位：宿主声明它之后才挂载；卡片的 key 用 bundle 包名。 */
+const SETTINGS_SLOT = 'plugins.bundle.config'
 /** 面板 id 与 `main` 的 key 是**同一个字**（官方：list id 寻址同 id 的中央面板）。 */
 const PANEL_ID = '@xrn1997/dsh-session-delete.trash'
 
@@ -101,8 +103,8 @@ const DETAIL: TrashDetailLike = {
   toolCallCount: 3,
   injectedCount: 7,
   messages: [
-    { role: 'user', time: 1, text: '先看改动', truncated: false },
-    { role: 'assistant', time: 2, text: '改动分四层', truncated: false },
+    { role: 'user', time: 1, text: '先看改动', truncated: false, attachments: [] },
+    { role: 'assistant', time: 2, text: '改动分四层', truncated: false, attachments: [] },
   ],
   omittedByPayloadCap: 0,
 }
@@ -117,7 +119,7 @@ function okOutcomes(action: ApplyAction, ids: readonly string[]): ApplyOutcome[]
   })
 }
 
-/** 一个**与实现同形**的 `RawSessionDeleteRemote`：六个段名各回一个信封（写动词全走 `apply`）。 */
+/** 一个**与实现同形**的 `RawSessionDeleteRemote`：八个 JSON 段各回一个信封（写动词全走 `apply`；附件字节段是二进制，不经这层）。 */
 function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
@@ -129,13 +131,15 @@ function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionD
     detail: async () => ({ ok: true, value: DETAIL }),
     apply: async (action, ids) => ({ ok: true, value: okOutcomes(action, ids) }),
     empty: async () => ({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } }),
+    attachmentOrphans: async () => ({ ok: true, value: { count: 0, totalBytes: 0, items: [] } }),
+    attachmentClean: async () => ({ ok: true, value: { removed: 0, freedBytes: 0, failed: 0 } }),
     ...overrides,
   }
 }
 
 /**
  * 取数通道的三种状态。
- * - `up`：六个段名按井号回信封（**探测过**）；
+ * - `up`：八个 JSON 段按井号回信封（**探测过**；附件字节段不经这层）；
  * - `throwing`：`fetch` 直接 reject（路由不在、宿主没起来）——探测不过；
  * - `not-json`：回的是 SPA 的 index.html（前缀路由没注册时落到兜底处理器）——探测也不过。
  */
@@ -158,6 +162,9 @@ function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { c
     [SESSION_DELETE_API_PREFIX + ROUTES.empty]: async () => raw.empty(),
     // 残留条那一份纯读报告（清理不在这里，仍是 `/apply` 的第五个动作）
     [SESSION_DELETE_API_PREFIX + ROUTES.orphans]: async () => raw.orphans(),
+    // 维护卡的孤儿附件：报告纯读、清理聚合写
+    [SESSION_DELETE_API_PREFIX + ROUTES.attachmentOrphans]: async () => raw.attachmentOrphans(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.attachmentClean]: async () => raw.attachmentClean(),
   }
   globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
     const path = String(input)
@@ -319,7 +326,7 @@ function Scene({
 }
 
 describe('apply 的装配面', () => {
-  it('取数通道可用时：菜单槽两行、行首格与行尾排各一次、overlay 槽四次（提示 + 单删框 + 浮条 + 批量框）、面板行与中央面板各一次；面板 id 与 main 的 key 同字', async () => {
+  it('取数通道可用时：菜单槽两行、行首格与行尾排各一次、overlay 槽四次（提示 + 单删框 + 浮条 + 批量框）、面板行与中央面板各一次、设置页一次；面板 id 与 main 的 key 同字', async () => {
     const { injected, registered } = await bootstrap()
     // 同一个槽位 key 多次 `slots.inject` 是官方写法本身（宿主对 `conversation.chat.node`
     // 就连写十几次 inject，每次一个贡献），overlay 上的四样东西各是各的贡献。
@@ -334,6 +341,7 @@ describe('apply 的装配面', () => {
       OVERLAY_SLOT,
       PANEL_SLOT,
       MAIN_SLOT,
+      SETTINGS_SLOT,
     ])
     expect(registered.map((row) => row.id)).toEqual([
       '@xrn1997/dsh-session-delete.delete',
@@ -345,6 +353,7 @@ describe('apply 的装配面', () => {
       '@xrn1997/dsh-session-delete.batch-bar',
       '@xrn1997/dsh-session-delete.batch-confirm',
       PANEL_ID,
+      undefined,
       undefined,
     ])
     // 一对座位：`sidebar.panellist` 的 id 与 `main` 的 key 必须同字（官方 selectPanel 按 id
@@ -369,6 +378,10 @@ describe('apply 的装配面', () => {
     expect(registered[2]?.order).toBe(300)
     expect(registered[3]?.order).toBe(300)
     expect(panelRow?.order).toBe(900)
+    // 设置页卡片按 **bundle 包名** 寻址（keyed 座位），不是 `id`；宿主的插件详情页声明该子槽位后才会挂载。
+    const settingsRow = registered.find((row) => row.name === SETTINGS_SLOT)
+    expect(settingsRow?.key).toBe('@xrn1997/dsh-session-delete')
+    expect(settingsRow?.id).toBeUndefined()
   })
 
   it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {
@@ -705,5 +718,20 @@ describe('中央面板（`main` 的占用者）', () => {
 
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
     expect(screen.getByText('回收站')).toBeInTheDocument()
+  })
+})
+
+describe('插件设置页（`plugins.bundle.config` 的占用者）', () => {
+  it('注入面给 deps/t；挂载只渲染卡片，不自动发检查请求', async () => {
+    const { seat, fetchCalls } = await bootstrap()
+    const { Component, props } = seat(SETTINGS_SLOT)
+    render(<Component {...props} />)
+
+    expect(screen.getByText('维护')).toBeInTheDocument()
+    expect(screen.getAllByText('尚未检查')).toHaveLength(2)
+    // 探测那一问是注册的前提；之后没有任何自动扫描（手动触发）。
+    expect(fetchCalls.map((call) => call.path)).toEqual([
+      `${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`,
+    ])
   })
 })

@@ -50,7 +50,9 @@ const ZH = {
   'trash.confirm.all': '清空回收站？',
   'trash.confirm.one': '彻底删除 1 个会话？',
   'trash.confirm.one.meta': '{project} · 删除于 {at} · {size}',
-  'trash.confirm.body': '这会从回收站移除文件，{strong}。',
+  // 只清 `.dsh` 里的副本：用户磁盘上的原图/原文件不进任何删除链路（`src/trash/attachments.ts` 的两条红线）。
+  'trash.confirm.body':
+    '这会从回收站移除文件，{strong}。只清理会话独占的图片附件副本（共享副本保留）；宿主投影缓存与你磁盘上的原图不受影响。',
   'trash.confirm.body.strong': '之后没有任何副本可以恢复',
   'trash.confirm.purge': '彻底删除',
 
@@ -82,14 +84,53 @@ const ZH = {
   'trash.orphans.meta': '共 {size}，来自 {parents} 个失踪的父会话',
   'trash.orphans.open': '查看并清理',
   'trash.orphans.confirm': '清理 {count} 个无主子会话？',
-  'trash.orphans.body': '这些子会话的父会话已经不在会话列表或回收站里，清理后不可恢复。正在运行的子会话会被拒绝，不会被删除。',
+  'trash.orphans.body':
+    '这些子会话的父会话已经不在会话列表或回收站里，清理后不可恢复。正在运行的子会话会被拒绝，不会被删除。只清理会话独占的图片附件副本（共享副本保留）；宿主投影缓存与你磁盘上的原图不受影响。若剩余引用源读不出，本次附件清理会跳过（会话目录仍会删除）。',
   'trash.orphans.group': '{project} · {count} 个 · {size}',
-  'trash.orphans.cacheNote': '本次只清理会话目录，不包含宿主投影缓存和附件。',
+  'trash.orphans.cacheNote': '本次会一并清理会话独占的图片附件副本；宿主投影缓存不包含在内。若剩余引用源读不出，本次附件清理会跳过（会话目录仍会删除）。',
   'trash.orphans.clean': '清理',
   'trash.orphans.failure': '残留检查/清理失败：{message}',
   'trash.orphans.cleanFailed': '{count} 组未清理：{message}',
   'trash.orphans.cleanPartial': '已先删掉 {removed} 个会话目录（{size}）',
   'trash.orphans.cleanGone': '有 {count} 组已不在了（可能已被别处清理，或父会话已恢复）',
+  // 删除/清空回执里的附件那半句（面板与维护卡共用同一判据，读法住 `receipt.ts`）。跳过不是失败：
+  // `skipped` 说的是
+  // "有候选或剩余引用源读不出，这一轮部分或整体没敢清"（原因上屏），`failed` 是逐文件真出错的那几件；
+  // 两个数分开说，不合并。`skipped` 而 `removed > 0` 时说「部分」：那一轮清掉了 `removed` 件，
+  // 不冒充"整轮没清"。`skipped` 与 `failed` 同时出现时，失败件数追加在跳过句尾（前缀带分隔符）。
+  'trash.attachments.failed': '已删除会话，但 {count} 个附件未能清理',
+  'trash.attachments.skipped': '附件未清理：{reason}',
+  'trash.attachments.skippedPartial': '部分附件未清理：{reason}（已清理 {removed} 个）',
+  'trash.attachments.alsoFailed': '；另有 {count} 个附件删除失败',
+
+  // 插件设置页的「维护」卡：两段都是手动触发（检查 → 预览 → 清理），没有自动扫描也没有定时器。
+  // 状态行六档：尚未检查 / 检查中 / 清理中 / 检查失败 / 没有发现 / N——在飞的动作优先于一切，
+  // 检查/清理失败优先于「尚未检查」（失败不是"还没查"）。孤儿会话段复用 `trash.orphans.*` 的呈现文案，
+  // 清理回执里的附件读数复用 `trash.attachments.skipped*` 那对句子；孤儿附件段的确认句必须把三条
+  // 边界说完（只清 `.dsh` 内无引用图片副本、源文件不动、共享引用保留）。
+  'maintenance.title': '维护',
+  'maintenance.orphans.title': '孤儿会话',
+  'maintenance.orphans.hint': '父会话已不在会话列表或回收站里的子会话。检查只读，不会自动运行。',
+  'maintenance.attachments.title': '孤儿附件',
+  'maintenance.attachments.hint': '在 .dsh 里没有任何引用的图片副本。检查只读，清理只动这些副本。',
+  'maintenance.scan': '检查',
+  'maintenance.scanning': '检查中…',
+  'maintenance.cleaning': '清理中…',
+  'maintenance.checkFailed': '检查失败',
+  'maintenance.notScanned': '尚未检查',
+  'maintenance.none': '没有发现',
+  'maintenance.orphans.count': '{count} 个',
+  'maintenance.attachments.count': '{count} 个',
+  'maintenance.attachments.scanFailed': '检查失败：{message}',
+  'maintenance.attachments.cleaned': '已清理 {count} 个（{size}）',
+  'maintenance.attachments.cleanFailed': '{count} 个附件未能清理（已清理 {removed} 个）',
+  // 顶层失败（没拿到回执）没有"件数"可说：本地化前缀 + 服务端原文，不把原文裸着上屏。
+  'maintenance.attachments.cleanError': '附件清理失败：{message}',
+  'maintenance.attachments.confirm': '查看并清理 {count} 个孤儿附件？',
+  'maintenance.attachments.body': '只清理 .dsh 内无引用的图片副本；源文件不受影响；共享引用保留。',
+  'maintenance.attachments.previewTruncated': '仅预览前 {shown} 个；清理会处理全部 {total} 个。',
+  'maintenance.attachments.previewHint': '点图片可放大；关闭这个框不会删除任何东西。',
+  'maintenance.attachments.clean': '清理这些附件',
 
   // 详情那一层（docs/ui-spec.md）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
   'detail.notSelected': '选中一条会话，看它讲了什么',
@@ -119,6 +160,15 @@ const ZH = {
   'detail.messages.omitted': '还有 {count} 条未显示',
   'detail.image': '[图片]',
   'detail.image.alt': '[图片 · {alt}]',
+  // 附件条（`src/client/attachment-view.tsx`）：空名用「文件」兜底；放大框标题优先用文件名。
+  'detail.attachment.file': '文件',
+  'detail.attachment.preview': '附件预览',
+  'detail.attachment.alt': '附件图片',
+  'detail.attachment.open': '打开图片「{name}」',
+  'detail.attachment.unavailable': '附件不可用',
+  'detail.attachment.save': '另存为',
+  'detail.attachment.saving': '保存中…',
+  'detail.attachment.saveFailed': '保存失败：{message}',
   'detail.back': '← 返回清单',
   'detail.list.label': '回收站清单',
   'detail.role.user': '你',
@@ -193,7 +243,8 @@ const EN: Record<CopyKey, string> = {
   'trash.confirm.all': 'Empty the trash?',
   'trash.confirm.one': 'Delete this session permanently?',
   'trash.confirm.one.meta': '{project} · deleted {at} · {size}',
-  'trash.confirm.body': 'This removes the files from the trash; {strong}.',
+  'trash.confirm.body':
+    'This removes the files from the trash; {strong}. Only session-exclusive image attachment copies are cleaned (shared copies are kept); host projection caches and your original files are untouched.',
   'trash.confirm.body.strong': 'no copy remains to restore it',
   'trash.confirm.purge': 'Delete permanently',
 
@@ -219,14 +270,47 @@ const EN: Record<CopyKey, string> = {
   'trash.orphans.meta': '{size} total, from {parents} missing parent sessions',
   'trash.orphans.open': 'Review and clean',
   'trash.orphans.confirm': 'Clean {count} orphan subagent sessions?',
-  'trash.orphans.body': 'Their parent sessions are no longer in the session list or the trash; this cannot be undone. Running sessions are refused and left untouched.',
+  'trash.orphans.body':
+    'Their parent sessions are no longer in the session list or the trash; this cannot be undone. Running sessions are refused and left untouched. Only session-exclusive image attachment copies are cleaned (shared copies are kept); host projection caches and your original files are untouched. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
   'trash.orphans.group': '{project} · {count} sessions · {size}',
-  'trash.orphans.cacheNote': 'This cleans session directories only; host projection caches and attachments are not included.',
+  'trash.orphans.cacheNote':
+    'Session-exclusive image attachment copies inside .dsh are cleaned as well; host projection caches are not included. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
   'trash.orphans.clean': 'Clean',
   'trash.orphans.failure': 'Orphan check/cleanup failed: {message}',
   'trash.orphans.cleanFailed': '{count} groups were not cleaned: {message}',
   'trash.orphans.cleanPartial': 'Removed {removed} session directories first ({size})',
   'trash.orphans.cleanGone': '{count} groups were already gone (cleaned elsewhere or their parent was restored)',
+  'trash.attachments.failed': 'Sessions were deleted, but {count} attachments could not be cleaned',
+  'trash.attachments.skipped': 'Attachments were not cleaned: {reason}',
+  'trash.attachments.skippedPartial': 'Some attachments were not cleaned: {reason} ({removed} cleaned)',
+  'trash.attachments.alsoFailed': '; also {count} attachment deletions failed',
+
+  'maintenance.title': 'Maintenance',
+  'maintenance.orphans.title': 'Orphan sessions',
+  'maintenance.orphans.hint':
+    'Subagent sessions whose parent is no longer in the session list or the trash. Checking only reads; it never runs automatically.',
+  'maintenance.attachments.title': 'Orphan attachments',
+  'maintenance.attachments.hint':
+    'Image copies inside .dsh that nothing references. Checking only reads; cleanup touches only these copies.',
+  'maintenance.scan': 'Check',
+  'maintenance.scanning': 'Checking…',
+  'maintenance.cleaning': 'Cleaning…',
+  'maintenance.checkFailed': 'Check failed',
+  'maintenance.notScanned': 'Not checked yet',
+  'maintenance.none': 'Nothing found',
+  'maintenance.orphans.count': '{count}',
+  'maintenance.attachments.count': '{count}',
+  'maintenance.attachments.scanFailed': 'Check failed: {message}',
+  'maintenance.attachments.cleaned': 'Cleaned {count} ({size})',
+  'maintenance.attachments.cleanFailed': '{count} attachments could not be cleaned ({removed} cleaned)',
+  'maintenance.attachments.cleanError': 'Attachment cleanup failed: {message}',
+  'maintenance.attachments.confirm': 'Review and clean {count} orphan attachments?',
+  'maintenance.attachments.body':
+    'Only unreferenced image copies inside .dsh are cleaned; source files are untouched; shared references are kept.',
+  'maintenance.attachments.previewTruncated':
+    'Only the first {shown} are previewed; cleanup handles all {total}.',
+  'maintenance.attachments.previewHint': 'Click an image to enlarge it; closing this dialog deletes nothing.',
+  'maintenance.attachments.clean': 'Clean these attachments',
 
   'detail.notSelected': 'Select a session to see what it was about',
   'detail.loading': 'Reading this session…',
@@ -255,6 +339,14 @@ const EN: Record<CopyKey, string> = {
   'detail.messages.omitted': '{count} more messages not shown',
   'detail.image': '[Image]',
   'detail.image.alt': '[Image · {alt}]',
+  'detail.attachment.file': 'File',
+  'detail.attachment.preview': 'Attachment preview',
+  'detail.attachment.alt': 'Attachment image',
+  'detail.attachment.open': 'Open image “{name}”',
+  'detail.attachment.unavailable': 'Attachment unavailable',
+  'detail.attachment.save': 'Save as',
+  'detail.attachment.saving': 'Saving…',
+  'detail.attachment.saveFailed': 'Save failed: {message}',
   'detail.back': '← Back to list',
   'detail.list.label': 'Trash list',
   'detail.role.user': 'You',

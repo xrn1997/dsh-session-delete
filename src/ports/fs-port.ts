@@ -16,10 +16,14 @@ export interface FsPort {
   listDirs(p: string): Promise<string[]>
   /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），不在这里。 */
   readFile(p: string): Promise<Buffer>
+  /** 只读的单文件读数：附件渲染与独占计划都用它（不递归、不跟随目录）。 */
+  statFile(p: string): Promise<{ size: number }>
+  /** 删单个文件（不是目录）。危险能力，只挂到 `RemovalDeps` 上。 */
+  removeFile(p: string): Promise<void>
 }
 
-/** 动词的基础面：读与搬移都有，**不拿删除**。删目录只挂在 `RemovalDeps` 上（ADR-0006）。 */
-export type CoreFsPort = Omit<FsPort, 'removeDir'>
+/** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0006）。 */
+export type CoreFsPort = Omit<FsPort, 'removeDir' | 'removeFile'>
 
 /** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
  *  `this` 变成 undefined）。所以端口只做转发，递归在模块作用域里自调。 */
@@ -45,5 +49,9 @@ export function createFsPort(): FsPort {
       return (await readdir(p, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name)
     },
     async readFile(p) { return readFile(p) },
+    async statFile(p) {
+      return { size: (await stat(p)).size }
+    },
+    async removeFile(p) { await rm(p, { force: true }) },
   }
 }

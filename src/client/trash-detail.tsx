@@ -7,8 +7,10 @@
  * - 注入条数与截断条数必须上屏，避免正文变少被误读成“会话只有这些内容”。
  *
  * 助手正文走 Markdown，用户提问保持原话；样式 token 与差异见 ui/markdown.css 文件头。
+ * 附件随消息位置渲染：用户气泡之上、助手正文之后；附件是那条消息的内容，不单开区块。
  */
 import { type CSSProperties } from 'react'
+import { AttachmentStrip } from './attachment-view.js'
 import { absoluteText, agoText, type Translate } from './copy.js'
 import type { TrashDetailLike, TrashEntryLike } from './remote.js'
 import { MarkdownBody } from './markdown.js'
@@ -248,6 +250,9 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
   const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
   // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（markdown.tsx 头注）。
   const localeKey = t('common.close')
+  // 文本与附件都为空的条目是附件总量闸用尽后的防御形态（纯附件消息）：
+  // 它既没有字也没有图，画出来只是一条空行 ⇒ 整条不画。计数仍是 `detail` 那两本账，不在这里改。
+  const messages = detail.messages.filter((message) => message.text !== '' || message.attachments.length > 0)
   return (
     <>
       <dl style={META}>
@@ -282,11 +287,11 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
           : ''}
       </div>
 
-      {detail.messages.length === 0 ? (
+      {messages.length === 0 ? (
         <div style={META_LINE}>{t('detail.noBody')}</div>
       ) : (
         <div style={THREAD}>
-          {detail.messages.map((message, index) => (
+          {messages.map((message, index) => (
             <div
               key={`${message.time}-${index}`}
               data-sd-msg={message.role}
@@ -298,14 +303,21 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
               {/* 助手的 `text` 段本身就是 markdown 源，照宿主那样渲；**用户的提问是原话**，
                   渲成 markdown 会把"我打过的那串反斜杠"改掉样子——所以只有助手侧过 MarkdownBody。 */}
               {message.role === 'user' ? (
-                <div data-sd-bubble style={BUBBLE}>
-                  {message.text}
-                  {message.truncated ? '…' : ''}
-                </div>
+                <>
+                  <AttachmentStrip attachments={message.attachments} t={t} align="end" />
+                  {/* 纯附件消息没有可说的话 ⇒ 不铺一只空气泡；图/文件名就是这一条的内容。 */}
+                  {message.text === '' && !message.truncated ? null : (
+                    <div data-sd-bubble style={BUBBLE}>
+                      {message.text}
+                      {message.truncated ? '…' : ''}
+                    </div>
+                  )}
+                </>
               ) : (
                 <>
                   <MarkdownBody text={message.text} t={t} localeKey={localeKey} />
                   {message.truncated ? <div style={META_LINE}>…</div> : null}
+                  <AttachmentStrip attachments={message.attachments} t={t} align="start" />
                 </>
               )}
             </div>

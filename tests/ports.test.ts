@@ -1,8 +1,13 @@
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { createFsPort } from '../src/ports/fs-port.js'
+
+const temps: string[] = []
+afterEach(async () => {
+  while (temps.length > 0) await rm(temps.pop() as string, { recursive: true, force: true })
+})
 
 describe('文件层端口', () => {
   it('exists 对不存在的路径返回 false，不抛错', async () => {
@@ -51,4 +56,17 @@ describe('文件层端口', () => {
     const raw = await fs.readFile(join(root, 'session-trash', 'e1', 'session.v4.jsonl.zstd'))
     expect(Buffer.isBuffer(raw) && raw.toString()).toBe('bytes')
   })
+})
+
+it('statFile 量文件、removeFile 幂等删除，且方法能解构出来单独调', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-fs-'))
+  temps.push(dir)
+  const file = join(dir, 'a.txt')
+  await writeFile(file, 'hello')
+  const port = createFsPort()
+  const { statFile, removeFile } = port
+  expect(await statFile(file)).toMatchObject({ size: 5 })
+  await removeFile(file)
+  expect(await port.exists(file)).toBe(false)
+  await removeFile(file) // force：已经不在也不抛
 })

@@ -45,6 +45,11 @@ const NEWLINE = 0x0a
  */
 const CANONICAL_ZSTD_LOG = /^session(?:\.v([1-9][0-9]*))?\.jsonl\.zstd$/u
 
+/** 这个名字是不是规范日志（任意一代）。附件引用扫描用它区分"老一代日志"与"读不懂的旁文件"。 */
+export function isCanonicalSessionLogName(name: string): boolean {
+  return CANONICAL_ZSTD_LOG.test(name)
+}
+
 /**
  * 同一个会话目录里可以并存多代日志；只读版本号最大的那代，因为新代包含旧代的记录且末尾更晚
  * ⇒ 读旧代 = 一份截了尾巴的快照；把几代拼起来 = 重复计数。

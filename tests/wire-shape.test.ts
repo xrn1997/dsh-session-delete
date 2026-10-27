@@ -18,7 +18,13 @@ import {
   type TrashRowWire,
 } from '../src/shared/wire.js'
 import type { PurgeResultLike, TrashDetailLike, TrashEntryLike } from '../src/client/remote.js'
-import type { PurgeStatsWire, TrashDetailWire } from '../src/shared/wire.js'
+import type {
+  AttachmentCleanupWire,
+  AttachmentOrphanReportWire,
+  PurgeStatsWire,
+  TrashDetailAttachmentWire,
+  TrashDetailWire,
+} from '../src/shared/wire.js'
 
 /** 两个类型**完全相等**（不是"互相可赋值"）——多一个或漏一个字段都会让它变成 false。 */
 type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
@@ -110,6 +116,41 @@ describe('两半共用同一份形状（不是两份互相镜像）', () => {
     const purgeMirror: Exact<PurgeResultLike, PurgeStatsWire> = true
     const detailMirror: Exact<TrashDetailLike, TrashDetailWire> = true
     expect([entryMirror, purgeMirror, detailMirror]).toEqual([true, true, true])
+  })
+
+  it('详情消息的附件字段是必填数组；附件统计是可选字段', () => {
+    const message: TrashDetailWire['messages'][number] = {
+      role: 'user', time: 1, text: '', truncated: false, attachments: [],
+    }
+    const purge: PurgeStatsWire = { removed: 1, freedBytes: 2, attachments: { removed: 1, freedBytes: 2, failed: 0 } }
+    expect(message.attachments).toEqual([])
+    expect(purge.attachments?.failed).toBe(0)
+  })
+
+  it('附件读数的线上形状：图像段可选名字/类型/尺寸，文件段必有名字，清理回执可带跳过原因', () => {
+    const image: TrashDetailAttachmentWire = {
+      attachmentId: `sha256:${'a'.repeat(64)}`, kind: 'image', name: 'x.png', mediaType: 'image/png',
+      bytes: 3, width: 1, height: 2,
+    }
+    const file: TrashDetailAttachmentWire = {
+      attachmentId: `sha256:${'b'.repeat(64)}`, kind: 'file', name: 'x.txt', bytes: 3,
+    }
+    const cleanup: AttachmentCleanupWire = { removed: 1, freedBytes: 2, failed: 0, skipped: '日志不完整' }
+    expect([image.kind, file.kind, cleanup.skipped]).toEqual(['image', 'file', '日志不完整'])
+  })
+
+  it('孤儿附件报告只有两格：数量与总字节（不把对象名单发上线）', () => {
+    const report: AttachmentOrphanReportWire = {
+      count: 1,
+      totalBytes: 4096,
+      items: [{ attachmentId: `sha256:${'a'.repeat(64)}`, bytes: 4096 }],
+    }
+    expect(Object.keys(report).sort()).toEqual(['count', 'items', 'totalBytes'])
+    expect(report).toEqual({
+      count: 1,
+      totalBytes: 4096,
+      items: [{ attachmentId: `sha256:${'a'.repeat(64)}`, bytes: 4096 }],
+    })
   })
 })
 

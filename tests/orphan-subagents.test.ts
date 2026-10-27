@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import {
   cleanOrphanGroup,
@@ -10,10 +11,28 @@ import {
   type OrphanGroup,
 } from '../src/verbs/orphan-subagents.js'
 import type { SessionIdentity } from '../src/ports/host-port.js'
+import { attachmentPathOf } from '../src/trash/attachments.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { createLogWorld, trashEntry } from './support/world.js'
 
 const HOME = '/h'
+const IMAGE = `sha256:${'a'.repeat(64)}`
+const imagePath = attachmentPathOf(HOME, 'image', IMAGE)
+/** 一条带独占图片引用的会话日志（压缩格式与 `pickSessionLog` 认的那一代一致）。 */
+const imageLog = () => zlib.zstdCompressSync(Buffer.from(
+  `${JSON.stringify({ type: 'session', version: 4, id: 'session-root', createdAt: 1, cwd: 'C:/p' })}\n` +
+  `${JSON.stringify({
+    type: 'user/message',
+    time: 2,
+    data: {
+      source: { kind: 'user' },
+      content: [{ type: 'image', attachment: { attachmentId: IMAGE, mediaType: 'image/png', bytes: 3, width: 1, height: 1 } }],
+    },
+  })}\n`,
+  'utf8',
+))
+/** 一个附件都没碰的回执（现有的普通组不涉及图片）。 */
+const NOTHING_CLEANED = { removed: 0, freedBytes: 0, failed: 0 } as const
 const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdentity => ({
   sessionId, projectDir: '--p--', subagent: true, ...over,
 })
@@ -105,7 +124,7 @@ describe('扫描报告与清理', () => {
     ])
     const [group] = await loadOrphanGroups(d, [])
     const result = await cleanOrphanGroup(d, group as OrphanGroup)
-    expect(result).toEqual({ removed: 2, freedBytes: 200 })
+    expect(result).toEqual({ removed: 2, freedBytes: 200, attachments: NOTHING_CLEANED })
     expect(calls).toEqual([
       'unarchive(session-root)', 'unarchive(session-kid)',
       'detach(session-kid,ws-1)',
@@ -119,6 +138,24 @@ describe('扫描报告与清理', () => {
     expect(host.isLive).toHaveBeenCalledWith('session-kid')
   })
 
+  it('清理连带独占图片：删目录之后才删对象，附件读数单独回执', async () => {
+    const { d, fs } = deps([s('session-root', { parentSessionId: 'session-gone' })])
+    const dir = sessionDirOf('--p--', 'session-root', HOME)
+    const order: string[] = []
+    fs.listDirs.mockImplementation(async () => [])
+    fs.listFiles.mockImplementation(async (p: string) => p === dir ? ['session.v4.jsonl.zstd'] : [])
+    fs.readFile.mockImplementation(async () => imageLog())
+    fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath ? 7 : 0 }))
+    fs.removeDir.mockImplementation(async (p: string) => { order.push(`removeDir:${p}`) })
+    fs.removeFile.mockImplementation(async (p: string) => { order.push(`removeFile:${p}`) })
+
+    const [group] = await loadOrphanGroups(d, [])
+    const result = await cleanOrphanGroup(d, group as OrphanGroup)
+
+    expect(result).toEqual({ removed: 1, freedBytes: 100, attachments: { removed: 1, freedBytes: 7, failed: 0 } })
+    expect(order).toEqual([`removeDir:${dir}`, `removeFile:${imagePath}`])
+  })
+
   it('成员目录缺席 ⇒ 跳过它的删除与计数，但不跳过归档集摘除', async () => {
     const { d, fs, host } = deps([
       s('session-root', { parentSessionId: 'session-gone' }),
@@ -127,7 +164,7 @@ describe('扫描报告与清理', () => {
     const [group] = await loadOrphanGroups(d, [])
     fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith('session-kid'))
     const result = await cleanOrphanGroup(d, group as OrphanGroup)
-    expect(result).toEqual({ removed: 1, freedBytes: 100 })
+    expect(result).toEqual({ removed: 1, freedBytes: 100, attachments: NOTHING_CLEANED })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect(fs.removeDir).toHaveBeenCalledWith(sessionDirOf('--p--', 'session-root', HOME))
     expect(host.unarchive).toHaveBeenCalledWith('session-kid')

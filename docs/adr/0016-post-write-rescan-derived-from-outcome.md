@@ -1,6 +1,6 @@
 # 写后要不要重扫残留，由这次的写入结果派生
 
-Status: accepted
+Status: superseded by 0021
 
 「无主子会话」那一块在写入之后要不要重扫，此前由调用方传 `rescan: true` 决定：漏传就留下盘上不露面的新孤儿，全传则每次写都付一次全量扫描。`src/client/use-trash-query.ts` 的 `needsOrphanRescan` 把这条判据收成一处——调用方只交这次的 `WriteOutcome`，要不要扫由动作、请求的 id 与发读前的清单自己算。
 

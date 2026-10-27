@@ -1,13 +1,34 @@
 import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import { purgeTrash } from '../src/verbs/purge-trash.js'
-import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { attachmentPathOf } from '../src/trash/attachments.js'
+import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { groupOf } from '../src/trash/groups.js'
 import { createLogWorld, trashEntry } from './support/world.js'
 
 const HOME = '/h'
+
+const IMAGE = `sha256:${'a'.repeat(64)}`
+const imagePath = attachmentPathOf(HOME, 'image', IMAGE)
+/** 一条带独占图片引用的会话日志（压缩格式与 `pickSessionLog` 认的那一代一致）。 */
+const imageLog = () => zlib.zstdCompressSync(Buffer.from(
+  `${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n` +
+  `${JSON.stringify({
+    type: 'user/message',
+    time: 2,
+    data: {
+      source: { kind: 'user' },
+      content: [{ type: 'image', attachment: { attachmentId: IMAGE, mediaType: 'image/png', bytes: 3, width: 1, height: 1 } }],
+    },
+  })}\n`,
+  'utf8',
+))
+
+/** 一个附件都没碰的回执（现有的普通条目不涉及图片）。 */
+const NOTHING_CLEANED = { removed: 0, freedBytes: 0, failed: 0 } as const
 
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：世界由参数描述，不再自己凑端口。
  *  日志只记 evictLive / announceRemoved 两件——彻底删除对宿主内存做的事就这两件。 */
@@ -35,7 +56,7 @@ describe('彻底删除', () => {
   it('删一条：目录被移除、清单少一条、返回释放字节', async () => {
     const { fs, purge, manifest } = deps([trashEntry('a'), trashEntry('b')])
     const r = await purge('a')
-    expect(r).toEqual({ removed: 1, freedBytes: 512 })
+    expect(r).toEqual({ removed: 1, freedBytes: 512, attachments: NOTHING_CLEANED })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect(await manifest.list()).toHaveLength(1)
   })
@@ -63,7 +84,7 @@ describe('彻底删除', () => {
     const { host, purge, manifest } = deps([trashEntry('a')])
     host.evictLive = vi.fn(async () => 'unknown' as const)
     const r = await purge('a')
-    expect(r).toEqual({ removed: 1, freedBytes: 512 })
+    expect(r).toEqual({ removed: 1, freedBytes: 512, attachments: NOTHING_CLEANED })
     expect(await manifest.list()).toHaveLength(0)
     expect(host.evictLive).toHaveBeenCalledWith('a')
     expect(host.announceRemoved).not.toHaveBeenCalled()
@@ -114,7 +135,7 @@ describe('彻底删除', () => {
       value: { p: [{ sessionId: 'session-kid', projectDir: '--p--' }] },
     }))
     const r = await purge('p')
-    expect(r).toEqual({ removed: 2, freedBytes: 1024 })
+    expect(r).toEqual({ removed: 2, freedBytes: 1024, attachments: NOTHING_CLEANED })
     expect(host.unarchive).toHaveBeenCalledWith('p')
     expect(host.unarchive).toHaveBeenCalledWith('session-kid')
     expect(fs.removeDir).toHaveBeenCalledWith(sessionDirOf('--p--', 'session-kid', HOME))
@@ -124,12 +145,30 @@ describe('彻底删除', () => {
     ])
   })
 
+  // 独占图片在会话目录删完之后才清；附件字节单独走 `attachments`，不改 `freedBytes`。
+  it('连带清理独占图片：先删目录再删对象，回执带附件读数', async () => {
+    const { fs, purge } = deps([trashEntry('a')])
+    const dir = trashDirOf('a', HOME)
+    const order: string[] = []
+    fs.listDirs.mockImplementation(async () => [])
+    fs.listFiles.mockImplementation(async (p: string) => p === dir ? ['session.v4.jsonl.zstd'] : [])
+    fs.readFile.mockImplementation(async () => imageLog())
+    fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath ? 7 : 0 }))
+    fs.removeDir.mockImplementation(async (p: string) => { order.push(`removeDir:${p}`) })
+    fs.removeFile.mockImplementation(async (p: string) => { order.push(`removeFile:${p}`) })
+
+    const r = await purge('a')
+
+    expect(r).toEqual({ removed: 1, freedBytes: 512, attachments: { removed: 1, freedBytes: 7, failed: 0 } })
+    expect(order).toEqual([`removeDir:${dir}`, `removeFile:${imagePath}`])
+  })
+
   // 语料看不见不是失败：这次只清清册里的那部分，盘上残留留给 `GET /orphans` 兜底（与 delete 的降级一致）。
   it('语料看不见（available:false）⇒ 静默降级，只清清册里的那一部分', async () => {
     const { fs, host, purge } = deps([trashEntry('p')])
     host.subagentMembersOf = vi.fn(async () => ({ available: false as const }))
     const r = await purge('p')
-    expect(r).toEqual({ removed: 1, freedBytes: 512 })
+    expect(r).toEqual({ removed: 1, freedBytes: 512, attachments: NOTHING_CLEANED })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect(host.unarchive).toHaveBeenCalledWith('p')
     expect(host.subagentMembersOf).toHaveBeenCalledTimes(1)

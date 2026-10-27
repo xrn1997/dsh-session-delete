@@ -56,8 +56,8 @@ it('按清册定位目录，一次读出 cwd / 时间 / 标题 / 计数 / 模型
   })
   expect(detail.models).toEqual(['m-1'])
   expect(detail.messages).toEqual([
-    { role: 'user', time: 13, text: '先看改动', truncated: false },
-    { role: 'assistant', time: 14, text: '改动分四层', truncated: false },
+    { role: 'user', time: 13, text: '先看改动', truncated: false, attachments: [] },
+    { role: 'assistant', time: 14, text: '改动分四层', truncated: false, attachments: [] },
   ])
 })
 
@@ -83,6 +83,119 @@ it('推理段与工具调用不进正文（少掉的条数由 `assistantMessageC
   expect(detail.messages).toEqual([])
   expect(detail.assistantMessageCount).toBe(0)
   expect(detail.toolCallCount).toBe(1)
+})
+
+it('纯图片消息不被空文本过滤；附件元信息过线、文本仍原话', async () => {
+  const imgId = `sha256:${'a'.repeat(64)}`
+  const log = body({
+    type: 'user/message', time: 20,
+    data: {
+      source: { kind: 'user' },
+      content: [
+        { type: 'image', attachment: { attachmentId: imgId, mediaType: 'image/png', bytes: 3, width: 10, height: 20, name: 'shot.png' } },
+      ],
+    },
+  })
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+  expect(detail.userMessageCount).toBe(1)
+  expect(detail.messages).toEqual([{
+    role: 'user', time: 20, text: '', truncated: false,
+    attachments: [{ attachmentId: imgId, kind: 'image', mediaType: 'image/png', bytes: 3, width: 10, height: 20, name: 'shot.png' }],
+  }])
+})
+
+it('畸形 attachmentId 与 file 块：file 保留、畸形跳过', async () => {
+  const good = `sha256:${'b'.repeat(64)}`
+  const log = body({
+    type: 'user/message', time: 21,
+    data: {
+      source: { kind: 'user' },
+      content: [
+        { type: 'text', text: '文件' },
+        { type: 'file', attachment: { attachmentId: good, name: 'a.pdf', bytes: 9 } },
+        { type: 'image', attachment: { attachmentId: '../../x' } },
+      ],
+    },
+  })
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+  expect(detail.messages[0]?.attachments).toEqual([
+    { attachmentId: good, kind: 'file', name: 'a.pdf', bytes: 9 },
+  ])
+})
+
+it('助手消息同样收附件：计数、角色、元信息一起过线', async () => {
+  const imgId = `sha256:${'c'.repeat(64)}`
+  const log = body({
+    type: 'assistant/message', time: 22,
+    data: {
+      message: {
+        content: [
+          { type: 'image', attachment: { attachmentId: imgId, mediaType: 'image/png', bytes: 5, width: 30, height: 40, name: 'reply.png' } },
+        ],
+      },
+    },
+  })
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+  expect(detail.assistantMessageCount).toBe(1)
+  expect(detail.messages).toHaveLength(1)
+  expect(detail.messages[0]!.role).toBe('assistant')
+  expect(detail.messages[0]!.attachments).toEqual([
+    { attachmentId: imgId, kind: 'image', mediaType: 'image/png', bytes: 5, width: 30, height: 40, name: 'reply.png' },
+  ])
+})
+
+it('注入消息的附件也不进正文：source.kind 过滤在附件提取之前，只涨 injectedCount', async () => {
+  // 顺序判据：若先提附件再判 source，这张图就会借"附件非空"绕过过滤混进 messages。
+  const imgId = `sha256:${'d'.repeat(64)}`
+  const log = body({
+    type: 'user/message', time: 23,
+    data: {
+      source: { kind: 'runtime-context' },
+      content: [
+        { type: 'text', text: '<system-reminder>…' },
+        { type: 'image', attachment: { attachmentId: imgId, mediaType: 'image/png', bytes: 2, width: 1, height: 1 } },
+      ],
+    },
+  })
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+  expect(detail.messages).toEqual([])
+  expect(detail.userMessageCount).toBe(0)
+  expect(detail.injectedCount).toBe(1)
+})
+
+it('附件的两道闸：每条 20、总量 200，多出的静默跳过；文本与计数照旧', async () => {
+  const img = (n: number) => ({ type: 'image', attachment: { attachmentId: `sha256:${n.toString(16).padStart(64, '0')}`, mediaType: 'image/png', bytes: 1 } })
+  const msg = (time: number, count: number) => ({
+    type: 'user/message', time,
+    data: { source: { kind: 'user' }, content: [{ type: 'text', text: `第${time}条` }, ...Array.from({ length: count }, (_u, i) => img(time * 100 + i))] },
+  })
+  const log = body(msg(1, 25), ...Array.from({ length: 11 }, (_u, i) => msg(10 + i, 20)))
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+
+  expect(detail.messages[0]!.attachments).toHaveLength(20)
+  expect(detail.messages.reduce((sum, m) => sum + m.attachments.length, 0)).toBe(200)
+  expect(detail.messages).toHaveLength(12)
+  expect(detail.userMessageCount).toBe(12)
+  expect(detail.messages.every((m) => m.truncated === false && m.text.startsWith('第'))).toBe(true)
+  // 附件被截是静默的：`omittedByPayloadCap` 只说"整条正文没进来"，不兼报附件少了几张。
+  expect(detail.omittedByPayloadCap).toBe(0)
+})
+
+it('附件总量用尽后，纯附件消息仍收进正文：形态是空文本 + 空附件（渲染侧须容忍）', async () => {
+  // 10 条 × 20 张 = 总量 200 刚好吃满；第 11 条只剩附件、没有文字。
+  const img = (n: number) => ({ type: 'image', attachment: { attachmentId: `sha256:${n.toString(16).padStart(64, '0')}`, mediaType: 'image/png', bytes: 1 } })
+  const bulk = Array.from({ length: 10 }, (_unused, i) => ({
+    type: 'user/message', time: i + 1,
+    data: { source: { kind: 'user' }, content: Array.from({ length: 20 }, (_inner, j) => img((i + 1) * 100 + j)) },
+  }))
+  const onlyImage = { type: 'user/message', time: 99, data: { source: { kind: 'user' }, content: [img(999)] } }
+  const detail = await readTrashDetail(makeDeps(body(...bulk, onlyImage)).deps)(id)
+
+  expect(detail.messages).toHaveLength(11)
+  // 过滤判"空文本**且**无附件"，发生在附件闸之前 ⇒ 这条仍是一条消息，只是附件被 room=0 削空。
+  expect(detail.messages[10]).toEqual({ role: 'user', time: 99, text: '', truncated: false, attachments: [] })
+  expect(detail.userMessageCount).toBe(11)
+  expect(detail.omittedByPayloadCap).toBe(0)
 })
 
 it('认不出的 type 一律忽略、不报错（日志词汇表随宿主代次只增不减）', async () => {

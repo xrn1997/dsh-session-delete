@@ -151,6 +151,7 @@ export function reportOrphans(groups: readonly OrphanGroup[]): OrphanReportWire 
  * - `unarchive` 对未归档的会话是官方幂等 no-op（`registry.unarchiveSession`），所以这里不需要那次
  *   `wasArchived` 读——这里没有"还原到删除前"的义务。
  * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 本来就是「未分组」，不是故障）。
+ * - 独占图片的剩余引用源由附件域自己扫：活动会话 + 全部 session-trash + storages/cache。
  */
 export async function cleanOrphanGroup(
   deps: RemovalDeps,

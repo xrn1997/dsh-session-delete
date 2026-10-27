@@ -3,6 +3,7 @@
   "version": "0.3.1",
   "description": "在 DeepSeek Harness 里删除会话：删除=移入回收站（可恢复），另设显式彻底删除",
   "type": "module",
+  "packageManager": "pnpm@11.25.0",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
   "exports": {

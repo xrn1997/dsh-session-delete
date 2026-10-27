@@ -1,8 +1,10 @@
+import type { Translate } from './copy.js'
 import {
   SESSION_DELETE_CODES,
   type ApplyAction,
   type ApplyOutcome,
   type ApplyValueByAction,
+  type AttachmentCleanupWire,
   type RemoteFailure,
 } from '../shared/wire.js'
 
@@ -136,6 +138,10 @@ export interface ReceiptSummary {
    *  两个域不混在一个数组里靠调用方猜，也不各留一个永远为空的字段。 */
   readonly landedIds: readonly string[]
   readonly anySuccess: boolean
+  /** purge / orphan-clean 的 `ok` 回执里那半份附件读数，**按批相加**（一段 `/apply` 可能带多条 ok）。
+   *  `skipped` 取第一条有的：它说的是"这一轮为什么没敢清"，不是可累加的计数。
+   *  两种动作都没有读数（或这一批一条都没落地）时缺席——不拿零冒充"清过"。 */
+  readonly attachmentCleanup?: AttachmentCleanupWire
 }
 
 /** 一次摘要派生的两样产物：聚合摘要与逐条失败原文。
@@ -157,6 +163,60 @@ function isSuccessVerdict<A extends ApplyAction>(
   verdict: ReceiptVerdict<A>,
 ): verdict is SuccessVerdict<A> {
   return verdict.kind === 'ok' || verdict.kind === 'already-gone'
+}
+
+/** purge / orphan-clean 的成功值里那半份附件读数；别的动作与没有读数的那几条回执都没有这一格。
+ *  `attachments: null` 这类畸形线上值也按"没有读数"处理：这一层只读回执，不替契约在加法里兜底。 */
+function statsAttachments(value: unknown): AttachmentCleanupWire | undefined {
+  if (typeof value !== 'object' || value === null || !('attachments' in value)) return undefined
+  const attachments = (value as { readonly attachments?: unknown }).attachments
+  return typeof attachments === 'object' && attachments !== null
+    ? attachments as AttachmentCleanupWire
+    : undefined
+}
+
+/**
+ * 附件读数跨 `ok` 回执相加（一段 `/apply` 可能带多条），`skipped` 取第一条有的——它说的是这一轮
+ * 为什么没敢清，不是能累加的数。`removed` 可能 > 0 而 `skipped` 有值：那是**部分**没清，上屏时要说清。
+ */
+function summarizeAttachmentCleanup<A extends ApplyAction>(
+  receipt: Receipt<A>,
+): AttachmentCleanupWire | undefined {
+  if (receipt.action !== 'purge' && receipt.action !== 'orphan-clean') return undefined
+  let removed = 0
+  let freedBytes = 0
+  let failedCount = 0
+  let skipped: string | undefined
+  let seen = false
+  for (const verdict of receipt.verdicts) {
+    if (verdict.kind !== 'ok') continue
+    const attachments = statsAttachments(verdict.value)
+    if (attachments === undefined) continue
+    seen = true
+    removed += attachments.removed
+    freedBytes += attachments.freedBytes
+    failedCount += attachments.failed
+    skipped ??= attachments.skipped
+  }
+  if (!seen) return undefined
+  return skipped === undefined
+    ? { removed, freedBytes, failed: failedCount }
+    : { removed, freedBytes, failed: failedCount, skipped }
+}
+
+/**
+ * 附件清理回执的「跳过半句」：`skipped` 说的是"这一轮为什么没敢清"，不是失败——原因上屏，
+ * `removed > 0` 时说「部分」，`failed` 件数追加在句尾（不被跳过原因吞掉）。
+ * 面板（`use-trash-query.ts`）与维护卡（`use-maintenance.ts`）共用这一判据，不许各拼一份。
+ * 没 `skipped` 时回 `null`：后半句（全清/失败怎么说）两个面各有各的口径，由调用方自己接。
+ */
+export function attachmentSkippedSentence(a: AttachmentCleanupWire, t: Translate): string | null {
+  if (a.skipped === undefined) return null
+  const failedSuffix = a.failed > 0 ? t('trash.attachments.alsoFailed', { count: a.failed }) : ''
+  const base = a.removed > 0
+    ? t('trash.attachments.skippedPartial', { reason: a.skipped, removed: a.removed })
+    : t('trash.attachments.skipped', { reason: a.skipped })
+  return `${base}${failedSuffix}`
 }
 
 export function summarizeReceipt<A extends ApplyAction>(
@@ -198,6 +258,7 @@ export function summarizeReceipt<A extends ApplyAction>(
       partial,
       landedIds,
       anySuccess: successIds.length > 0,
+      attachmentCleanup: summarizeAttachmentCleanup(receipt),
     },
     failures,
   }

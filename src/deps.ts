@@ -4,7 +4,7 @@ import type { PresenceCapability } from './ports/presence-port.js'
 import type { TrashLedger } from './trash/ledger.js'
 
 /** Node 半的基础依赖面：组合根只装配这一颗；动词之间不互相 import 依赖面 interface。
- *  `fs` 不含 `removeDir`，`host` 不含在场三件——两条危险能力各走 {@link RemovalDeps} 与
+ *  `fs` 不含 `removeDir` / `removeFile`，`host` 不含在场三件——两条危险能力各走 {@link RemovalDeps} 与
  *  {@link CoreDeps.presence}。 */
 export interface CoreDeps {
   fs: CoreFsPort
@@ -17,8 +17,9 @@ export interface CoreDeps {
 /** 会话删除动词的依赖面：只多读时钟；它不删目录（回滚只把搬走的搬回）。 */
 export type DeleteSessionDeps = CoreDeps & { now(): number }
 
-/** 永久删除的执行面：执行器及其分发拿得到 `removeDir`；计划函数仍只收 `CoreDeps`（它们不写）。 */
-export type RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort, 'removeDir'> }
+/** 永久删除的执行面：执行器及其分发拿得到 `removeDir` 与 `removeFile`；计划函数仍只收 `CoreDeps`（它们不写）。 */
+export type RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort, 'removeDir' | 'removeFile'> }
 
-/** 组合根装出的全量面：`/apply` 的分发同时够到删除的时钟与永久删除的 `removeDir`。 */
+/** 组合根装出的全量面：`/apply` 的分发同时够到删除的时钟与永久删除的 `removeDir` / `removeFile`
+ *  （后者也供孤儿附件清理段使用）。 */
 export type DeleteDeps = DeleteSessionDeps & RemovalDeps

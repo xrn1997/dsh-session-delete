@@ -128,6 +128,8 @@ function harness() {
   // `TrashQuery.emptyTrash` 交回的是"这一趟是否落地"，不是聚合回执（回执在 use-trash-query 里）。
   // 真实实现自己会套 `around` + `refreshAfterWrite`，所以控制器对 `kind:'all'` 不再补第二层。
   const emptyTrash = vi.fn(async (): Promise<boolean> => true)
+  // 附件读数上屏归 query（拼句子与清旧提示都在那一侧）；这里只钉"控制器把哪一份交过去"。
+  const noteAttachmentCleanup = vi.fn((_a: unknown): void => {})
   const input = (over: Over = {}): TrashPanelControllerInput => ({
     // 控制器只读这两条：`detail` 给读详情，`applyOutcomes` 给恢复/批量的那一段 `/apply`。
     deps,
@@ -139,11 +141,12 @@ function harness() {
       refreshAll,
       refreshAfterWrite,
       emptyTrash,
+      noteAttachmentCleanup,
     },
     ordered: over.ordered ?? [],
     canAutoSelect: over.canAutoSelect ?? false,
   })
-  return { deps, refreshAll, refreshAfterWrite, emptyTrash, input }
+  return { deps, refreshAll, refreshAfterWrite, emptyTrash, noteAttachmentCleanup, input }
 }
 
 function mount(over: Over = {}) {
@@ -539,40 +542,34 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
   })
 
-  it('单条恢复把 outcome 交给 query：孩子与组根的差异由 query 判，控制器只转交', async () => {
+  it('单条恢复后清单重读一次：控制器只交"重读"这个动作，不再把 outcome 交给 query 判重扫', async () => {
     const child = mount({ entries: [CHILD] })
     child.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['child']))
+    const refreshBefore = child.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await child.result.current.restore(CHILD)
     })
-    expect(child.refreshAfterWrite).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'restore', ids: ['child'] }))
+    expect(child.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
+    // 孤儿重扫判据（`needsOrphanRescan`）2026-10-27 移出面板：孤儿检查是设置页维护卡的手动动作。
+    expect(child.refreshAfterWrite.mock.calls.at(-1)).toEqual([])
 
     const root = mount({ entries: [A] })
     root.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
     await act(async () => {
       await root.result.current.restore(A)
     })
-    expect(root.refreshAfterWrite).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'restore', ids: ['a'] }))
+    expect(root.refreshAfterWrite.mock.calls.at(-1)).toEqual([])
   })
 
-  it('批量恢复把 outcome 交给 query：孩子与组根的差异由 query 判，控制器只转交', async () => {
+  it('批量恢复后清单重读一次，同样不把 outcome 交给 query', async () => {
     const withChild = mount({ entries: [A, CHILD] })
     withChild.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a', 'child']))
+    const refreshBefore = withChild.refreshAfterWrite.mock.calls.length
     await act(async () => {
       await withChild.result.current.confirmApply('restore', ['a', 'child'])
     })
-    expect(withChild.refreshAfterWrite).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'restore', ids: ['a', 'child'] }))
-
-    const roots = mount({ entries: [A] })
-    roots.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
-    await act(async () => {
-      await roots.result.current.confirmApply('restore', ['a'])
-    })
-    expect(roots.refreshAfterWrite).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'restore', ids: ['a'] }))
+    expect(withChild.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
+    expect(withChild.refreshAfterWrite.mock.calls.at(-1)).toEqual([])
   })
 
   it('面板恢复结算跨槽位：熄灭撤销横幅，并忘掉 main-view 的 closedByUs', async () => {
@@ -673,6 +670,38 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(notice.result.current).toBeNull()
   })
 
+  it('purge 结算把附件统计交给 query：成功交摘要那半，顶层失败交 undefined 清旧提示', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.applyOutcomes.mockResolvedValueOnce([
+      {
+        id: 'a', action: 'purge', ok: true,
+        value: { removed: 1, freedBytes: 1, attachments: { removed: 2, freedBytes: 20, failed: 1 } },
+      },
+    ])
+
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a'])
+    })
+    expect(m.noteAttachmentCleanup).toHaveBeenCalledWith({ removed: 2, freedBytes: 20, failed: 1 })
+
+    // 顶层失败 = 没拿到信封，不能断言这一趟清过附件 ⇒ 交 undefined，旧提示一起收掉。
+    m.deps.applyOutcomes.mockRejectedValueOnce(new Error('路由自检失败'))
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a'])
+    })
+    expect(m.noteAttachmentCleanup).toHaveBeenLastCalledWith(undefined)
+  })
+
+  it('restore 不碰附件提示：那一趟没有附件读数，旧提示归下一次 purge / 清空', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.applyOutcomes.mockResolvedValueOnce(restoreOutcomes(['a']))
+
+    await act(async () => {
+      await m.result.current.confirmApply('restore', ['a'])
+    })
+    expect(m.noteAttachmentCleanup).not.toHaveBeenCalled()
+  })
+
   it('pending 归控制器：request 构造待确认，setPending 不再出现在 interface', () => {
     const m = mount({ entries: [A, B] })
     act(() => { m.result.current.request({ kind: 'restore', ids: ['b', 'a'] }) })
@@ -733,7 +762,6 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.pending).toBeNull()
     expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
     expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
-    expect(m.refreshAfterWrite).toHaveBeenCalledWith(expect.objectContaining({ action: 'purge' }))
 
     // 成功的那条缓存已丢：再选它必须重读，否则会摆着已经被删掉的那一世的详情。
     const fresh = deferred<TrashDetailLike>()
@@ -954,7 +982,7 @@ describe('面板控制器 · 动作期间 busy', () => {
 })
 
 describe('面板控制器 · 失效通告', () => {
-  it('挂载走完整刷新；失效通告只戳写后刷新（不再付一次全量扫描）', async () => {
+  it('挂载读一次清单；失效通告只戳写后刷新', async () => {
     const m = mount({ entries: [A] })
     await act(async () => {
       await m.result.current.select(A)

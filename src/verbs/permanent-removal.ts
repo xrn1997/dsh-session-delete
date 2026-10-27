@@ -4,9 +4,15 @@
  */
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
+import {
+  executeImageAttachmentRemoval,
+  isMissing,
+  planImageAttachmentRemoval,
+  type ImageRemovalPlan,
+} from '../trash/attachments.js'
 import { bareSessionId, type HostCorpusPort, type SubagentMember } from '../ports/host-port.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
-import { isSessionDeleteCodeError } from '../shared/wire.js'
+import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/wire.js'
 import { verbError } from './errors.js'
 import { assertNoLive } from './live-admission.js'
 
@@ -22,12 +28,6 @@ export interface PlannedMemberRemoval {
   readonly dir: string
   readonly bytes: number
   readonly workspaceId?: string
-}
-
-/** `exists` 与 `sizeOfDir` 之间目录消失（ENOENT）是唯一一种当"不在"的失败：盘没挂、权限、I/O 错误
- *  都不许伪装成"目录没了"，那会让 `/list` 静默少算释放量、让删除计划少一条该删的目录。 */
-function isMissing(error: unknown): boolean {
-  return (error as { code?: unknown } | undefined)?.code === 'ENOENT'
 }
 
 /** 一条目录的盘上读数：在不在 + 实测字节（不在 = 0 字节）。 */
@@ -191,6 +191,10 @@ export interface RemovalPlan {
   readonly unarchive: readonly string[]
   /** 计划量到的合计；成功回执的 freedBytes 只念它。 */
   readonly bytes: number
+  /** 这一次要连带清掉的独占图片对象（`trash/attachments.ts` 的域判定；空计划 = 没有可删的、或
+   *  剩余引用源读不出而整体跳过——原因在 `skipped` 里）。附件字节**不进** `bytes`：那是会话目录的
+   *  释放量，附件读数单独走回执的 `attachments`。 */
+  readonly attachments: ImageRemovalPlan
 }
 
 function totalBytes(items: readonly { readonly bytes: number }[]): number {
@@ -205,6 +209,8 @@ function totalBytes(items: readonly { readonly bytes: number }[]): number {
  * - 盘上后代经 `selectStrandedMembers` 选出（一次问全部 targets、排除全部清册 id、bare id 全局只计划一次）。
  * - `members` 只收盘上还有目录的成员（目录缺席没有可删的字节）；`unarchive` = targets + 这些成员：
  *   只摘这一次真要碰的 id。
+ * - `attachments` 由被删目录（targets + 这些成员）里的图片引用与全部剩余引用源算独占；共享的保留、
+ *   剩余引用源读不出就整体跳过（判据住 `trash/attachments.ts`，这里只接线）。
  * - 活体准入在量目录与任何写之前逐个查 targets 与**全部枚举到的**盘上后代；任一在跑就整条拒绝、
  *   零副作用。没有跳过它的开关——计划就是执行前的闸（ADR-0006）。
  * - `sessionQuery` 缺席时端口回 `{ available: false }` ⇒ members 为空、不抛（盘上残留留给 `GET /orphans` 兜底）。
@@ -222,12 +228,18 @@ export async function planTrashRemoval(
   ])
   const trash = await Promise.all(targets.map((entry) => measureTrashRow(deps, entry)))
   const members = await planMemberRemovals(deps, candidates)
+  // 剩余引用源由附件域自己扫（活动会话 + 除本次被删目录外的全部 session-trash + storages/cache）。
+  const attachments = await planImageAttachmentRemoval(
+    deps,
+    [...trash.map((row) => row.dir), ...members.map((member) => member.dir)],
+  )
   return {
     kind: 'trash',
     trash,
     members,
     unarchive: [...targets.map((entry) => entry.sessionId), ...members.map((member) => member.sessionId)],
     bytes: totalBytes(trash) + totalBytes(members),
+    attachments,
   }
 }
 
@@ -238,6 +250,8 @@ export async function planTrashRemoval(
  * - `unarchive` 覆盖**全部传入成员**（含目录缺席）：orphan-clean 在删目录之前整批摘归档集，
  *   目录缺席的 id 也可能还挂在归档集里；重试时不会再长出一条幽灵 id。
  * - live 准入覆盖**全部传入成员**（含目录缺席）：它们都在这一组的可见面里，任一在跑就整组拒绝。
+ * - `attachments` 的剩余引用源由附件域自己扫（活动会话 + 全部 session-trash + storages/cache），
+ *   共享图片因此保留（判据住 `trash/attachments.ts`）。
  * - 回执由 `kind:'orphan'` 派生：删目录阶段失败时执行器要交回 `{removed, freedBytes, failedSessionId}`。
  */
 export async function planOrphanRemoval(
@@ -246,12 +260,17 @@ export async function planOrphanRemoval(
 ): Promise<RemovalPlan> {
   await assertNoLive(deps.host, members.map((member) => member.sessionId))
   const present = await planMemberRemovals(deps, members)
+  const attachments = await planImageAttachmentRemoval(
+    deps,
+    present.map((member) => member.dir),
+  )
   return {
     kind: 'orphan',
     trash: [],
     members: present,
     unarchive: members.map((member) => member.sessionId),
     bytes: totalBytes(present),
+    attachments,
   }
 }
 
@@ -260,8 +279,11 @@ export async function planOrphanRemoval(
  * （`plan.bytes`），执行期不再累加一遍。
  *
  * 顺序：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行
- * （在才删目录 → 摘清册行 → 通告成员离场）→ 逐条盘上成员（删目录 → 通告成员离场）。目录删掉就没有
- * "退回去"这回事，中途失败**不回滚**；已经删掉的由下面的计数器如实交回。
+ * （在才删目录 → 摘清册行 → 通告成员离场）→ 逐条盘上成员（删目录 → 通告成员离场）→ 逐条附件对象。
+ * 目录删掉就没有"退回去"这回事，中途失败**不回滚**；已经删掉的由下面的计数器如实交回。
+ *
+ * 附件清理排在**所有会话目录删完之后**：对象只在会话真的没了之后才动；单文件失败只进
+ * `attachments.failed`，不影响（也不回滚）会话删除的回执。
  *
  * 失败形状：
  * - `kind:'orphan'`（orphan-clean）⇒ `io` + `{removed, freedBytes, failedSessionId}`，不伪装成整组没动；
@@ -273,7 +295,7 @@ export async function planOrphanRemoval(
 export async function executeRemoval(
   deps: RemovalDeps,
   plan: RemovalPlan,
-): Promise<{ removed: number; freedBytes: number }> {
+): Promise<{ removed: number; freedBytes: number; attachments: AttachmentCleanupWire }> {
   const presence = deps.presence
   let removed = 0
   /** 删到这一刻已经腾出的**进度**：只喂 `orphan` 的部分回执；成功回执念计划的合计（`plan.bytes`）。 */
@@ -343,5 +365,14 @@ export async function executeRemoval(
     await presence.memberGone(member.sessionId)
   }
 
-  return { removed, freedBytes: plan.bytes }
+  // 附件对象最后动：会话目录已经真的没了，失败只计数、不回滚，也不改会话删除的字节。
+  const attachments = await executeImageAttachmentRemoval(deps, plan.attachments)
+  return {
+    removed,
+    freedBytes: plan.bytes,
+    attachments: {
+      ...attachments,
+      ...(plan.attachments.skipped === undefined ? {} : { skipped: plan.attachments.skipped }),
+    },
+  }
 }

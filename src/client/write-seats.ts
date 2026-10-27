@@ -1,10 +1,12 @@
 /**
  * 逐条 `/apply` 的写入座位：一次写入发生在哪个界面位置，就在哪个函数里绑定呈现材质、闸与重读通道。
  *
- * 收尾顺序住 `write-settlement.ts`（ADR-0013），重读策略住 `use-trash-query.ts`（ADR-0016）；
+ * 收尾顺序住 `write-settlement.ts`（ADR-0013），面板的重读策略住 `use-trash-query.ts`；
  * 座位只拥有「这次是谁在写、交哪些材质、闸在哪」。
  *
  * 边界：不判回执、不决定收尾顺序、不拥有各面的本地状态；面板座位的闸由面板传入，不另造第二枚。
+ * 无主子会话清理**不是**座位：它只在插件设置页的维护卡里手动触发（ADR-0021），
+ * 读数、闸与重查都归 `use-maintenance.ts`。
  */
 import type { BusyGate } from './busy-gate.js'
 import type { OneShotDeps, TrashEntryLike } from './remote.js'
@@ -112,24 +114,6 @@ export function purgeFromPanel(input: PanelWriteInput<'purge'>): Promise<WriteOu
       dismissUndo: dismissUndoNotice,
       clearDetailCache: input.clearDetailCache,
     },
-    gate: input.gate,
-    refresh: input.refreshAfterWrite,
-  })
-}
-
-interface OrphanCleanSeatInput {
-  deps: OneShotDeps
-  ids: readonly string[]
-  gate: BusyGate
-  refreshAfterWrite(outcome: WriteOutcome<'orphan-clean'>): Promise<void>
-}
-
-/** 无主子会话清理座位：不碰回收站失效与撤销，回执判读仍归 `use-trash-query.ts`。 */
-export function cleanOrphansFromPanel(input: OrphanCleanSeatInput): Promise<WriteOutcome<'orphan-clean'>> {
-  return runWrite({
-    deps: input.deps,
-    action: 'orphan-clean',
-    ids: input.ids,
     gate: input.gate,
     refresh: input.refreshAfterWrite,
   })

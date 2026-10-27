@@ -13,6 +13,8 @@ pnpm test         # vitest run
 pnpm typecheck    # tsc --noEmit
 ```
 
+GitHub Actions 在 push 到 `main` 与每个 PR 上跑同一组门：`pnpm typecheck`、`pnpm test`、`pnpm build`，最后 `npm pack --dry-run` 验证发布清单。工作流住 `.github/workflows/ci.yml`，pnpm 版本由 `package.json` 的 `packageManager` 指定。**真机验证不在 CI 内**，仍按下面「真机验证」走。
+
 **`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`。四条分发路：`link:` 要自己构建；npm 发布由 `prepack` 兜；`pnpm pack` 出的 tarball 也由 `prepack` 构建（`dsh plugin --profile <profile> add ./….tgz`）；源码 git 直装没有构建（本仓没有 `prepare`，那条路现在是死的）。
 
 改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
@@ -46,6 +48,8 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 3. **`dshReleases` 只列桌面真机跑过的代次**（`tests/skeleton.test.ts` 双向钉）；CLI 台架读数只用于定 `engines.dsh` 地板，不进那份名单。
 4. 真机验收清单随对应 issue/PR 或提交说明走（本仓不再存批次日志）——**代签不了**：构建绿与单测绿只证形状与逻辑，不证激活。
 5. **删除 → 恢复后的对话门（2026-10-21 真机事故）**：删除一个**打开过**的会话 → 从回收站恢复 → 直接发一条消息。**已触发**的信号是消息出现在对话里、会话日志增长并得到回复；只有重启宿主后才恢复 = 旧 agent 没被完整摘掉（ADR-0008）。恢复后若仍停在「会话不可用」，那是宿主常驻 `Session` 的 `removed` 粘性状态——当前实现会在删除当前视图时关掉它、撤销后重开（`src/client/main-view.ts`，ADR-0008）。单测覆盖插件侧的收尾判据（handle 捕获、主视图收尾）；宿主 `ctx.agents` 的生命周期与宿主客户端常驻 `Session` 的 `removed` 粘性仍只能真机走。
+6. **附件门**：造一条带图片（和普通文件）的会话 → 删除进回收站 → 打开详情确认图片可见、可放大、文件可下载 → 恢复 → 再删 → 彻底删除 → 确认 `.dsh/attachments/v1/objects` 里该对象消失、源文件仍在；另一条会话共享同一张图时，删掉一条后另一条仍能看图。
+7. **设置页维护卡门**：重启宿主 → 打开插件详情页 → 「维护」卡出现，两段都在「尚未检查」（挂载不发请求）→ 点「检查」孤儿附件：报告应显示当前本机已有的无引用对象数与体积（应与盘上当下真实孤儿一致；清完重查归零）→ 「查看并清理」先列图片缩略图（点开可放大、关闭不删），正文说清只清 `.dsh` 内无引用图片副本、源文件不受影响、共享引用保留 → 清理后重查为 0，`.dsh/attachments/v1/objects` 里这些对象消失、你磁盘上的源文件仍在。孤儿会话段同样走「检查 → 预览 → 清理」。最后看一眼回收站面板：没有孤儿横幅、也没有孤儿提示，挂载与写后重读都不发 `GET /orphans`（单测已钉，真机这一步是目视确认）。
 
 ## 发版流程
 

@@ -11,9 +11,11 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import zlib from 'node:zlib'
+import { describe, expect, it, vi } from 'vitest'
 import type { EvictionOutcome } from '../src/ports/host-port.js'
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { attachmentPathOf } from '../src/trash/attachments.js'
 import { visibleGroups } from '../src/trash/groups.js'
 import { verbError } from '../src/verbs/errors.js'
 import {
@@ -82,6 +84,27 @@ function shortPath(arg: unknown): string {
 
 /** 一条盘上成员（宿主 `SubagentMember` 的形状）。 */
 const member = (sessionId: string, projectDir = '--p--') => ({ sessionId, projectDir })
+
+const IMAGE = `sha256:${'a'.repeat(64)}`
+const imagePath = (id: string) => attachmentPathOf(HOME, 'image', id)
+/** 一条带独占图片引用的会话日志（压缩格式与 `pickSessionLog` 认的那一代一致）。 */
+const imageLog = () => zlib.zstdCompressSync(Buffer.from(
+  `${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n` +
+  `${JSON.stringify({
+    type: 'user/message',
+    time: 2,
+    data: {
+      source: { kind: 'user' },
+      content: [{ type: 'image', attachment: { attachmentId: IMAGE, mediaType: 'image/png', bytes: 3, width: 1, height: 1 } }],
+    },
+  })}\n`,
+  'utf8',
+))
+
+/** 计划里没有可清的附件（空计划、无 `skipped`）。 */
+const NO_ATTACHMENTS = { entries: [], bytes: 0 } as const
+/** 执行器一个附件都没碰的回执。 */
+const NOTHING_CLEANED = { removed: 0, freedBytes: 0, failed: 0 } as const
 
 /** `exists` 与 `sizeOfDir` 之间目录消失时 Node 抛的那种错误（判据只看 `code`）。 */
 function enoent(path: string): Error {
@@ -335,6 +358,7 @@ describe('planTrashRemoval：purge 的删除计划', () => {
       members: [],
       unarchive: ['session-a', 'session-k'],
       bytes: 140,
+      attachments: NO_ATTACHMENTS,
     })
     expect(deps.host.subagentMembersOf).toHaveBeenCalledTimes(1)
     expect(deps.host.subagentMembersOf).toHaveBeenCalledWith(['session-a', 'session-k'])
@@ -477,6 +501,7 @@ describe('planOrphanRemoval：orphan-clean 的删除计划', () => {
       members: [{ sessionId: 'session-root', dir: presentDir, bytes: 300, workspaceId: 'ws-1' }],
       unarchive: ['session-root', 'session-gone'],
       bytes: 300,
+      attachments: NO_ATTACHMENTS,
     })
     expect(deps.host.isLive).toHaveBeenCalledTimes(2)
     expect(deps.host.isLive).toHaveBeenCalledWith('session-root')
@@ -511,8 +536,162 @@ describe('planOrphanRemoval：orphan-clean 的删除计划', () => {
 
     const plan = await planOrphanRemoval(deps, [])
 
-    expect(plan).toEqual({ kind: 'orphan', trash: [], members: [], unarchive: [], bytes: 0 })
+    expect(plan).toEqual({ kind: 'orphan', trash: [], members: [], unarchive: [], bytes: 0, attachments: NO_ATTACHMENTS })
     expect(deps.host.isLive).not.toHaveBeenCalled()
+  })
+})
+
+describe('附件连带清理：独占图片', () => {
+  it('purge 计划带上独占图片；执行在删目录之后删对象', async () => {
+    const root = entry('session-a')
+    const dir = trashDirOf(root.id, HOME)
+    const made = world({ rows: [root], sizes: { [dir]: 100 }, logMethods: [] })
+    // 剩余引用源只扫这一层：本用例不造任何剩余会话 / storages / cache。
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) => p === dir ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async (p: string) =>
+      p === `${dir}/session.v4.jsonl.zstd` ? imageLog() : Buffer.alloc(0))
+    made.fs.statFile.mockImplementation(async (p: string) => ({
+      size: p === imagePath(IMAGE) ? 7 : 0,
+    }))
+    const calls: string[] = []
+    made.fs.removeDir.mockImplementation(async (p: string) => { calls.push(`removeDir:${p}`) })
+    made.fs.removeFile.mockImplementation(async (p: string) => { calls.push(`removeFile:${p}`) })
+
+    const plan = await planTrashRemoval(made.deps, [root], [root])
+    const stats = await executeRemoval(made.deps, plan)
+
+    expect(plan.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+    expect(calls).toEqual([`removeDir:${dir}`, `removeFile:${imagePath(IMAGE)}`])
+    // 附件字节不进 freedBytes：那是会话目录的释放量，附件读数单独走回执的 attachments。
+    expect(stats).toEqual({
+      removed: 1,
+      freedBytes: 100,
+      attachments: { removed: 1, freedBytes: 7, failed: 0 },
+    })
+  })
+
+  it('共享图片被剩余会话引用 ⇒ 计划为空', async () => {
+    const root = entry('session-a')
+    const dir = trashDirOf(root.id, HOME)
+    const sessionRoot = `${HOME}/sessions`
+    const remaining = `${sessionRoot}/--p--/session-b`
+    const made = world({ rows: [root] })
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === sessionRoot ? ['--p--'] : p === `${sessionRoot}/--p--` ? ['session-b'] : [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === dir || p === remaining ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async () => imageLog())
+
+    const plan = await planTrashRemoval(made.deps, [root], [root])
+
+    expect(plan.attachments.entries).toEqual([])
+    // 有剩余引用是**判定出来**的共享，不是读不出：不置 skipped（上屏的提示半句不出现）。
+    expect(plan.attachments.skipped).toBeUndefined()
+  })
+
+  it('剩余清册行引用同一图片 ⇒ 计划为空、不置 skipped', async () => {
+    const target = entry('session-a')
+    const remaining = entry('session-b')
+    const targetDir = trashDirOf(target.id, HOME)
+    const remainingDir = trashDirOf(remaining.id, HOME)
+    const made = world({ rows: [target, remaining], logMethods: [] })
+    // 引用源只有这两条回收站目录：会话根、storages、cache 都是空的。
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === `${HOME}/session-trash` ? [target.id, remaining.id] : [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === targetDir || p === remainingDir ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async () => imageLog())
+    made.fs.statFile.mockImplementation(async (p: string) => ({
+      size: p === imagePath(IMAGE) ? 7 : 0,
+    }))
+
+    const plan = await planTrashRemoval(made.deps, [target, remaining], [target])
+
+    // 不删的那一行仍算剩余引用源（附件域扫整个 session-trash，排除本次被删目录）：图片保留、不跳过。
+    expect(made.fs.listFiles).toHaveBeenCalledWith(remainingDir)
+    expect(plan.attachments.entries).toEqual([])
+    expect(plan.attachments.skipped).toBeUndefined()
+    expect(made.fs.removeFile).not.toHaveBeenCalled()
+  })
+
+  it('剩余引用源读不出 ⇒ 空计划 + skipped，会话删除仍然成功', async () => {
+    const root = entry('session-a')
+    const dir = trashDirOf(root.id, HOME)
+    const sessionRoot = `${HOME}/sessions`
+    const remaining = `${sessionRoot}/--p--/session-b`
+    const made = world({ rows: [root], sizes: { [dir]: 100 }, logMethods: [] })
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === sessionRoot ? ['--p--'] : p === `${sessionRoot}/--p--` ? ['session-b'] : [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === dir || p === remaining ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async (p: string) => {
+      if (p === `${dir}/session.v4.jsonl.zstd`) return imageLog()
+      throw new Error('EACCES: permission denied')
+    })
+
+    const plan = await planTrashRemoval(made.deps, [root], [root])
+    const stats = await executeRemoval(made.deps, plan)
+
+    expect(plan.attachments).toMatchObject({ entries: [], bytes: 0 })
+    expect(plan.attachments.skipped).toMatch(/无法证明独占/)
+    expect(stats).toMatchObject({ removed: 1, freedBytes: 100 })
+    expect(stats.attachments).toMatchObject({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(stats.attachments.skipped).toBe(plan.attachments.skipped)
+    expect(made.fs.removeDir).toHaveBeenCalledWith(dir)
+    expect(await made.manifest.list()).toEqual([])
+  })
+
+  it('附件删除失败只计数，会话删除照旧完成', async () => {
+    const root = entry('session-a')
+    const dir = trashDirOf(root.id, HOME)
+    const made = world({ rows: [root], sizes: { [dir]: 100 }, logMethods: [] })
+    // 剩余引用源只扫这一层：本用例不造任何剩余会话 / storages / cache。
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) => p === dir ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async (p: string) =>
+      p === `${dir}/session.v4.jsonl.zstd` ? imageLog() : Buffer.alloc(0))
+    made.fs.statFile.mockImplementation(async (p: string) => ({
+      size: p === imagePath(IMAGE) ? 7 : 0,
+    }))
+    made.fs.removeFile.mockImplementation(async () => { throw new Error('EBUSY') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const plan = await planTrashRemoval(made.deps, [root], [root])
+      const stats = await executeRemoval(made.deps, plan)
+
+      expect(stats).toMatchObject({ removed: 1, freedBytes: 100 })
+      expect(stats.attachments).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      expect(made.fs.removeDir).toHaveBeenCalledWith(dir)
+      expect(await made.manifest.list()).toEqual([])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('orphan 计划的剩余引用源扫全部 session-trash：那里没有引用 ⇒ 进计划；目录里引用它 ⇒ 保留', async () => {
+    const removedDir = sessionDirOf('--p--', 'session-root', HOME)
+    const row = entry('session-gone')
+    const trashDir = trashDirOf(row.id, HOME)
+    const made = world({ rows: [row], logMethods: [] })
+    // 会话根、storages、cache 都是空的：这一趟只走"被删目录 + session-trash 目录"两条引用源。
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === removedDir || p === trashDir ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async () => imageLog())
+    made.fs.statFile.mockImplementation(async (p: string) => ({
+      size: p === imagePath(IMAGE) ? 7 : 0,
+    }))
+
+    const exclusive = await planOrphanRemoval(made.deps, [member('session-root')])
+    expect(exclusive.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+
+    // 清册行所在的目录也是剩余引用源：把它列出来，扫描就会读它并保留 IMAGE。
+    made.fs.listDirs.mockImplementation(async (p: string) => p === '/h/session-trash' ? [row.id] : [])
+    const shared = await planOrphanRemoval(made.deps, [member('session-root')])
+    expect(shared.attachments.entries).toEqual([])
+    expect(shared.attachments.skipped).toBeUndefined()
   })
 })
 
@@ -539,7 +718,7 @@ describe('executeRemoval：执行器', () => {
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 4, freedBytes: 170 })
+    expect(result).toEqual({ removed: 4, freedBytes: 170, attachments: NOTHING_CLEANED })
     expect(result.freedBytes).toBe(plan.bytes)
     expect(calls).toEqual([
       'unarchive(session-p)', 'unarchive(session-k)', 'unarchive(session-x)', 'unarchive(session-y)',
@@ -569,11 +748,12 @@ describe('executeRemoval：执行器', () => {
       members: [],
       unarchive: [root.sessionId],
       bytes: 999,
+      attachments: NO_ATTACHMENTS,
     }
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 1, freedBytes: 999 })
+    expect(result).toEqual({ removed: 1, freedBytes: 999, attachments: NOTHING_CLEANED })
   })
 
   it('回收站目录缺席的行：不删目录、仍摘清册行、计 1 条 0 字节', async () => {
@@ -587,7 +767,7 @@ describe('executeRemoval：执行器', () => {
     const result = await executeRemoval(deps, plan)
 
     expect(plan.trash.map((row) => row.present)).toEqual([true, false])
-    expect(result).toEqual({ removed: 2, freedBytes: 100 })
+    expect(result).toEqual({ removed: 2, freedBytes: 100, attachments: NOTHING_CLEANED })
     expect(deps.fs.removeDir).toHaveBeenCalledTimes(1)
     expect(deps.fs.removeDir).toHaveBeenCalledWith(rootDir)
     expect(await manifest.list()).toEqual([])
@@ -679,6 +859,7 @@ describe('executeRemoval：执行器', () => {
       members: [],
       unarchive: [root.sessionId],
       bytes: 100,
+      attachments: NO_ATTACHMENTS,
     }
     deps.fs.removeDir.mockImplementation(async () => { throw new Error('boom') })
 
@@ -795,7 +976,7 @@ describe('executeRemoval：执行器', () => {
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 1, freedBytes: 5 })
+    expect(result).toEqual({ removed: 1, freedBytes: 5, attachments: NOTHING_CLEANED })
     expect(deps.host.evictLive).toHaveBeenCalledWith('session-p')
     expect(deps.host.announceRemoved).not.toHaveBeenCalled()
   })
@@ -806,7 +987,7 @@ describe('executeRemoval：执行器', () => {
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 0, freedBytes: 0 })
+    expect(result).toEqual({ removed: 0, freedBytes: 0, attachments: NOTHING_CLEANED })
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.unarchive).not.toHaveBeenCalled()
   })

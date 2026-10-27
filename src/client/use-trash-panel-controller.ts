@@ -33,15 +33,18 @@ export type PendingAction =
   | { kind: 'restore'; ids: readonly string[] }
 
 /**
- * 控制器要的面。`query` 取四样：清单（选中从它里面找）、`refreshAll`（挂载与显式重试）、
- * `refreshAfterWrite`（失效与写后）、清空（面板的写动作那一半）。`ordered` 是键盘/自动选中用的
- * "屏幕上的顺序"（只含展开的组），
+ * 控制器要的面。`query` 取五样：清单（选中从它里面找）、`refreshAll`（挂载与显式重试）、
+ * `refreshAfterWrite`（失效与写后）、清空（面板的写动作那一半）、`noteAttachmentCleanup`（purge 回执里
+ * 附件那半句交给查询侧拼句子上屏）。`ordered` 是键盘/自动选中用的"屏幕上的顺序"（只含展开的组），
  * 由面板算好传进来——布局常量不搬进控制器。
  */
 export interface TrashPanelControllerInput {
   deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
   gate: BusyGate
-  query: Pick<TrashQuery, 'list' | 'refreshAll' | 'refreshAfterWrite' | 'emptyTrash'>
+  query: Pick<
+    TrashQuery,
+    'list' | 'refreshAll' | 'refreshAfterWrite' | 'emptyTrash' | 'noteAttachmentCleanup'
+  >
   ordered: readonly TrashEntryLike[]
   canAutoSelect: boolean
 }
@@ -80,7 +83,7 @@ interface DetailFailure {
 
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
   const { deps, gate, query, ordered, canAutoSelect } = input
-  const { list, refreshAll, refreshAfterWrite, emptyTrash } = query
+  const { list, refreshAll, refreshAfterWrite, emptyTrash, noteAttachmentCleanup } = query
   const entries = listView(list).rows
 
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -91,10 +94,11 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   const [actionFailure, setActionFailure] = useState<Readonly<Record<string, string>>>({})
   /** 面板存活期内每条只读一次（本机量级不值得预读，也不值得重复读）。 */
   const detailCache = useRef(new Map<string, TrashDetailLike>())
-  /** 挂载那一拍做完整刷新（清单 + 残留），之后失效通告只走写后刷新。 */
+  /** 挂载那一拍读一次清单，之后失效通告只走写后刷新（两条名字不同，读法是同一条）。 */
   const firstRefresh = useRef(true)
 
-  // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍重读清单；报告未知或非空才顺带重扫。
+  // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍重读清单。
+  // 无主子会话不再顺带扫：那是设置页维护卡的手动动作（ADR-0021）。
   const revision = useTrashRevision()
   useEffect(() => {
     if (firstRefresh.current) {
@@ -220,6 +224,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 失败也重读：组回滚可能自己失败（`details.rollbackFailures`），清单不能继续摆旧行。
    * 「重读也在这趟里」由 `runWrite` 的闸保证：旧清单还在屏上时同一个动作不能被再点一次。
    * 单条恢复走 `single` 读法，`already-gone` 不可能出现，座位里那条查找兜底在此不会命中。
+   * 座位的 refresh 仍按 `WriteOutcome` 给（那只信封里没有附件读数要转交）：这里只把它换成"重读"这一个动作，
+   * outcome 不再流向 query——孤儿重扫判据已不在面板（ADR-0021）。
    */
   const restore = useCallback(async (entry: TrashEntryLike): Promise<void> => {
     setActionFailure((current) => {
@@ -228,7 +234,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       return next
     })
     const outcome = await restoreFromPanel({
-      deps, ids: [entry.id], single: true, entries, gate, refreshAfterWrite, clearDetailCache,
+      deps,
+      ids: [entry.id],
+      single: true,
+      entries,
+      gate,
+      refreshAfterWrite: () => refreshAfterWrite(),
+      clearDetailCache,
     })
     const failure = outcome.failures.get(entry.id)
     if (failure !== undefined) failRow(entry.id, failure)
@@ -240,11 +252,14 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 不能断言哪几条落地：原文保守地铺到每一个 id（别让清单看起来"删成功了"），清单照样重读。
    */
   const confirmApply = useCallback(async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
-    // 成败都走同一段收尾（写完框就收、清单就重读）；要不要顺带重扫残留由 query 从 outcome 派生
-    // （purge 总要扫；restore 只在恢复露面的孩子或清单未知时扫），这里只如实转交。
+    // 成败都走同一段收尾（写完框就收、清单就重读）。无主子会话的重扫已不在面板：要不要扫由设置页
+    // 维护卡的手动检查决定（ADR-0021），这里只交"重读"本身。
+    // 附件读数只住在 purge 的回执里：信封成功就交摘要那半（逐条全失败时摘要也没有读数 ⇒ 旧提示会收掉），
+    // 顶层失败没拿到信封、不能断言清过 ⇒ 交 `undefined`。restore 不碰它。
     const settle = (outcome: WriteOutcome<'purge' | 'restore'>): Promise<void> => {
       setPending(null)
-      return refreshAfterWrite(outcome)
+      if (action === 'purge') noteAttachmentCleanup(outcome.ok ? outcome.summary.attachmentCleanup : undefined)
+      return refreshAfterWrite()
     }
     // 面板座位：purge 清成功条目的详情缓存并熄灭指向它们的撤销横幅；restore 另忘掉 main-view 的
     // closedByUs（只遗忘、不重开）。两样都由 settlement 按 anySuccess 上闸。
@@ -258,7 +273,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       for (const [id, message] of outcome.failures) next[id] = message
       return next
     })
-  }, [clearDetailCache, deps, entries, gate, refreshAfterWrite])
+  }, [clearDetailCache, deps, entries, gate, refreshAfterWrite, noteAttachmentCleanup])
 
   /**
    * 确认框上的「确认」按 `pending` 的形状分派：三条按条目标都委托 `confirmApply`（一段 `/apply`）；

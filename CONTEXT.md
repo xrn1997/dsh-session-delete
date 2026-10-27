@@ -6,7 +6,7 @@
 
 ## 这是什么
 
-在宿主里**删除会话**：删除 = 移入回收站（可恢复），另设显式的彻底删除；回收站之外还收留一批**无主子会话**。两半：**Node 半**（动盘、动清册、动宿主服务）与**浏览器半**（槽位里的界面）。
+在宿主里**删除会话**：删除 = 移入回收站（可恢复），另设显式的彻底删除；回收站之外还有两类**手动**维护的存量：**无主子会话**与**孤儿附件**。两半：**Node 半**（动盘、动清册、动宿主服务）与**浏览器半**（槽位里的界面）。
 
 ## 名词
 
@@ -16,6 +16,35 @@
 **会话**（session）
 宿主持久化的一条对话。落盘为 `sessions/<项目目录>/<会话目录>/session.vN.jsonl.zstd`——zstd **多帧**，第一行是 header（含 `id` 与 `cwd`）；一个目录里可以并存多代日志，只读版本号最大的那代（`src/log/session-log.ts`）。
 _Avoid_: 对话、聊天记录（那是用户视角的内容，不是持久化单位）。
+
+**附件**（attachment）
+会话消息里的 `image` / `file` block，指向宿主附件库里的一个内容寻址对象；不是用户磁盘上的原图。
+_唯一实现_：`src/trash/attachments.ts` 的 `attachmentsInContent`。
+
+**附件库**（attachment store）
+`$DSH_HOME/attachments/v1`：图片在 `objects/`，普通文件在 `file-objects/` + `files/`。宿主所有、没有删除接口。
+_Avoid_: 缓存（它是宿主持久副本；派生请求缓存在 `cache/attachments`）。
+
+**附件引用**（attachment reference）
+会话消息 `content[]` 里指向附件库对象的 `image` / `file` block；`attachmentId` 是唯一寻址依据，`name` 只做下载名。
+_唯一实现_：`src/trash/attachments.ts` 的 `attachmentsInContent`。
+
+**引用扫描**（reference scan）
+判断图片对象是否仍被引用：读全部会话日志、全部 `session-trash` 目录与 `storages` / `cache` JSON；任一读不出就按"不可知"处理，删除整体跳过（fail closed）。
+_唯一实现_：`src/trash/attachments.ts` 的 `imageIdsOfDir` / `collectRemainingImageRefs`。
+
+**独占附件**（exclusive attachment）
+被本次永久删除的会话引用、且剩余任何会话/派生存储都不再引用的图片对象。只删这一种。
+_唯一实现_：`src/trash/attachments.ts` 的 `planImageAttachmentRemoval`。
+
+**孤儿附件**（orphan attachment）
+`$DSH_HOME/attachments/v1/objects` 下、任何引用源（全部会话日志 + 全部 `session-trash` 目录 + `storages` / `cache` JSON）都不再引用的图片对象。只由插件设置页的维护卡手动检查与清理；只删这些 `.dsh` 内的图片副本，源文件与共享引用不在其中。
+_唯一实现_：`src/trash/attachments.ts` 的 `scanOrphanImageAttachments` / `cleanOrphanImageAttachments`。
+_Avoid_: 无主附件（父会话不在的是「无主子会话」；孤儿附件说的是"没有任何引用"）。
+
+**附件清理**（attachment cleanup）
+永久删除或孤儿附件清理时，按计划删掉 `.dsh` 内独占 / 无引用的图片副本；不碰源文件、普通文件与共享引用。
+_唯一实现_：`src/trash/attachments.ts` 的 `executeImageAttachmentRemoval` / `cleanOrphanImageAttachments`。
 
 **项目目录**（`projectDir`）
 宿主 `projectKey(cwd)` 的产物（`--…--` 裹边、分隔符折成 `-`、非分隔符走 `~XXXX` 转义）。**有损**：分隔符那段拆不回真实路径。
@@ -57,7 +86,8 @@ _Avoid_: 批次、集合（组是删除时一起搬进来的成员关系；批�
 跟着父被删、但**没进回收站**、仍留在 `sessions/` 上的后代（级联落地之前删掉的那些存量）。与「组里带进来的孩子」是两件事，界面上各说各的，不许一个冒充另一个。
 
 **无主子会话**（orphan subagent）
-`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录（投影缓存与附件不在范围内）；判据住 `src/verbs/orphan-subagents.ts`。
+`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录与会话独占的图片附件副本（投影缓存不在范围内；共享图片保留，判据见 ADR-0020）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。
+_唯一实现_：`src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrphanGroups`。
 
 **活体**（live session）
 宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**；「在跑就整组拒绝」的判据住 `src/verbs/live-admission.ts`，删除时把 session 与它的 agent handle 一起摘掉（见 ADR-0008）。
@@ -98,16 +128,17 @@ _Avoid_: 弹窗（太泛；这里专指名单上那两类与「最上层」判�
 `useTrashQuery` 交出的唯一清单真相：`loading`（还没读到）/ `ready(rows)`（有行）/ `unknown(failure)`（读不到）。`unknown` 不向下游交出任何行——选择、导航、分组与页脚动作都不再读旧行；清空失败同样落 `unknown`。_唯一实现_：`src/client/use-trash-query.ts`。
 _Avoid_: 缓存、空清单（`unknown` 不是空，`ready([])` 才是空）。
 
-**写后重扫**（post-write orphan rescan）
-一次写入之后要不要重扫无主子会话：由这次的写入结果从动作、请求的 id 与发读前的清单派生，调用方不传标记。判据见 ADR-0016。
-_Avoid_: 强制刷新（那是面板上的手动动作）；把「报告为空」当成「不用扫」——报告 `null` 是未知，不是零。_唯一实现_：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`。
+**维护卡**（maintenance card）
+插件设置页（`plugins.bundle.config`，按 bundle 包名寻址）里的一张卡，装两段手动维护：孤儿会话与孤儿附件。检查只读、清理过确认框、清完自动重查；挂载不发请求，没有定时器。
+_唯一实现_：`src/client/maintenance-settings.tsx` 的 `MaintenanceSettings`（读数与动作住 `src/client/use-maintenance.ts` 的 `useMaintenance`）。
+_Avoid_: 设置面板、清理任务（「面板」专指回收站面板；这里没有自动任务）。
 
 **写入座位**（write seat）
-一次 `/apply` 写入发生在哪个界面位置：菜单删除、批量删除、外部撤销恢复、面板恢复 / 永久删除、无主子会话清理。座位拥有自己的呈现材质、闸与重读通道；逐条收尾顺序与 `anySuccess` 门仍住 `src/client/write-settlement.ts`，busy 的生命周期住 `src/client/busy-gate.ts`。_唯一实现_：`src/client/write-seats.ts`。
+一次 `/apply` 写入发生在哪个界面位置：菜单删除、批量删除、外部撤销恢复、面板恢复 / 永久删除。座位拥有自己的呈现材质、闸与重读通道；逐条收尾顺序与 `anySuccess` 门仍住 `src/client/write-settlement.ts`，busy 的生命周期住 `src/client/busy-gate.ts`。_唯一实现_：`src/client/write-seats.ts`。
 _Avoid_: 写入入口、按钮处理（座位说的是一个界面位置的整趟材质，不是某颗控件的回调）。
 
 **回执摘要**（receipt summary）
-一次写 `/apply` 回执的唯一派生物：成功 id、失败表、中性 id、失败 verdict、部分计数、按动作取的相关落地 id（delete 的条目 id / restore 的回盘会话 id）与 `anySuccess`。写入座位与收尾只消费摘要，不再各自 walk `verdicts`。_唯一实现_：`src/client/receipt.ts` 的 `summarizeReceipt`。
+一次写 `/apply` 回执的唯一派生物：成功 id、失败表、中性 id、失败 verdict、部分计数、按动作取的相关落地 id（delete 的条目 id / restore 的回盘会话 id）、跨 `ok` 相加的附件清理读数（`skipped` 取第一条）与 `anySuccess`。写入座位与收尾只消费摘要，不再各自 walk `verdicts`。_唯一实现_：`src/client/receipt.ts` 的 `summarizeReceipt`。
 _Avoid_: 回执（写回执的原始 `Receipt` 仍住 `receipt.ts`，是摘要的输入，不是调用方的读法）；`count` 的逐条数值仍由 `src/client/batch-select.tsx` 的 `fetchCounts` 读 `verdicts`，它不产摘要。
 
 **待确认动作**（pending action）

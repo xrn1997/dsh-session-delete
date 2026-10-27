@@ -44,7 +44,7 @@ describe('确认框的关闭规则', () => {
   })
 })
 
-describe('四张确认框都走同一条关框规则', () => {
+describe('各张确认框都走同一条关框规则', () => {
   it('回收站恢复框：busy 时取消与 Esc 都拦住，空闲才交回', () => {
     const onCancel = vi.fn()
     const view = render(

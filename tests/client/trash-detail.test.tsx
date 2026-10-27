@@ -1,9 +1,10 @@
 // 回收站的详情块：四态 + 两个动作 + 窄档返回（docs/ui-spec.md）
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
 import { TrashDetail, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
+import type { TrashDetailAttachmentWire } from '../../src/shared/wire.js'
 
 const DELETED_AT = Date.UTC(2026, 9, 14, 6, 56, 58)
 
@@ -32,8 +33,8 @@ const detail: TrashDetailLike = {
   injectedCount: 241,
   omittedByPayloadCap: 0,
   messages: [
-    { role: 'user', time: Date.UTC(2026, 9, 12, 1, 0, 0), text: '先看改动', truncated: false },
-    { role: 'assistant', time: Date.UTC(2026, 9, 12, 1, 5, 0), text: '改动分四层', truncated: true },
+    { role: 'user', time: Date.UTC(2026, 9, 12, 1, 0, 0), text: '先看改动', truncated: false, attachments: [] },
+    { role: 'assistant', time: Date.UTC(2026, 9, 12, 1, 5, 0), text: '改动分四层', truncated: true, attachments: [] },
   ],
 }
 
@@ -117,8 +118,8 @@ describe('回收站详情块 · 有内容', () => {
       detail: {
         ...detail,
         messages: [
-          { role: 'user', time: Date.UTC(2026, 9, 12, 1, 0, 0), text: md, truncated: false },
-          { role: 'assistant', time: Date.UTC(2026, 9, 12, 1, 5, 0), text: md, truncated: false },
+          { role: 'user', time: Date.UTC(2026, 9, 12, 1, 0, 0), text: md, truncated: false, attachments: [] },
+          { role: 'assistant', time: Date.UTC(2026, 9, 12, 1, 5, 0), text: md, truncated: false, attachments: [] },
         ],
       },
     })
@@ -203,5 +204,205 @@ describe('回收站详情块 · 「删除于」两样都给（docs/ui-spec.md �
     const value = screen.getByText(/前（/).textContent ?? ''
     expect(value).toMatch(/^(刚刚|\d+(分钟|小时|天|个月|年)前)（.+）$/)
     expect(value).toContain(new Date(DELETED_AT).toLocaleString())
+  })
+})
+
+// 附件：图片走缩略图 + 放大框，文件走下载 chip；地址只由 id/kind 拼（`/attachment` 段的契约）。
+describe('回收站详情块 · 附件', () => {
+  const attachment: TrashDetailAttachmentWire = {
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    kind: 'image',
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 10,
+    height: 20,
+    name: 'shot.png',
+  }
+
+  function withMessages(messages: TrashDetailLike['messages']) {
+    return at({ kind: 'ready', entry, detail: { ...detail, messages } })
+  }
+
+  it('用户消息里的图片渲染为可点开的缩略图；点开出现放大框', () => {
+    withMessages([{ role: 'user', time: 1, text: '看图', truncated: false, attachments: [attachment] }])
+    const img = screen.getByAltText('shot.png') as HTMLImageElement
+    expect(img.getAttribute('src')).toContain('/dsh-session-delete-api/attachment?')
+    expect(img.getAttribute('src')).toContain(encodeURIComponent(attachment.attachmentId))
+    fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('shot.png')
+  })
+
+  it('缩略图懒加载并按 contain 收进框里；放大框那张不带 lazy（点开就要图）', () => {
+    withMessages([{ role: 'user', time: 1, text: '看图', truncated: false, attachments: [attachment] }])
+    const thumb = screen.getByAltText('shot.png') as HTMLImageElement
+    // 一段会话可能带几十张图：屏外的先不取，省的是附件段的二进制流量。
+    expect(thumb.getAttribute('loading')).toBe('lazy')
+    expect(thumb.style.objectFit).toBe('contain')
+    fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
+    const preview = screen.getByRole('dialog').querySelector('img') as HTMLImageElement
+    expect(preview.getAttribute('loading')).toBeNull()
+  })
+
+  it('图片加载失败显示占位，不出现破图；占位仍说清是哪一件（名字 + 体量 + 附件不可用）', () => {
+    withMessages([{ role: 'user', time: 1, text: '', truncated: false, attachments: [attachment] }])
+    fireEvent.error(screen.getByAltText('shot.png'))
+    const label = screen.getByText('附件不可用')
+    expect(label).toBeInTheDocument()
+    expect(screen.queryByAltText('shot.png')).not.toBeInTheDocument()
+    // 「附件不可用」单独剩一句等于把"哪张图没了"也丢了：占位那一格里名字、体量、图标都还在。
+    const placeholder = label.parentElement as HTMLElement
+    expect(placeholder).toHaveTextContent('shot.png')
+    expect(placeholder).toHaveTextContent('3B')
+    expect(placeholder.querySelector('svg')).not.toBeNull()
+  })
+
+  it('放大框可另存为：先取字节、按 Content-Type 补扩展名，再触发下载', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) =>
+      new Response(new Blob(['x'], { type: 'image/png' }), { headers: { 'content-type': 'image/png' } }))
+    const createObjectURL = vi.fn(() => 'blob:test')
+    const revokeObjectURL = vi.fn()
+    const originalCreate = URL.createObjectURL
+    const originalRevoke = URL.revokeObjectURL
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      withMessages([{ role: 'user', time: 1, text: '看图', truncated: false, attachments: [attachment] }])
+      fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
+      fireEvent.click(screen.getByRole('button', { name: '另存为' }))
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      expect(String(fetchMock.mock.calls[0]![0])).toContain('/dsh-session-delete-api/attachment?')
+      expect(createObjectURL).toHaveBeenCalledTimes(1)
+      expect(click).toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+      if (originalCreate === undefined) delete (URL as { createObjectURL?: unknown }).createObjectURL
+      else Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreate })
+      if (originalRevoke === undefined) delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL
+      else Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevoke })
+    }
+  })
+
+  it('另存为遇到 200 + JSON 信封：把服务端原文上屏，不把 HTTP 200 当原因', async () => {
+    const fetchMock = vi.fn(async () => new Response(
+      JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '附件不在：sha256:aaaa' } }),
+      { status: 200, headers: { 'content-type': 'application/json; charset=utf-8' } },
+    ))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      withMessages([{ role: 'user', time: 1, text: '看图', truncated: false, attachments: [attachment] }])
+      fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
+      fireEvent.click(screen.getByRole('button', { name: '另存为' }))
+      expect(await screen.findByText('保存失败：附件不在：sha256:aaaa')).toBeInTheDocument()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('放大框里的图片加载失败也换成占位，不把破图留在浮层里', () => {
+    withMessages([{ role: 'user', time: 1, text: '看图', truncated: false, attachments: [attachment] }])
+    fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
+    const dialog = screen.getByRole('dialog')
+    const preview = dialog.querySelector('img') as HTMLImageElement
+    fireEvent.error(preview)
+    expect(dialog.querySelector('img')).toBeNull()
+    expect(dialog).toHaveTextContent('附件不可用')
+    expect(dialog).toHaveTextContent('shot.png')
+  })
+
+  it('文件附件渲染为下载 chip', () => {
+    const fileId = `sha256:${'b'.repeat(64)}`
+    withMessages([{
+      role: 'user', time: 1, text: '', truncated: false,
+      attachments: [{ attachmentId: fileId, kind: 'file', name: 'a.pdf', bytes: 12 }],
+    }])
+    const link = screen.getByRole('link', { name: /a.pdf/ }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toContain(encodeURIComponent(fileId))
+    expect(link.getAttribute('href')).toContain('/dsh-session-delete-api/attachment?')
+    expect(link.getAttribute('download')).toBe('a.pdf')
+    // 长文件名要能折行，别把消息条撑破。
+    expect(link.style.maxWidth).toBe('100%')
+    expect(link.style.wordBreak).toBe('break-all')
+  })
+
+  // 文件名是宿主日志里的一串自由文本：它只该落在查询串里（编码后），碰不到寻址路径。
+  it('恶意文件名只进查询串且被 URL 编码；href 的路径段与 id/kind 一个字节都不变', () => {
+    const fileId = `sha256:${'d'.repeat(64)}`
+    const hostile = '../x?a=b&c'
+    withMessages([{
+      role: 'user', time: 1, text: '', truncated: false,
+      attachments: [{ attachmentId: fileId, kind: 'file', name: hostile, bytes: 5 }],
+    }])
+    const link = screen.getByRole('link', { name: /\.\.\/x/ }) as HTMLAnchorElement
+    const href = link.getAttribute('href') ?? ''
+    const [path, query = ''] = href.split('?')
+    // 路径段是端点常量，name 不参与拼路径：`../` 换不掉它。
+    expect(path).toBe('/dsh-session-delete-api/attachment')
+    expect(href.split('?')).toHaveLength(2) // name 里的 `?` 没造出第二个问号
+    expect(query).not.toContain('../x')
+    expect(query).not.toContain('&c') // name 里的 `&` 没造出第四个参数
+    expect(new URLSearchParams(query).getAll('id')).toEqual([fileId])
+    expect(new URLSearchParams(query).getAll('kind')).toEqual(['file'])
+    expect(new URLSearchParams(query).get('name')).toBe(hostile)
+    expect(query).toContain(`name=${encodeURIComponent(hostile)}`)
+    // download 只是建议名；它不参与寻址，原样交出去由浏览器清洗。
+    expect(link.getAttribute('download')).toBe(hostile)
+  })
+
+  it('文件名是空串 ⇒ 用「文件」兜底，且不把 name 塞进查询串', () => {
+    const fileId = `sha256:${'c'.repeat(64)}`
+    withMessages([{
+      role: 'user', time: 1, text: '', truncated: false,
+      attachments: [{ attachmentId: fileId, kind: 'file', name: '', bytes: 12 }],
+    }])
+    const link = screen.getByRole('link', { name: /^文件/ }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toContain(encodeURIComponent(fileId))
+    expect(link.getAttribute('href')).not.toContain('name=')
+  })
+
+  it('助手消息的附件排在 Markdown 正文之后', () => {
+    const { container } = withMessages([
+      { role: 'assistant', time: 1, text: '**看图**', truncated: false, attachments: [attachment] },
+    ])
+    const row = container.querySelector('[data-sd-msg="assistant"]') as Element
+    const markdown = row.querySelector('.sd-md') as Element
+    const img = row.querySelector('img') as Element
+    expect(markdown).not.toBeNull()
+    expect(img).not.toBeNull()
+    // DOCUMENT_POSITION_FOLLOWING：img 在 markdown 之后。
+    expect(markdown.compareDocumentPosition(img) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  // 用户行是 alignItems:'flex-end'（靠气泡那侧），助手行不铺底、正文铺满栏：附件条得跟着各自的行走。
+  it('附件条跟消息行走：用户侧靠右、助手侧靠左（助手不再被硬拉到右边）', () => {
+    const { container } = withMessages([
+      { role: 'user', time: 1, text: '看图', truncated: false, attachments: [attachment] },
+      { role: 'assistant', time: 2, text: '图在这里', truncated: false, attachments: [attachment] },
+    ])
+    const strips = [...container.querySelectorAll<HTMLElement>('[data-sd-attachment-strip]')]
+    expect(strips).toHaveLength(2)
+    expect(strips[0]!.closest('[data-sd-msg]')?.getAttribute('data-sd-msg')).toBe('user')
+    expect(strips[0]!.style.justifyContent).toBe('flex-end')
+    expect(strips[1]!.closest('[data-sd-msg]')?.getAttribute('data-sd-msg')).toBe('assistant')
+    expect(strips[1]!.style.justifyContent).toBe('flex-start')
+  })
+
+  it('文本与附件都空的消息整行不画（附件总量闸用尽后的防御形态）', () => {
+    const { container } = withMessages([
+      { role: 'user', time: 1, text: '', truncated: false, attachments: [] },
+      { role: 'assistant', time: 2, text: '还有内容', truncated: false, attachments: [] },
+    ])
+    const rows = [...container.querySelectorAll('[data-sd-msg]')]
+    expect(rows.map((row) => row.getAttribute('data-sd-msg'))).toEqual(['assistant'])
+  })
+
+  it('纯图片消息不画空气泡：缩略图就是这一条的内容', () => {
+    const { container } = withMessages([
+      { role: 'user', time: 1, text: '', truncated: false, attachments: [attachment] },
+    ])
+    expect(container.querySelectorAll('[data-sd-bubble]')).toHaveLength(0)
+    expect(container.querySelector('[data-sd-msg="user"] img')).not.toBeNull()
   })
 })

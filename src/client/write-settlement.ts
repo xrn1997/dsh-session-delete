@@ -16,7 +16,7 @@
  *   `summary.successIds.length` 作条数，组成 `{ entryIds, n }` 交给座位，座位只决定发布哪一形
  *   （单条带标题、批量带条数）——那句文案与它的键住 `undo-toast.tsx` 与 `copy.ts`；purge 支在
  *   `anySuccess` 时熄灭指向这些条目的横幅——留着就是一条注定失败的「撤销」。
- * - **`count` 不结算**；`orphan-clean` 没有跨槽位收尾（清完由 query 自己的写后刷新收尾）。
+ * - **`count` 不结算**；`orphan-clean` 没有跨槽位收尾（维护卡的 `use-maintenance.ts` 清完自己重查）。
  *   不直接读 DOM、不问宿主：主视图收尾只经 `main-view.ts` 的 `afterDelete` / `afterRestore`
  *   （服务缺席或抛错都静默退回）；重读仍归各调用方的 `refresh`（面板那侧的最新票在 `use-trash-query.ts`）。
  */

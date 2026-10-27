@@ -1,14 +1,21 @@
-// 无主子会话的维护块（`src/client/orphan-maintenance.tsx`）——从面板里整块搬出来的那三段界面。
+// 无主子会话的维护块（`src/client/orphan-maintenance.tsx`）——从面板里整块搬出来、现在由插件设置页
+// 维护卡单独使用的那三段界面。
 //
 // 这一份只钉界面的三条判据与两条写动作的接线，不钉内部结构：
 // ① 报告非空才出警告条（空报告与 `null` 都不出——"检查过了，什么都没有"不是要给用户看的东西，
 //    而"还没扫到"更不是"零条"）；
 // ② 读不到是**可见的失败**（原文 + 重试），"这一组已经不在了"是单独一块中性提示，两者不合并；
 // ③ `confirm` 与报告同时在场才开预览框，取消 / 确认各调一个动作。
+//
+// 组件只吃**本地窄接口** `OrphanMaintenanceQuery`（报告 + 三条提示 + 四个动作），设置页的
+// `useMaintenance` 与（历史上的）面板 query 都是它的实现方；这里按那个接口造替身。
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
-import { OrphanMaintenance, type OrphanMaintenanceProps } from '../../src/client/orphan-maintenance.js'
+import {
+  OrphanMaintenance,
+  type OrphanMaintenanceQuery,
+} from '../../src/client/orphan-maintenance.js'
 import type { OrphanReportWire } from '../../src/client/remote.js'
 
 /** 与面板测试同一份读数形状：`roots` 是每组"父没了"的 subagent 自己的 id，界面不重算。 */
@@ -18,7 +25,7 @@ const REPORT: OrphanReportWire = {
   groups: [{ projectDir: '--p--', sessions: 2, bytes: 2048 }],
 }
 
-type Query = OrphanMaintenanceProps['query']
+type Query = OrphanMaintenanceQuery
 
 /** 假 query：四个读数与四个动作都由用例现给；缺省是"还没扫到、也没有提示"。 */
 function queryOf(over: Partial<Query> = {}): Query {
@@ -30,7 +37,7 @@ function queryOf(over: Partial<Query> = {}): Query {
     setOrphanConfirm: vi.fn(),
     openOrphanPreview: vi.fn(),
     cleanOrphans: vi.fn(async () => {}),
-    refreshAll: vi.fn(async () => {}),
+    scanOrphans: vi.fn(async () => {}),
     ...over,
   }
 }
@@ -61,12 +68,12 @@ describe('无主子会话维护块', () => {
     expect(screen.queryByText(/残留检查/)).not.toBeInTheDocument()
   })
 
-  it('失败块摆原文 + 重试调 refreshAll；中性提示单独一块', () => {
-    const refreshAll = vi.fn(async () => {})
+  it('失败块摆原文 + 重试调 scanOrphans；中性提示单独一块', () => {
+    const scanOrphans = vi.fn(async () => {})
     const notice = '有 1 组已不在了（可能已被别处清理，或父会话已恢复）'
     const view = render(
       <OrphanMaintenance
-        query={queryOf({ orphanFailure: '残留检查/清理失败：sessionQuery 不在', orphanNotice: notice, refreshAll })}
+        query={queryOf({ orphanFailure: '残留检查/清理失败：sessionQuery 不在', orphanNotice: notice, scanOrphans })}
         busy={false}
         t={zhTranslate}
       />,
@@ -75,7 +82,7 @@ describe('无主子会话维护块', () => {
     expect(screen.getByText('残留检查/清理失败：sessionQuery 不在')).toBeInTheDocument()
     expect(screen.getByText(notice)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    expect(refreshAll).toHaveBeenCalledTimes(1)
+    expect(scanOrphans).toHaveBeenCalledTimes(1)
 
     // 只有中性提示时：它不摆「重试」，也不冒充失败原文。
     view.unmount()

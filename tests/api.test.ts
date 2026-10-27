@@ -4,8 +4,9 @@
 // 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 六个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
-//    POST empty＝清空、GET orphans＝无主子会话扫描）；
+//  ① 九个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
+//    POST empty＝清空、GET orphans＝无主子会话扫描、GET attachment＝附件原始字节、
+//    GET attachment-orphans＝孤儿附件报告、POST attachment-clean＝孤儿附件清理）；
 //  ② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
@@ -17,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiHandler } from '../src/api/dispatch.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyOutcome } from '../src/shared/wire.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { attachmentPathOf } from '../src/trash/attachments.js'
 import type { DeleteDeps } from '../src/deps.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createFakeDeps } from './support/fake-deps.js'
@@ -32,7 +34,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
   trashEntry(entryIdOf(sessionDirName), { sessionId: sessionDirName, ...over })
 
 /**
- * 六个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
+ * 九个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
  * （`tests/support/fake-deps.ts` 里那第二个 adapter）。
  * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
@@ -111,6 +113,11 @@ async function call(base: string, path: string, init: CallInit = {}): Promise<{ 
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
 }
 
+/** 原始响应（附件段回二进制，不能用 `call` 的 `res.json()`）。 */
+async function callRaw(base: string, path: string): Promise<Response> {
+  return fetch(`${base}${path}`)
+}
+
 /** 失败的形状（src/shared/wire.ts 的五个码）：`{ok:false, error:{code, message}}`。 */
 async function failureOf(base: string, path: string, init: CallInit = {}): Promise<{ status: number; code: string; message: string }> {
   const { status, body } = await call(base, path, init)
@@ -152,7 +159,7 @@ function rawCall(
   const url = new URL(`${base}${path}`)
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { hostname: url.hostname, port: url.port, path: url.pathname, method, headers },
+      { hostname: url.hostname, port: url.port, path: url.pathname + url.search, method, headers },
       (res) => {
         let text = ''
         res.setEncoding('utf8')
@@ -262,8 +269,12 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [parent.id] },
     })
     const outcome = (body.value as Array<{ ok: true; value: { removed: number; freedBytes: number } }>)[0]!
-    // 删掉的三份目录：父 + 孩子 + 盘上后代；释放量与清单那一行同一个数。
-    expect(outcome.value).toEqual({ removed: 3, freedBytes: rows[0]!.releaseBytes })
+    // 删掉的三份目录：父 + 孩子 + 盘上后代；释放量与清单那一行同一个数。附件读数单独一格（这个世界没有图片）。
+    expect(outcome.value).toEqual({
+      removed: 3,
+      freedBytes: rows[0]!.releaseBytes,
+      attachments: { removed: 0, freedBytes: 0, failed: 0 },
+    })
   })
 
   // 页脚合计（可见行之和）与「清空」的回执也必须对得上：两处量的同一组目录。
@@ -890,7 +901,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     }
   })
 
-  it('栅栏对六个段名一视同仁（这里打的是 POST /detail）：跨源 Origin 拒 403，桌面壳的 Referer 放行', async () => {
+  it('栅栏对九个段名一视同仁（这里打的是 POST /detail）：跨源 Origin 拒 403，桌面壳的 Referer 放行', async () => {
     const { deps, fs } = makeDeps({ seed })
     const base = await start(deps)
     const payload = JSON.stringify({ [PARAMS.entryId]: entryIdOf('session-a') })
@@ -1157,7 +1168,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   })
 
   // 语料面缺席 ≠ "这个家没有孤儿"。回一份 `roots: []` 的空报告会让界面说一句"没有要清理的"，
-  // 而盘上真躺着几百 MB ⇒ 必须是 `io` 信封（Task 2 在动词层立的判据，这里钉它能过桥到线上）。
+  // 而盘上真躺着几百 MB ⇒ 必须是 `io` 信封（判据在动词层，这里钉它能过桥到线上）。
   it('GET /orphans 的 sessionQuery 缺席 ⇒ io 信封，不冒充空报告', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
@@ -1167,7 +1178,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     expect(failure.code).toBe('sessiondelete/io')
   })
 
-  // 第六个段名是**读**段：不留第二条写路径——清理只有 `POST /apply` 的 `orphan-clean` 这一条路。
+  // `/orphans` 是**读**段：不留第二条写路径——清理只有 `POST /apply` 的 `orphan-clean` 这一条路。
   it('POST /orphans 不是写动作 ⇒ 405', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
@@ -1370,5 +1381,279 @@ describe('路由层 · POST /empty（清空 = 聚合回执，不按条回）', (
     expect(body.ok).toBe(true)
     expect(fs.removeDir).toHaveBeenCalledWith(`/h/session-trash/${id}`)
     expect(await manifest.list()).toEqual([])
+  })
+})
+
+// 附件段（2026-10-27）：附件字节。全仓唯一的二进制响应段；读的是宿主附件库
+//（`$DSH_HOME/attachments/v1/objects` 图片 / `file-objects` 普通文件），不碰回收站清册。
+// 请求本身不对（id/kind 形状）⇒ 400 + JSON 信封；对象不在 / 超过上限 ⇒ 200 + JSON 信封
+//（图片的 `img onError` 会换成占位；普通文件走 `<a download>`，没有页面内失败面）。
+describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
+  const imageId = `sha256:${'a'.repeat(64)}`
+  const fileId = `sha256:${'b'.repeat(64)}`
+  /** 附件段的 query（`id` / `kind` / `name` 与 Node 半同源）。 */
+  const query = (id: string, kind: string, name?: string): string =>
+    `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent(id)}&${PARAMS.attachmentKind}=${kind}`
+    + (name === undefined ? '' : `&${PARAMS.attachmentName}=${encodeURIComponent(name)}`)
+
+  it('GET /attachment 回原始图片字节与安全头', async () => {
+    const made = makeDeps()
+    made.fs.statFile.mockImplementation(async (p: string) =>
+      (p.includes('/attachments/') ? { size: png.length } : { size: 0 }))
+    made.fs.readFile.mockImplementation(async (p: string) => {
+      if (p.includes('/attachments/')) return png
+      throw new Error(`unexpected read: ${p}`)
+    })
+    const base = await start(made.deps)
+    const res = await callRaw(base, query(imageId, 'image'))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/png')
+    expect(res.headers.get('content-length')).toBe(String(png.length))
+    expect(res.headers.get('cache-control')).toBe('private, no-store')
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(png)
+  })
+
+  it('GET /attachment 的 id/kind 闸：非法一律 400 信封，且不读盘', async () => {
+    const made = makeDeps()
+    const base = await start(made.deps)
+    const badPaths = [
+      `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent('../../x')}&${PARAMS.attachmentKind}=image`,
+      `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent(`sha256:${'A'.repeat(64)}`)}&${PARAMS.attachmentKind}=image`,
+      `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent(imageId)}&${PARAMS.attachmentKind}=v2`,
+      `${ROUTES.attachment}?${PARAMS.attachmentKind}=image`,
+    ]
+    for (const path of badPaths) {
+      const { status, body } = await call(base, path)
+      expect(status, path).toBe(400)
+      expect(body.ok, path).toBe(false)
+    }
+    expect(made.fs.statFile).not.toHaveBeenCalled()
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('GET /attachment 对象不在：200 + 失败信封（img onError 的落点）', async () => {
+    const made = makeDeps()
+    made.fs.statFile.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
+    const base = await start(made.deps)
+    const { status, body } = await call(base, query(imageId, 'image'))
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { code: string }).code).toBe('sessiondelete/io')
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('GET /attachment 超过 20 MiB：200 + 失败信封，不把整份字节读进内存', async () => {
+    const made = makeDeps()
+    made.fs.statFile.mockResolvedValue({ size: 20 * 1024 * 1024 + 1 })
+    const base = await start(made.deps)
+    const { status, body } = await call(base, query(imageId, 'image'))
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { message: string }).message).toContain('上限')
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('kind=file 回 octet-stream + attachment 下载头，文件名过闸', async () => {
+    const bytes = Buffer.from('hello attachment')
+    const made = makeDeps()
+    made.fs.statFile.mockResolvedValue({ size: bytes.length })
+    made.fs.readFile.mockResolvedValue(bytes)
+    const base = await start(made.deps)
+    const res = await callRaw(base, query(fileId, 'file', '../secret name.txt'))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/octet-stream')
+    const disposition = res.headers.get('content-disposition') ?? ''
+    expect(disposition.startsWith("attachment; filename*=UTF-8''")).toBe(true)
+    // 路径分隔符与 `..` 都被换掉：请求里的名字进不了文件系统，只作为下载名。
+    expect(decodeURIComponent(disposition.slice("attachment; filename*=UTF-8''".length))).toBe('__secret name.txt')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes)
+  })
+
+  it('GET /attachment 也过同源栅栏：跨源 Origin 403，且不读盘', async () => {
+    const made = makeDeps()
+    const base = await start(made.deps)
+    const res = await rawCall(base, query(imageId, 'image'), 'GET', { origin: 'https://evil.example' })
+    expect(res.status).toBe(403)
+    expect(made.fs.statFile).not.toHaveBeenCalled()
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('图片魔数认不出 ⇒ 按下载处理（octet-stream + attachment），不猜类型', async () => {
+    const bytes = Buffer.from('not an image')
+    const made = makeDeps()
+    made.fs.statFile.mockResolvedValue({ size: bytes.length })
+    made.fs.readFile.mockResolvedValue(bytes)
+    const base = await start(made.deps)
+    const res = await callRaw(base, query(imageId, 'image'))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/octet-stream')
+    expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename\*=UTF-8''/)
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes)
+  })
+})
+
+// 孤儿附件（2026-10-27，第八、第九段）：报告与清理共用同一份引用扫描。
+// 报告是纯读（不排链、不读清册），读不出引用源 ⇒ 200 + io（不拿 0 冒充"没有孤儿"）；
+// 清理是写动作（上链），只删 `objects` 下无引用的图片，聚合回 `AttachmentCleanupWire`。
+describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment-clean，2026-10-27）', () => {
+  const OBJECTS = `${HOME}/attachments/v1/objects`
+  const ACTIVE = '/h/sessions/--p--/session-active'
+  const TRASHED = '/h/session-trash/20260101T000000Z-session-trashed'
+  const LOG = 'session.v4.jsonl.zstd'
+  const hex = (char: string) => char.repeat(64)
+  const ID = `sha256:${hex('a')}`
+  const ID2 = `sha256:${hex('b')}`
+  const ID3 = `sha256:${hex('c')}`
+  const imagePath = (id: string) => attachmentPathOf(HOME, 'image', id)
+  const logWithImage = (id: string) =>
+    zlib.zstdCompressSync(Buffer.from(
+      [
+        JSON.stringify({ type: 'session', version: 4, id: 'session-x', createdAt: 1, cwd: 'C:/p' }),
+        JSON.stringify({
+          type: 'user/message', time: 2,
+          data: {
+            source: { kind: 'user' },
+            content: [{ type: 'image', attachment: { attachmentId: id, mediaType: 'image/png', bytes: 3 } }],
+          },
+        }),
+      ].join('\n') + '\n',
+      'utf8',
+    ))
+
+  /** 三个对象：aa 被活动会话引用、bb 被回收站目录引用、cc 无引用。 */
+  function orphanDeps(over: { unreadable?: boolean } = {}) {
+    const made = makeDeps()
+    made.fs.listDirs.mockImplementation(async (p: string) => {
+      if (p === '/h/sessions') return ['--p--']
+      if (p === '/h/sessions/--p--') return ['session-active']
+      if (p === '/h/session-trash') return ['20260101T000000Z-session-trashed']
+      if (p === OBJECTS) return ['aa', 'bb', 'cc']
+      return []
+    })
+    made.fs.listFiles.mockImplementation(async (p: string) => {
+      if (p === ACTIVE) return over.unreadable === true ? ['session.v4.jsonl'] : [LOG]
+      if (p === TRASHED) return [LOG]
+      if (p === `${OBJECTS}/aa`) return [hex('a')]
+      if (p === `${OBJECTS}/bb`) return [hex('b')]
+      if (p === `${OBJECTS}/cc`) return [hex('c')]
+      return []
+    })
+    made.fs.readFile.mockImplementation(async (p: string) => {
+      if (p === `${ACTIVE}/${LOG}`) return logWithImage(ID)
+      if (p === `${TRASHED}/${LOG}`) return logWithImage(ID2)
+      throw new Error(`unexpected read: ${p}`)
+    })
+    made.fs.statFile.mockImplementation(async (p: string) => {
+      if (p === imagePath(ID)) return { size: 10 }
+      if (p === imagePath(ID2)) return { size: 20 }
+      if (p === imagePath(ID3)) return { size: 30 }
+      return { size: 0 }
+    })
+    return made
+  }
+
+  it('GET /attachment-orphans：没有对象 ⇒ {count:0,totalBytes:0}，且不读清册', async () => {
+    const made = makeDeps()
+    const listSpy = vi.spyOn(made.manifest, 'list')
+    const base = await start(made.deps)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans)
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { count: 0, totalBytes: 0, items: [] } })
+    expect(listSpy).not.toHaveBeenCalled()
+  })
+
+  it('GET /attachment-orphans：只报无引用对象（活动会话与回收站目录的引用保留）', async () => {
+    const made = orphanDeps()
+    const base = await start(made.deps)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans)
+    expect(status).toBe(200)
+    expect(body).toEqual({
+      ok: true,
+      value: { count: 1, totalBytes: 30, items: [{ attachmentId: ID3, bytes: 30 }] },
+    })
+    expect(made.fs.removeFile).not.toHaveBeenCalled()
+  })
+
+  it('GET /attachment-orphans：预览清单最多 200 条，数量与字节按全量', async () => {
+    const names = Array.from({ length: 205 }, (_, i) => i.toString(16).padStart(64, '0'))
+    const made = makeDeps()
+    made.fs.listDirs.mockImplementation(async (p: string) => {
+      if (p === OBJECTS) return ['00']
+      return []
+    })
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === `${OBJECTS}/00` ? names : [])
+    made.fs.statFile.mockResolvedValue({ size: 1 })
+    const base = await start(made.deps)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans)
+    expect(status).toBe(200)
+    const value = body.value as { count: number; totalBytes: number; items: unknown[] }
+    expect(value.count).toBe(205)
+    expect(value.totalBytes).toBe(205)
+    expect(value.items).toHaveLength(200)
+  })
+
+  it('GET /attachment-orphans：引用源读不出 ⇒ 200 + sessiondelete/io（不冒充空报告）', async () => {
+    const made = orphanDeps({ unreadable: true })
+    const base = await start(made.deps)
+    const failure = await failureOf(base, ROUTES.attachmentOrphans)
+    expect(failure.status).toBe(200)
+    expect(failure.code).toBe('sessiondelete/io')
+    expect(failure.message).toMatch(/无法判定孤儿/)
+    expect(failure.message).toMatch(/没有可读的会话日志/)
+  })
+
+  // 报告是纯读：链被对账占住时照样立刻回（与 /orphans、/ping 同一条豁免）。
+  it('GET /attachment-orphans 不进到达序链', async () => {
+    const made = orphanDeps()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let first = true
+    made.fs.listDirs.mockImplementation(async (p: string) => {
+      // 第一趟 `/list` 的对账卡在回收站根上；报告自己也读这一层，但只挡第一趟。
+      if (p === '/h/session-trash' && first) {
+        first = false
+        await gate
+      }
+      if (p === '/h/sessions') return ['--p--']
+      if (p === '/h/sessions/--p--') return ['session-active']
+      if (p === '/h/session-trash') return ['20260101T000000Z-session-trashed']
+      if (p === OBJECTS) return ['aa', 'bb', 'cc']
+      return []
+    })
+    const base = await start(made.deps)
+    const listPromise = call(base, ROUTES.list)
+    await vi.waitFor(() => { expect(made.fs.listDirs).toHaveBeenCalledWith('/h/session-trash') })
+    const report = await call(base, ROUTES.attachmentOrphans)
+    expect(report.body).toEqual({
+      ok: true,
+      value: { count: 1, totalBytes: 30, items: [{ attachmentId: ID3, bytes: 30 }] },
+    })
+    release()
+    await listPromise
+  })
+
+  it('POST /attachment-clean：只删无引用图片，回 {removed,freedBytes,failed}', async () => {
+    const made = orphanDeps()
+    const base = await start(made.deps)
+    const { status, body } = await call(base, ROUTES.attachmentClean, { method: 'POST' })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { removed: 1, freedBytes: 30, failed: 0 } })
+    expect(made.fs.removeFile).toHaveBeenCalledTimes(1)
+    expect(made.fs.removeFile).toHaveBeenCalledWith(imagePath(ID3))
+    expect(made.fs.removeFile).not.toHaveBeenCalledWith(imagePath(ID))
+    expect(made.fs.removeFile).not.toHaveBeenCalledWith(imagePath(ID2))
+  })
+
+  it('POST /attachment-clean：引用源读不出 ⇒ 零删 + skipped（不是零条假回执）', async () => {
+    const made = orphanDeps({ unreadable: true })
+    const base = await start(made.deps)
+    const { status, body } = await call(base, ROUTES.attachmentClean, { method: 'POST' })
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, value: { removed: 0, freedBytes: 0, failed: 0 } })
+    expect((body.value as { skipped?: string }).skipped).toMatch(/无法判定孤儿/)
+    expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 })

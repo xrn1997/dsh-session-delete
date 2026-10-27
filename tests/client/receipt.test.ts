@@ -153,6 +153,69 @@ describe('summarizeReceipt', () => {
     ]))
     expect(purge.summary.landedIds).toEqual([])
   })
+
+  it('purge 回执里的附件统计聚合成摘要；跳过与失败分开保留', () => {
+    const outcomes: ApplyOutcome[] = [{
+      id: 'e1', action: 'purge', ok: true,
+      value: { removed: 1, freedBytes: 10, attachments: { removed: 2, freedBytes: 20, failed: 1, skipped: 'x' } },
+    }]
+    const read = summarizeReceipt(readReceipt('purge', ['e1'], outcomes))
+    expect(read.summary.attachmentCleanup).toEqual({ removed: 2, freedBytes: 20, failed: 1, skipped: 'x' })
+  })
+
+  // `skipped` 是原因、不是计数：两条 ok 各带一句时留**第一条**。把 `skipped ??=` 改成 `skipped =`
+  // 会被后一条覆盖，所以这条用例必须让两条都真的带值。
+  it('purge：两条 ok 都带 skipped ⇒ 第一条赢', () => {
+    const receipt = readReceipt('purge', ['p1', 'p2'], [
+      { id: 'p1', action: 'purge', ok: true, value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '第一条' } } },
+      { id: 'p2', action: 'purge', ok: true, value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '第二条' } } },
+    ])
+    expect(summarizeReceipt(receipt).summary.attachmentCleanup?.skipped).toBe('第一条')
+  })
+
+  // seen=false 的那条路：ok 但这一条没有半点附件读数（老服务端 / 这一组根本没附件）⇒ 摘要不许
+  // 拿零冒充"清过"，整个字段缺席。`attachments: null` 是畸形线上值，同样按没有读数处理（不炸）。
+  it('purge 的 ok 回执没有 attachments（或它是 null）⇒ 摘要没有读数', () => {
+    const absent = readReceipt('purge', ['p'], [
+      { id: 'p', action: 'purge', ok: true, value: { removed: 1, freedBytes: 1 } },
+    ])
+    expect(summarizeReceipt(absent).summary.attachmentCleanup).toBeUndefined()
+
+    const nulled = readReceipt('purge', ['p'], [
+      { id: 'p', action: 'purge', ok: true, value: { removed: 1, freedBytes: 1, attachments: null } },
+    ] as unknown as ApplyOutcome[])
+    expect(summarizeReceipt(nulled).summary.attachmentCleanup).toBeUndefined()
+  })
+
+  // 一段 `/apply` 可能带多条 ok 回执（批量彻底删除），附件读数要相加；失败条不参与，
+  // `skipped` 取**第一条有的**——跳过说的是"这一轮为什么没敢清"，多组各有一句时不叠加。
+  it('附件读数跨多条 ok 回执相加；skipped 留第一条；失败条不参与', () => {
+    const receipt = readReceipt('orphan-clean', ['a', 'b', 'c'], [
+      { id: 'a', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1 } },
+      { id: 'b', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1, attachments: { removed: 2, freedBytes: 20, failed: 0, skipped: '第一条的原因' } } },
+      { id: 'c', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1, attachments: { removed: 3, freedBytes: 30, failed: 1, skipped: '后面那句不覆盖' } } },
+    ])
+    expect(summarizeReceipt(receipt).summary.attachmentCleanup).toEqual({
+      removed: 5, freedBytes: 50, failed: 1, skipped: '第一条的原因',
+    })
+
+    const failedOnly = readReceipt('purge', ['p'], [
+      {
+        id: 'p', action: 'purge', ok: false,
+        error: { code: SESSION_DELETE_CODES.io, message: 'boom', details: { attachments: { removed: 9, freedBytes: 90, failed: 9 } } },
+      },
+    ])
+    expect(summarizeReceipt(failedOnly).summary.attachmentCleanup).toBeUndefined()
+  })
+
+  it('别的动作不产生附件摘要：delete / restore 的回执里没有那个读数', () => {
+    const del = summarizeReceipt(readReceipt('delete', ['a'], [entry('a')]))
+    const restore = summarizeReceipt(readReceipt('restore', ['e1'], [
+      { id: 'e1', action: 'restore', ok: true, value: row('e1') },
+    ]))
+    expect(del.summary.attachmentCleanup).toBeUndefined()
+    expect(restore.summary.attachmentCleanup).toBeUndefined()
+  })
 })
 
 describe('landedEntryIds', () => {

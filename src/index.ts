@@ -27,7 +27,7 @@ export const name = '@xrn1997/dsh-session-delete'
  *   它同样可能晚于本插件激活，写进插件 inject 只会让整个插件 pending。
  *
  * `webServer` 是**浏览器半取数通道的承载者**（那条薄线）：插件用它注册 `/dsh-session-delete-api`
- * 前缀路由，浏览器半同源 fetch 那六个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
+ * 前缀路由，浏览器半同源 fetch 那九个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
  * `super(ctx, "webServer")`），服务名与 `register({kind:'prefix', path, handler})` 的形状按
  * `dsh-host-webserver/lib/index.js` 与 `README.md` 原文读实，不是猜的。
  *

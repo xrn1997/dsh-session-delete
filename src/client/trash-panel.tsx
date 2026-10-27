@@ -22,9 +22,9 @@ import {
 } from 'react'
 import { TRASH_DIR_LABEL } from '../shared/wire.js'
 import { useBusyGate } from './busy-gate.js'
+import { AttachmentNotice } from './attachment-view.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
 import { type SessionDeleteRemote } from './remote.js'
-import { OrphanMaintenance } from './orphan-maintenance.js'
 import { TrashDetail } from './trash-detail.js'
 import { useColumnResize } from './use-column-resize.js'
 import { usePanelWidth } from './use-panel-width.js'
@@ -47,12 +47,13 @@ import { listView, useTrashQuery } from './use-trash-query.js'
 import { useTrashSelection } from './use-trash-selection.js'
 import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
 
-/** 面板的依赖面：三个读（`list` / `detail` / `scanOrphans`）+ **一段 `apply`** + 清空。
+/** 面板的依赖面：两个读（`list` / `detail`）+ **一段 `apply`** + 清空。
  *  **没有第二条路**：「恢复一条」也走 `apply`（N=1），面板不再同时吃
- *  `applyOutcomes` 与一个便捷的 `restore`。 `scanOrphans` 是回收站之外那批无主子会话的纯读报告。 */
+ *  `applyOutcomes` 与一个便捷的 `restore`。无主子会话的检查/清理不在这里——它是插件设置页
+ *  维护卡的手动动作（`use-maintenance.ts`），面板一次都不自动扫（ADR-0021）。 */
 export type TrashPanelDeps = Pick<
   SessionDeleteRemote,
-  'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'scanOrphans'
+  'list' | 'detail' | 'applyOutcomes' | 'emptyTrash'
 >
 
 export interface TrashPanelProps {
@@ -182,7 +183,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   /** 面板唯一的一枚全局闸（写动作在飞时按住一排按钮）：本体住 `busy-gate.ts`，查询侧的写动作也吃它。 */
   const gate = useBusyGate()
 
-  // 取数与扫描编排、以及孤儿清理那一条写动作，整块住在 `use-trash-query.ts`。
+  // 取数编排（清单状态 + 附件回执）整块住在 `use-trash-query.ts`。
   const query = useTrashQuery({ deps, t, gate })
   const { list: listState, refreshAll } = query
   // 清单状态的解读只住 `use-trash-query.ts`：面板不再自己从 status 反推失败/加载/空态。
@@ -594,9 +595,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         </div>
       </div>
 
-      {/* 回收站之外的无主子会话：警告条 / 失败块 / 中性提示 / 预览确认整块住在
-          `orphan-maintenance.tsx`，面板只留这一个插入点（header 之后、toolbar 之前）。 */}
-      <OrphanMaintenance query={query} busy={controller.busy} t={t} />
+      {/* 上一趟写动作的附件那半句（彻底删除 / 清空）：它**不是清单状态**，
+          清单读不出来，所以摆在清单之外；文案与"什么时候该有这句"都归 `use-trash-query.ts`。 */}
+      <AttachmentNotice message={query.attachmentNotice} />
 
       {toolbar}
 

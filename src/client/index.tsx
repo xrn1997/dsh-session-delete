@@ -11,6 +11,7 @@
  * - shell.overlay：声明 asar @21206189。
  * - sidebar.panellist：声明 @44796980；行渲染 @44783481；label 解析 @44795361（thunk 随 locale）。
  * - main：渲染 @21185725；id 与 panellist 同字，selectPanel 只校验已注册 @21199710。
+ * - plugins.bundle.config：插件详情页的 keyed 子槽位，宿主页面挂载时才声明（ADR-0021）。
  *
  * 硬约束：
  * - inject 只写宿主必给的 slots；可选服务走 ctx.get。理由与代价见 docs/architecture.md §3。
@@ -28,6 +29,7 @@ import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
 import { DeleteMenuItem } from './delete-menu-item.js'
 import { bindMainView } from './main-view.js'
+import { MaintenanceSettings } from './maintenance-settings.js'
 import {
   buildDeps,
   createHttpRemote,
@@ -58,6 +60,8 @@ const ROW_ACTION_SLOT = 'sidebar.workspaces.session.row.action'
 const OVERLAY_SLOT = 'shell.overlay'
 const PANEL_SLOT = 'sidebar.panellist'
 const MAIN_SLOT = 'main'
+/** 插件详情页的子槽位：宿主页面挂载时才声明，未声明前 `inject` 等待（更早的宿主没有这张卡）。 */
+const SETTINGS_SLOT = 'plugins.bundle.config'
 
 /** 本插件在槽位里的稳定 id 前缀（宿主对重名直接抛错、对重 id 静默替换，必须带插件专属前缀）。 */
 const PLUGIN_ID = '@xrn1997/dsh-session-delete'
@@ -275,6 +279,16 @@ async function activate(client: ClientContextLike): Promise<void> {
   // ③' 中央面板：同字 key；清单本体（自带页面骨架与滚动，中央列那个盒子两样都不给）。
   client.slots.inject(MAIN_SLOT, () =>
     client.slots.register({ name: MAIN_SLOT, key: PANEL_ID, inject: () => ({ deps, t }) }, TrashPanel),
+  )
+
+  // ④ 插件设置页的「维护」卡：宿主按 **bundle 包名**寻址这个 keyed 子槽位。
+  // 页面没挂载时宿主不会声明它，`inject` 就等着——不在更早的宿主上硬注册（那会响亮失败）。
+  // 卡片里两段都是手动触发；这里只给读数面与文案，不在这里发任何扫描。
+  client.slots.inject(SETTINGS_SLOT, () =>
+    client.slots.register(
+      { name: SETTINGS_SLOT, key: PLUGIN_ID, inject: () => ({ deps, t }) },
+      MaintenanceSettings,
+    ),
   )
 }
 

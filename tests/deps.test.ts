@@ -31,6 +31,15 @@ type RemovalFsRemoveDir = 'removeDir' extends keyof RemovalDeps['fs'] ? true : f
 const removalFsRemoveDir: RemovalFsRemoveDir = true
 type DeleteFsRemoveDir = 'removeDir' extends keyof DeleteDeps['fs'] ? true : false
 const deleteFsRemoveDir: DeleteFsRemoveDir = true
+/** 同一条闸管单文件删除：它比 `removeDir` 更危险（附件清理只许点 `.dsh` 图片对象），基础面不许有。 */
+type CoreFsRemoveFile = 'removeFile' extends keyof CoreDeps['fs'] ? true : false
+const coreFsRemoveFile: CoreFsRemoveFile = false
+type DeleteSessionFsRemoveFile = 'removeFile' extends keyof DeleteSessionDeps['fs'] ? true : false
+const deleteSessionFsRemoveFile: DeleteSessionFsRemoveFile = false
+type RemovalFsRemoveFile = 'removeFile' extends keyof RemovalDeps['fs'] ? true : false
+const removalFsRemoveFile: RemovalFsRemoveFile = true
+type DeleteFsRemoveFile = 'removeFile' extends keyof DeleteDeps['fs'] ? true : false
+const deleteFsRemoveFile: DeleteFsRemoveFile = true
 /** 按整个在场角色面拦，不列三个名字：端口将来多出第四条也不会漏进动词的 `host`。 */
 type CoreHostPresence = Extract<keyof CoreDeps['host'], keyof HostPresencePort>
 const coreHostHasNoPresence: CoreHostPresence extends never ? true : false = true
@@ -69,6 +78,10 @@ it('CoreDeps 是五项基础；会话删除加时钟，组合根再加永久删�
   expect(deleteSessionFsRemoveDir).toBe(false)
   expect(removalFsRemoveDir).toBe(true)
   expect(deleteFsRemoveDir).toBe(true)
+  expect(coreFsRemoveFile).toBe(false)
+  expect(deleteSessionFsRemoveFile).toBe(false)
+  expect(removalFsRemoveFile).toBe(true)
+  expect(deleteFsRemoveFile).toBe(true)
   expect(coreHostHasNoPresence).toBe(true)
 })
 

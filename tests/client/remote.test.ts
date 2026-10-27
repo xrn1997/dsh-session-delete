@@ -88,7 +88,7 @@ describe('注入面的展开', () => {
   })
 })
 
-describe('createHttpRemote · detail 那一趟（六个段名里的 `POST /detail`）', () => {
+describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
@@ -129,7 +129,7 @@ describe('createHttpRemote · detail 那一趟（六个段名里的 `POST /detai
   })
 })
 
-describe('createHttpRemote · orphans 那一趟（六个段名里的 `GET /orphans`）', () => {
+describe('createHttpRemote · orphans 那一趟（九段里的 `GET /orphans`）', () => {
   const report = {
     roots: ['session-root'],
     totalSessions: 2,
@@ -161,6 +161,65 @@ describe('createHttpRemote · orphans 那一趟（六个段名里的 `GET /orpha
     await expect(deps.scanOrphans()).rejects.toMatchObject({
       code: 'sessiondelete/io',
       message: 'sessionQuery 不在',
+    })
+    vi.unstubAllGlobals()
+  })
+})
+
+// 2026-10-27 孤儿附件：报告是纯读（GET），清理是聚合写（POST）。两段都回 JSON 信封，
+// 失败支在注入面展开成 throw——与其余段同一条契约。
+describe('createHttpRemote · 孤儿附件两段（九段里的 `GET /attachment-orphans` / `POST /attachment-clean`）', () => {
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+
+  it('报告 GET 到 /attachment-orphans，不带 body；成功信封原样展开', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const report = { count: 106, totalBytes: 29_150_413, items: [] }
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope(report)
+    })
+    await expect(createHttpRemote().attachmentOrphans()).resolves.toEqual({ ok: true, value: report })
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans}`)
+    expect(calls[0]!.init?.method).toBe('GET')
+    expect(calls[0]!.init?.body).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
+  it('清理 POST 到 /attachment-clean，空请求体；聚合回执原样展开', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    const cleanup = { removed: 106, freedBytes: 29_150_413, failed: 0 }
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope(cleanup)
+    })
+    await expect(createHttpRemote().attachmentClean()).resolves.toEqual({ ok: true, value: cleanup })
+    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean}`)
+    expect(calls[0]!.init?.method).toBe('POST')
+    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({})
+    vi.unstubAllGlobals()
+  })
+
+  it('注入面展开两段：成功支给裸值，失败支抛原文与码', async () => {
+    const report = { count: 3, totalBytes: 300, items: [] }
+    vi.stubGlobal('fetch', async (path: string) => {
+      if (String(path).endsWith(ROUTES.attachmentOrphans)) return envelope(report)
+      return envelope({ removed: 2, freedBytes: 200, failed: 0 })
+    })
+    const deps = buildDeps(createHttpRemote())
+    await expect(deps.scanAttachmentOrphans()).resolves.toEqual(report)
+    await expect(deps.cleanAttachmentOrphans()).resolves.toEqual({ removed: 2, freedBytes: 200, failed: 0 })
+
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '引用源读不出' } }),
+        { headers: { 'content-type': 'application/json' } }))
+    await expect(deps.scanAttachmentOrphans()).rejects.toMatchObject({
+      code: 'sessiondelete/io',
+      message: '引用源读不出',
+    })
+    await expect(deps.cleanAttachmentOrphans()).rejects.toMatchObject({
+      code: 'sessiondelete/io',
+      message: '引用源读不出',
     })
     vi.unstubAllGlobals()
   })

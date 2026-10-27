@@ -11,7 +11,7 @@ import { TrashPanel } from '../../src/client/trash-panel.js'
 import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
 import type { ApplyAction, ApplyOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
-import { createFakeRemote, EMPTY_ORPHANS, type FakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
 import { failed, outcomes, restoreOutcomes } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
 
@@ -24,9 +24,10 @@ const rows = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 224 * 1024, releaseBytes: 224 * 1024, title: '/code-review' },
 ]
 
-/** `ORPHANS` = 有一组两个孩子的残留（`EMPTY_ORPHANS` 从假远端拿，盘上干净那一份只留一个定义）。
- *  形状就是 `shared/wire.ts` 的 `OrphanReportWire`，`roots` 是**每组那个"父没了"的 subagent 自己**的 id
- *  ——清理时原样发给 `/apply` 的 `orphan-clean`，界面上不重新推导（推导一遍就是第二套判据）。 */
+/** `ORPHANS` = 有一组两个孩子的残留（"盘上干净"那一份是假远端的缺省，不必在本文件再写一遍）。
+ *  形状就是 `shared/wire.ts` 的 `OrphanReportWire`，`roots` 是**每组那个"父没了"的 subagent 自己**的 id。
+ *  本文件只拿它当"盘上确实有残留"的现场，证明面板不再自动扫、也不再摆提示；检查/清理的用例
+ *  住 `orphan-maintenance.test.tsx` / `maintenance-settings.test.tsx` / `use-maintenance.test.tsx`。 */
 const ORPHANS = {
   roots: ['session-root'], totalSessions: 2, totalBytes: 2 * 1024, missingParents: 1,
   groups: [{ projectDir: '--p--', sessions: 2, bytes: 2 * 1024 }],
@@ -37,8 +38,8 @@ const detailFixture: TrashDetailLike = {
   models: ['m-1'], turnCount: 1, userMessageCount: 1, assistantMessageCount: 1, toolCallCount: 3,
   injectedCount: 7, omittedByPayloadCap: 0,
   messages: [
-    { role: 'user', time: 1, text: '先看改动', truncated: false },
-    { role: 'assistant', time: 2, text: '改动分四层', truncated: false },
+    { role: 'user', time: 1, text: '先看改动', truncated: false, attachments: [] },
+    { role: 'assistant', time: 2, text: '改动分四层', truncated: false, attachments: [] },
   ],
 }
 
@@ -59,7 +60,6 @@ function makeDeps(over: Partial<FakeRemote> = {}): FakeRemote {
     list: vi.fn(async () => rows),
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
     emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
-    scanOrphans: vi.fn(async () => EMPTY_ORPHANS),
     detail: vi.fn(async () => detailFixture),
     ...over,
   })
@@ -385,6 +385,22 @@ describe('回收站面板 · 其余行为', () => {
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('purge', ['a']))
   })
 
+  // 附件清理是**上一趟写的后果**：清单照常重读，但这句警告要留在面板顶部（面板把回执里那半句交给 query，
+  // 再读 `attachmentNotice` 渲染）。任务简报里写的"给 query 夹具塞 attachmentNotice"在这里不适用——
+  // 本文件用真 hook + 假远端整块渲染，所以这条从真回执走上来，断言的是接线而不是夹具。
+  it('彻底删除的回执说「N 个附件未清」⇒ 面板顶部摆出那句警告', async () => {
+    const deps = makeDeps({
+      applyOutcomes: vi.fn(async (_action: ApplyAction, ids: readonly string[]) => outcomes('purge', ids, {
+        a: { value: { removed: 1, freedBytes: 1, attachments: { removed: 0, freedBytes: 0, failed: 2 } } },
+      })),
+    })
+    renderWide(deps)
+    const row = await screen.findByRole('option', { name: /code-review/ })
+    fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
+    fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
+    expect(await screen.findByText('已删除会话，但 2 个附件未能清理')).toBeInTheDocument()
+  })
+
   // 彻底删除按组走（组语义见 src/trash/groups.ts）⇒ 点下去页脚合计掉的是「父 + 全部孩子」。确认框那一格说的是
   // "我即将失去多少"，所以它必须是同一个口径，不能只报父自己那一格（issue #2）。
   it('单条彻底删除的确认卡片报的是整组要释放的字节（父 + 孩子）', async () => {
@@ -420,7 +436,7 @@ describe('回收站面板 · 其余行为', () => {
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
   })
 
-  it('读失败时给「重试」，点一下把整面重读一遍（清单 + 残留扫描）', async () => {
+  it('读失败时给「重试」，点一下把清单重读一遍', async () => {
     const deps = makeDeps({
       list: vi
         .fn()
@@ -428,14 +444,10 @@ describe('回收站面板 · 其余行为', () => {
         .mockResolvedValueOnce(rows),
     })
     render(<TrashPanel deps={deps} />)
-    // 清单没读成 ⇒ 残留扫描一次都不发：`/orphans` 判"父没了"吃的是对账后的清册，
-    // 拿旧清册扫会把刚被手工搬进回收站的父报成失踪父。
     await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(1))
-    expect(deps.scanOrphans).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: '重试' }))
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
     expect(deps.list).toHaveBeenCalledTimes(2)
-    await waitFor(() => expect(deps.scanOrphans).toHaveBeenCalledTimes(1))
   })
 
   // 改版前 `entries === null` 那一拍什么都不画：读得慢就是一块没有解释的空。
@@ -537,7 +549,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     expect(await screen.findByText(/1.5KB/)).toBeInTheDocument()
   })
 
-  // 盘上还剩的孩子也会被彻底删除/清空连带带走（Task 3 的 `purgeTrash`），所以"共多少"与确认框那句
+  // 盘上还剩的孩子也会被彻底删除/清空连带带走（`purgeTrash`），所以"共多少"与确认框那句
   // 「我即将失去多少」都读 Node 半算好的 `releaseBytes`（唯一算式在 `api/trash-rows.ts` 的 `toWire`），
   // 同一屏不许两套口径。
   it('头部合计与单条彻底删除确认都算上 strandedBytes', async () => {
@@ -1149,154 +1161,21 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
   })
 })
 
-// 回收站之外的无主子会话（父既不在宿主语料、也不在清册）——2026-10-19 那条维护入口。
-// 三条界面规则钉在这里：① 报告非空才出那条提示（干净时一个字都不出现，"检查过了"不是要给用户看的东西）；
-// ② 扫描失败 = 可见的失败 + 重试，**绝不冒充"零条残留"**（`/orphans` 读不到语料时回的是 `io`，
-// 把它折成空报告就等于把"不知道"说成"没有"）；③ 清理走的仍是那一段 `/apply`，只是第五个动作，
-// 界面上不留第二条执行路径。
-describe('回收站面板 · 无主子会话的残留条（2026-10-19）', () => {
-  it('扫描到无主子会话 ⇒ 顶部条件提示；预览后调用 orphan-clean', async () => {
+// 回收站之外的无主子会话（父既不在宿主语料、也不在清册）2026-10-19 挂在面板上，
+// 2026-10-27 搬进插件设置页的维护卡（手动检查 → 预览 → 清理）。面板不再自动扫、也不再摆那块警告条：
+// 那三条界面规则（报告非空才出、读不到是可见失败、清理仍走 `/apply` 的第五个动作）连同用例
+// 一起住 `orphan-maintenance.test.tsx` / `maintenance-settings.test.tsx` 与 `use-maintenance.test.tsx`。
+// 这里只钉"面板这一侧真的没有了"：给假远端一份非空孤儿报告，面板一次都不去问。
+describe('回收站面板 · 不再自动扫无主子会话（2026-10-27 搬家后）', () => {
+  it('挂载与写后重读都不发 /orphans，面板上也没有孤儿提示', async () => {
     const deps = makeDeps({ scanOrphans: vi.fn(async () => ORPHANS) })
     renderWide(deps)
-    expect(await screen.findByText('回收站之外发现 2 个无主子会话')).toBeInTheDocument()
-    expect(screen.getByText('共 2.0KB，来自 1 个失踪的父会话')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '查看并清理' }))
-    expect(screen.getByText('清理 2 个无主子会话？')).toBeInTheDocument()
-    // 官方 `fileSizeText` 的规则是"选中单位小于十带一位小数"⇒ 2048 字节念作 `2.0KB` 而不是 `2KB`
-    // （brief 那里写的是后者，是它算错了格式化，不是这里在改口径）。
-    expect(screen.getByText('p · 2 个 · 2.0KB')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '清理' }))
-    await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('orphan-clean', ['session-root']))
-    // 配色只许用宿主真有的 token：计划里写的 `--dsw-alias-state-warning-primary` 在 asar 中查无此名
-    // （宿主那档叫 `state-warn-primary`），未定义的自定义属性会让 `color` 退回继承——**jsdom 照不出这
-    // 条落差**，所以钉子只能钉在字符串上（与「危险动作分两档」那条同一个量法）。
-    const banner = document.querySelector('[data-dsh-session-delete="orphan-banner"]') as HTMLElement
-    expect((banner.firstElementChild as HTMLElement).style.color).toBe('var(--dsw-alias-state-warn-primary)')
-  })
-
-  it('没有残留 ⇒ 不出现那条提示', async () => {
-    renderWide(makeDeps())
-    await waitFor(() => expect(screen.queryByText(/无主子会话/)).not.toBeInTheDocument())
-  })
-
-  it('扫描失败 ⇒ 原位上屏并可重试', async () => {
-    const scan = vi.fn(async () => { throw Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' }) })
-    renderWide(makeDeps({ scanOrphans: scan }))
-    expect(await screen.findByText(/残留检查\/清理失败：sessionQuery 不在/)).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '重试' }))
-    await waitFor(() => expect(scan).toHaveBeenCalledTimes(2))
-  })
-
-  // 顺序是判据不是偏好：`GET /orphans` 读的是**清册**来判"父没了"，而清册只有在 `/list` 那一次对账之后
-  // 才与 `session-trash/` 的目录持平。反过来接，一个刚被手工搬进回收站的父会被报告成失踪父（写侧有闸、
-  // 读侧没有），界面上就成了"有一条能清、点下去说清不掉"。
-  it('残留扫描排在清单对账之后（清单没落地前一次都不发）', async () => {
-    let releaseList: (value: typeof rows) => void = () => {}
-    const scan = vi.fn(async () => EMPTY_ORPHANS)
-    const deps = makeDeps({
-      list: vi.fn(() => new Promise<typeof rows>((resolve) => { releaseList = resolve })),
-      scanOrphans: scan,
-    })
-    renderWide(deps)
-    await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(1))
-    expect(scan).not.toHaveBeenCalled()
-    releaseList(rows)
-    await waitFor(() => expect(scan).toHaveBeenCalledTimes(1))
-  })
-
-  // 逐条失败住在 `ApplyOutcome` 里，不在信封里：整批"办成了"不代表每一组都清掉了。
-  // 只报服务端那份回执说了的（有几组没成 + 第一条原文），不写"整组已清完"这类服务端没给的话。
-  it('清理逐条失败 ⇒ 说清几组没成并带上原文，不当成成功', async () => {
-    const deps = makeDeps({
-      scanOrphans: vi.fn(async () => ORPHANS),
-      applyOutcomes: vi.fn(async () => [
-        { id: 'session-root', action: 'orphan-clean', ok: false, error: { code: 'sessiondelete/io', message: '目录搬不动' } },
-      ]),
-    })
-    renderWide(deps)
-    fireEvent.click(await screen.findByRole('button', { name: '查看并清理' }))
-    fireEvent.click(screen.getByRole('button', { name: '清理' }))
-    expect(await screen.findByText(/1 组未清理：目录搬不动/)).toBeInTheDocument()
-  })
-
-  // `not-found` 不是"没清干净"：这一组可能已被别处清掉，或父已回到清册。单列成中性提示，
-  // 不再混进「N 组未清理」的失败计数。
-  it('清理回执的 not-found 单列为「已不在了」，不计入未清理', async () => {
-    const deps = makeDeps({
-      scanOrphans: vi.fn(async () => ORPHANS),
-      applyOutcomes: vi.fn(async () => [
-        {
-          id: 'session-root',
-          action: 'orphan-clean',
-          ok: false,
-          error: { code: 'sessiondelete/not-found', message: '不再是可清理的无主子会话：session-root' },
-        },
-      ]),
-    })
-    renderWide(deps)
-    fireEvent.click(await screen.findByRole('button', { name: '查看并清理' }))
-    fireEvent.click(screen.getByRole('button', { name: '清理' }))
-    expect(await screen.findByText(/有 1 组已不在了/)).toBeInTheDocument()
-    expect(screen.queryByText(/组未清理/)).not.toBeInTheDocument()
-  })
-
-  // 服务端在删到一半失败时把已删计数挂在 `error.details`；界面不能说成"整组没动"。
-  it('删到一半失败 ⇒ 失败块带上已删计数与字节', async () => {
-    const deps = makeDeps({
-      scanOrphans: vi.fn(async () => ORPHANS),
-      applyOutcomes: vi.fn(async () => [
-        {
-          id: 'session-root',
-          action: 'orphan-clean',
-          ok: false,
-          error: {
-            code: 'sessiondelete/io',
-            message: '删除会话目录失败：boom',
-            details: { removed: 1, freedBytes: 1024, failedSessionId: 'session-kid' },
-          },
-        },
-      ]),
-    })
-    renderWide(deps)
-    fireEvent.click(await screen.findByRole('button', { name: '查看并清理' }))
-    fireEvent.click(screen.getByRole('button', { name: '清理' }))
-    const failure = await screen.findByText(/1 组未清理：删除会话目录失败：boom/)
-    expect(failure).toHaveTextContent('已先删掉 1 个会话目录（1.0KB）')
-  })
-
-  // 清理之后到 refresh 完成前不能允许同一批再提交：否则第二次拿旧报告再发一次，
-  // 服务端回 not-found，界面会把一次已经完成的清理报成"未清理"。
-  it('清理后刷新未完成时，顶部那颗「查看并清理」保持禁用、不会二次提交', async () => {
-    let releaseList!: () => void
-    const list = vi.fn()
-      .mockResolvedValueOnce(rows)
-      .mockImplementationOnce(() => new Promise<typeof rows>((resolve) => { releaseList = () => resolve(rows) }))
-    const deps = makeDeps({ list, scanOrphans: vi.fn(async () => ORPHANS) })
-    renderWide(deps)
-    fireEvent.click(await screen.findByRole('button', { name: '查看并清理' }))
-    fireEvent.click(screen.getByRole('button', { name: '清理' }))
-    await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledTimes(1))
-    await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(2))
-    const bannerButton = screen.getByRole('button', { name: '查看并清理' })
-    expect(bannerButton).toBeDisabled()
-    fireEvent.click(bannerButton)
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    releaseList()
-    await waitFor(() => expect(bannerButton).not.toBeDisabled())
-    expect(deps.applyOutcomes).toHaveBeenCalledTimes(1)
-  })
-
-  // 扫描失败时，已经打开的那份预览不能留着一个"过期报告 + 可确认"的浮层。
-  it('扫描失败时关掉已经打开的预览框', async () => {
-    const scan = vi.fn()
-      .mockResolvedValueOnce(ORPHANS)
-      .mockRejectedValueOnce(Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' }))
-    const deps = makeDeps({ scanOrphans: scan })
-    renderWide(deps)
-    fireEvent.click(await screen.findByRole('button', { name: '查看并清理' }))
-    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await screen.findByRole('option', { name: /code-review/ })
+    // 写后重读（失效通告）也不许顺手扫一次。
     act(() => { invalidateTrash() })
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-    expect(await screen.findByText(/残留检查\/清理失败：sessionQuery 不在/)).toBeInTheDocument()
+    await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(2))
+    expect(deps.scanOrphans).not.toHaveBeenCalled()
+    expect(screen.queryByText(/无主子会话/)).not.toBeInTheDocument()
+    expect(document.querySelector('[data-dsh-session-delete="orphan-banner"]')).toBeNull()
   })
 })

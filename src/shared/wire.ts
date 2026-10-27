@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约：前缀、六个端点、请求/响应形状与失败码。
+ * 跨半 wire 契约：前缀、九个端点、请求/响应形状与失败码。
  * Node 半（src/api/dispatch.ts）与浏览器半（src/client/remote.ts）共用这一份，不各写字面量。
  *
  * 构建约束：本文件零运行时依赖、无 import；浏览器半把整个文件 inline 进 bundle。
@@ -15,7 +15,7 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 六个段名（相对前缀）。写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
+/** 九个段名（相对前缀）。写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
  *  单条就是长度为 1 的批量，仓里不留第二条执行路径。
  *  - `GET /list`：对账并读清单（`session-trash/` 里的目录是准）。
  *  - `GET /ping`：最便宜的在/不在（不碰清册、不碰盘、不进链），供客户端探测。
@@ -23,7 +23,10 @@ export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
  *  - `POST /apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean`），逐条回 `ApplyOutcome`。
  *  - `POST /empty`：清空回收站（聚合回执，不按条回）。
  *  - `GET /orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
- *    这一段只负责"有多少、在哪、多大"。 */
+ *    这一段只负责"有多少、在哪、多大"。
+ *  - `GET /attachment`：附件原始字节（全仓唯一的二进制响应段；失败仍回 JSON 信封）。
+ *  - `GET /attachment-orphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。
+ *  - `POST /attachment-clean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。 */
 export const ROUTES = {
   list: '/list',
   /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
@@ -36,6 +39,12 @@ export const ROUTES = {
   empty: '/empty',
   /** 纯读：扫描回收站之外的无主子会话（父已不在语料/清册）。 */
   orphans: '/orphans',
+  /** 附件字节（图片/普通文件）：全仓唯一的二进制响应段，读的是宿主附件库。 */
+  attachment: '/attachment',
+  /** 纯读：扫全部引用源与附件库 `objects`，报无引用图片的数量、字节与预览清单。 */
+  attachmentOrphans: '/attachment-orphans',
+  /** 聚合清理：只删 `objects` 下无引用的图片，回 `AttachmentCleanupWire`。 */
+  attachmentClean: '/attachment-clean',
 } as const
 
 /** `/apply` 的五个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean` 是**宿主会话 id**
@@ -105,12 +114,26 @@ export interface TrashRowWire extends TrashEntryWire {
   workspaceMissing?: boolean
 }
 
-/** 单条详情里的一条消息（`trash/detail.ts` 读出来的那一份）。 */
+/** 单条详情里的一条附件读数（`trash/attachments.ts` 的 `attachmentsInContent` 产出、详情投影上线）。
+ *  `attachmentId` 是宿主附件库的 sha256 键，也是 `GET /attachment` 的唯一寻址依据。 */
+export interface TrashDetailAttachmentWire {
+  attachmentId: string
+  kind: 'image' | 'file'
+  name?: string
+  mediaType?: string
+  bytes: number
+  width?: number
+  height?: number
+}
+
+/** 单条详情里的一条消息（`trash/detail.ts` 读出来的那一份）。
+ *  `attachments` 必填：没有附件就是空数组（界面上"这一条带没带附件"不靠字段缺席判断）。 */
 export interface TrashDetailMessageWire {
   role: 'user' | 'assistant'
   time: number
   text: string
   truncated: boolean
+  attachments: TrashDetailAttachmentWire[]
 }
 
 /** 回收站单条详情的线上形状（`POST /detail`）。 */
@@ -132,10 +155,36 @@ export interface TrashDetailWire {
   omittedByPayloadCap: number
 }
 
-/** 清空回收站的聚合回执。 */
+/** 一次永久删除顺带、或一次孤儿附件清理的附件读数。`skipped` 有值 = 这一轮**部分或整体没清**：
+ *  有候选日志或剩余引用源读不出（原因上屏）。此时 `removed` 仍可能 > 0——损坏的只是某一组候选，
+ *  其余照常清；跳过不是失败：`failed` 是逐文件真出错的那几件。 */
+export interface AttachmentCleanupWire {
+  removed: number
+  freedBytes: number
+  failed: number
+  skipped?: string
+}
+
+/** 孤儿附件报告里的一条：内容哈希 + 实测字节。没有原始文件名（附件库只存内容）。 */
+export interface AttachmentOrphanItemWire {
+  attachmentId: string
+  bytes: number
+}
+
+/** 孤儿附件报告（`GET /attachment-orphans`）：数量、总字节与对象清单。
+ *  清单只带 id/bytes（不含路径/文件名），供设置页预览缩略图，最多 200 条；数量与字节按全量算。
+ *  读不出任何一处引用源时**不返回这一形状**，而是 `io` 失败——不拿 0 冒充"没有孤儿"。 */
+export interface AttachmentOrphanReportWire {
+  count: number
+  totalBytes: number
+  items: AttachmentOrphanItemWire[]
+}
+
+/** 清空回收站的聚合回执。`attachments` 缺席 = 这一版/这一轮没有附件清理读数（不拿零冒充"清过"）。 */
 export interface PurgeStatsWire {
   removed: number
   freedBytes: number
+  attachments?: AttachmentCleanupWire
 }
 
 /** 无主子会话扫描里**一个项目目录**的汇总（界面上那条"哪一家还剩多少"的读数）。 */
@@ -155,17 +204,23 @@ export interface OrphanReportWire {
   groups: readonly OrphanProjectGroupWire[]
 }
 
-/** 清理一组无主子会话的回执（与 {@link PurgeStatsWire} 同形，但计的是"删掉的会话目录"）。 */
+/** 清理一组无主子会话的回执（与 {@link PurgeStatsWire} 同形，但计的是"删掉的会话目录"）。
+ *  `attachments` 的口径与 purge 相同。 */
 export interface OrphanCleanStatsWire {
   removed: number
   freedBytes: number
+  attachments?: AttachmentCleanupWire
 }
 
-/** 请求体字段名：浏览器半发、Node 半读，同名同义（`empty` 没有入参）。 */
+/** 请求参数名：浏览器半发、Node 半读，同名同义（`empty` 没有入参）。
+ *  附件段是 **query 参数**（GET 二进制响应，没有请求体）。 */
 export const PARAMS = {
   entryId: 'entryId',
   action: 'action',
   ids: 'ids',
+  attachmentId: 'id',
+  attachmentKind: 'kind',
+  attachmentName: 'name',
 } as const
 
 /**

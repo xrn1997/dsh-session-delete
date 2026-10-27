@@ -3,7 +3,9 @@
  *
  * - 路由是宿主 web server 上的插件前缀；官方 remote.<namespace> 需要生成的 Typert 描述符，
  *   第三方无法动态挂载，因此走这条薄线（ADR-0009）。
- * - 六段：list / ping / orphans / detail / apply / empty；写动作统一走 apply。
+ * - 九段：list / ping / orphans / detail / apply / empty / attachment / attachment-orphans / attachment-clean；
+ *   写动作统一走 apply；`attachment` 是唯一二进制段，由 `src/client/attachment-view.tsx` 直接拼地址，
+ *   不经过本文件的信封通道；`attachment-orphans`（纯读）与 `attachment-clean`（聚合写）是孤儿附件的两段。
  * - 信封与官方 unary 面同形：{ok:true,value} / {ok:false,error}。HTTP 往返本身失败才 reject；
  *   业务失败以信封返回，由 unwrapRemoteResult 在注入面抛出。
  * - error 在线上是 {code,message,details?} 普通对象；判别依据 isDSHRemoteError 住在
@@ -17,6 +19,8 @@ import {
   type ApplyAction,
   type ApplyOutcome,
   type ApplyValueByAction,
+  type AttachmentCleanupWire,
+  type AttachmentOrphanReportWire,
   type OrphanReportWire,
   type PurgeStatsWire,
   type RemoteFailure,
@@ -109,8 +113,9 @@ export async function callRemote<T>(run: () => Promise<T>): Promise<RemoteOutcom
 }
 
 /** 本插件前缀路由那套**响应信封**的窄镜像（不是宿主服务 `ctx.remote.*`——那条 typert 通道为什么用不了，见 `AGENTS.md` 的 `remote.<namespace>` 那条）：
- *  每个方法 resolve 成 `RemoteResult<T>`。面是六段：`list` / `ping` / `orphans` / `detail` / `apply` / `empty`；
- *  写动作统一走 `apply`（一组 id 进、逐条结果出）。 */
+ *  每个方法 resolve 成 `RemoteResult<T>`。九个段名里这层走八个 JSON 段：`list` / `ping` / `orphans` / `detail` / `apply` / `empty` /
+ *  `attachment-orphans` / `attachment-clean`；写动作统一走 `apply`（一组 id 进、逐条结果出）；
+ *  `/attachment` 是二进制段，由 `src/client/attachment-view.tsx` 直接拼地址。 */
 export interface RawSessionDeleteRemote {
   list(): Promise<RemoteResult<TrashEntryLike[]>>
   /** 通道的"在不在"：一次零成本的 GET（探测专用，见 `src/api/dispatch.ts` 的 `ping` 支）。 */
@@ -118,6 +123,10 @@ export interface RawSessionDeleteRemote {
   /** 纯读：回收站之外的无主子会话扫描。它**不清理**——清理是 `apply` 的 `orphan-clean` 动作，
    *  这一段只交回"有多少、在哪、多大"（读不到语料时报 `io`，调用方不许把它折成"零条残留"）。 */
   orphans(): Promise<RemoteResult<OrphanReportWire>>
+  /** 纯读：`.dsh` 内无引用图片对象的数量、字节与预览清单（引用源读不出时报 `io`，不折成 0）。 */
+  attachmentOrphans(): Promise<RemoteResult<AttachmentOrphanReportWire>>
+  /** 聚合写：只删上一条报告那一刻无引用的图片对象，回 `AttachmentCleanupWire`。 */
+  attachmentClean(): Promise<RemoteResult<AttachmentCleanupWire>>
   detail(entryId: string): Promise<RemoteResult<TrashDetailLike>>
   /** 一组 id 上的同一个动作。顶层信封的 `ok:false` 只表示**整次调用**没办成（路由自检、栅栏之外）；
    *  单条动作的成败住在 `ApplyOutcome` 里——这是批量接口的判据，别在信封层找它。 */
@@ -162,6 +171,10 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
     list: () => requestEnvelope<TrashEntryLike[]>(prefix + ROUTES.list, { method: 'GET' }),
     ping: () => requestEnvelope<string>(prefix + ROUTES.ping, { method: 'GET' }),
     orphans: () => requestEnvelope<OrphanReportWire>(prefix + ROUTES.orphans, { method: 'GET' }),
+    attachmentOrphans: () =>
+      requestEnvelope<AttachmentOrphanReportWire>(prefix + ROUTES.attachmentOrphans, { method: 'GET' }),
+    // 这一段没有入参；空 JSON 体只是让 POST 与其余写段同一形状（路由表声明 body: none，不读它）。
+    attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(prefix + ROUTES.attachmentClean, post({})),
     detail: (entryId) =>
       requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({ [PARAMS.entryId]: entryId })),
     apply: (action, ids) =>
@@ -188,8 +201,14 @@ export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean
   }
 }
 
-/** `shared/wire.ts` 的 `ApplyOutcome` 与那份扫描报告从这里转出去——浏览器半只认 `remote.js` 这一扇门。 */
-export type { ApplyAction, ApplyOutcome, OrphanReportWire } from '../shared/wire.js'
+/** `shared/wire.ts` 的 `ApplyOutcome`、扫描报告与附件回执从这里转出去——浏览器半只认 `remote.js` 这一扇门。 */
+export type {
+  ApplyAction,
+  ApplyOutcome,
+  AttachmentCleanupWire,
+  AttachmentOrphanReportWire,
+  OrphanReportWire,
+} from '../shared/wire.js'
 
 /**
  * N=1 的成功支：`null` 已被 `receipt.ts` 的单条读法折成协议错，所以 `value` 必然非空。
@@ -203,7 +222,8 @@ export type OneShotSuccess<A extends ApplyAction> = {
 }
 
 /**
- * 注入面（`deps`）的 interface：**与六个段名一一对应的五个方法**（`ping` 只给探测用，留在 raw 层）。
+ * 注入面（`deps`）的 interface：**七个方法**（raw 层另有 `ping` 供探测；九段里的 `/attachment` 由
+ * `src/client/attachment-view.tsx` 直接拼地址，也不在这层）。
  *
  * **不再有 N=1 的便捷方法**：`delete` / `restore` / `countSubagents` 曾是同一段
  * `/apply` 的三种写法，于是一个 `module` 里同一个动作有两条路（回收站面板的 deps 同时躺着
@@ -215,6 +235,10 @@ export interface SessionDeleteRemote {
   /** 回收站之外的无主子会话报告（纯读）。读不到就是 throw —— 界面上那是**一次失败的检查**，
    *  不是"零条残留"（把 `io` 折成空报告等于把"不知道"说成"没有"）。 */
   scanOrphans(): Promise<OrphanReportWire>
+  /** `.dsh` 内无引用图片对象的报告（纯读；含最多 200 条预览清单）。读不到就是 throw，同样不许折成 0。 */
+  scanAttachmentOrphans(): Promise<AttachmentOrphanReportWire>
+  /** 清掉报告那一刻无引用的图片副本（聚合回执）。 */
+  cleanAttachmentOrphans(): Promise<AttachmentCleanupWire>
   detail(entryId: string): Promise<TrashDetailLike>
   /** 一段管所有写动作：一次调用把整批办完，逐条结果原样交回组件。 */
   applyOutcomes(action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]>
@@ -260,6 +284,8 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
   return {
     list: () => raw.list().then((result) => unwrapRemoteResult(result)),
     scanOrphans: () => raw.orphans().then((result) => unwrapRemoteResult(result)),
+    scanAttachmentOrphans: () => raw.attachmentOrphans().then((result) => unwrapRemoteResult(result)),
+    cleanAttachmentOrphans: () => raw.attachmentClean().then((result) => unwrapRemoteResult(result)),
     detail: (entryId) => raw.detail(entryId).then((result) => unwrapRemoteResult(result)),
     applyOutcomes: applyOnce,
     emptyTrash: () => raw.empty().then((result) => unwrapRemoteResult(result)),
