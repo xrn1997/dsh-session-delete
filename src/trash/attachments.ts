@@ -134,12 +134,12 @@ function scanImageIdsInLog(raw: Buffer): LogImageIds {
 }
 
 export interface AttachmentReadDeps {
-  fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile'>
+  fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile' | 'realpath'>
   home: string
 }
 
 export interface AttachmentRemovalDeps extends AttachmentReadDeps {
-  fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile' | 'removeFile'>
+  fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile' | 'realpath' | 'removeFile'>
 }
 
 /** 宿主写日志时的临时名：`session.vN.jsonl.zstd.<hash>.tmp`（内容写完后才 rename 成规范名）。 */
@@ -270,9 +270,14 @@ async function collectRemainingImageRefs(
   const scanJson = async (root: string): Promise<void> => {
     if (!(await deps.fs.exists(root))) return
     const stack = [root]
+    const seen = new Set<string>()
     while (stack.length > 0) {
       const dir = stack.pop() as string
       try {
+        // `listDirs` 跟随软链之后，目录图不再是树：按**真实路径**去重，软链绕回祖先不会无线下潜。
+        const real = await deps.fs.realpath(dir)
+        if (seen.has(real)) continue
+        seen.add(real)
         for (const name of await deps.fs.listDirs(dir)) stack.push(`${dir}/${name}`)
         for (const name of await deps.fs.listFiles(dir)) {
           if (!name.endsWith('.json')) continue

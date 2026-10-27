@@ -117,12 +117,19 @@ describe('宿主服务层端口的接线', () => {
   })
 
   it('projectDirOf 用宿主的 projectKey 算法（`--<cwd 里的分隔符换成 ->--`），undefined cwd 走 _no-cwd', async () => {
-    const { ctx } = makeEnv({ headers: { a: { cwd: 'C:/Users/dev' }, b: {}, c: { cwd: 'C:\\develop\\GitHub\\dsh-session-delete' } } })
+    const { ctx } = makeEnv({ headers: {
+      a: { cwd: 'C:/Users/dev' },
+      b: {},
+      c: { cwd: 'C:\\develop\\GitHub\\dsh-session-delete' },
+      d: { cwd: '/home/dev/project' },
+    } })
     const host = createHostPort(ctx)
     // 分隔符（`/` `\` `:`）**连续出现只折成一个 `-`**（`C:\` 两字符 → 一个 `-`），两端再裹 `--`；cwd 缺席落 `_no-cwd`。
     expect(await host.projectDirOf('a')).toBe('--C-Users-dev--')
     expect(await host.projectDirOf('b')).toBe('_no-cwd')
     expect(await host.projectDirOf('c')).toBe('--C-develop-GitHub-dsh-session-delete--')
+    // Linux 的绝对路径没有盘符、开头就是 `/`：折出来的名字不能以 `-` 开头（那是 `--` 包裹的东西）
+    expect(await host.projectDirOf('d')).toBe('--home-dev-project--')
   })
 
   // 编码（Node 半，逐字镜像宿主）与解码（`shared/wire.ts`，客户端用它渲染回收站组头）是**一对**：

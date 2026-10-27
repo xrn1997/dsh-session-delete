@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -55,6 +55,58 @@ describe('文件层端口', () => {
     expect((await fs.listFiles(join(root, 'session-trash', 'e1'))).sort()).toEqual(['nested', 'session.v4.jsonl.zstd'])
     const raw = await fs.readFile(join(root, 'session-trash', 'e1', 'session.v4.jsonl.zstd'))
     expect(Buffer.isBuffer(raw) && raw.toString()).toBe('bytes')
+  })
+
+  // Linux 上 dotfiles 管理器/独立挂载盘常把项目或会话目录做成软链。Dirent 不跟随软链，
+  // 旧实现把它们从引用扫描里整个漏掉 ⇒ 独占判断把仍被引用的图片当孤儿删掉（ADR-0020 红线）。
+  it('listDirs 跟随指向目录的软链；指向文件与断链都不算目录', async (ctx) => {
+    const root = await mkdtemp(join(tmpdir(), 'dshdel-'))
+    temps.push(root)
+    const fs = createFsPort()
+    await mkdir(join(root, 'plain'))
+    await mkdir(join(root, 'real-project'))
+    await writeFile(join(root, 'a.txt'), 'x')
+    const linkDir = async (target: string, link: string) => {
+      try {
+        await symlink(target, link, 'dir')
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== 'EPERM' && code !== 'EACCES') throw error
+        // Windows 没有建软链的特权时，junction 同样是"指向目录的链接"（Dirent 照样 isSymbolicLink）
+        if (process.platform !== 'win32') throw error
+        await symlink(target, link, 'junction')
+      }
+    }
+    try {
+      await linkDir(join(root, 'real-project'), join(root, 'linked-project'))
+    } catch {
+      ctx.skip() // 两个平台都建不了链接的环境，这条验不了
+      return
+    }
+    // 指向文件的软链与断链只在建得了的环境里造（Windows 无特权时造不出），造不出也照样验证"不当目录"
+    await symlink(join(root, 'a.txt'), join(root, 'linked-file'), 'file').catch(() => {})
+    await symlink(join(root, 'gone'), join(root, 'broken-link'), 'dir').catch(() => {})
+    expect((await fs.listDirs(root)).sort()).toEqual(['linked-project', 'plain', 'real-project'])
+    expect(await fs.realpath(join(root, 'linked-project'))).toBe(await fs.realpath(join(root, 'real-project')))
+  })
+
+  it('rename 搬目录；目标已存在就拒绝——Linux 会静默替代空目录，两个平台必须一个语义', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshdel-'))
+    temps.push(root)
+    const fs = createFsPort()
+    await fs.ensureDir(join(root, 'sessions', 's1'))
+    await writeFile(join(root, 'sessions', 's1', 'log'), 'bytes')
+    await fs.ensureDir(join(root, 'session-trash'))
+    await fs.rename(join(root, 'sessions', 's1'), join(root, 'session-trash', 'e1'))
+    expect(await fs.exists(join(root, 'sessions', 's1'))).toBe(false)
+    expect(await fs.exists(join(root, 'session-trash', 'e1', 'log'))).toBe(true)
+
+    await fs.ensureDir(join(root, 'session-trash', 'occupied'))
+    await fs.ensureDir(join(root, 'sessions', 's2'))
+    await expect(fs.rename(join(root, 'sessions', 's2'), join(root, 'session-trash', 'occupied')))
+      .rejects.toThrow(/目标已存在/)
+    // 拒绝之后两边都还在：源没动，目标也没被替代
+    expect(await fs.exists(join(root, 'sessions', 's2'))).toBe(true)
   })
 })
 

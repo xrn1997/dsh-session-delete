@@ -78,6 +78,7 @@ function makeWorld(over: {
   sizes?: Record<string, number>
   statFile?: (p: string) => { size: number }
   removeFile?: (p: string) => void
+  realpath?: (p: string) => string
 }) {
   const made = createFakeDeps({
     home: HOME,
@@ -93,6 +94,7 @@ function makeWorld(over: {
       fileSize: (p) => over.sizes?.[p] ?? 100,
       statFile: over.statFile,
       removeFile: over.removeFile,
+      realpath: over.realpath,
     },
   })
   return made
@@ -581,6 +583,7 @@ describe('孤儿附件扫描与清理', () => {
     sizes?: Record<string, number>
     statFile?: (p: string) => { size: number }
     removeFile?: (p: string) => void
+    realpath?: (p: string) => string
   } = {}) {
     return makeWorld({
       logs: over.logs ?? worldLogs(),
@@ -589,6 +592,7 @@ describe('孤儿附件扫描与清理', () => {
       sizes: over.sizes ?? worldSizes(),
       statFile: over.statFile,
       removeFile: over.removeFile,
+      realpath: over.realpath,
     })
   }
 
@@ -598,6 +602,31 @@ describe('孤儿附件扫描与清理', () => {
     expect(plan.skipped).toBeUndefined()
     expect(plan.entries).toEqual([{ id: ID3, path: imagePath(ID3), bytes: 30 }])
     expect(plan.bytes).toBe(30)
+  })
+
+  // `listDirs` 跟随软链之后，目录图不再是树：软链绕回祖先时按真实路径去重才停得住。
+  // 没有这一步，引用扫描会一路下潜，维护卡的「检查」永远不返回。
+  it('软链绕回祖先：按真实路径去重，引用扫描不会绕圈', async () => {
+    const STORAGES = `${HOME}/storages`
+    const LOOP = `${STORAGES}/loop`
+    let loopListings = 0
+    const made = orphanWorld({
+      dirs: (p) => {
+        if (p === STORAGES) return ['loop']
+        if (p === LOOP || p.startsWith(`${LOOP}/`)) {
+          // 真软链让同一个物理目录在更深的路径下再次出现；去重失效时这里会一直列下去。
+          loopListings++
+          if (loopListings > 4) throw new Error('引用扫描在软链环上绕圈')
+          return ['loop']
+        }
+        return worldDirs(p)
+      },
+      realpath: (p) => (p === LOOP || p.startsWith(`${LOOP}/`) ? STORAGES : p),
+    })
+    const plan = await scanOrphanImageAttachments(made.deps)
+    expect(plan.skipped).toBeUndefined()
+    expect(loopListings).toBe(0) // 环在 realpath 那一步就断了，一次都没去列它
+    expect(plan.entries.map((entry) => entry.id)).toEqual([ID3])
   })
 
   it('引用源读不出 ⇒ 整份报告跳过（entries 为空，不拿 0 冒充"没有孤儿"）', async () => {

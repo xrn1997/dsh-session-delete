@@ -59,6 +59,7 @@ function world(opts: {
       return 512
     }),
     // 对账不碰单文件读数与单文件删除；留最安静的缺省只为补满 `FsPort`。
+    realpath: vi.fn(async (p: string) => p),
     statFile: vi.fn(async () => ({ size: 0 })),
     removeFile: vi.fn(async () => {}),
   }

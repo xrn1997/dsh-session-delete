@@ -145,9 +145,11 @@ export interface FakeFsOptions extends CallLog {
   fileSize?: number | ((p: string) => number)
   statFile?: (p: string) => { size: number } | Promise<{ size: number }>
   removeFile?: (p: string) => void | Promise<void>
+  /** 软链世界：真实路径可以不同于逻辑路径；缺省是树（identity）。 */
+  realpath?: (p: string) => string | Promise<string>
 }
 
-/** 内存里的 `FsPort`：10 个方法；缺省是"目录都在、字节可量、什么都不真的动"。 */
+/** 内存里的 `FsPort`：11 个方法；缺省是"目录都在、字节可量、什么都不真的动"。 */
 export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
   const record = recorder(over)
   const exists = (p: string): boolean => (typeof over.exists === 'function' ? over.exists(p) : over.exists ?? true)
@@ -165,6 +167,8 @@ export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
       record('listDirs', [p])
       return typeof over.dirs === 'function' ? over.dirs(p) : over.dirs ?? []
     }),
+    // 内存世界是棵树：没有软链，真实路径就是自己。
+    realpath: vi.fn(async (p: string) => (over.realpath === undefined ? p : await over.realpath(p))),
     readFile: vi.fn(async (p: string) => {
       record('readFile', [p])
       if (over.readFile === undefined) throw new Error(`fake fs: 没有为 ${p} 准备 readFile`)
