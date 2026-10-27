@@ -1,15 +1,11 @@
 import {
   isDSHRemoteError,
   isSessionDeleteCodeError,
-  SESSION_DELETE_ERROR_DOMAIN,
+  SESSION_DELETE_CODES,
   verbCodeOf,
   type RemoteFailure,
   type VerbCode,
 } from '../shared/wire.js'
-
-/** 插件专属远程域名（src/shared/wire.ts）：与宿主官方域（`workspace/*`、`session/*`、`gateway/*`…）不重名。
- *  字面量的家在 `shared/wire.ts`（ADR-0003）——浏览器半也按同一个域认码。 */
-const DOMAIN = SESSION_DELETE_ERROR_DOMAIN
 
 /** 五个码的家同样在 `shared/wire.ts`（`io` 是唯一兜底）——这里只是取来用，不再抄第二份。 */
 type Code = VerbCode
@@ -123,8 +119,8 @@ export function toRemoteFailure(error: unknown): RemoteFailure {
   const own = detailsOf(error) ?? (host === undefined ? undefined : detailsOf(host))
   if (host === undefined && fromVerb === undefined && typeof raw === 'string' && raw.includes('/')) {
     // 形状像 code 但不是官方域、也不是我们的动词码（`sessiondelete/nope` 那类）⇒ 兜 io，但原文照带
-    return { code: `${DOMAIN}/io`, message: messageOf(error) }
+    return { code: SESSION_DELETE_CODES.io, message: messageOf(error) }
   }
   const code = host !== undefined ? HOST_ERROR_CODE[host.name] : fromVerb ?? 'io'
-  return { code: `${DOMAIN}/${code}`, message: messageOf(error), ...(own === undefined ? {} : { details: own }) }
+  return { code: SESSION_DELETE_CODES[code], message: messageOf(error), ...(own === undefined ? {} : { details: own }) }
 }

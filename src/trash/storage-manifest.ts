@@ -11,7 +11,7 @@ import { REQUIRED_ENTRY_FIELDS } from './entry.js'
  * 清单：宿主 storage domain 的绑定
  * ------------------------------------------------------------------ */
 
-/** 本插件自己的域（CONTEXT.md 的「清册」条：介质落在 `~/.dsh/storages/`）。
+/** 本插件自己的域（CONTEXT.md 的「清册」条：介质落在数据根下的 `storages/`）。
  *
  *  **名字必须带插件专属前缀**：domain 名是 `storageDomain` facility 里的**全局键**，而**一个名字在
  *  一个 facility 里只能 `open()` 一次**（句柄归调用方所有）——别人先占了同名域，本插件会**在激活时**

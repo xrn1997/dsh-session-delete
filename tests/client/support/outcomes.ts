@@ -33,8 +33,9 @@ export type OutcomeOverride<A extends ApplyAction> =
   | { readonly message: string; readonly code?: string }
 
 /** 各动作**中性**的成功支：没有落地证据时能表达的最弱成功。
- *  `ApplyValueByAction` 在这里是闸：表里多一个动作而这里没补，编译不过。 */
-const NEUTRAL_VALUE: ApplyValueByAction = {
+ *  `ApplyValueByAction` 在这里是闸：表里多一个动作而这里没补，编译不过。
+ *  `fakeApply` 的缺省实现也读这一份，别再抄第二张表。 */
+export const NEUTRAL_VALUE: ApplyValueByAction = {
   delete: null,
   restore: null,
   purge: { removed: 0, freedBytes: 0 },

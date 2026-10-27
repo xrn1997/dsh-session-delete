@@ -13,13 +13,15 @@
  *    实测（10.1）补一句：默认那条路是**转义成字面文本**（页面上看得见 `<img …>` 这串字符），不是丢掉；
  *    看得见是诚实（用户本来就能从会话里读到它），关键是它落成不了节点。
  * ② **链接与图片不给它开新面**：链接渲染成纯文本 + `title` 带上原 URL（面板在宿主中央列里，
- *    我们不去碰宿主的导航与 `window.open`，那是别人的地盘）；图片渲染成 `[图片] alt`，
- *    因为正文里的图片路径指向会话当时的 cwd，在回收站里既读不到也不该去读。
+ *    我们不去碰宿主的导航与 `window.open`，那是别人的地盘）；图片渲染成本地化占位（`copy.ts` 的
+ *    `detail.image` / `detail.image.alt`），因为正文里的图片路径指向会话当时的 cwd，在回收站里
+ *    既读不到也不该去读。
  * ③ **GFM 打开**：会话里最常出现的是表格与任务列表（`remark-gfm`）。
  */
 import { memo, type ReactNode } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import type { Translate } from './copy.js'
 // 「组件在屏幕上」必然等于「样式在场」：`.sd-md` 那张表由 `ui/styles.ts` 随模块物化注进 `<style>`，
 // 所以这里跟其他 ui 组件一样走副作用导入，不指望调用方恰好也 import 了什么。
 import './ui/styles.js'
@@ -30,13 +32,17 @@ const AnchorAsText = ({ href, children }: { href?: string; children?: ReactNode 
 )
 
 /** 图片在回收站里读不到（路径属于会话当时的 cwd），只把 alt 说清楚。 */
-const ImageAsText = ({ alt, src }: { alt?: string; src?: string }) => (
-  <span className="sd-md-image" title={src ?? ''}>[图片{alt && alt !== '' ? ` · ${alt}` : ''}]</span>
+const ImageAsText = ({ alt, src, t }: { alt?: string; src?: string; t: Translate }) => (
+  <span className="sd-md-image" title={src ?? ''}>
+    {alt && alt !== '' ? t('detail.image.alt', { alt }) : t('detail.image')}
+  </span>
 )
 
-const COMPONENTS: Components = {
-  a: AnchorAsText as Components['a'],
-  img: ImageAsText as Components['img'],
+function componentsFor(t: Translate): Components {
+  return {
+    a: AnchorAsText as Components['a'],
+    img: ((props) => <ImageAsText {...props} t={t} />) as Components['img'],
+  }
 }
 
 /**
@@ -44,14 +50,19 @@ const COMPONENTS: Components = {
  * `node_modules/react-markdown/lib/index.js:175-178`——`Markdown()` 每次调用都 `createProcessor(options)`
  * 再 `runSync(parse(file))`，`MarkdownHooks` 那一支也一样），而面板任何一次重渲（悬停、↑↓、
  * 「刚刚删除」那句要读 `Date.now()`）都会走到这里 ⇒ 不按住就是每条助手回复每拍重解析一遍。
- * 按住的条件就只有 `text`：它是这里唯一的输入，样式挂在 `.sd-md` 上、不随渲染变。
+ * 按住的条件是 `text` 与**探针 `localeKey`**（调用方在渲染时算好的一句固定键译文 `t('common.close')`）。
+ * `t` 本身是宿主 `bind` 出来的**稳定身份**（`copy.ts` 头注），一次客户端激活只造一个——拿身份当判据，
+ * 换语言就漏了：同一个 `t` 换 locale 后吐另一套词，烘进正文树的那句图片占位会滞留旧语言，而周围的
+ * 标签那一拍已经改口。探针也不能在 comparator 里现调 `t` 取——宿主 `t` 读的是**当前** locale，
+ * prev/next 那一拍都取到新值、恒等；只有渲染时算好存进 props 的那份才是换语言那一刻的读数。
+ * 探针没变 = 同语言同 `t` ⇒ 跳过重解析；变了（换语言或换 `t`）⇒ 重解析。
  */
-export const MarkdownBody = memo(function MarkdownBody({ text }: { text: string }): ReactNode {
+export const MarkdownBody = memo(function MarkdownBody({ text, t }: { text: string; t: Translate; localeKey: string }): ReactNode {
   return (
     <div className="sd-md" data-dsh-session-delete="md">
-      <Markdown remarkPlugins={[remarkGfm]} components={COMPONENTS}>
+      <Markdown remarkPlugins={[remarkGfm]} components={componentsFor(t)}>
         {text}
       </Markdown>
     </div>
   )
-})
+}, (prev, next) => prev.text === next.text && prev.localeKey === next.localeKey)

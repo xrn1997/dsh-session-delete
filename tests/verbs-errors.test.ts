@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { verbError, withRollbackFailures } from '../src/verbs/errors.js'
+import { trashEmpty, verbError, withRollbackFailures } from '../src/verbs/errors.js'
+
+describe('`trash-empty` 的原文', () => {
+  // 原文要上屏，点名那句是承重的（purge 与详情都靠它告诉用户"你点的这条不在清单里"）。
+  it('拿得到条目就点名那个 id，拿不到时只报通用那句', () => {
+    expect(trashEmpty('a1').message).toBe('回收站里没有这一条：a1')
+    expect(trashEmpty().message).toBe('回收站里没有这一条')
+    expect(trashEmpty().code).toBe('sessiondelete/trash-empty')
+  })
+})
 
 describe('回滚失败的结构化上报', () => {
   it('内层 details 合并进来，消息不重复「回滚未完成」', () => {

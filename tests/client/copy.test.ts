@@ -51,7 +51,7 @@ describe('文案接线', () => {
     expect(Object.keys(dicts.zh).length).toBeGreaterThan(30)
     // 宿主那条路给出来的是中文原话（不是键名）。
     expect(t('trash.title')).toBe('回收站')
-    expect(t('trash.summary', { count: 3, size: '22KB' })).toBe('3 个会话 · 共 22KB')
+    expect(t('trash.summary', { count: 3, size: '22KB' })).toBe('3 个会话 · 可释放 22KB')
   })
 
   it('服务在时英文也能出话（en 不是空壳）', () => {
@@ -68,7 +68,11 @@ describe('文案接线', () => {
       )
     }
     expect(en('trash.title')).toBe('Trash')
-    expect(en('trash.summary', { count: 3, size: '22KB' })).toBe('3 sessions · 22KB total')
+    expect(en('trash.summary', { count: 3, size: '22KB' })).toBe('3 sessions · 22KB reclaimable')
+    expect(en('detail.image.alt', { alt: 'shot' })).toBe('[Image · shot]')
+    const combined = en('detail.deletedAt.combined', { relative: '2d ago', absolute: '10/14/2026' })
+    expect(combined).toBe('2d ago (10/14/2026)')
+    expect(combined).not.toMatch(/[\u4e00-\u9fff（）]/)
     expect(en('menu.live')).not.toBe('menu.live')
     expect(ns).toBe('xrn1997-session-delete')
   })

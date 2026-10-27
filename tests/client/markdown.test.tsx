@@ -2,9 +2,12 @@
 // 这里只管"一段 markdown 源 → 什么 DOM"，把三条收口钉住：原始 HTML 不进 DOM、链接与图片不开新面。
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
+import { zhTranslate, type Translate } from '../../src/client/copy.js'
 import { MarkdownBody } from '../../src/client/markdown.js'
+import { englishTranslate } from './support/locale.js'
 
-const body = (text: string) => render(<MarkdownBody text={text} />)
+const body = (text: string, t: Translate = zhTranslate, localeKey = t('common.close')) =>
+  render(<MarkdownBody text={text} t={t} localeKey={localeKey} />)
 
 describe('回收站详情 · markdown 正文', () => {
   it('块级结构真的被渲出来（标题/列表/粗体/表格），不是一整块纯文本', () => {
@@ -46,6 +49,30 @@ describe('回收站详情 · markdown 正文', () => {
     body('![回归截图](/tmp/shot.png)')
     expect(screen.getByText('[图片 · 回归截图]')).toBeInTheDocument()
     expect(document.querySelector('img')).toBeNull()
+  })
+
+  it('没有 alt 只剩占位本身，不留下「· 」那半个形状', () => {
+    body('![](/tmp/shot.png)')
+    expect(screen.getByText('[图片]')).toBeInTheDocument()
+  })
+
+  it('英文界面用英文占位，不把中文写死在正文里', () => {
+    body('![回归截图](/tmp/shot.png)', englishTranslate())
+    expect(screen.getByText('[Image · 回归截图]')).toBeInTheDocument()
+    expect(screen.queryByText(/图片/)).toBeNull()
+  })
+
+  it('同一个 t 身份换了语言，占位也跟着改口，不滞留旧语言', () => {
+    let lang: 'zh' | 'en' = 'zh'
+    const zh = zhTranslate
+    const en = englishTranslate()
+    const t: Translate = (key, params) => (lang === 'zh' ? zh : en)(key, params)
+    const view = render(<MarkdownBody text="![回归截图](/tmp/shot.png)" t={t} localeKey={t('common.close')} />)
+    expect(screen.getByText('[图片 · 回归截图]')).toBeInTheDocument()
+    lang = 'en'
+    view.rerender(<MarkdownBody text="![回归截图](/tmp/shot.png)" t={t} localeKey={t('common.close')} />)
+    expect(screen.getByText('[Image · 回归截图]')).toBeInTheDocument()
+    expect(screen.queryByText(/图片/)).toBeNull()
   })
 
   it('样式挂在 .sd-md 上——那张表就是宿主 MarkdownText 的投影，换选择器会静默失配', () => {

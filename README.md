@@ -10,7 +10,7 @@
 
 - 安装：`dsh plugin --profile <profile> add @xrn1997/dsh-session-delete`
 - 许可：[Apache-2.0](LICENSE)
-- 数据：回收站本体留在本机 `~/.dsh/session-trash/`，不联网、不上传
+- 数据：回收站本体留在本机 `$DSH_HOME/session-trash/`（默认 `~/.dsh/session-trash/`），不联网、不上传
 
 ## 目录
 
@@ -43,13 +43,13 @@ dsh plugin --profile <profile> add @xrn1997/dsh-session-delete
 dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 ```
 
-装完**重启宿主**（Node 半不走 HMR）。卸载只移除插件，`~/.dsh/session-trash/` 下已有的目录不会被自动清理。
+装完**重启宿主**（Node 半不走 HMR）。卸载只移除插件，`$DSH_HOME/session-trash/`（默认 `~/.dsh/session-trash/`）下已有的目录不会被自动清理。
 
-也可以离线分发：`pnpm pack` 出 tarball 后 `dsh plugin add ./xrn1997-dsh-session-delete-<版本>.tgz`（scoped 包的文件名带作者段）。包里带预构建产物（`prepack` 会替你跑 `build`），这条路不需要为构建脚本授权。
+也可以离线分发：`pnpm pack` 出 tarball 后 `dsh plugin --profile <profile> add ./xrn1997-dsh-session-delete-<版本>.tgz`（scoped 包的文件名带作者段）。包里带预构建产物（`prepack` 会替你跑 `build`），这条路不需要为构建脚本授权。
 
 **兼容性分两层，别混**：
 
-- **装得上**由 `package.json` 的 `engines.dsh` 决定：宿主拿运行中的版本比这个区间，不满足即拒绝并回滚。窗口是 **`>=0.1.7-rc.2 <0.3.0-0`**（预发布版本参与匹配）。地板是**完整功能**的最低代次：`0.1.7-rc.2` 在 CLI 台架上验过四个槽位齐全、激活零错误；更低的 `0.1.7-rc.1` 缺行首勾选槽位，`0.1.5` 起连会话行入口都没有。
+- **装得上**由 `package.json` 的 `engines.dsh` 决定：宿主拿运行中的版本比这个区间，不满足即拒绝并回滚。窗口是 **`>=0.1.7-rc.2 <0.3.0-0`**（预发布版本参与匹配）。地板是**完整功能**的最低代次：`0.1.7-rc.2` 在 CLI 台架上验过四个槽位齐全、激活零错误；更低的 `0.1.7-rc.1` 缺行首勾选槽位，`0.1.5` 及以前连会话行入口都没有。
 - **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列桌面真机实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3**（均 `compatible`）。窗口内的其他代次装得上但没在桌面真机上验过；窗口外的一律拒装。
 
 ## 用法
@@ -75,13 +75,13 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 | 东西 | 位置 |
 | --- | --- |
-| 回收站本体 | `~/.dsh/session-trash/<时间戳>-<原目录名>/` |
-| 回收站清单 | 本插件自己的 storage domain（介质在 `~/.dsh/storages/`） |
+| 回收站本体 | `$DSH_HOME/session-trash/<时间戳>-<原目录名>/`（默认 `~/.dsh/session-trash/…`） |
+| 回收站清单 | 本插件自己的 storage domain（介质在 `$DSH_HOME/storages/`，默认 `~/.dsh/storages/`） |
 
-- 回收站与 `~/.dsh/sessions/` **同卷**：搬进搬出靠整目录 `rename`，原子、瞬时。
+- 回收站与 `$DSH_HOME/sessions/`（默认 `~/.dsh/sessions/`）**同卷**：搬进搬出靠整目录 `rename`，原子、瞬时。
 - **一格目录 = 一个会话**：父会话与跟着它进来的子会话各占一格，面板上折成一行。手工翻回收站目录时看到比清单多的目录，那是子会话。
 - **清单丢了不致命**：会话文件自描述，解压后第一行即 header，含 `id` 与 `cwd`；读取回收站列表（以及清空、恢复、彻底删除与清理残留前）会先与回收站目录对账。
-- **不自动过期**：不设天数上限，清空是显式动作；界面显示条数与占用。
+- **不自动过期**：不设天数上限，清空是显式动作；界面显示条数与共可释放量（与彻底删除确认同一口径）。
 - **附件不连坐**：附件是全局内容寻址的，与会话不是父子关系——删除不连带，也不会回收；被删会话独享的附件会留成垃圾（要回收得先有引用计数，属另一件事）。
 - **无主子会话不在回收站里**：它们的父会话已不存在；清理只清会话目录，不包含宿主投影缓存和附件。
 - 回收站本体留在本机、不联网、不上传。

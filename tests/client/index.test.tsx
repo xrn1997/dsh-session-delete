@@ -349,13 +349,15 @@ describe('apply 的装配面', () => {
     ])
     // 一对座位：`sidebar.panellist` 的 id 与 `main` 的 key 必须同字（官方 selectPanel 按 id
     // 去 main 里找占用者，找不着就抛）。
-    expect(registered[9]?.key).toBe(PANEL_ID)
+    const panelRow = registered.find((row) => row.id === PANEL_ID)
+    const panelMain = registered.find((row) => row.id === undefined && row.key === PANEL_ID)
+    expect(panelMain?.key).toBe(PANEL_ID)
     // 行的名字由**注册元数据**给（宿主 `resolveSlotLabel(options.label)` 解析后画在行上），
     // 不是我们组件里写的字——所以这条必须钉在注册项上。**给的是 thunk**：官方
     // `resolveSlotLabel` 逐字 `typeof label === 'function' ? label() : label`，其 JSDoc 即
     // "thunks follow the active locale"，而宿主又挂了 `ctx.locale.subscribe(syncPanels)`
     // ⇒ 切语言时这一行跟着走（`copy.ts` 头注）。
-    const label = registered[8]?.label
+    const label = panelRow?.label
     expect(typeof label).toBe('function')
     expect(typeof label === 'function' ? label() : label).toBe('回收站')
     // 菜单行落在官方四行（pin 100 / rename 200 / fork 300 / archive 400）之后：多选 850 在删除 900
@@ -366,7 +368,7 @@ describe('apply 的装配面', () => {
     expect(registered[1]?.order).toBe(850)
     expect(registered[2]?.order).toBe(300)
     expect(registered[3]?.order).toBe(300)
-    expect(registered[8]?.order).toBe(900)
+    expect(panelRow?.order).toBe(900)
   })
 
   it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {

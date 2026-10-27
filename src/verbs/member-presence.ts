@@ -27,8 +27,8 @@ export type MemberPresenceHost = Pick<HostPresencePort, 'evictLive' | 'announceR
  *  `announceRestored` 直接交宿主那一手：能力面与宿主面同名同签名，再包一层只会多一个转调。 */
 export function createMemberPresence(host: MemberPresenceHost): PresenceCapability {
   return {
-    async memberGone(sessionId, facts = {}) {
-      if (facts.backInTrash === false) return
+    async memberGone(sessionId, facts = { backInTrash: true }) {
+      if (!facts.backInTrash) return
       const eviction: EvictionOutcome = await host.evictLive(sessionId)
       if (eviction !== 'unknown') await host.announceRemoved(sessionId)
     },

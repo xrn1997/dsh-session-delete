@@ -9,14 +9,14 @@
  */
 import { vi } from 'vitest'
 import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../../../src/shared/wire.js'
-import { failed, ok } from './outcomes.js'
+import { failed, NEUTRAL_VALUE, ok } from './outcomes.js'
 
 export type SingleAction = (id: string) => Promise<unknown>
 
-/** 一层 `applyOutcomes`：`over[action]` 缺省 = 成功回 `null`（`count` 回 0）。 */
+/** 一层 `applyOutcomes`：`over[action]` 缺省 = 该动作的中性成功值（口径住 `outcomes.ts`）。 */
 export function fakeApply(over: Partial<Record<ApplyAction, SingleAction>> = {}) {
   return vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> => {
-    const run: SingleAction = over[action] ?? (async () => (action === 'count' ? 0 : null))
+    const run: SingleAction = over[action] ?? (async () => NEUTRAL_VALUE[action])
     const receipts: ApplyOutcome[] = []
     for (const id of ids) {
       try {

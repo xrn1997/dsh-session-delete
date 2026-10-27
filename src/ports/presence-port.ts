@@ -11,8 +11,9 @@ export interface MemberBackFacts {
 
 export interface PresenceCapability {
   /** 成员已经不在宿主可见列表：摘活体；三态不是 unknown 时发 removed。
-   *  `backInTrash: false` 表示目录没退回回收站（恢复回滚失败），此时什么都不做。 */
-  memberGone(sessionId: string, facts?: { readonly backInTrash?: boolean }): Promise<void>
+   *  `backInTrash: false` 表示目录没退回回收站（恢复回滚失败），此时什么都不做；`facts` 缺席按
+   *  「正常退回」处理（`createMemberPresence` 的缺省），不再留第三种含义。 */
+  memberGone(sessionId: string, facts?: { readonly backInTrash: boolean }): Promise<void>
   /** 成员已经回到原来的可见状态：目录与账本两件写都回去才发 added。 */
   memberBack(sessionId: string, facts: MemberBackFacts): Promise<void>
   /** 批量恢复的「回来了」通告；单条就是长度为 1 的批。 */

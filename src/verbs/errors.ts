@@ -23,6 +23,11 @@ export function verbError(code: VerbCode, message: string, cause?: unknown, deta
   return e
 }
 
+/** `trash-empty` 的原文：有具体条目就点名那个 id，拿不到时只报通用那句。 */
+export function trashEmpty(entryId?: string): VerbError {
+  return verbError('trash-empty', entryId === undefined ? '回收站里没有这一条' : `回收站里没有这一条：${entryId}`)
+}
+
 /** 路由自检用的失败：带 HTTP 状态语义，**不**冒充五个动词码。 */
 export function routeError(code: RouteCode, httpStatus: number, message: string): VerbError & { httpStatus: number } {
   const e = verbError('io', message) as VerbError & { httpStatus: number }

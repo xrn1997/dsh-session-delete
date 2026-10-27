@@ -48,7 +48,9 @@ export const ROUTES = {
 } as const
 
 /** `/apply` 的五个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean` 是**宿主会话 id**
- *  （前两个还没进回收站，第三个压根没有回收站行），`restore`/`purge` 是**回收站条目 id**。 */
+ *  （前两个还没进回收站，第三个压根没有回收站行），`restore`/`purge` 是**回收站条目 id**。
+ *  两域都是 string（线上形状）；这里不引入品牌类型——错域不靠类型拦，交给各动词在运行期按自己的
+ *  语义处理，批处理不猜格式。 */
 export type ApplyAction = 'delete' | 'restore' | 'purge' | 'count' | 'orphan-clean'
 
 /** 每个动作的成功值：`count` 是一个数（拿不到就是 0，界面上那半句整句不出现）；

@@ -158,8 +158,8 @@ describe('宿主要求声明与浏览器半声明', () => {
     })
   })
 
-  // `files` 从「整目录 `lib`」收成**精确产物**：整目录会把 1.26 MB 的 `lib/client.js.map` 一起发出去
-  // （官方那条明写"不要发布 JS map"），而 `link:` 装法根本不看这份清单——两处不同步就会只有 npm 在发垃圾。
+  // `files` 从「整目录 `lib`」收成**精确产物**：整目录会把盘上所有构建产物一起发出去（官方那条明写
+  // "不要发布 JS map"），而 `link:` 装法根本不看这份清单——两处不同步就会只有 npm 在发垃圾。
   it('发布清单精确到产物：不列整目录 lib、不带任何 .map', () => {
     expect(manifest.files).not.toContain('lib')
     for (const entry of manifest.files) expect(entry, entry).not.toMatch(/\.map$/)
@@ -220,7 +220,7 @@ describe('浏览器半平台模块表', () => {
 describe('抄本表点名的自造差异（界面保真复核门：除 ui.css 文件头点名的那些外一律与官方明文逐属性一致）', () => {
   const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
 
-  it('文件头点名的五条自造规则真在表里（声明与实现对上）', () => {
+  it('文件头点名的六条自造规则真在表里（声明与实现对上）', () => {
     expect(css).toContain('.sd-resizing {')
     // 2026-10-16 补的第二条：清单行是 role="option" 的可聚焦 div，键盘焦点必须有可见描边
     expect(css).toContain('[data-dsh-session-delete="trash-row"]:focus-visible {')
@@ -231,8 +231,17 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     // 第五条：宿主行自己的选中态归宿主，批量选择要有整行底色；状态点/归档行的兜底不能与行首重复
     expect(css).toContain('[data-row-key^="session:"]:has([data-dsh-session-delete="batch-pick"][data-checked="true"])')
     expect(css).toContain('[data-seat="leading"]) .sd-batch-pick-action')
-    expect(/五处不是抄本/.test(css)).toBe(true)
-    expect(css.split('本插件自造的第').length - 1).toBe(5)
+    // 第六条：宿主行首 16×20 格里那层 inline-flex 包装
+    expect(css).toContain('.sd-batch-pick-leading {')
+    expect(/六处不是抄本/.test(css)).toBe(true)
+    // 组头 reset 是文件头点名的例外，七项必须全在**组头那一块**的 inline 样式里（不能只 reset text-align）。
+    const panel = readFileSync(fileURLToPath(new URL('../src/client/trash-panel.tsx', import.meta.url)), 'utf8')
+    const headStyle = /trash-group-head[\s\S]*?style=\{\{([\s\S]*?)\}\}/.exec(panel)?.[1] ?? ''
+    expect(headStyle, '没找到组头的 inline style').not.toBe('')
+    for (const prop of ["background: 'none'", "border: 'none'", 'padding: 0', "font: 'inherit'", "textAlign: 'start'", "'1 1 auto'", 'gap: 6']) {
+      expect(headStyle, `组头 reset 缺 ${prop}`).toContain(prop)
+    }
+    expect(css.split('本插件自造的第').length - 1).toBe(6)
   })
 
   it('批量浮条按内容展开：width:max-content + max-width，避免左半屏收缩把按钮挤到第二行', () => {

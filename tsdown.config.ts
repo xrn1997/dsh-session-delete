@@ -124,6 +124,8 @@ export default defineConfig([
     // 因为下面这个 `clean` 会先把整个 `lib/` 抹掉。
     dts: false,
     clean: true,
+    // 不产 map：`files` 是精确清单、不收 map；留着 `//# sourceMappingURL` 只会让装包后的 devtools 去请求一个不存在的文件。
+    sourcemap: false,
     deps: {
       // 归属已由 neverBundle/alwaysBundle 全量表定，onlyBundle 关闭其白名单过滤并消掉构建期 hint
       onlyBundle: false,
@@ -141,7 +143,8 @@ export default defineConfig([
     // 给浏览器 bundle 挂 Node 目标的语义是错的。这半只跑在宿主外壳的 Chromium 里。
     target: 'es2022',
     dts: false, // dts 会把 banner/footer 包进 .d.cts 弄坏解析
-    sourcemap: true,
+    // 同 Node 半：map 不进包，产物里也不留指向它的 sourceMappingURL。
+    sourcemap: false,
     clean: false, // Node 半已 clean；两段配置同写 lib/
     deps: {
       onlyBundle: false, // 归属已由下面两个谓词全量表定

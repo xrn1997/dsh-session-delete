@@ -54,26 +54,31 @@ function requireString(body: JsonBody, field: string): string {
 }
 
 /**
- * `/apply` 的五个动作。**运行期那张表由类型派生**：少一个动作编译不过、多一个也是——
- * 不再靠"两张表同进同退"的注释。
+ * `/apply` 的五个动作与各自的**静态纯度**。一张表两个用途：动作名单由键派生，纯度也从同一格读——
+ * 新增动作必须同时给出纯度，漏了编译不过；新加一个纯读动作也不会再静默落进 `chained`。
  */
 const APPLY_ACTION_TABLE = {
-  delete: true,
-  restore: true,
-  purge: true,
-  count: true,
-  'orphan-clean': true,
-} satisfies Record<ApplyAction, true>
+  delete: 'chained',
+  restore: 'chained',
+  purge: 'chained',
+  count: 'pure',
+  'orphan-clean': 'chained',
+} satisfies Record<ApplyAction, 'pure' | 'chained'>
 
 export const APPLY_ACTIONS = Object.keys(APPLY_ACTION_TABLE) as readonly ApplyAction[]
+
+/** 认不认得这个动作：`/apply` 的纯度与拒否共用同一条判据，名单只有上面那一张。 */
+function isApplyAction(value: unknown): value is ApplyAction {
+  return typeof value === 'string' && Object.hasOwn(APPLY_ACTION_TABLE, value)
+}
 
 /** `/apply` 的动作：认不得的一律点名拒掉，不折成"空批量"糊弄过去。 */
 function requireAction(body: JsonBody): ApplyAction {
   const value = body?.[PARAMS.action]
-  if (typeof value !== 'string' || !(APPLY_ACTIONS as readonly string[]).includes(value)) {
+  if (!isApplyAction(value)) {
     throw routeError('bad-request', 400, `批量动作不认识：需是 ${APPLY_ACTIONS.join(' / ')} 之一`)
   }
-  return value as ApplyAction
+  return value
 }
 
 /** `/apply` 的 id 组：必须是非空字符串数组（空数组不是"什么都不做"，是调用方自己没组好）。 */
@@ -120,7 +125,10 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
   [ROUTES.apply]: {
     method: 'POST',
     body: 'json',
-    purity: (body) => (body?.[PARAMS.action] === 'count' ? 'pure' : 'chained'),
+    purity: (body) => {
+      const action = body?.[PARAMS.action]
+      return isApplyAction(action) ? APPLY_ACTION_TABLE[action] : 'chained'
+    },
     read: 'none',
     // `count` 不碰清册也不动文件（它问的是**还在盘上**的会话），和详情一样走豁免；
     // 其余四个都是写动作（`delete` / `restore` / `purge` / `orphan-clean`）——前三个动清册，

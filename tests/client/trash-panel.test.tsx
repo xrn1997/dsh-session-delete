@@ -281,6 +281,46 @@ describe('回收站面板 · 键盘', () => {
     expect(deps.detail).toHaveBeenCalledTimes(1)
   })
 
+  it('下钻里打开确认框：Esc 只关框，下钻不退；再按才回清单', async () => {
+    const deps = makeDeps({ list: vi.fn(async () => two) })
+    renderNarrow(deps)
+    fireEvent.click(await screen.findByRole('option', { name: /第二条/ }))
+    await screen.findByRole('button', { name: '← 返回清单' })
+    fireEvent.click(screen.getByRole('button', { name: '清空回收站…' }))
+    await screen.findByRole('dialog')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+  })
+
+  it('写入在飞时 Esc 不关框也不退下钻，焦点留在框里', async () => {
+    let finish: (() => void) | undefined
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      emptyTrash: vi.fn(() => new Promise((resolve) => {
+        finish = () => { resolve({ removed: 2, freedBytes: 2 }) }
+      })),
+    })
+    renderNarrow(deps)
+    fireEvent.click(await screen.findByRole('option', { name: /第二条/ }))
+    await screen.findByRole('button', { name: '← 返回清单' })
+    fireEvent.click(screen.getByRole('button', { name: '清空回收站…' }))
+    const dialog = within(await screen.findByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: '彻底删除' }))
+    const cancel = dialog.getByRole('button', { name: '取消' }) as HTMLButtonElement
+    await waitFor(() => expect(cancel.disabled).toBe(true))
+    const close = dialog.getByRole('button', { name: '关闭' })
+    close.focus()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+    expect(document.activeElement).toBe(close)
+    await act(async () => { finish?.() })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('清单那一块是 listbox：每行一个 option，选中的带 aria-selected', async () => {
     const deps = makeDeps({ list: vi.fn(async () => two) })
     renderWide(deps)
@@ -292,9 +332,9 @@ describe('回收站面板 · 键盘', () => {
 })
 
 describe('回收站面板 · 其余行为', () => {
-  it('头部给出条数与合计占用（官方 fileSizeText 口径）', async () => {
+  it('头部给出条数与共可释放量（与彻底删除确认同一口径）', async () => {
     render(<TrashPanel deps={makeDeps()} />)
-    expect(await screen.findByText('1 个会话 · 共 224KB')).toBeInTheDocument()
+    expect(await screen.findByText('1 个会话 · 可释放 224KB')).toBeInTheDocument()
   })
 
   // 「刷新」图标 2026-10-16 按用户裁定删除（清单每次读都对账，它没有别人替代不了的活）；
@@ -504,7 +544,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     const row = { ...rows[0]!, strandedSubagents: 2, strandedBytes: 2 * 1024, releaseBytes: 224 * 1024 + 2 * 1024 }
     const deps = makeDeps({ list: vi.fn(async () => [row]) })
     renderWide(deps)
-    expect(await screen.findByText(/共 226KB/)).toBeInTheDocument()
+    expect(await screen.findByText(/可释放 226KB/)).toBeInTheDocument()
     fireEvent.click(within(screen.getByRole('option', { name: /code-review/ })).getByRole('button', { name: '彻底删除…' }))
     expect(within(screen.getByRole('dialog')).getByText(/226KB/)).toBeInTheDocument()
   })
@@ -758,6 +798,21 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     // 顺序按清单从上往下，不按点击顺序；**不是**每条一次请求（那是"恢复很慢"的那个形状）
     expect(applyOutcomes).toHaveBeenCalledWith('purge', ['a', 'b'])
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+  })
+
+  it('清单清空后多选态仍有出口：退出按钮可用，点它回到普通态', async () => {
+    const list = vi.fn().mockResolvedValueOnce(rows).mockResolvedValue([])
+    const { container } = renderNarrow(depsOf({ list }))
+    await screen.findByText('/code-review')
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    fireEvent.click(rowOf(container, 'a'))
+    fireEvent.click(footerButton('彻底删除 1 条'))
+    fireEvent.click(await screen.findByRole('button', { name: '彻底删除' }))
+    expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
+    const exit = screen.getByRole('button', { name: '退出多选' }) as HTMLButtonElement
+    expect(exit.disabled).toBe(false)
+    fireEvent.click(exit)
+    expect(screen.getByRole('button', { name: '多选' })).toBeInTheDocument()
   })
 
   // 跨项目多选是**扁平 entries 序**与**屏幕分组序**唯一会分叉的地方：组间按各组最新一条排，

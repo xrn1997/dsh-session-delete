@@ -54,6 +54,8 @@ function sourceFiles(dir: string): string[] {
   })
 }
 
+/** 上面这些常量由 `tsc` 在编译期求值：真正的闸是 `pnpm typecheck`。下面的 expect 把当前形状钉成
+ *  可读的运行期证据；常量本身受 `noUnusedLocals` 约束，删 expect 时要连常量一起删。 */
 it('CoreDeps 是五项基础；会话删除加时钟，组合根再加永久删除能力', () => {
   expect(Object.keys(coreKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence'])
   expect(coreIsExhaustive).toBe(true)

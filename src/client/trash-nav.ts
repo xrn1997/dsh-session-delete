@@ -8,9 +8,10 @@
  * 还给谁"——而那份顺序只在面板手里（`ordered` 只含展开的组）。收进一个 module 之后面板只交输入
  * 与四个动作，控制器不再知道焦点这回事。
  *
- * 它**不查文档、不认选择器**：焦点动作由调用方注入 `focusRow`，DOM 查询仍留在面板——行是在那儿
- * 渲染出来的，选择器只在那儿有权威。它只读事件的 `target` 来判断这一下该不该归清单：从行内按钮 /
- * 勾选框起来的 Enter / Space 是人家的激活键，不是清单的下钻或勾选。
+ * 它**不查自己的行、不认行选择器**：焦点动作由调用方注入 `focusRow`，行的 DOM 查询仍留在面板——
+ * 行是在那儿渲染出来的，行选择器只在那儿有权威；唯一的文档查询是 Esc 让路判据（问
+ * `ui/top-layer.ts` 当前有没有打开的 dialog / menu）。它只读事件的 `target` 来判断这一下该不该
+ * 归清单：从行内按钮 / 勾选框起来的 Enter / Space 是人家的激活键，不是清单的下钻或勾选。
  *
  * 三条原样搬来的判据（界面现状住 `docs/ui-spec.md` 的「键盘」那条；这里只留「为什么这么定」）：
  * - **方向键走环**：未选中时 ↓ 落第一条、↑ 落最后一条；到端回卷，不是撞墙。
@@ -19,11 +20,13 @@
  *   没点过时全行都是 `-1`，键盘根本进不来清单。焦点所在的行就是激活目标：选中行被折叠时，
  *   Enter / Space 落在拿 tab 落点的那一条上，而不是一声不响。
  * - **Esc 只在下钻期间生效**：监听挂 `document`，因为窄档下钻时清单**不在 DOM 里**；退回后把焦点
- *   交还选中那一行**一次**，交完就清账，后续重渲染不再重复抢焦点。
+ *   交还选中那一行**一次**，交完就清账，后续重渲染不再重复抢焦点。最上层是确认框 / 菜单时
+ *   **不接这一下**：Esc 先归它，否则 busy 时框不关、清单却退了，焦点还会被交还到遮罩后。
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { TrashEntryLike } from './remote.js'
+import { hasTopLayer } from './ui/top-layer.js'
 
 /**
  * 导航要的面。`ordered` 是**屏幕上的顺序**（只含展开的组），由面板/选择面算好传进来——
@@ -98,10 +101,12 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
 
   // 监听挂 `document`：窄档下钻时清单不在 DOM 里，挂在容器上的 Esc 是一条永远收不到的死路径。
   // `drillEnabled` 也进条件：宽档里即使残留着 `drilled`（例如从窄档拖宽），Esc 也不归清单。
+  // 最上层有 dialog / menu 时让路：那一层自己收 Esc；这里先退下钻会和它抢同一下按键。
   useEffect(() => {
     if (!drilled || !drillEnabled) return
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (hasTopLayer(document)) return
       refocusRow.current = selectedId
       exitDrill()
     }

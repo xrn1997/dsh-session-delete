@@ -72,7 +72,7 @@ export type CorpusRead<T> =
  * 角色三：**会话语料**——整表身份与子会话闭包。
  *
  * 两个读面都把"这一趟看不见语料"写成显式的 {@link CorpusRead}：`{ available: false }` 与
- * "看见了、里面是空的"是两件事。**缺席之后怎么办归调用方，清单见 `CONTEXT.md` 的「语料缺席」**。
+ * "看见了、里面是空的"是两件事。**缺席之后怎么办归调用方，清单见 `docs/architecture.md` §2 的「语料缺席」**。
  */
 export interface HostCorpusPort {
   /** 整个会话语料（live ∪ persisted）的只读身份表。**服务缺席是显式的**：`sessionQuery` 没挂，或它的

@@ -322,15 +322,37 @@ describe('文档门 · 文档分层', () => {
     expect(read('AGENTS.md')).toContain('docs/AGENTS.md')
   })
 
-  it('每个 ADR 文件都进索引，索引里也没有不存在的篇', () => {
+  it('每个 ADR 文件都进索引，索引里也没有不存在的篇，且每篇恰好一行', () => {
     const files = readdirSync(join(ROOT, 'docs', 'adr'))
       .filter((name) => /^\d{4}-.+\.md$/.test(name))
       .map((name) => name.slice(0, 4))
     expect(files.length, 'ADR 目录没有扫到任何文件').toBeGreaterThan(0)
-    const listed = new Set([...read('docs/adr/README.md').matchAll(/`(\d{4})`/g)].map((match) => match[1]!))
-    expect(listed.size, 'ADR 索引没有解析出任何编号').toBeGreaterThan(0)
-    expect(files.filter((id) => !listed.has(id)), '这些 ADR 没进 docs/adr/README.md').toEqual([])
-    expect([...listed].filter((id) => !files.includes(id)), '索引指向不存在的 ADR').toEqual([])
+    // 只认索引表第一列（`| `0001` | …`）：正文里互引别的 ADR 不算重复行。
+    const listed = [...read('docs/adr/README.md').matchAll(/^\| `(\d{4})`/gm)].map((match) => match[1]!)
+    expect(listed.length, 'ADR 索引没有解析出任何编号').toBeGreaterThan(0)
+    expect(new Set(listed).size, 'ADR 索引里有重复行').toBe(listed.length)
+    expect(files.filter((id) => !listed.includes(id)), '这些 ADR 没进 docs/adr/README.md').toEqual([])
+    expect(listed.filter((id) => !files.includes(id)), '索引指向不存在的 ADR').toEqual([])
+  })
+
+  it('每个 ADR 第一行是标题', () => {
+    const files = readdirSync(join(ROOT, 'docs', 'adr')).filter((name) => /^\d{4}-.+\.md$/.test(name))
+    const bad = files.filter((name) => {
+      const first = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8').split(/\r?\n/)[0] ?? ''
+      return !/^# .+/.test(first)
+    })
+    expect(bad, `缺标题：${bad.join(', ')}`).toEqual([])
+  })
+
+  it('每个 ADR 都以锚点段收尾（允许折行）', () => {
+    const files = readdirSync(join(ROOT, 'docs', 'adr')).filter((name) => /^\d{4}-.+\.md$/.test(name))
+    const bad = files.filter((name) => {
+      const blocks = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8')
+        .split(/\r?\n\s*\r?\n/)
+        .filter((block) => block.trim() !== '')
+      return !/^锚点：/.test((blocks.at(-1) ?? '').trimStart())
+    })
+    expect(bad, `末段不是锚点：${bad.join(', ')}`).toEqual([])
   })
 
   it('每个 ADR 紧跟标题有 Status 行', () => {
@@ -427,6 +449,11 @@ describe('文档门 · 截图清单', () => {
     const now = drift(images, manifest)
     expect(now, now.join('\n')).toEqual([])
     for (const path of manifest) expect(pathExists(join(ROOT, path)), path).toBe(true)
+    // 反方向：本地多出来的图也必须进清单，否则它既没人引用、也不会被核对。
+    const local = readdirSync(join(ROOT, 'docs', 'screenshots'))
+      .filter((name) => /\.(png|jpe?g)$/i.test(name))
+      .map((name) => `docs/screenshots/${name}`)
+    expect(local.filter((path) => !manifest.includes(path)), '本地有、清单没有').toEqual([])
   })
 
   it('判据认得出漂移（正控）', () => {

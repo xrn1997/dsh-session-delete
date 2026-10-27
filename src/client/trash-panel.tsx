@@ -274,7 +274,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     toggleCheck, toggleGroupCheck, groupFullyChecked, groupPartiallyChecked,
   } = selection
 
-  /** 行的 DOM 查询留给面板；导航只拿"把焦点还给哪一行"这个动作（不认选择器）。 */
+  /** 行的 DOM 查询留给面板；导航只拿"把焦点还给哪一行"这个动作（不认行选择器）。 */
   const focusRow = useCallback((entryId: string): void => {
     const node = listRef.current?.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`)
     node?.focus()
@@ -295,7 +295,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
 
   /**
    * 键盘导航（↑↓ 走环、Enter/Space、tab 落点、Esc 交还焦点）整块住在 `trash-nav.ts`。
-   * 屏幕顺序与四个动作从这里进去；它不查 DOM——`focusRow` 是面板交出去的那一动作。
+   * 屏幕顺序与四个动作从这里进去；它不查行 DOM——`focusRow` 是面板交出去的那一动作，
+   * 顶层浮层的让路判据由 `ui/top-layer.ts` 回答。
    */
   const nav = useTrashNav({
     ordered,
@@ -618,7 +619,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       <Button
         variant="ghost"
         size="sm"
-        disabled={!hasEntries}
+        // 多选态永远留出口：清单被清空或读失败后 `hasEntries` 为假，退出按钮仍要能点。
+        disabled={!hasEntries && !selectMode}
         aria-pressed={selectMode}
         onClick={() => {
           if (selectMode) exitSelect()
@@ -644,7 +646,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         <div style={{ ...ELLIPSIS, minWidth: 0 }}>
           <div style={{ fontSize: 16, fontWeight: 600, lineHeight: '24px' }}>{t('trash.title')}</div>
           {selectMode ? (
-            // 多选态下头部这一行说的是"勾了几条"——合计占用那一句这时候不是主角，勾选数才是。
+            // 多选态下头部这一行说的是"勾了几条"——共可释放那句这时候不是主角，勾选数才是。
             <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>
               {t('trash.select.count', { count: checkedIds.length })}
             </div>

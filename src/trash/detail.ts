@@ -13,14 +13,16 @@
  *    本机存量一条都触发不了（量级随盘上会话数摆动，不在这里钉数）⇒ 它们是防异常
  *    膨胀的；**不设"文件太大就拒绝"**，那种阈值只会把真读得出来的正文挡在外面。
  *
- * 计数与正文**同源同判据**：`userMessageCount` 就是进了正文的提问条数、`assistantMessageCount` 就是
- * 有文字的回复条数——不是一套判据算两遍，否则页面上会出现"计数 421、正文 200"这种对不上账的话。
+ * 计数与正文**同源过滤、各过各的闸**：`user/message` 先要求 `source.kind === 'user'`，两类都过空文本
+ * 过滤；`userMessageCount` / `assistantMessageCount` 数的是通过过滤的条数，**不受载荷闸影响**。正文再受
+ * 单条/累计两个闸：单条超限截断并把那一条标成 `truncated`，累计到上限后剩下的整条不再收、只累进
+ * `omittedByPayloadCap`——所以计数可以大于正文条数，详情里两件事分开说。
  */
 import { trashDirOf, type TrashEntry } from './entry.js'
 import type { FsPort } from '../ports/fs-port.js'
 import type { TrashDetailMessageWire, TrashDetailWire } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
-import { verbError } from '../verbs/errors.js'
+import { trashEmpty, verbError } from '../verbs/errors.js'
 
 /** 每条文字的上限（字符）。超出即截断并置 `truncated`。 */
 export const PER_MESSAGE_CHAR_CAP = 3_000
@@ -74,7 +76,7 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
   return async function readTrashDetail(entryId: string): Promise<TrashDetail> {
     const all = await deps.rows()
     const record: TrashEntry | undefined = all.find((e) => e.id === entryId)
-    if (record === undefined) throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
+    if (record === undefined) throw trashEmpty(entryId)
 
     const dir = trashDirOf(record.id, deps.home)
     if (!(await deps.fs.exists(dir))) throw verbError('io', `回收站目录不在：${dir}`)

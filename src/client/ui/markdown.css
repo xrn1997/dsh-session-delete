@@ -21,8 +21,8 @@
  *    **去掉** hover 的下划线（那是"点我"的邀请）。
  *
  * 抄过来但用不上的选择器已删：`.fileLink` / `.fileMention` / `.linkIcon` / `.image` / `.imageAlt`
- * （图片渲成 `[图片 · alt]`）/ `.katex-display` / `:global(.md-code-block)` / `.shiki`（高亮由宿主
- * 的 highlighter 提供，我们没有）。
+ * （图片渲成本地化占位，见 `copy.ts` 的 `detail.image` / `detail.image.alt`）/ `.katex-display` /
+ * `:global(.md-code-block)` / `.shiki`（高亮由宿主的 highlighter 提供，我们没有）。
  */
 .sd-md {
   min-width: 0;

@@ -53,6 +53,7 @@ describe('路由表 · 六个段名各一行', () => {
     }
     // 没有动作（或动作不认识）也进链：认不得的动作由处理那一步响亮拒掉，绝不"什么都不做"地插队
     expect(of(null)).toBe('chained')
+    expect(of({ action: 'nope' })).toBe('chained')
   })
 
   it('读面：每一段声明自己该拿到的清册读面', () => {

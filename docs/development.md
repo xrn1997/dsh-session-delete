@@ -13,13 +13,13 @@ pnpm test         # vitest run
 pnpm typecheck    # tsc --noEmit
 ```
 
-**`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`。三条分发路：`link:` 要自己构建；npm 发布由 `prepack` 兜；源码 git 直装没有构建（本仓没有 `prepare`，那条路现在是死的）。
+**`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`。四条分发路：`link:` 要自己构建；npm 发布由 `prepack` 兜；`pnpm pack` 出的 tarball 也由 `prepack` 构建（`dsh plugin --profile <profile> add ./….tgz`）；源码 git 直装没有构建（本仓没有 `prepare`，那条路现在是死的）。
 
 改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
 
-`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 指路活着、相对链接与锚点指得到东西、ADR 索引双向完整、README 截图清单与兼容性投影一致、主人清单/界面规格/文档标准各只有一份、根 `AGENTS.md` 预算；具体判据以该文件为准。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
+`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 指路活着、相对链接与锚点指得到东西、ADR 标题 / `Status` / `锚点：` 齐全、索引双向完整且没有重复行、README 截图清单与本地文件双向一致、README 的窗口/真机名单/徽章从 `package.json` 投影、主人清单/界面规格/文档标准各只有一份、根 `AGENTS.md` 预算；具体判据以该文件为准。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。`tests/docs.test.ts` 自己从语料里排除：它的正文必须引用已废称呼与历史设计稿目录名，扫自己必然自红；这是唯一的自排除，不是白名单。
 
 `pnpm typecheck` 也带一道门：`tsconfig.json` 开着 `isolatedModules` 与 `verbatimModuleSyntax`，所以 `AGENTS.md` 门 5 那条「跨插件一律 `import type`」不是风格建议——把类型面写成值 import 直接编译红，不需要靠评审记性。门 5 的另一半（浏览器半一条 `@deepseek-ai/*` 的 import 都不许有，type-only 也不留）不归编译器管：宿主包就装在 `devDependencies` 里，值 import 照样解析得到。那一半的门是 `pnpm test` 里 `tests/skeleton.test.ts` 的「跨插件 import 红线」源码扫描——两半各钉各的，别把两条判据都记到 typecheck 头上。
 
@@ -35,7 +35,7 @@ pnpm build        # 必须在源码目录手动跑一次
 dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 ```
 
-`link:` 只建目录链接、不替你构建；卸载只移除插件，`~/.dsh/session-trash/` 下的已有目录不会被清理。
+`link:` 只建目录链接、不替你构建；卸载只移除插件，`$DSH_HOME/session-trash/`（默认 `~/.dsh/session-trash/`）下的已有目录不会被清理。
 
 ## 真机验证（硬约束，别跳）
 
@@ -52,7 +52,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm build`，退出码逐个看过（0/0/0）。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交、打 annotated tag `Vx.y.z`、push。
-4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`（`lib/client.js.map` 就是故意留在盘上不进包的）。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。
+4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。
    - 根目录 `screenshots.json` 列的是 README 那些真机图的清单；文档门会钉住 README、清单与本地文件三方一致，换图时同批更新。
 5. **README 徽章**与「真跑过」名单按当次实测代次更新（徽章读 npm `latest` 清单，工作树改了不会变）。
@@ -63,7 +63,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 
 - **Windows 沙箱下 node 的子进程 spawn 一律 EPERM**：vitest 起 esbuild 服务会撞上——那不是本仓代码的问题，换个不受限的执行环境即可。
 - **npm cache EPERM**：`npm view` 偶尔撞 `AppData\Local\npm-cache` 临时文件锁，重试或换查询方式。
-- 回收站的运行时数据不在本仓：`~/.dsh/session-trash/`（本体）与 `~/.dsh/storages/`（内部索引，别手碰）。
+- 回收站的运行时数据不在本仓：`$DSH_HOME/session-trash/`（本体）与 `$DSH_HOME/storages/`（内部索引，别手碰）；`DSH_HOME` 缺省是 `~/.dsh`。
 - 会话文件是**多帧** zstd，Node 自带 API 只给第一帧——读法与用例住 `src/log/zstd-frames.ts` 与 `tests/zstd-frames.test.ts`。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
 - **`.qoder/repowiki` 是生成的知识库快照**：它的基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。

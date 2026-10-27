@@ -14,7 +14,7 @@
  * 计数角标**不做**（2026-09-30 裁决）：这个座位只给一个 16/18px 的 glyph 盒（`.panelGlyph{flex:none}`），
  * 角标只能溢出到行外（本仓量过：15px 的角标右缘超出 glyph 7px、顶缘高出行顶 5px，宽态就压到上一行；
  * rail 态那行是 36px 圆、`padding:0`，更糟）。`label` 虽支持 thunk，但宿主只在**槽位条目变化或
- * 语言变化**时重读（同上 @44795361），拿它当活计数必然 stale。条数与合计占用改在面板头部给
+ * 语言变化**时重读（同上 @44795361），拿它当活计数必然 stale。条数与共可释放量改在面板头部给
  * （见 `trash-panel.tsx`）。
  */
 import { IconTrashOutlineRegular } from './ui/icons.js'

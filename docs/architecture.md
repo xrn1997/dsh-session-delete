@@ -70,7 +70,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - **客户端条目 pending = 宿主进程死**：可选服务（locale）走 `ctx.get` 而不是 `inject`。
 - 文案住 `src/client/copy.ts` 的命名空间字典（zh 真源 + en 逐键镜像），经宿主 locale 服务可选读，缺席降级内置 zh。**渠道错误原文除外**：`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale；它们是协议诊断原文，不是界面标签。
 - **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与整行点击守卫住 `src/client/host-rows.ts`）。
-- **写入座位、busy 闸、清单导航、确认框关框与无主子会话维护各有自己的 module**：`src/client/write-seats.ts` 把每个调用点的呈现材质、闸与重读通道绑在一处，`src/client/busy-gate.ts` 只拥有「这一趟还算忙」的生命周期，`src/client/confirm-close.ts` 拥有四张确认框共用的 busy 关框规则，`src/client/trash-nav.ts` 拥有清单的键盘契约与焦点意图，`src/client/orphan-maintenance.tsx` 拥有维护块的呈现；回收站面板只留页面骨架、清单行与确认框开合。
+- **写入座位、busy 闸、清单导航、确认框关框与无主子会话维护各有自己的 module**：`src/client/write-seats.ts` 把每个调用点的呈现材质、闸与重读通道绑在一处，`src/client/busy-gate.ts` 只拥有「这一趟还算忙」的生命周期，`src/client/confirm-close.ts` 拥有四张确认框共用的 busy 关框规则，`src/client/trash-nav.ts` 拥有清单的键盘契约与焦点意图，`src/client/ui/top-layer.ts` 拥有 Modal 与清单共用的顶层浮层名单与 Escape 判据，`src/client/orphan-maintenance.tsx` 拥有维护块的呈现；回收站面板只留页面骨架、清单行与确认框开合。
 - **撤销通知台与 Toast 组件分家**：现场、seq、发布与熄灭住 `src/client/undo-notices.ts`；`src/client/undo-toast.tsx` 只做组件，组合通知台与恢复座位（`restoreFromUndo`）。因此 `undo-toast ↔ write-seats` 的 import 环不再存在；裁决与被否掉的替代见 ADR-0018。
 - 浏览器半**不持任何真相**：线上失败码与数据根目录名从 `wire.ts` 取常量（自己的未分类诊断码住 `receipt.ts`），"这次会释放多少"念服务端算好的 `releaseBytes`——它只做呈现。
 
@@ -99,10 +99,10 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 清册读的两个读面（`list()` = 对账 + 读，供 `/list`、`/empty` 与写动词；`raw()` = 不对账、不写行，供 pure 的 `/orphans` 与 `/detail`） | `src/trash/ledger.ts` | 存储域绑定、对账的具体目录判据；哪一段拿哪一面归 `src/api/route-table.ts` |
 | 清册与 `session-trash/` 目录的对账 | `src/trash/reconcile.ts` | 目录里读哪一代日志 |
 | 会话日志的选代与走帧（多帧 zstd） | `src/log/session-log.ts` + `src/log/zstd-frames.ts` | 正文该显示什么 |
-| 详情给谁看、给多少（`source.kind` 过滤、载荷闸、计数与正文同源） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`） |
+| 详情给谁看、给多少（`source.kind` 过滤、两个载荷闸、计数不过闸） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`） |
 | 正文怎么排版成 DOM（裸 HTML、链接与图片的收口） | `src/client/markdown.tsx` + `src/client/ui/markdown.css` | 抄来的宿主消息行样式 |
 | 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
-| 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/ledger.ts`） |
+| 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/reconcile.ts`） |
 | 盘与路径的适配（`FsPort`） | `src/ports/fs-port.ts` | 该删哪些目录（各动词的判据） |
 | 数据根的解析（`$DSH_HOME` / `~/.dsh`） | `src/ports/home.ts` | 宿主的显式配置（插件不可得） |
 | 恢复时「挂不挂账本」与那句「归入未分组」 | `src/verbs/restore-session.ts` 的 `attachableWorkspaceId` / `isWorkspaceMissing` | 工作区还在时的挂接失败 |
@@ -124,14 +124,15 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 同源栅栏（桌面壳那条只留 Referer 的路） | `src/api/dispatch.ts` | 操作失败的信封（那是 `map-error`） |
 | 客户端可见文案 | `src/client/copy.ts` | 服务端错误原文；渠道错误原文除外（`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale） |
 | 清册与残留的取数编排、清空回收站的聚合回执（清单状态的词义见 `CONTEXT.md`「清单状态」；对外只有 `refreshAll` / `refreshAfterWrite` 两个重读意图，`reloadRows` / `rescanOrphans` 只是 implementation 细节；最新票（`createLatestWins`，词表见 `CONTEXT.md`）、在飞的旧响应不许盖新态、输给后发读的读不清场；调用方不传 `rescan`，写后残留由 `refreshAfterWrite(outcome)` 从 action / ids / 当前清单派生——清单未知或找不到这个 id 时保守重扫，失效通告不带 outcome 时报告未知 / 非空才重扫，强制重扫输给后发读时由赢家补扫；`refreshAll` / `refreshAfterWrite` 的清单读失败清空报告与提示并作废在飞扫描；清空失败时的残留清场归本模块，行为见 `docs/ui-spec.md` §3）；写动作与清理走调用方传入的同一枚 `gate`，不另造第二枚闸；清空与清理各自把整趟包进这枚闸；清空成功顺带调用撤销通知台的整条清空（落点全没了；现场归 `src/client/undo-notices.ts`） | `src/client/use-trash-query.ts` | 服务端算的那个数；busy 的生命周期（`src/client/busy-gate.ts`） |
-| 清单的选择面（多选态、勾选集合、组头三态派生、`ordered` 的可见顺序） | `src/client/use-trash-selection.ts` | 谁能接住孩子（`src/trash/groups.ts`）；键盘与焦点（`src/client/trash-nav.ts`） |
-| 清单的键盘契约与焦点意图（活动行 `aria-activedescendant` 与唯一 tab 落点、方向键走环、Enter / Space 的双重语义、Esc 只在下钻期间生效、退出下钻后交还一次焦点） | `src/client/trash-nav.ts` | 可见顺序（`src/client/use-trash-selection.ts`）、详情 / 缓存 / 确认框（`src/client/use-trash-panel-controller.ts`）、DOM 查询（由调用方注入 `focusRow`） |
+| 回收站清单的选择面（多选态、勾选集合、组头三态派生、`ordered` 的可见顺序） | `src/client/use-trash-selection.ts` | 谁能接住孩子（`src/trash/groups.ts`）；键盘与焦点（`src/client/trash-nav.ts`） |
+| 清单的键盘契约与焦点意图（活动行 `aria-activedescendant` 与唯一 tab 落点、方向键走环、Enter / Space 的双重语义、Esc 只在下钻期间生效且顶层有 dialog/menu 时让路、退出下钻后交还一次焦点） | `src/client/trash-nav.ts` | 可见顺序（`src/client/use-trash-selection.ts`）、详情 / 缓存 / 确认框（`src/client/use-trash-panel-controller.ts`）、行的 DOM 查询（由调用方注入 `focusRow`）；顶层浮层名单与判据（`src/client/ui/top-layer.ts`） |
+| 顶层浮层（`[role="dialog"][aria-modal="true"]` 与 `[role="menu"]`）的名单与「谁在最上层收 Escape」判据 | `src/client/ui/top-layer.ts` | Modal 何时关、清单何时退下钻（由各自决定并调用） |
 | 无主子会话维护的呈现（警告条、失败块、中性提示、预览与清理确认） | `src/client/orphan-maintenance.tsx` | 扫描、写后重扫判据与清理回执判读（`src/client/use-trash-query.ts`）；busy 的读数（面板传入） |
 | 动过回收站之后谁重读（失效通告台，只有一个修订号） | `src/client/trash-store.ts` | 动了什么、谁动的（清单本体永远问宿主） |
 | 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期；latest-wins 句柄 `createLatestWins` 的 compare-and-set） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
-| 批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
+| 宿主会话列表的批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
 | 宿主行快照订阅（DOM 观察 + 行登记；渲染侧只读快照）与整行点击守卫 | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
-| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回 / 面板恢复的呈现材质） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`） |
+| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
 | 四张确认框的 busy 关框规则 | `src/client/confirm-close.ts` 的 `useIdleClose` | 各框的按钮文案与禁用呈现 |
 | 槽位贡献与注册 | `src/client/index.tsx` | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
@@ -139,7 +140,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 
 ## 5. 数据与生命周期
 
-- 运行时数据全住数据根（`~/.dsh/`）：会话本体 `sessions/<项目目录>/<会话目录>/`（宿主的），回收站本体 `session-trash/<条目 id>/` 与清册（宿主 storage 域，介质在 `storages/`）。**回收站必须与 `sessions/` 同卷**（搬移靠整目录 `rename`，原子）。
+- 运行时数据全住数据根（`$DSH_HOME/`，默认 `~/.dsh/`）：会话本体 `sessions/<项目目录>/<会话目录>/`（宿主的），回收站本体 `session-trash/<条目 id>/` 与清册（宿主 storage 域，介质在 `storages/`）。**回收站必须与 `sessions/` 同卷**（搬移靠整目录 `rename`，原子）。
 - **`session-trash/` 目录是唯一需要手动动的地方**：真相读（`list()`）先与目录对账（多出的目录重建出行、目录没了摘行、认不出的当外人），由 `src/trash/ledger.ts` 保证；纯读面 `/orphans` 与 `/detail` 只读 `raw()`，不对账、不写行（`/detail` 遇到“行在、目录不在”照旧判 `io`，不靠对账摘行），`orphan-clean` 等写动作先 `list()` 再扫。`storages/` 那份是内部索引，外面改它要重启宿主才生效。
 - **清册只记文件里真有的事实**：随盘上随时变的数（还剩几个孩子、这次释放多少）一律现算现给、不落清册。
 - **会话列表不是磁盘投影**：`sessionQuery.listSessions()` 是磁盘持久化 **∪** 宿主内存里 attach 着的活体会话；摘账本挡不住活体，客户端会把它归入「未分组」。删除必须 `evictLive` 把 session 与 agent handle 一起摘掉（ADR-0008）。

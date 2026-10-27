@@ -1,6 +1,6 @@
 import type { TrashEntry } from '../trash/entry.js'
 import type { RemovalDeps } from '../deps.js'
-import { verbError } from './errors.js'
+import { trashEmpty } from './errors.js'
 import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
 
 /**
@@ -32,7 +32,7 @@ export function purgeTrash(deps: RemovalDeps) {
   ): Promise<{ removed: number; freedBytes: number }> {
     const selected = targets ?? rows
     if (targets !== undefined && selected.length === 0) {
-      throw verbError('trash-empty', requestedId === undefined ? '回收站里没有这一条' : `回收站里没有这一条：${requestedId}`)
+      throw trashEmpty(requestedId)
     }
 
     // 计划只读：活体准入在**一切写之前**（任一在跑就整条拒绝、零副作用）。盘上后代按**清册里还在的 id**

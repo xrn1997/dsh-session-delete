@@ -1,7 +1,7 @@
 import { parseEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import { isWorkspaceMissingError, type HostIdentityPort } from '../ports/host-port.js'
 import type { CoreDeps } from '../deps.js'
-import { verbError } from './errors.js'
+import { trashEmpty, verbError } from './errors.js'
 import { createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
 import { withPresenceTail } from './member-presence.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
@@ -37,7 +37,7 @@ export function restoreSession(deps: CoreDeps) {
     const [root, ...followers] = group
     const target = group.find(e => e.id === entryId)
     if (root === undefined || target === undefined) {
-      throw verbError('trash-empty', `回收站里没有这一条：${entryId}`)
+      throw trashEmpty(entryId)
     }
 
     for (const entry of group) {

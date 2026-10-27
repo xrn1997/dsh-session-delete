@@ -65,7 +65,7 @@
 - **CHANGELOG**：只在发版时追加已发布版本；写用户可见变化与升级注意，未发布改动不预写；逐提交明细留 git。
 - **过程工件**：只住本机；任务完成时把长期成立的结论提炼进 ADR、`docs/architecture.md` 或 `docs/ui-spec.md`，其余随工作区消失。需要保留历史理由时写 ADR。
 - **生成快照**：整棵树重新生成，不逐文件修；与代码冲突时以代码为准。
-- **文档门**：`pnpm test` 内的 `tests/docs.test.ts` 检查路径、已废称呼、`§N` 指路、ADR 索引/状态、Markdown 链接/锚点、截图清单与 AGENTS 预算；完整命令见 `docs/development.md`。
+- **文档门**：`pnpm test` 内的 `tests/docs.test.ts` 检查路径、已废称呼、`§N` 指路、ADR 标题/状态/锚点/索引、Markdown 链接/锚点、截图清单与 AGENTS 预算；完整命令见 `docs/development.md`。
 
 ## 5. 评审清单
 

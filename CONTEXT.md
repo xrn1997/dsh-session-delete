@@ -30,7 +30,7 @@ _Avoid_: 垃圾桶、删除列表（会把它说成一个 UI 或一个临时缓�
 _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 
 **清册**（manifest）
-条目的索引，住在宿主 storage 域（介质在 `~/.dsh/storages/`）。它是**内部索引、不用手碰**；外部真正的事实来源是 `session-trash/` 里那些目录，两者由**对账**拉平。清册只记文件里真有的事实：随盘上随时变的数（还剩几个孩子、这次释放多少）现算现给、不落清册。
+条目的索引，住在宿主 storage 域（介质在数据根下的 `storages/`）。它是**内部索引、不用手碰**；外部真正的事实来源是 `session-trash/` 里那些目录，两者由**对账**拉平。清册只记文件里真有的事实：随盘上随时变的数（还剩几个孩子、这次释放多少）现算现给、不落清册。
 _Avoid_: 索引、数据库（清册是宿主 storage 域里的内部索引，但不是一个可查询的数据库）。
 
 **对账**（reconcile）
@@ -89,6 +89,10 @@ _Avoid_: 通知、事件（太泛；通告专指这两条成对的客户端事�
 **渲染侧快照**（visible-rows snapshot）
 宿主 DOM 这个组件树之外的事实源，在渲染期交出的读数：脏了才重读，干净时回同一个引用；变化由适配器里的观察者通告，不靠定时重读。判据与裁决见 ADR-0015。
 _Avoid_: 缓存（这里只讲「同一引用」这条 snapshot 契约，不是通用缓存）；轮询（没有定时器在重读 DOM）。_唯一实现_：`src/client/host-rows.ts` 的 `useVisibleSelectableRows`（订阅骨架住 `src/client/store.ts` 的 `createLazyStore`）。
+
+**顶层浮层**（top layer）
+挂在文档上的模态对话框与菜单的总称，也是「谁在最上层收 Escape」的判据：名单按文档序，最后一个就是最上层。`Modal` 的关闭键与清单的 Esc 退下钻都问它，不各写一份选择器。_唯一实现_：`src/client/ui/top-layer.ts`。
+_Avoid_: 弹窗（太泛；这里专指名单上那两类与「最上层」判据）。
 
 **清单状态**（trash list state）
 `useTrashQuery` 交出的唯一清单真相：`loading`（还没读到）/ `ready(rows)`（有行）/ `unknown(failure)`（读不到）。`unknown` 不向下游交出任何行——选择、导航、分组与页脚动作都不再读旧行；清空失败同样落 `unknown`。_唯一实现_：`src/client/use-trash-query.ts`。

@@ -14,29 +14,21 @@
  * - **官方的多层栈**（`layers` WeakMap + `closeTopModal` / `isBehindModal`）：那是给"对话框里还能再开
  *   对话框、且宿主菜单也在抢 Escape"的场景准备的。本插件同一时刻只会有一个确认框，所以这里只保留它
  *   的**判据本身**——Escape 只在"自己就是文档里最后一个 `[role="dialog"][aria-modal="true"]`
- *   或 `[role="menu"]`"时生效（`isTopLayer`）。这一条不能省：菜单/对话框先后打开时，
- *   "谁在最上面谁收 Escape"是用户能看见的规矩。
+ *   或 `[role="menu"]`"时生效（`isTopLayer`，名单与判据住 `ui/top-layer.ts`）。这一条不能省：
+ *   菜单/对话框先后打开时，"谁在最上面谁收 Escape"是用户能看见的规矩。
  * - **输入法合成守卫**（`observeComposition`）：本插件的对话框里没有文本输入框，不可能处在合成态。
  */
 import { useLayoutEffect, useRef, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { IconCloseOutlineRegular } from './icons.js'
+import { isTopLayer } from './top-layer.js'
 import './styles.js'
 
 const FOCUSABLE =
   'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]'
 
-/** 文档序里排在前面的层决定谁拿快捷键：对话框与菜单同一张名单（官方 `modalSelector` 逐字）。 */
-const TOP_LAYER = '[role="dialog"][aria-modal="true"], [role="menu"]'
-
 /** 这些键一旦按下就不再是"自动焦点"，焦点环恢复正常。 */
 const NAVIGATION_KEYS = new Set(['Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'])
-
-/** 自己是不是文档里最上面的那一层。 */
-function isTopLayer(element: HTMLElement): boolean {
-  const layers = element.ownerDocument.querySelectorAll(TOP_LAYER)
-  return layers.length > 0 && layers[layers.length - 1] === element
-}
 
 /** 自动聚焦不留环：宿主主题按 `data-dsh-automatic-focus` 抑制 outline，键盘导航或失焦即摘掉。 */
 function focusWithoutRing(element: HTMLElement): void {

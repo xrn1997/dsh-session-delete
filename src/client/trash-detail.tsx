@@ -251,13 +251,16 @@ function Meta({ label, title, children }: { label: string; title?: string; child
 /**
  * 有内容：元信息（时间 → 体量 → 位置三组的顺序）+ 正文。
  *
- * 计数与正文**同源**：`提问`/`回复` 就是进了正文的那两类条数，不是日志里的 `user/message` 总数——
- * 后者被 `injectedCount` 单独说清，页面上不出现两本对不上的账。
+ * 页面上**两本账分开读**：`提问`/`回复` 是过滤后的条数（注入那些由 `injectedCount` 单独说清，不并进
+ * 这两个数），**不受载荷闸影响**；正文是闸过的那一份（单条超限截断、累计到顶后整条不显示）。
+ * 于是「计数 421、正文 200」可以同时成立——怎么过滤、两个闸各是多少归 `src/trash/detail.ts`，这里只摆数。
  */
 function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashDetailLike; t: Translate }) {
   // 回收站的目录名就是条目 id（CONTEXT.md 的「条目」条），转义那部分不承载额外信息 ⇒ 原样摆，完整串交给 title。
   const folder = entry.id
   const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
+  // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（markdown.tsx 头注）。
+  const localeKey = t('common.close')
   return (
     <>
       <dl style={META}>
@@ -266,7 +269,10 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
         <Meta label={t('detail.field.span')}>{spanText(detail.createdAt, detail.lastActivity, t) ?? '—'}</Meta>
         {/* 「删除于」两样都要（docs/ui-spec.md 状态⑥）：相对那句好读，绝对那句好核对。 */}
         <Meta label={t('detail.field.deletedAt')}>
-          {`${agoText(entry.deletedAt, Date.now(), t)}（${absoluteText(entry.deletedAt)}）`}
+          {t('detail.deletedAt.combined', {
+            relative: agoText(entry.deletedAt, Date.now(), t),
+            absolute: absoluteText(entry.deletedAt),
+          })}
         </Meta>
         <Meta label={t('detail.field.size')}>{fileSizeText(entry.sizeBytes)}</Meta>
         <Meta label={t('detail.field.turns')}>{String(detail.turnCount)}</Meta>
@@ -311,7 +317,7 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
                 </div>
               ) : (
                 <>
-                  <MarkdownBody text={message.text} />
+                  <MarkdownBody text={message.text} t={t} localeKey={localeKey} />
                   {message.truncated ? <div style={META_LINE}>…</div> : null}
                 </>
               )}
