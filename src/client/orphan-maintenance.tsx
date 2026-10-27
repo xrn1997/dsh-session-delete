@@ -37,7 +37,7 @@ export function OrphanMaintenance({ query, busy, t }: OrphanMaintenanceProps): R
   const { orphanReport, orphanFailure, orphanNotice, orphanConfirm } = query
   return (
     <>
-      {/* 回收站之外的无主子会话（2026-10-19）。**只在报告非空时出现**——"检查过了，什么都没有"不是
+      {/* 回收站之外的无主子会话。**只在报告非空时出现**——"检查过了，什么都没有"不是
           要给用户看的东西，而那份报告读不到时走下面那块失败（不是这里，更不是"零条"）。
           层级沿用页面上那一条：警告色的图标 + 一句话 + 一颗描边动作，实心红仍然只归「清空回收站…」
           （确认框里那块是它的后续，与彻底删除同一个规矩）。 */}
@@ -76,7 +76,7 @@ export function OrphanMaintenance({ query, busy, t }: OrphanMaintenanceProps): R
       ) : null}
 
       {/* 检查/清理自己失败：这是"我们没能回答有多少残留"，与"没有残留"是两件事 ⇒ 原位上屏 + 重试，
-          绝不静默折成一条都不出现（2026-10-19 那条判据）。 */}
+          绝不静默折成一条都不出现。 */}
       {orphanFailure !== null ? (
         <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}>
           <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-state-error-primary)' }} aria-hidden="true">

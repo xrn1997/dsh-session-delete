@@ -1,5 +1,5 @@
 /**
- * 勾选框（2026-10-15 加，回收站多选态用）。
+ * 勾选框，回收站多选态用。
  *
  * 样式与行为抄自 `@deepseek-ai/dsh-client-ui-primitives` 的 `lib/Checkbox.module.css`
  * （那四条声明逐字进了 `ui.css` 的 `.sd-checkbox`）：**本体是原生 `input[type=checkbox]` +

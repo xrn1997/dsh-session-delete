@@ -29,6 +29,7 @@
 - 键盘：`listbox`/`option`，清单容器带 `aria-activedescendant`（只在选中行还在 DOM 里时指它），行用 roving tabindex——有行时恰好一行拿 `tabIndex=0`（选中行可见时是它，否则第一条可见行）；↑↓ 只走可见行、到端回卷；窄档 Enter/Space 下钻，宽档 Enter/Space 只选中，Esc 返回（确认框或菜单开着时先归它）；多选态 `aria-multiselectable`，Enter/Space 切换勾选；行内按钮 / 勾选框的 Enter/Space 归控件自己；详情不加 `aria-live`。
 - 危险层级：页面本体唯一那块实心红**永远在页脚那一排的最后一颗**（非多选 =「清空回收站…」，多选 =「彻底删除 N 条」；写法是 `trash-view.ts` 的 `BULK_DANGER`）；行内那颗「彻底删除…」是安静的红（不铺底）；「恢复」描边；浮层确认用实心红。
 - 失败落点：清单读失败只在清单块；某条正文读失败只在详情块，不冻结动作；操作失败原文落在出事那一行/那一块。
+- 失败块标 `role=status`；但插入即播报并不保证（`aria-live` 监听的是已在场区域的变更），尚未经 AT 验证，属已知边界。
 
 ## 4. 批量删除四态
 

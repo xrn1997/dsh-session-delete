@@ -1,39 +1,12 @@
 /**
- * 可见文案（界面标签与提示）＋接上宿主 Client locale 服务的那一步。
+ * 界面文案与宿主 locale 服务的接入。
  *
- * **例外：渠道错误原文。** `src/client/receipt.ts` 的 missing-id 与单条幂等空值、
- * `src/client/remote.ts` 的取数通道错误是协议诊断原文，固定中文、不随 locale；它们不进本字典。
- *
- * ## 为什么不是散在各组件里的中文字面量
- *
- * 官方给第三方 UI 插件的规则是「Route visible UI text through the Client locale service」
- * （宿主技能 `cordis-plugin-development/references/ui-plugin.md`）。宿主自己那套就是这么做的：
- * `ui-sidebar` 声明 `inject = ['slots','layout','uiWorkspace','locale','shortcuts']`，并在
- * `ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-sidebar: dictionaries')` 里注册字典
- * （真产物原文）。所以本插件也把文案收成一份带**命名空间**的字典，`zh` 是完整真源、`en` 逐键镜像
- * ——宿主 `register` 的**对象形式要求两套内置语言都齐**（缺一个键就是运行期报错）。
- *
- * ## 服务是**可选读**的，不进 `inject`
- *
- * `ctx.get('locale')` 而不是把 `locale` 写进 `inject`。理由是本仓那条硬约束的另一面：**客户端半的
- * 条目激活失败 = 宿主进程死**（前端启动自检 `web boot: N entry did not activate` ⇒ 桌面壳
- * `reportFatal('web-boot')`）。宿主自己的 `ui-sidebar` 敢硬注入 `locale`（它是宿主的一部分，知道
- * 那一行一定在），而本插件要跨宿主代数活着 ⇒ 服务缺席时**降级到内置 zh 文案继续工作**，
- * 好过整个进程死。这与宿主对可选服务的官方写法同形（`ctx.get('…')?.…`）。
- *
- * 取数面：[`dsh-client-locale`] 的 `LocaleRuntime.register(ns, { zh, en })` 返回一个 disposer
- * （必须挂进 `ctx.effect`，否则卸载后字典留在注册表里，下次挂载会撞 "already has locale"），
- * `bind(ns)` 交回一个**按命名空间记忆化**的 `t(key, params)`（官方明说它"retain stable identity …
- * so they can ride inject surfaces without breaking memoization"——所以我们把它塞进槽位的
- * `inject` 载荷是正当用法）。
- *
- * ## 面板行那一行字为什么要用 thunk
- *
- * `sidebar.panellist` 的行名字由宿主 `syncPanels` 逐字 `label: resolveSlotLabel(options.label) ?? id`
- * 解析，而 `resolveSlotLabel` 的实现是 `typeof label === 'function' ? label() : label`，
- * 其 JSDoc 原文即 "thunks follow the active locale"；宿主自己还挂了
- * `ctx.effect(() => ctx.locale.subscribe(syncPanels), 'ui-sidebar: panel labels')` 在语言切换时重读。
- * ⇒ 面板名传 `() => t('trash.title')` 就随语言走；**换成活计数就会 stale**（只在条目或语言变化时重读）。
+ * - zh 是完整真源，en 逐键镜像。
+ * - locale 服务通过 ctx.get('locale') 可选读，服务缺席时退回内置 zh；为什么不进 inject 见
+ *   docs/architecture.md §3。
+ * - 面板行名传 thunk，语言切换时宿主会重读；其余文案走 t(key, params)。
+ * - 渠道错误原文（src/client/receipt.ts 的 missing-id/幂等空值、src/client/remote.ts 的取数通道错误）
+ *   不在此字典，它们是协议诊断，固定中文。
  */
 import { relativeTime, type RelativeTimeUnit } from './ui/format.js'
 import type { ClientContextLike } from './context.js'
@@ -81,15 +54,14 @@ const ZH = {
   'trash.confirm.body.strong': '之后没有任何副本可以恢复',
   'trash.confirm.purge': '彻底删除',
 
-  // 清单那一排的视图开关（2026-10-15：组折叠 / 拖分栏）。「折叠」管组内（项目名那一行以下）。
+  // 清单那一排的视图开关（组折叠 / 拖分栏）。「折叠」管组内（项目名那一行以下）。
   'trash.toolbar.collapseAll': '全部折叠',
   'trash.toolbar.expandAll': '全部展开',
   'trash.divider.label': '调整左右分栏宽度',
   'trash.select.group': '勾选「{project}」这 {count} 条会话',
 
-  // 多选与批量动作（2026-10-15 开的口子先只有"批量彻底删除"；2026-10-17 按用户裁定加上"批量恢复"：
-  // 恢复是加法，但一批条目多、去向是各自的旧项目目录，点之前也要过一道确认框——**批量**走框，
-  // 单行那颗仍然直接执行）。
+  // 多选与批量动作。批量恢复与批量彻底删除共用这些文案；恢复是加法，但一批条目多，
+  // 去向是各自的原项目目录，点之前也要过一道确认框。单行恢复仍直接执行。
   'trash.toolbar.select': '多选',
   'trash.toolbar.selectExit': '退出多选',
   'trash.select.count': '已选 {count} 条',
@@ -102,7 +74,7 @@ const ZH = {
   'trash.confirm.restore.body': '这一批会回到它们各自的原项目目录，恢复到会话列表里。',
   'trash.confirm.restoreNow': '恢复',
 
-  // 回收站之外的无主子会话（2026-10-19 那条维护入口）。父会话既不在宿主语料也不在清册里，它的孩子
+  // 回收站之外的无主子会话。父会话既不在宿主语料也不在清册里，它的孩子
   // 就没人再列、也没人能删——宿主客户端把 `origin:"subagent"` 整排藏掉了，所以这一格
   // 只能由我们报出来。**清理走 `/apply` 的 `orphan-clean`**，回执按组：`not-found` 单列「已不在了」，
   // 真失败可能带部分回执（已删目录数/字节）；这里不写"整组已清完"这种服务端没说的话。
@@ -160,7 +132,7 @@ const ZH = {
   'dialog.hint': '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。',
   'dialog.confirm': '移入回收站',
 
-  // 宿主列表批量删除（2026-10-17）。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
+  // 宿主列表批量删除。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
   // `dialog.subagents`（汇总），n=1 的标题复用 `dialog.title`，运行中原因复用 `menu.live`，
   // 「多选/退出多选」复用回收站工具栏的 `trash.toolbar.select` / `selectExit`——不造第二句。
   'batch.row.pick': '勾选「{title}」以批量删除',

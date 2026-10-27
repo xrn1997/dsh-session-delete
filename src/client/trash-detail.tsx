@@ -1,24 +1,12 @@
 /**
- * 回收站的**详情块**（docs/ui-spec.md 的四态）。
+ * 回收站详情块：只画状态，不取数。选中、缓存、失败与重读都在面板控制器里。
  *
- * 它**不自己取数**：选中、缓存、失败与重读全在面板控制器（`use-trash-panel-controller.ts`）手里，
- * 这里只把一个状态画出来——
- * 所以它能被单独测穿（喂四种状态，断四张形状）。
+ * 三条界面约束：
+ * - 动作（恢复/彻底删除）留在清单行右侧；详情只负责看。
+ * - 标题优先用清册标题，空串才回落到日志的 session/title。
+ * - 注入条数与截断条数必须上屏，避免正文变少被误读成“会话只有这些内容”。
  *
- * 三个不能让步的点：
- * ① **动作不住在这里**（2026-10-15 真机反馈后定，与 2026-10-01 那版同形）：「恢复」「彻底删除…」
- *    在清单行右侧。搬进详情那一阵子，左栏为了只放标题被压到 316px，读起来就是"左侧太窄"——
- *    动作回行内之后左栏需要的宽度也回来了（420px，理由写在面板常量处）。
- * ② **标题优先用清册那一份**：保证「行里叫 A、点开也叫 A」，清册标题是空串才回落到日志里的
- *    `session/title`。
- * ③ **注入条数与截断条数必须上屏**：正文比日志里的 `user/message` 少一大截是**过滤的结果**，
- *    页面上要说清少掉的是什么、多少条，不能让它读起来像"这条会话就这么点内容"。
- *
- * 皮肤**只由 token 决定**，且 token 与消息行的声明都来自宿主自己那两张表（`MessageItem.module.css` /
- * `AssistantMarkdown.module.css` / `MarkdownText.module.css`，逐字抄，来源与差异记在 `ui/markdown.css`
- * 文件头）——字号一律走 `--dsh-content-font-*` 那根轴，不再写宿主同类面的字面量 px。
- * **助手正文走 Markdown，用户提问走原话**（2026-10-15 真机反馈后改；见 `markdown.tsx` 那三行收口）：
- * 助手的 `text` 段本身就是 markdown 源，用 `pre-wrap` 摆出来就是用户说的"对话内容没渲染、是一整块纯文本"。
+ * 助手正文走 Markdown，用户提问保持原话；样式 token 与差异见 ui/markdown.css 文件头。
  */
 import { type CSSProperties } from 'react'
 import { absoluteText, agoText, type Translate } from './copy.js'
@@ -78,12 +66,11 @@ const META_VALUE = { margin: 0, minWidth: 0, wordBreak: 'break-word' } as CSSPro
 const THREAD: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }
 
 /**
- * 消息行照宿主拄（2026-10-15 真机反馈后重写；来源 `app.asar` 里
+ * 消息行照宿主抄（来源 `app.asar` 里
  * `@deepseek-ai/dsh-client-ui-chat/lib/client.js` 内联的 `MessageItem.module.css` 与
  * `AssistantMarkdown.module.css`，逐字声明）。两条关键事实：
- * **只有用户有气泡**，助手那侧宿主不铺底、不给边框，正文直接铺满栏——上一版给助手画了带边框的卡片，
- * 就是"右侧 UI 风格问题很多"里最难看的那一处。字号也不再用字面量：走 `--dsh-content-font-size` 那根轴，
- * 宿主调内容字号时这里一起动。
+ * **只有用户有气泡**，助手那侧宿主不铺底、不给边框，正文直接铺满栏；给助手画带边框的卡片
+ * 会与宿主消息行不同形。字号走 `--dsh-content-font-size` 那根轴，宿主调内容字号时这里一起动。
  */
 const USER_ROW: CSSProperties = { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, minWidth: 0 }
 
@@ -113,7 +100,7 @@ const META_LINE: CSSProperties = {
   color: 'var(--dsw-alias-label-tertiary)',
 }
 
-/** 读失败与写失败共用的那块（`role="status"`：读屏走到这里会当状态消息念）。 */
+/** 读失败与写失败共用的那块（`role="status"`；播报口径与其未验证的边界见 docs/ui-spec.md）。 */
 const STATUS_BLOCK: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',

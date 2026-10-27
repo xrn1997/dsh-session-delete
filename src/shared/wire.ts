@@ -1,18 +1,9 @@
 /**
- * 跨半 wire 契约：`/dsh-session-delete-api` 的**前缀、六个端点段、请求字段名**——
- * Node 半（`src/api/dispatch.ts` 注册并分发）与浏览器半（`src/client/remote.ts` 同源 fetch）
- * 之间唯一的那份真相。两侧都 import 它，不各写一份字面量。
+ * 跨半 wire 契约：前缀、六个端点、请求/响应形状与失败码。
+ * Node 半（src/api/dispatch.ts）与浏览器半（src/client/remote.ts）共用这一份，不各写字面量。
  *
- * 两条构建期硬约束（不是偏好）：
- *  ① tsdown 的浏览器半纯度门拦 Node 内建与平台模块表外的 `@deepseek-ai/*` 值 import——
- *     本文件两者都不涉及，且**零运行时依赖**（client 半把它整个 inline 进 bundle）；
- *  ② 跨插件一律 `import type`——本文件干脆没有 import。
- *
- * 信封（`RemoteResult`）与失败形状（`RemoteFailure`）也在这里——**因为它们本来就是两半的共同契约**：
- * Node 半按它产出（`src/api/dispatch.ts` 的失败支就是 `RemoteFailure` 那三件），浏览器半按它判别
- * （`src/client/remote.ts` 的 `unwrapRemoteResult` / `failureOf`）。形状取自宿主网关客户端面的原文
- * 「每次 unary 调用 resolve 成 RemoteResult、不为载体问题 reject」，但**它是本仓自己的 wire 契约**，
- * 不是对宿主模块的 import。
+ * 构建约束：本文件零运行时依赖、无 import；浏览器半把整个文件 inline 进 bundle。
+ * 信封 {ok:true,value} / {ok:false,error:{code,message,details?}} 也是两半的共同契约。
  */
 
 /**
@@ -24,15 +15,15 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 六个段名（相对前缀）。2026-10-17 批量重构：写动词从「一条一段」收成**一段 `/apply`**——
- *  一次 HTTP 带一组 id、逐条回结果；单条就是长度为 1 的批量，仓里不再留第二条执行路径。
- *  - `GET /list`：**对账并读**清单（`session-trash/` 里的目录是准）。
- *  - `GET /ping`：最便宜的在/不在（不碰清册、不碰盘、不进链）——客户端探测用它，不用一次全表读。
- *  - `POST /detail`：单条详情（用 POST 表达一个读：判据就写在 `src/api/route-table.ts` 那一行的上方）。
+/** 六个段名（相对前缀）。写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
+ *  单条就是长度为 1 的批量，仓里不留第二条执行路径。
+ *  - `GET /list`：对账并读清单（`session-trash/` 里的目录是准）。
+ *  - `GET /ping`：最便宜的在/不在（不碰清册、不碰盘、不进链），供客户端探测。
+ *  - `POST /detail`：单条详情（用 POST 表达一个读，判据在 `src/api/route-table.ts`）。
  *  - `POST /apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean`），逐条回 `ApplyOutcome`。
- *  - `POST /empty`：清空回收站（聚合回执，**不**按条回）。
- *  - `GET /orphans`：无主子会话的扫描报告（纯读，2026-10-19）。**清理不在这里**——它是 `/apply` 的
- *    第五个动作，这一段只负责"有多少、在哪、多大"。 */
+ *  - `POST /empty`：清空回收站（聚合回执，不按条回）。
+ *  - `GET /orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
+ *    这一段只负责"有多少、在哪、多大"。 */
 export const ROUTES = {
   list: '/list',
   /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
@@ -141,7 +132,7 @@ export interface TrashDetailWire {
   omittedByPayloadCap: number
 }
 
-/** 清空回收站的回执（与旧 `purge` 同形）。 */
+/** 清空回收站的聚合回执。 */
 export interface PurgeStatsWire {
   removed: number
   freedBytes: number

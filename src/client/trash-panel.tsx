@@ -1,57 +1,18 @@
 /**
- * 回收站清单面板（`docs/ui-spec.md` 的状态 ④⑤ + 两栏形态）——**中央面板的本体**（`main` 槽的占用者）。
+ * 回收站中央面板（main 槽占用者）：页面骨架、清单/详情两栏或下钻、清单行与确认框开合。
  *
- * 面板自带页面骨架（标题 / 条数与合计 / 工具排 / 内容区 / 页脚），因为宿主给中央列的那个盒子
- * （`AppFrame` 的 `.centerCol`）只有背景与圆角，**没有 padding、也不是滚动容器**——asar 里那条
- * `.BynINW_centerCol{background:var(--dsw-alias-bg-base);border-radius:…;corner-shape:round}` 逐字
- * 如此。回收站可以很长（本机 125 个会话合计 85M），不自己收滚动就会把整列顶长。
+ * 布局与行为：
+ * - 中央列本身没有 padding 也不是滚动容器，面板自己收滚动。
+ * - 面板 border-box 宽达到 SPLIT_MIN_WIDTH 且清单有条目时走左右两栏；否则单列/下钻，
+ *   详情铺满并给返回。
+ * - 动作留在清单行右侧；详情只负责看，失败原文留在出事的那一行。
+ * - 空态不出现「清空回收站…」；「读不到」与「空的」分开。
+ * - 危险层级：页脚那排的最后一颗是整页唯一的实心红（非多选是「清空回收站…」，
+ *   多选是「彻底删除 N 条」）；行内「彻底删除…」只给字色，不给底色。
  *
- * **2026-10-15 形态改版：居中一列 → 清单在左、单条详情在右。**三条决定摆在这里（现行界面规格住
- * `docs/ui-spec.md`，本文件只记这三条与实现约束）：
- * ① 动机：一条只有一个标题，判断不了该恢复还是该彻底删除 ⇒ 详情要摆出这条会话自己日志里的元信息
- *   与正文，而详情只能我们自己画（宿主读不到回收站目录里的文件）；
- * ② 断点 900px（盒子宽，不是窗口宽）：中央列宽由 `usePanelWidth`（ResizeObserver）观测，**只听
- *   window.resize 会漏**——宿主侧栏折叠/展开也改中央列宽，而且量的是面板自己那块的 **border-box 宽**。
- *   窄于此走下钻（详情铺满 + 返回），因为 2026-10-01 真机在 520px 窗量过中央列只有 405px，两栏在那
- *   儿两栏都读不了；900 这个数是按两栏各自要读得开算出来的（见 `SPLIT_MIN_WIDTH` 处）；
- * ③ **动作留在清单行右侧**（2026-10-15 试过"退出行、住进详情"，按真机反馈回到 2026-10-01 的形状）：
- *   那一版左栏为了只放标题被压到 316px，用户第一眼就是"左侧太窄"。详情只负责看，失败原文也跟着
- *   动作留在它自己那一行。
- *
- * **卡片配色沿用 2026-10-01 那批**（宿主设置面卡片的底层 token，不是随包发布的 settings 别名）：
- * `background:var(--dsw-alias-bg-layer-2)` + `border:.5px solid var(--dsw-alias-border-l4)` +
- * `border-radius:var(--dsw-radius-lg)`（20px 的 `xl` 会把 60px 上下的行吹成胶囊）。
- * 选中态换一枚 token（2026-10-15 从 asar 的 `dsh-client-ui-theme/lib/client.js` 逐字读出）：
- * `--dsw-alias-button-ghost-active-fill`（浅 `#ebeef2` / 深 `#43454a`）配
- * `--dsw-alias-button-ghost-active-border`（`#979da6` / `#81858c`）——宿主自己侧栏选中项用的
- * `--dsw-specific-sidebar-nav-item-active` 与前者取值逐字相同，所以这是宿主"选中"那一档，不是我挑的。
- *
- * 时间分桶走 `relativeTime`（逐字抄自官方，见 `ui/format.ts`），项目名从宿主 `projectKey` 反推
- * （`unescapeProjectKey`，两半共用），组头 `title` 给完整原串。**行分隔**交给卡片自己的边框。
- *
- * 三条界面规则没有因为改版让路：
- * - **空态**：`回收站是空的`，且底部**不出现**「清空回收站…」（没有东西可清）。
- * - **失败写在出事的那一块上**：清单读不到 ⇒ 单独一块摆原文 + 重试（不是空态，"读不到"与"空的"是
- *   两件事）；某条会话的正文读不到 ⇒ 只在详情那块说，清单照常可选；恢复/彻底删除失败 ⇒ 原因留在
- *   **清单那一行**（按条目 id 存，切走再回来还在）；无主子会话的检查/清理读不到 ⇒ 面板顶端那块摆原文 + 重试
- *   （那是"没能回答有多少残留"，与"没有残留"是两件事，不许折成空报告）；清理发现"这一组已经不在了" ⇒
- *   单独一条中性提示，不计入失败。这些失败块都标 `role="status"`——但**插入即播报并不保证**
- *   （`aria-live` 看的是"已在场的区域发生了变更"），要稳得常驻一个只给读屏看的播报台，本机没有 AT
- *   可验，所以留在这里当已知边界，不写成已经做到。
- * - **危险层级**：整页只有一块实心红（页脚「清空回收站…」，确认框里那块是它的后续）；行与详情里的
- *   「彻底删除…」是**安静的红**——只写 `color:--dsw-alias-state-error-primary`、**不写 background**
- *   （作者态内联 `background` 永远赢过类规则，而 `ui.css` 里 `.sd-button-ghost:hover` / `:active` 都是
- *   普通类 ⇒ 铺了底的动作在点错之前不给任何视觉回应）。批量与确认框那款实心红的写法（`variant="primary"`
- *   + 就地覆盖 `--dsw-alias-button-primary-fill` / `-hover`）照抄宿主插件管理页 @21658274。
- *
- * 布局只用**结构**内联样式，**配色与圆角一律走 token**，**字号是字面量 px**（宿主同类面也这么写）。
- * 结构与层级归 docs/ui-spec.md，皮肤只由 token 决定。控件样式住在 `src/client/ui/ui.css`，
- * 由 `ui/styles.ts` 在浏览器半模块物化时挂成一个 `<style>`——这是宿主给客户端插件的一等公民通道。
- *
- * **浅色主题已在真机看过（2026-10-01）**：浅色下 `bg-base` 与 `bg-layer-2` 同值（都是 `bluish-00`）
- * ⇒ 卡片只剩一根 `border-l4` 描边与页面分隔，分组靠组头 + 间距站住。**选中态在两档下都要另量**
- * （浅 `#fff` → `#ebeef2`、深 `#2c2c2e` → `#43454a`，2026-10-01/10-15 真机量的）；那两档取自同一个
- * token，来源表见 `src/client/ui/ui.css` 文件头。
+ * 样式：结构与布局用内联样式；配色与圆角走宿主 token；控件样式在 src/client/ui/ui.css，
+ * 由 ui/styles.ts 在模块物化时注入 style。界面规格见 docs/ui-spec.md；
+ * 改断点或列宽前先看 SPLIT_MIN_WIDTH、LIST_COLUMN_DEFAULT / LIST_COLUMN_MIN、DETAIL_RESERVE 与 usePanelWidth。
  */
 import {
   type CSSProperties,
@@ -105,38 +66,23 @@ export interface TrashPanelProps {
 const TRASH_DIR = TRASH_DIR_LABEL
 
 /**
- * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（docs/ui-spec.md，2026-10-15 真机后定值）。
- *
- * 为什么是 900 而不是当初那个 760：760 是从"正文列限宽"那条关心得搬来的，**不是两栏所需宽度**。
- * 两栏要成立，详情那一栏得真的读得下去：那一格固定要吃掉 90（两道 gap 32 + 把手 10 + 页内边距 48），
- * 详情至少要 399 ⇒ 地板 489，剩下的给清单。窄于此与其挤成两条读不了的柱子，不如下钻。
- * 900 这一档清单被夹到 411（比默认窄 9px），是 2026-10-15 按真 Chromium 量过之后定的：当时按"分隔 1px"
- * 算成 420 + 32 + 1 + 399 + 48，实际那格是 10px，于是清单让 9px 给详情，两边的可读下限都守住。
+ * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（docs/ui-spec.md）。
+ * 两栏要成立，详情列至少 399，加两道 gap 32、把手 10、页内边距 48 ⇒ 地板 489；
+ * 900 这一档清单为 411，刚好守住两边可读下限。改数字前先同步 DETAIL_RESERVE 与 usePanelWidth。
  */
 const SPLIT_MIN_WIDTH = 900
-/**
- * 左栏的**默认**宽（2026-10-15 起可拖，见下面 `LIST_COLUMN_MIN` / `DETAIL_RESERVE`）。
- * 这个数是**为"行内有动作"设计的**（2026-10-15 真机反馈后定）：两颗按钮（「恢复」描边 +
- * 「彻底删除…」安静的红）连 gap 约 152px，卡片左右内边距 28px，剩下 ~240px 给标题与
- * 「删除于 … · 大小」那一行——316 是"只放标题"那一版的宽度，动作搬回来之后它就不成立了。
- */
+/** 左栏默认宽：为“行内有动作”设计——两颗按钮约 152px，卡片内边距 28px，
+ *  剩下约 240px 给标题与元信息。可拖范围见 LIST_COLUMN_MIN / DETAIL_RESERVE。 */
 const LIST_COLUMN_DEFAULT = 420
-/**
- * 左栏下限。**量出来的，不是算出来的**（2026-10-15，真 Chromium 上按 10px 一档扫 240→420）：
- * 两颗按钮从来不会被挤掉——它们 `flex:none`，再窄也是**文字列**缩，所以"放得下按钮"根本不是约束
- * （我第一版按这个算出 280，是错的）。真正的下沿是「删除于 … · 224KB」那一行什么时候不再被省略号
- * 截断：280 差 50px、320 差 10px、**330 归零**。定在 330。
- */
+/** 左栏下限 330：再窄时「删除于 … · 224KB」那行就会开始被省略号截断。
+ *  按钮 flex:none，不参与这个下限。 */
 const LIST_COLUMN_MIN = 330
-/**
- * 拖到最右时给详情那一侧留的地板：正文可读最小宽 399 + 那一格的 90（两道 gap 32、把手 10、页内边距 48）。
- * 于是 `900 − 489 = 411`——断点下沿那一档**清单抢不动宽度**（而且它比默认 420 还窄 9px），这是对的：
- * 那一档两栏刚好塞满，再让清单抢宽就是把详情挤回"读不开"的样子（上一轮"右侧没有渲染"就是这么来的）。
- */
+/** 拖到最右时给详情留的地板：正文最小宽 399 + 两道 gap 32 + 把手 10 + 页内边距 48 = 489。
+ *  900 − 489 = 411，断点下沿清单抢不动宽度。 */
 const DETAIL_RESERVE = 489
 /** 分隔线键盘一格的像素数（←→）。 */
 const HANDLE_STEP = 20
-/** 详情正文的收口宽度：中央列再宽也不把文字拉成长线（原来那条"整列限宽 760"的关心得换成只限正文）。 */
+/** 详情正文的收口宽度：中央列再宽也不把文字拉成长线。 */
 const DETAIL_TEXT_MAX_WIDTH = 860
 
 /**
@@ -204,10 +150,8 @@ const DETAIL_COLUMN = {
 const DETAIL_INNER: CSSProperties = { minWidth: 0, maxWidth: DETAIL_TEXT_MAX_WIDTH, width: '100%' }
 
 /**
- * 那一排视图开关（全部折叠 / 全部展开、多选；「刷新」图标 2026-10-16 已删，见 `toolbar` 那处注释）。
- * 它**住在面板体顶端、不在清单列里**：原先在滚动容器内，长清单滚到底会把开关滚走（2026-10-15
- * 真机反馈后搬出来的理由，与已经删掉的「整条左栏收起」无关）。宽度上限由用它的地方现给——两栏时
- * 跟着可拖的清单列宽，单列时不设上限。
+ * 视图开关（全部折叠 / 全部展开、多选）。住在面板体顶端，不进滚动容器，长清单滚到底也不会滚走。
+ * 宽度上限由用它的地方现给：两栏时跟清单列宽，单列时不设上限。
  */
 const TOOLBAR: CSSProperties = {
   display: 'flex',
@@ -327,10 +271,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const noteParts = splitOn(t('trash.footer.note', { dir: TRASH_DIR }), TRASH_DIR)
 
   /**
-   * 清单容器（roving tabindex 那个唯一的 tab 巢）。`flex:'1 1 auto'` 是**空态居中链**的一节：
-   * 空态块自己有 `flex:1` + `justifyContent:center`，但要有**有高度的**父链才居得起来——本层是
-   * 两栏改造（2026-10-15）新插进来的 div，缺这条 flex 就把链断在"内容高"上、空态图标贴左上角
-   * （2026-10-16 真机反馈）。长清单不受影响：`min-height:auto` 把它钉在内容高，滚动照旧归外层。
+   * 清单容器（roving tabindex 的唯一 tab 巢）。`flex:'1 1 auto'` 撑起空态居中的父链；
+   * `min-height:auto` 让长清单保持内容高，滚动交给外层。
    */
   const list = (
     <div
@@ -524,8 +466,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         {t('trash.row.workspaceGone')}
                       </div>
                     ) : null}
-                    {/* 恢复/彻底删除 的失败原文留在这条记录上（2026-10-15 真机反馈：动作回到行内，
-                        失败也就跟着回行内——"动作与它的原因在同一行"这条住 docs/ui-spec.md「失败落点」，没换地方）。 */}
+                    {/* 恢复/彻底删除的失败原文留在这一行：动作与原因同一行（docs/ui-spec.md「失败落点」）。 */}
                     {controller.actionFailure[entry.id] === undefined ? null : (
                       <div
                         role="status"
@@ -546,8 +487,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       </div>
                     )}
                   </div>
-                  {/* 两颗动作按钮住在行右侧（与 2026-10-01 那版同形）。选中态只改变卡片底色与描边，
-                      不抢动作的位置——动作一直在，看详情才需要点整行。多选态整排退场。 */}
+                  {/* 两颗动作按钮住在行右侧；选中态只改卡片底色与描边，不抢动作位置。多选态整排退场。 */}
                   {selectMode ? null : (
                     <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
                       <Button
@@ -601,12 +541,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   )
 
   /**
-   * 那一排**常驻面板体顶端**，不住清单列里：它原先在滚动容器内，长清单滚到底会把开关滚走。
-   * 宽度上限跟着清单列走，所以它在视觉上仍然"属于清单"。
-   *
-   * 这里曾有一颗「刷新」图标（2026-10-15 收进那一排、同日降级成图标，**2026-10-16
-   * 按用户裁定删除**）：清单现在是"每次读都对账"（见 `reconcile.ts`），开面板、切走再切回、
-   * 重启——任何一次读都会先同步，那颗按钮不再承担别人替代不了的活。
+   * 视图开关常驻面板体顶端，不进滚动容器；宽度上限跟清单列走，视觉上仍属于清单。
+   * 不设「刷新」按钮：每次读清单都会先对账（见 reconcile.ts），开面板、切回、重启都会同步。
    */
   const toolbar = (
     <div
@@ -689,11 +625,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             borderTop: '0.5px solid var(--dsw-alias-border-l2)',
           }}
         >
-          {/* 这句里「不自动过期」是**必须看得见**的告警，所以别处都用 ELLIPSIS、这一处不用：
-              520px 窗（正文列 405）量到这句 `scrollWidth 360 > clientWidth 280` ⇒ 套上省略号就被截断。
-              句子整体一个 key（`trash.footer.note`，占位符 `{dir}`），渲染时按 `dir` 的值切一刀、把那一截
-              包成 code——不拆成前后两段翻译，免得两种语言各钉一次语序。多选态共用这一份：动作专属的
-              警告（"不可恢复"）归各自的确认框，2026-10-17 起这句不再分两版。 */}
+          {/* 「不自动过期」必须完整可见，所以这一处不用 ELLIPSIS；句子整体一个 key，
+              渲染时按 {dir} 切一刀把目录包成 code，避免两种语言各钉一次语序。
+              多选态共用这一份；动作专属警告归各自的确认框。 */}
           <span style={{ minWidth: 0, fontSize: 11.5, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
             {noteParts[0]}
             <span style={{ fontFamily: 'var(--ds-font-family-code)', fontSize: 11 }}>{noteParts[1]}</span>

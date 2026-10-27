@@ -1,7 +1,6 @@
 /**
- * 永久删除的**测量、计划与执行**：一次永久删除（`/list` 的只读读数或 purge / orphan-clean 的删除计划）
- * 之前要记下的事实（目录、字节、账本归属），以及拿到计划之后按它动盘的那一步。计划函数**只读**——
- * 写不写由执行器决定，但活体准入在这里就做掉，调用方拿到计划才允许动盘。
+ * 永久删除的测量、计划与执行：先记录目录/字节/账本归属，再按计划动盘。
+ * 计划函数只读；活体准入在计划阶段、任何写之前完成。
  */
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
@@ -69,7 +68,7 @@ export async function measureMemberDir(
 /** 把一组成员折成"删之前要记下的计划"；目录不在的成员跳过（记录与盘不一致是那条成员自己的事）。
  *  `purge` 的盘上后代、`orphan-clean` 的整组与 `/list` 的盘上残留都走这一处，别再各写一遍
  *  measure + workspaceOf。 */
-export async function planMemberRemovals(
+async function planMemberRemovals(
   deps: CoreDeps,
   members: readonly { readonly sessionId: string; readonly projectDir: string }[],
 ): Promise<PlannedMemberRemoval[]> {
@@ -260,14 +259,14 @@ export async function planOrphanRemoval(
  * 按计划执行一次永久删除：只写、不再量、不再判活体（计划就是执行前的闸）。回执的字节念计划
  * （`plan.bytes`），执行期不再累加一遍。
  *
- * 顺序（与迁移前的 purge / orphan-clean 一致）：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行
+ * 顺序：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行
  * （在才删目录 → 摘清册行 → 通告成员离场）→ 逐条盘上成员（删目录 → 通告成员离场）。目录删掉就没有
  * "退回去"这回事，中途失败**不回滚**；已经删掉的由下面的计数器如实交回。
  *
- * 失败形状沿用调用方原来的措辞与结构：
+ * 失败形状：
  * - `kind:'orphan'`（orphan-clean）⇒ `io` + `{removed, freedBytes, failedSessionId}`，不伪装成整组没动；
- * - `kind:'trash'`（purge）⇒ 同一个标签、不带 details。
- * - orphan-clean 的 unarchive / detach 在旧实现里不包装，这里原样抛出（不改变现有错误形状）。
+ * - `kind:'trash'`（purge）⇒ 同一个标签、不带 details；
+ * - orphan-clean 的 unarchive / detach 原样抛出。
  *
  * 通告只经 `member-presence`（摘活体三态 + `api-session/removed`），不在这里另写一份。
  */

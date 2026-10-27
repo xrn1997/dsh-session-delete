@@ -1,12 +1,10 @@
 /**
- * 逐条 `/apply` 的**写入座位**：一次写入发生在哪个界面位置，就在哪个函数里把呈现材质、闸与重读通道绑好。
+ * 逐条 `/apply` 的写入座位：一次写入发生在哪个界面位置，就在哪个函数里绑定呈现材质、闸与重读通道。
  *
- * 为什么要有它：六个调用点此前各自拼 `runWrite({ presentation: {…} })`，并各自决定要不要外包一层闸。
- * 收尾顺序（`write-settlement.ts`，ADR-0013）与重读策略（`use-trash-query.ts`，ADR-0016）不动；
+ * 收尾顺序住 `write-settlement.ts`（ADR-0013），重读策略住 `use-trash-query.ts`（ADR-0016）；
  * 座位只拥有「这次是谁在写、交哪些材质、闸在哪」。
  *
- * 边界：不判回执（`receipt.ts`）、不决定收尾顺序、不拥有各面的本地状态（`pending` / 详情缓存 / 行失败）。
- * 面板座位的闸由面板传入：`busy` 是它的 UI 状态，座位不另造第二枚。
+ * 边界：不判回执、不决定收尾顺序、不拥有各面的本地状态；面板座位的闸由面板传入，不另造第二枚。
  */
 import type { BusyGate } from './busy-gate.js'
 import type { OneShotDeps, TrashEntryLike } from './remote.js'

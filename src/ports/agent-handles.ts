@@ -17,7 +17,7 @@ interface AgentServiceLike {
 }
 
 /** 捕获所需的 ctx 窄面：可选服务读法（`get`）与按依赖注入的子上下文（`inject`，晚挂载的 `agents` 靠它补装）。
- *  旧 ctx / 假件可以没有 `inject`——那就只在 apply 时 `get` 一次。 */
+ *  有些 ctx / 假件没有 `inject`——那就只在 apply 时 `get` 一次。 */
 export interface AgentCtxLike {
   get(name: string): unknown
   inject?(names: readonly string[], callback: (child: { get(name: string): unknown }) => void): void
@@ -73,7 +73,7 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
         // **不能拿 `service[name]` 读回比身份**：cordis 的 traceable 服务代理每次读函数都会新包一层
         // （`get` 里的 `createShadowMethod`），读回永远不等于刚写进去的那个函数。赋值本身落在代理的
         // 目标对象上（实测：`Object.getOwnPropertyDescriptor(proxy, name).value === wrapped`），
-        // 调用也真的走 wrapper。2026-10-21 真机事故就是这条假警报：resume 已包上却在这里抛，
+        // 调用也真的走 wrapper。这条身份比较是假警报：resume 已包上却在这里抛，
         // 循环随后没走到 create ⇒ 新建会话的 handle 一个都没捕获。
         if (Object.getOwnPropertyDescriptor(service, name)?.value !== wrapped) {
           throw new Error(`agents.${name} is not writable`)
@@ -99,7 +99,7 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
     try {
       ctx.inject(['agents'], (child) => { install(child.get('agents')) })
     } catch {
-      // 没有 inject 的旧 ctx：不捕获。
+      // 没有 inject 的 ctx：不捕获。
     }
   }
   return {

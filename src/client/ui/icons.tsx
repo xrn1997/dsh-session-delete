@@ -1,18 +1,13 @@
 /**
- * 本插件 UI 层要用的图标（**逐条抄自** `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2`
- * 随包发布的明文产物 `lib/index.js`；出处与改写规则见 `ui.css` 头注）。
+ * 本插件 UI 层要用的图标（逐条抄自 `@deepseek-ai/dsh-client-ui-primitives` 的明文产物；
+ * 出处与改写规则见 `ui.css` 头注）。
  *
- * 只留本插件用到的：垃圾桶（删除动作 / 回收站）、警示（失败面）、打开的项目文件夹、
- * 关闭叉（对话框）、圆圈对勾（撤销提示的 success 档）、对勾（行尾兜底勾选开关，2026-10-17 加；
- * 行首主勾选走原生 Checkbox）、下折与右折 chevron（清单的分组折叠头，
- * 2026-10-15 加：`DisclosureRow` 那套折叠行的两态 glyph）。「刷新」那枚随按钮一起删了
- * （2026-10-16，见 `trash-panel.tsx` 工具排的注释）——本文件不留无人消费的几何。
+ * 只留本插件用到的：垃圾桶、警示、打开的项目文件夹、关闭叉、圆圈对勾、对勾、下折/右折 chevron。
  * **几何、`viewBox`、`strokeWidth` 逐字不动**——它们是官方图标集的形状，改了就不再与宿主同屏同形。
  *
  * 两条与官方实现的差异（都是减法，不是改写）：
- * - 只暴露 `size`（官方是 `{size, className, strokeWidth}` 三件套 + `Medium` 1.3px 那一档）：
- *   本插件调用处只传 `size`，加别的等于摊开官方整个图标 API。
- * - 不做 `ICON_REGULAR_STROKE` / `ICON_MEDIUM_STROKE` 常量：只有一个档位，直接写 1。
+ * - 只暴露 `size`：调用处只传 `size`，不摊开官方整个图标 API。
+ * - 不做 stroke 常量：只有一个档位，直接写 1。
  */
 import type { ReactElement, ReactNode } from 'react'
 
@@ -109,7 +104,7 @@ export function IconCheckCircleOutlineRegular({ size }: IconProps): ReactElement
   )
 }
 
-/** 行尾兜底「勾选开关」那枚对勾（状态点/归档行；官方 `IconCheckOutlineRegular`，`viewBox`/`d` 逐字；2026-10-17 加）。 */
+/** 行尾兜底勾选开关那枚对勾（状态点/归档行；官方几何逐字）。 */
 export function IconCheckOutlineRegular({ size }: IconProps): ReactElement {
   return (
     <IconFrame size={size}>

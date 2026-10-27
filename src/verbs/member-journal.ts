@@ -1,19 +1,13 @@
 /**
- * 一次成员移动 = 一串**自带反向动作的步骤**（ADR-0002）。
+ * 一次成员移动 = 一串自带反向动作的步骤（ADR-0002）。
  *
- * 为什么需要它：`delete-session.ts` 的 `moveOneIn`/`undoOneIn` 与 `restore-session.ts` 的 `restoreOne`
- * （含它的反向闭包）互为镜像，各自手写了三到四段嵌套 `try/catch`：迁移前全仓 `rollbackReason(` **22 处**、
- * `withRollbackFailures(` **8 处**。那不是"回滚值得自己的候选"，而是**同一条正反动作对被写了两遍**。
+ * 这里独占四件事，动词只声明“这次要做哪几步、每步怎么退”：
+ * - 相反顺序退化；
+ * - 一步失败时把已做成的那些退回去；
+ * - 失败收集：回滚不干净时不让原错误独走（details.rollbackFailures）；
+ * - 非原子步骤：undoOnFailure 让“这一步自己失败”也跑反向动作。
  *
- * 这里独占四件事，三个动词各自只声明"这次要做哪几步、每步怎么退"：
- * ① **相反顺序**退化（最后做成的先退）；
- * ② 一步失败时把**已经做成的**那些退回去；
- * ③ 失败收集：某一步退不干净时**不让原错误独走**（`details.rollbackFailures`，见 `verbs/errors.ts`）；
- * ④ **非原子步骤**：`undoOnFailure` 让"这一步自己失败了"也跑它的反向动作（例如"取消归档"半做完了，
- *    得先把会话重新藏回去）。
- *
- * 边界：它只服务"成员在 `sessions/` 与 `session-trash/` 之间搬"这一件事。做成通用撤销框架就会吸进
- * 不属于它的知识（谁该通告、通告几次、哪些失败算成功）。
+ * 边界：只服务成员在 sessions/ 与 session-trash/ 之间搬；不做通用撤销框架。
  */
 import { isSessionDeleteCodeError } from '../shared/wire.js'
 import { rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
@@ -39,7 +33,7 @@ export interface JournalUndo {
 export interface JournalStep {
   /** 稳定的领域键，给 `restored(key)` 用。 */
   readonly key: JournalStepKey
-  /** 这一步在做什么。失败原文按「`<label>：<原错误>`」拼——与迁移前那 22 处 `rollbackReason` 的措辞同形。 */
+  /** 这一步在做什么。失败原文按「`<label>：<原错误>`」拼。 */
   readonly label: string
   /** 做这一步。抛什么都由 journal 折成 `sessiondelete/io`（除非它自己已经是一个动词码）。 */
   run(): Promise<void>
@@ -114,9 +108,8 @@ export async function stepUndo(label: string, run: () => Promise<unknown>): Prom
 
 /**
  * **组级回滚**：把已经做成的成员按相反顺序退回；某一步退不干净时把失败并进原错误的
- * `details.rollbackFailures`，绝不让原错误独走（2026-10-19 `f2a7757`；那些失败句子的合并与措辞住
- * `src/verbs/errors.ts`，这里只是唯一的调用方）。删除与恢复两个按组走的动词共用这一处，
- * "相反顺序 + 失败合并"不再各写一遍。
+ * `details.rollbackFailures`，绝不让原错误独走。那些失败句子的合并与措辞住 `src/verbs/errors.ts`；
+ * 删除与恢复两个按组走的动词共用这一处。
  */
 export async function rollbackJournals(journals: readonly Journal[], error: unknown): Promise<never> {
   const failures: string[] = []

@@ -1,5 +1,5 @@
 /**
- * 多帧 zstd 流的**帧边界**（2026-10-15 实测）。
+ * 多帧 zstd 流的帧边界。
  *
  * 为什么要有这个文件：会话日志是一次次 append 出来的**帧序列**，而 Node 的 `zstdDecompressSync`
  * **与** `createZstdDecompress()` 流式**都只给第一帧**（实测：本机一个 3.8 MB 的文件，两个 API 都只回
@@ -16,7 +16,7 @@
  * **尾巴那 4 字节按实测处理，不按 descriptor 的 bit5**：校验位从未置位，却每帧都带 4 字节；
  * 判"读不读这 4 字节"用的是「跳过去必须正好撞上下一帧的 magic 或到 EOF」——猜错不会静默切歪：
  * 末尾的自证与块界护栏会抛（护栏是必需的：块头越界时 `|` 读回 0，而 0 的 `Last_Block` 位没置位，
- * 少了它块循环每圈只 +3 字节却永不 break，整个进程卡死——2026-10-15 写用例时真卡死过一次）。
+ * 少了它块循环每圈只 +3 字节却永不 break，整个进程会卡死；用例覆盖这一条）。
  */
 
 export interface FrameRange {
@@ -86,14 +86,14 @@ export function frameRanges(raw: Buffer): FrameRange[] {
       cursor += BLOCK_HEADER_BYTES
       // 越界必须在这里响亮失败，不能继续走：`readUint24LE` 是 `|` 读，越界那三字节全是 `undefined`
       // ⇒ 恒 0，而 0 的 `Last_Block` 位没置位 ⇒ 少了这道护栏，块循环每圈只 `cursor += 3` 却永远
-      // 不 break，整个进程卡死（2026-10-15 写用例时真卡过一次）。
+      // 不 break，整个进程会卡死。
       if (cursor > raw.length) {
         throw new Error(`zstd 块头越界：帧起于 ${at}，读到偏移 ${cursor}（文件长 ${raw.length}）`)
       }
       const blockType = (blockHeader >> BLOCK_TYPE_SHIFT) & 0x3
       const blockSize = (blockHeader >> BLOCK_SIZE_SHIFT) & BLOCK_SIZE_MASK
       // 3 是规范的 Reserved 位：真产物 36 904 帧里一次没出现过，而 Node 的解压端当场拒
-      // （"Data corruption detected"，2026-10-15 探针实测）⇒ 不照 Raw 那样吞掉块体，直接抛。
+      // （"Data corruption detected"）⇒ 不照 Raw 那样吞掉块体，直接抛。
       if (blockType === BLOCK_RESERVED) {
         throw new Error(`zstd 保留块类型：帧起于 ${at}，偏移 ${cursor - BLOCK_HEADER_BYTES} 的块头 type=3（规范 Reserved，对面解不开）`)
       }

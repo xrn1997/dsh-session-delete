@@ -1,38 +1,13 @@
 /**
- * 浏览器半的**取数通道**：同源 fetch 宿主 web server 上的 `/dsh-session-delete-api`，
- * 加上信封判别与注入面那一处「展开成裸值」的适配。
+ * 浏览器半的取数通道：同源 fetch /dsh-session-delete-api，并处理信封与失败原文。
  *
- * 通道形状（裁决）：真相/账本/判据全在宿主那边，Node 半用宿主**自己的 web server** 开一条
- * 插件专属前缀路由把六个段名（`list` / `ping` / `orphans` / `detail` / `apply` / `empty`）搬出来
- * （`src/api/dispatch.ts`），浏览器半同源调用。**不是重造后端**：
- * 路由层只做搬运与信封。为什么不用官方的 `remote.<namespace>`：那条路要**生成的 Typert 远程描述符**
- * 加一次 `$mount`，而盒内装配清单写死在 `dsh-api-remotes` 里、全宿主没有动态发现，第三方只能自挂自，
- * 对一个薄插件不划算。
- *
- * 三条约束决定了这个文件长这样：
- *
- * 1. **信封刻意与官方 unary 面同形**：`{ ok: true, value }` / `{ ok: false, error }`。这不是"还留着
- *    官方通道"——它现在是**我们两半之间**的 wire 契约（Node 半按它产出，见 `src/api/dispatch.ts`），
- *    选它是为了让组件面、`unwrapRemoteResult` 与既有用例一行都不用改。失败是**返回**而不是
- *    reject（同宿主网关原文："Every unary call resolves to `RemoteResult<T>` … and never rejects for a
- *    carrier problem"）；只有往返本身失败（打不通、回的不是信封）才 reject，那是**通道缺席**。
- * 2. **不许值 import 跨插件包**。`error` 在线上就是一段 JSON（`{code, message, details?}`），不是
- *    `RemoteError` 实例——所以判别**所依据的那一个标记位**只镜一份，家在两半共用的
- *    `src/shared/wire.ts`（`isDSHRemoteError`）。浏览器半落到本地时用 `throwRemoteFailure` 就地补上
- *    Error 本体与标记位；Node 半（`src/remote/map-error.ts`）只用它做「这已经是一次远程失败」的判别，
- *    产出的是线上那三件（`details` 可缺席）、不造任何 Error，更不 import 宿主那个类。
- * 3. **失败原文必须能上屏**。调用方（`callRemote`）只把**抛出来的失败**收成判别式状态——
- *    `{ ok: false, error }` 不是第三种落地：它在注入面那一处已经被 `unwrapRemoteResult` 抛成了异常，
- *    所以到了组件面前只剩「裸值 / throw」两支，调用方只写 `if (!outcome.ok)`，正常流里没有 try/catch；
- *    非本信封形状的异常（网络层、TypeError…）也不丢原文（见 `failureOf`）。
- *
- * 面（`list` / `ping` / `orphans` / `detail` / `apply` / `empty`）与 Node 半路由的六个段名一一对应（段名本身的家是
- * `src/shared/wire.ts`）；`list` 回一行行的条目，`ping` 只回一个探针值，`orphans` 回一份**纯读**的
- * 残留扫描报告，`detail` 回单条正文，
- * `apply` 回**一组逐条结果**，`empty` 回聚合回执。2026-10-17 之前是六个动作段（一条一段），
- * 批量只能由调用方循环拼——那正是「恢复 100 条很慢」的形状来源，收成一段之后这条通道不再有
- * "第二条执行路径"。**清理无主子会话也不另开一段**：它是 `apply` 的第五个动作，`orphans` 只负责
- * "有多少、在哪、多大"。
+ * - 路由是宿主 web server 上的插件前缀；官方 remote.<namespace> 需要生成的 Typert 描述符，
+ *   第三方无法动态挂载，因此走这条薄线（ADR-0009）。
+ * - 六段：list / ping / orphans / detail / apply / empty；写动作统一走 apply。
+ * - 信封与官方 unary 面同形：{ok:true,value} / {ok:false,error}。HTTP 往返本身失败才 reject；
+ *   业务失败以信封返回，由 unwrapRemoteResult 在注入面抛出。
+ * - error 在线上是 {code,message,details?} 普通对象；判别依据 isDSHRemoteError 住在
+ *   src/shared/wire.ts，这里不 import 任何宿主客户端包。
  */
 import {
   PARAMS,
@@ -52,7 +27,7 @@ import {
 import { CLIENT_UNKNOWN_CODE, missingOutcomeMessage, readSingleReceipt } from './receipt.js'
 
 /**
- * 回收站条目（`/list` 那一行）。**形状的家在 `shared/wire.ts`**（ADR-0003）：这里只是旧名的别名，
+ * 回收站条目（`/list` 那一行）。**形状的家在 `shared/wire.ts`**（ADR-0003）：这里只是别名，
  * 所以浏览器半不再自己抄一遍字段；下面几处"只读面"的镜像同理。
  */
 export type TrashEntryLike = TrashRowWire
@@ -134,11 +109,8 @@ export async function callRemote<T>(run: () => Promise<T>): Promise<RemoteOutcom
 }
 
 /** 本插件前缀路由那套**响应信封**的窄镜像（不是宿主服务 `ctx.remote.*`——那条 typert 通道为什么用不了，见 `AGENTS.md` 的 `remote.<namespace>` 那条）：
- *  每个方法 resolve 成 `RemoteResult<T>`。
- *
- * 2026-10-17 批量重构：写动词收成**一个 `apply`**（一段管所有动作、一组 id 进、逐条结果出），
- * 再加一段**纯探测** `ping`；2026-10-19 又加一段**纯读扫描** `orphans` ⇒ 面是六段：
- * `list` / `ping` / `orphans` / `detail` / `apply` / `empty`（原先六个动作段）。 */
+ *  每个方法 resolve 成 `RemoteResult<T>`。面是六段：`list` / `ping` / `orphans` / `detail` / `apply` / `empty`；
+ *  写动作统一走 `apply`（一组 id 进、逐条结果出）。 */
 export interface RawSessionDeleteRemote {
   list(): Promise<RemoteResult<TrashEntryLike[]>>
   /** 通道的"在不在"：一次零成本的 GET（探测专用，见 `src/api/dispatch.ts` 的 `ping` 支）。 */
@@ -205,8 +177,7 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
  * 错误映射也生效了），那时该做的是把入口显示出来、让原文上屏；只有往返本身失败才算通道缺席 ⇒
  * 一个槽位贡献都不注册（docs/architecture.md §3「通道探测决定入口出现与否」）。
  *
- * 2026-10-17：探测从"读一遍清单"改成这一问——**每次页面加载都跑全表对账**是白付的钱，
- * 而"信封到不到"这件事一次零成本的 GET 就答得出来。
+ * 探测用一次零成本的 `GET /ping`，不读清单，避免每次页面加载都跑全表对账。
  */
 export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean> {
   try {
@@ -245,7 +216,7 @@ export interface SessionDeleteRemote {
    *  不是"零条残留"（把 `io` 折成空报告等于把"不知道"说成"没有"）。 */
   scanOrphans(): Promise<OrphanReportWire>
   detail(entryId: string): Promise<TrashDetailLike>
-  /** 一段管所有写动作（2026-10-17 批量重构）：一次调用把整批办完，逐条结果原样交回组件。 */
+  /** 一段管所有写动作：一次调用把整批办完，逐条结果原样交回组件。 */
   applyOutcomes(action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]>
   /** 清空回收站（聚合回执）。 */
   emptyTrash(): Promise<PurgeResultLike>

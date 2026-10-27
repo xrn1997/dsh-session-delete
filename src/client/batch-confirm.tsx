@@ -1,5 +1,5 @@
 /**
- * 批量删除的确认框（2026-10-17）——挂在 `shell.overlay` 上的宿主，加它读的那个模块级现场。
+ * 批量删除的确认框——挂在 `shell.overlay` 上的宿主，加它读的那个模块级现场。
  *
  * 为什么又开一个文件而不是把 `delete-confirm.tsx` 撑大：单删那张框是**已交付的面**（docs/ui-spec.md 状态 ②，
  * 用例钉着），批量形与它只有三件不同——标题随条数、目标卡逐条列、执行是一次批量 `apply`。共用一个壳
@@ -96,7 +96,7 @@ const TARGET_TITLE = {
 const TARGET_META = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' } as const
 
 /**
- * 目标卡要能装几十条：2026-10-17 真机一次选 64 条，卡片把弹框撑出视口，标题和底部按钮都被顶没了。
+ * 目标卡要能装几十条：选中很多条时卡片不能把弹框撑出视口，标题与底部按钮必须保持可见。
  * 沿用回收站批量恢复确认框的 280px 先例——**只在卡片内部滚**，头与动作行留在框里。
  */
 const BATCH_TARGET_CARD = {

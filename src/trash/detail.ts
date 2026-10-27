@@ -20,7 +20,7 @@
  */
 import { trashDirOf, type TrashEntry } from './entry.js'
 import type { FsPort } from '../ports/fs-port.js'
-import type { TrashDetailMessageWire, TrashDetailWire } from '../shared/wire.js'
+import type { TrashDetailWire } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 import { trashEmpty, verbError } from '../verbs/errors.js'
 
@@ -28,10 +28,6 @@ import { trashEmpty, verbError } from '../verbs/errors.js'
 export const PER_MESSAGE_CHAR_CAP = 3_000
 /** 一次回信的正文总量上限（字符）。 */
 export const TOTAL_CHAR_CAP = 500_000
-
-/** 详情正文里的一条消息 / 整份详情：**线上形状的家在 `shared/wire.ts`**（ADR-0003）——
- *  Node 半产出它，浏览器半按同一份类型消费，这里只留旧名做别名。 */
-export type TrashDetailMessage = TrashDetailMessageWire
 
 export type TrashDetail = TrashDetailWire
 

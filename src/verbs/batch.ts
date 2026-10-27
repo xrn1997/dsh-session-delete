@@ -1,24 +1,13 @@
 /**
- * **「这一批」的唯一拥有者**（ADR-0002）：`POST /apply` 的落点——一组 id 上的同一个动作。
+ * 「这一批」的唯一实现（ADR-0002）：POST /apply 的落点——一组 id 上的同一个动作。
  *
- * 五个动作：`delete` / `restore` / `purge` / `count` / `orphan-clean`。
+ * 批量是请求的性质，不是单个动词的性质。这里拥有三件事：
+ * - 去重并保持输入顺序；
+ * - 逐条信封：一条失败不传染下一条，失败按 map-error 折成错误对象；
+ * - 恢复通告攒到批尾，一次 announceRestored(ids)。
  *
- * 为什么批量要有自己的 module：批量是**请求**的性质，不是某一条动词的性质。此前它长在三个动词的
- * interface 上（`onMembers` / `snapshot` / `suppressAnnounce`），于是每个动词都得知道"我是第几个、
- * 前面的兄弟带走了谁"，同一个事实还有三种机制（回调、调用方 `taken` 集合、动词就地收缩数组）。
- *
- * 这一层拥有三件（每条批量语义都在这里）：
- * ① **去重保序**：输入顺序就是界面"清单从上往下"的读感；
- * ② **逐条信封**：一条失败不传染下一条，失败按 `map-error` 那张表折成 `{code,message,details?}`；
- * ③ **一批一次通告**：恢复的 `api-session/added` 攒到批尾、调一次 `announceRestored(ids)`（预取与逐条
- *   发送都在 adapter 里；逐条调 = 每条一次宿主全表扫，那正是 2026-10-17 "恢复很慢"的头号来源）。
- *
- * **同批已带走集**（整批只读一次"最初的样子"）住 `src/verbs/batch-carried.ts`；这里消费它的
- * `claim` / `take`，purge 另取 entry 域的 `rows()` 作为当前只读清册。
- *
- * 「已被同批前一条带走」是**幂等成功**，不是失败：用户要的结果本来就已经达成了（`delete`/`restore`
- * 回 `null`；`purge` 回 `{removed:0,freedBytes:0}`）。判据仍归 `trash/groups.ts`（ADR-0001，
- * 由 `batch-carried.ts` 调用），同批已带走集只决定"这一条还该不该交给动词"。
+ * 「已被同批前一条带走」是幂等成功（delete/restore 回 null，purge 回 0），不是失败；
+ * 判据在 trash/groups.ts，同批已带走集在 batch-carried.ts。
  */
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../ports/host-port.js'

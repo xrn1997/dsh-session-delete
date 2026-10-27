@@ -15,7 +15,7 @@ import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
  * 再摘账本、最后删目录"的顺序都住 `verbs/permanent-removal.ts`——计划只读，执行器只写，计划就是
  * 执行前的闸（别在这里再长出一段手写步骤）。
  *
- * **这条动词不做回滚**：目录删掉就没有"退回去"这回事（2026-10-19 `f2a7757`：删到一半失败时已删目录不回滚；
+ * **这条动词不做回滚**：目录删掉就没有"退回去"这回事（删到一半失败时已删目录不回滚；
  * 带部分计数的 `details` 回执只属于 `orphan-clean`，purge 的 `removed` / `freedBytes` 仍只在成功回执里给）。
  * 对应地，`kind:'trash'` 的计划失败时执行器只抛那一步的 `io` 与原文、不带 details。
  */

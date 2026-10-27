@@ -1,19 +1,13 @@
 /**
  * 成员离场 / 归位的通告协议：摘活体、三态判断、成对事件只在这里做。
  *
- * 为什么要有它：delete（成功与回滚）/ restore 回滚 / purge（两个分支）/ orphan-clean
- * 六处调用曾经各写一遍
- * `evictLive → !== 'unknown' → announceRemoved`；删除回滚还要自己拼目录与账本两个布尔
- * 才发 `announceRestored`。
- * 这条协议说错一次就是客户端留着假行、或删掉真行，所以只留一个家。
+ * 调用方包括 delete、restore 回滚、purge、orphan-clean；协议说错一次就是客户端留假行或删真行。
  *
  * 边界：
- * - 批量恢复的编排（攒 id、批尾一次发）归 `verbs/batch.ts`（ADR-0002）；它经同一份能力面调
- *   `announceRestored(ids)`，本模块只实现这条批量通告（ADR-0019）。
- * - 本模块不决定哪个键算归位：动词在 `tail.onUndone` 里把 `restored(key)` 读成事实再交进来，真值表住这里；
- *   `run` / `undo` 之后补一条通告的**形状**由 {@link withPresenceTail} 拥有。
- * - 本模块用到的三条（`evictLive` / `announceRemoved` / `announceRestored`）按契约不抛（evictLive 三态、
- *   announce* 内部吞异常），这里不再叠 catch。
+ * - 批量恢复的编排归 `verbs/batch.ts`（ADR-0002）；本模块只实现 `announceRestored(ids)`（ADR-0019）。
+ * - 哪个键算归位由动词在 `tail.onUndone` 里读成事实再交进来，真值表住这里；
+ *   `run`/`undo` 之后补通告的形状由 {@link withPresenceTail} 拥有。
+ * - `evictLive`/`announce*` 按契约不抛，这里不再叠 catch。
  */
 import type { EvictionOutcome, HostPresencePort } from '../ports/host-port.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
@@ -55,14 +49,10 @@ export interface PresenceTail {
 }
 
 /**
- * 给一次成员移动的 journal 补上「在场那条尾巴」：run 完全成功之后离场、undo 之后按事实归位或离场。
+ * 给一次成员移动的 journal 补上「在场那条尾巴」：run 完全成功之后离场，undo 之后按事实归位或离场。
  *
- * 为什么是个工厂：删除与恢复此前各手拼一个匿名 journal，形状逐字相同（`journal.run` 加上
- * `presence.memberGone`／`journal.undo` 加上 `presence.memberBack`），只差键 → 事实的映射。
- * 两处各写一遍，就是「补在哪一拍」这条顺序又有第二个家。
- *
- * 边界：`memberGone` 的 `backInTrash:false` 早退与 `memberBack` 的两件齐备真值表仍归 `createMemberPresence`；
- * 这里只把事实原样递过去，不替它判断。
+ * 边界：`memberGone` 的 `backInTrash:false` 早退与 `memberBack` 的两件齐备真值表归 `createMemberPresence`；
+ * 这里只把事实原样递过去。
  */
 export function withPresenceTail(presence: PresenceCapability, journal: Journal, tail: PresenceTail): Journal {
   const announce = async (undo: JournalUndo): Promise<void> => {

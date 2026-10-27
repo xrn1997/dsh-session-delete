@@ -1,16 +1,12 @@
 /**
  * **同批已带走集**（「已被同批前一条带走」的 id）的唯一实现（ADR-0002 的内部实现）。
  *
- * 三个动作曾各有一套机制：delete 用动词回吐的 `movedSessionIds`，restore/purge 用
- * `original / current` 两份快照 + 旧 boolean 谓词 + `shrink`。这里把判据收成 `claim(id)` + `take(id)`；
  * 两种 id 域各一个 adapter：
  * - entry 适配：restore / purge 的条目 id，`claim` 是三态（fresh / carried / absent），组语义仍读
  *   `trash/groups.ts`；
  * - session 适配：delete 的会话 id，`claim` 只有 fresh / carried，集合由动词结果长出。
  *
- * entry 适配的三态判据读 `groups.claimOf`；session 适配没有原始清册视图，只记 `take` 过的会话 id
- * （因此只有 fresh / carried 两态）。这里只做 id 域适配，不另写组语义。
- * 两域的 `claim` 形状不同：entry 交 `GroupClaim`（只有 fresh 带组），session 只交 verdict；
+ * entry 适配的三态判据读 `groups.claimOf`；session 适配没有原始清册视图，只记 `take` 过的会话 id。
  * 当前只读视图（`rows`）只挂在 entry 域上：只有 purge 要它——盘上后代要按清册里还在的 id 排除。
  */
 import { bareSessionId } from '../ports/host-port.js'

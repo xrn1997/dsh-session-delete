@@ -1,16 +1,13 @@
 /**
- * **路由表**（ADR-0004）：段名 → `{ 方法, 纯度, 读面, body, 处理 }`。一条记录，两个消费者。
+ * 路由表（ADR-0004）：段名 → { 方法, 纯度, 读面, body, 处理 }。一条记录，两个消费者。
  *
- * 此前"同一条请求该过哪几道判断"的知识散在两个函数里：`dispatch()` 里六个 `if` 各调一次
- * `requireMethod`，`purityOf()` 里另一组 `if` 决定"要不要进到达序链"，两处靠**注释**维持一致。
- * 不一致的两种后果都不好在测试里撞见：
- * - 该纯的判成写 ⇒ 一次探测/大正文读/扫描把删除按钮堵在串行链后面；
- * - 该写的判成纯 ⇒ 写动作绕开到达序链，与对账交错，回收站出现"目录在、行是降级元数据"的世界；
- * - body 该读没读 ⇒ 下游拿到 `null`；读了两遍 ⇒ 请求流已被消费（Node 的流只能消费一次）。
+ * 一致性要求：
+ * - 该纯的判成写 ⇒ 探测/正文读/扫描被堵在串行链后；
+ * - 该写的判成纯 ⇒ 写动作绕开到达序链，与对账交错；
+ * - body 该读没读 ⇒ 下游拿到 null；读两遍 ⇒ 流已被消费。
  *
- * 为什么这张表**不在** `shared/wire.ts`：处理函数会 import 动词与 `node:fs`，而浏览器半要 import
- * `wire.ts`——值 import 会把 Node 半拖进客户端 bundle，正好撞上 `tsdown` 的纯度门。段名与动作仍住
- * `wire.ts`（两半的共同契约），这张表只回答"怎么处理"。
+ * 这张表不放 shared/wire.ts：处理函数会 import 动词与 node:fs，而浏览器半要 import wire.ts。
+ * 段名与动作仍住 wire.ts；这张表只回答“怎么处理”。
  */
 import { PARAMS, ROUTES, type ApplyAction } from '../shared/wire.js'
 import type { DeleteDeps } from '../deps.js'
@@ -29,7 +26,7 @@ export type Purity = 'pure' | 'chained' | ((body: JsonBody) => 'pure' | 'chained
 /** 清册读面：`none` = 不读；`list` = 真相读（先对账）；`raw` = 索引快照（不对账）。
  *  它与纯度是两条独立的轴：`count` 是 pure/不读，`detail` 是 pure/raw，`ping` 是 pure/不读。 */
 export type ReadKind = 'none' | 'list' | 'raw'
-type JsonBody = Record<string, unknown> | null
+export type JsonBody = Record<string, unknown> | null
 
 /** 路由交给处理函数的读能力：读段与 `/empty` 只能从这一面取行，不能自己挑 `list()` / `raw()`（`/apply` 的写动词读面归动词自己）。 */
 export interface RouteRead {

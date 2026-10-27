@@ -121,7 +121,7 @@ interface StorageDomainCtxLike {
  * 清单的真实绑定：官方 storage domain → `ManifestPort`（`StorageDomainLike` 在动词层保持一种读法）。
  * 域**懒开**且成功句柄只开一次（`apply` 是同步的，而 `open()` 是异步的），并挂一条 `ctx.effect` 清理：
  * 插件卸载时关掉句柄并把 `close()` 的落地交回框架（句柄归调用方所有，这是 `open()` 的 JSDoc 明写的契约；
- * 2026-10-17 起不再 `void` 走掉——没关严的句柄会让下一份同名域撞 `already-open`）。
+ * 不能 `void` 走掉——没关严的句柄会让下一份同名域撞 `already-open`）。
  *
  * **失败不缓存**：`open()` 被拒是瞬态（域被别的持有者占着、装载竞态），把第一次的 rejected promise
  * 缓存起来等于"这个会话永远删不掉"——下一次读会重新走 `open()`，成功才落下活句柄。

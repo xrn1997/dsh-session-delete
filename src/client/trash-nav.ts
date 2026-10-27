@@ -1,27 +1,15 @@
 /**
- * 清单的**键盘导航面**：方向键走环、Enter / Space 的双重语义、roving tabindex 的落点，
+ * 清单的键盘导航面：方向键走环、Enter/Space 的双重语义、roving tabindex 的落点，
  * 以及窄档下钻里按 Esc 退回清单并把焦点交还给那一行。
  *
- * 为什么收回一处：这几条判据此前劈在 `trash-panel.tsx`（键盘分支与 `activeDescendantId` /
- * `tabStopId` 两枚只读）与 `use-trash-panel-controller.ts`（Esc 的两个 effect 与那笔焦点账）之间。
- * 它们说的其实是同一件事——"屏幕上从上到下的那一串行里，谁是光标、谁拿 tab 落点、Esc 之后焦点
- * 还给谁"——而那份顺序只在面板手里（`ordered` 只含展开的组）。收进一个 module 之后面板只交输入
- * 与四个动作，控制器不再知道焦点这回事。
+ * 它不查自己的行、不认行选择器：焦点动作由调用方注入 focusRow，行的 DOM 查询留在面板；
+ * 唯一的文档查询是 Esc 让路判据（问 ui/top-layer.ts 当前有没有打开的 dialog/menu）。
+ * 只读事件的 target 判断这一下该不该归清单：行内按钮/勾选框的 Enter/Space 是人家的激活键。
  *
- * 它**不查自己的行、不认行选择器**：焦点动作由调用方注入 `focusRow`，行的 DOM 查询仍留在面板——
- * 行是在那儿渲染出来的，行选择器只在那儿有权威；唯一的文档查询是 Esc 让路判据（问
- * `ui/top-layer.ts` 当前有没有打开的 dialog / menu）。它只读事件的 `target` 来判断这一下该不该
- * 归清单：从行内按钮 / 勾选框起来的 Enter / Space 是人家的激活键，不是清单的下钻或勾选。
- *
- * 三条原样搬来的判据（界面现状住 `docs/ui-spec.md` 的「键盘」那条；这里只留「为什么这么定」）：
- * - **方向键走环**：未选中时 ↓ 落第一条、↑ 落最后一条；到端回卷，不是撞墙。
- * - **`aria-activedescendant` 只指向在 DOM 里的行**：选中那行被折叠起来时它就不存在，指过去是
- *   假引用。tab 落点（清单里唯一的 tab 巢）走同一条可见性规则，但**永远有一行拿着**——否则一次
- *   没点过时全行都是 `-1`，键盘根本进不来清单。焦点所在的行就是激活目标：选中行被折叠时，
- *   Enter / Space 落在拿 tab 落点的那一条上，而不是一声不响。
- * - **Esc 只在下钻期间生效**：监听挂 `document`，因为窄档下钻时清单**不在 DOM 里**；退回后把焦点
- *   交还选中那一行**一次**，交完就清账，后续重渲染不再重复抢焦点。最上层是确认框 / 菜单时
- *   **不接这一下**：Esc 先归它，否则 busy 时框不关、清单却退了，焦点还会被交还到遮罩后。
+ * 判据（界面现状见 docs/ui-spec.md「键盘」）：
+ * - 方向键走环：未选中时 ↓ 落第一条、↑ 落最后一条；到端回卷。
+ * - aria-activedescendant 只指向在 DOM 里的行；tab 落点永远有一行拿着。
+ * - Esc 只在下钻期间生效；退回后把焦点交还选中行一次；最上层是确认框/菜单时让路。
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'

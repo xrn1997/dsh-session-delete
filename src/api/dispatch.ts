@@ -1,41 +1,20 @@
 /**
- * `/dsh-session-delete-api` 前缀路由的**内部分发**（薄线的 Node 半）——**只管传输**。
+ * /dsh-session-delete-api 的前缀路由分发：只负责传输。
  *
- * 为什么是这一条路（裁决，不是偏好）：浏览器侧 `remote.<namespace>` 只能由**生成的 Typert 远程
- * 描述符贡献**经 `ctx.remote.$mount(...)` 挂上，而盒内那份装配清单是**写死的 25 条官方包**、
- * 全宿主没有任何"按包发现再挂载"的动态机制 ⇒ 第三方要那个命名空间，
- * 只能自挂自（要生成物 + `zod` + 改包布局），代价与收益完全不成比例。改用宿主**自己的 web server**
- * 开一条插件专属前缀路由：真相/账本/判据全在宿主那边，这一层只搬运。
+ * 三件事：同源栅栏 → 查路由表 → 回信封。方法、纯度、body 预读与读面的判据都在
+ * src/api/route-table.ts（这里只按判据执行）；行投影在 src/api/trash-rows.ts。
  *
- * 本文件只剩三件事：**栅栏 → 查表 → 信封**。
- *  - "这个段名该用什么方法、纯不纯、要不要预读 body、怎么处理"全在 `api/route-table.ts` 那一张表里
- *    （ADR-0004）；这里一个字都不再重复（此前方法判断与纯度判断分居两个函数、靠注释保持一致）。
- *  - 一行里放什么（清册行 → 线上行）归 `api/trash-rows.ts`。
- *  - 前面四条口径（不依赖 Cordis / 信封与浏览器半同形 / 状态语义 / 同源栅栏）与到达序链（口径 ⑤）
- *    仍住这里，因为它们是**传输**的事。
- *
- * 信封（口径 ②）：`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`。
- * `error.code` 走 `src/remote/map-error.ts` 的**同一张表**（src/shared/wire.ts 的五个码），原文进
- * `error.message`，结构化附带物进可选的 `error.details`。
- *
- * HTTP 状态不是第二套语义（口径 ③）：**操作失败**时状态一律 200（含 `ok:false`）——我们与浏览器半之间的
- * 契约是信封本身，判断成败只看 `ok`。**请求本身不对**才用 4xx（400 请求体 / 405 方法 / 404 未知路由），
- * 同源栅栏拒的是**请求**而不是操作，回 403；浏览器半先解信封再看状态。
- *
- * 同源栅栏（口径 ④）：本机回环上一条能删会话的写口不能被任意网页用 simple request CSRF 打——没有栅栏时
- * `content-type: text/plain` 的跨源 POST 不触发预检、直接生效。放行的形状见 {@link isTrustedRequest}。
- *
- * 到达序链（口径 ⑤）：`list`（含对账）与写动作都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩
- * ——删除刚把目录搬进回收站、行还没写上时，对账抢先把这行按目录"重建"出来，再被真实行覆盖成降级
- * 元数据。串行的代价只是排队（单进程单用户，毫秒级）；纯读不占这条链（哪几个段名纯、哪个动作纯，
- * 由路由表说，不在这里列）。
+ * - 请求本身不对用 4xx（400 请求体 / 405 方法 / 404 未知路由 / 403 栅栏拒绝）；
+ *   操作失败回 200 + {ok:false,error}。浏览器半先解信封，再看状态。
+ * - 同源栅栏按 protocol + host 识别桌面壳的 dsh-app://app，不能比较 URL.origin。
+ * - purity 为 chained 的请求串行执行，避免读清册/动文件/写清册交错。
  */
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { routeError } from '../verbs/errors.js'
 import type { DeleteDeps } from '../deps.js'
-import { routeOf, type BodyKind, type Purity, type RouteRead } from './route-table.js'
+import { routeOf, type BodyKind, type JsonBody, type Purity, type RouteRead } from './route-table.js'
 
 /** 请求体字节上限：这条通道只收几个 id，1MiB 是"够用且不给自己开一条内存放大器"的量级。 */
 const JSON_BODY_MAX_BYTES = 1024 * 1024
@@ -72,8 +51,6 @@ function isDesktopShellUrl(value: string): boolean {
   }
 }
 
-type JsonBody = Record<string, unknown> | null
-
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
   res.end(JSON.stringify(body))
@@ -84,7 +61,7 @@ function writeOk(res: ServerResponse, value: unknown): void {
 }
 
 /** 失败信封：码与原文都来自 `toRemoteFailure`（本插件唯一的错误映射表）。
- *  **状态语义（2026-10-17 错误面对齐）**：**请求本身不对**不再伪装成 200——请求体不对 400、方法不对 405、
+ *  **状态语义**：**请求本身不对**不再伪装成 200——请求体不对 400、方法不对 405、
  *  未知路由 404、栅栏拒 403（它们不是"一次办成的操作"，是"这条请求不归我办/你没资格办"）。
  *  **操作失败**仍回 200 + 信封。浏览器半先解信封再看状态，所以 4xx 上带的信封照样读得出原文；
  *  `code` 一律折成 `sessiondelete/io`，那三个路由标签（`bad-request` / `bad-method` / `not-found-route`）

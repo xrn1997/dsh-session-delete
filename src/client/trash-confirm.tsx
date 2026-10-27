@@ -161,7 +161,7 @@ export function TrashConfirm({
   )
 }
 
-/** 无主子会话的清理确认框（2026-10-19）。载荷是刚扫出来的那份报告，界面不重算。 */
+/** 无主子会话的清理确认框。载荷是刚扫出来的那份报告，界面不重算。 */
 export function OrphanConfirm({
   report,
   busy,

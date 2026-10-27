@@ -52,7 +52,7 @@ export function deleteSession(deps: DeleteSessionDeps) {
     //    查的是宿主报的全部孩子，**不是**后面按盘上目录筛过的 `members`——目录不在不代表它没在跑。
     await assertNoLive(deps.host, [sessionId, ...kids.map((kid) => kid.sessionId)])
 
-    // 父的目录必须在盘上（不在就是"账本说有、盘上没有"，与原来同一条 not-found）；
+    // 父的目录必须在盘上（不在就是"账本说有、盘上没有"，按 not-found）；
     // 孩子的目录缺席**跳过它**：宿主记录与磁盘不一致是孩子的问题，不该让父删不掉。
     const parentDir = sessionDirOf(parentProjectDir, sessionId, deps.home)
     if (!(await deps.fs.exists(parentDir))) throw verbError('not-found', `会话目录不存在：${parentDir}`)
@@ -91,8 +91,7 @@ export function deleteSession(deps: DeleteSessionDeps) {
  * 会留下"文件在、agent 已关"的半个世界。窗口与可选修法登记在 ADR-0008 的「边界」。
  *
  * 每一步的反向动作都是"把这件写退回原样"；**清册行是最后一件写**，它失败时 journal 会把目录搬回去、
- * 账本挂回去。清册行的反向动作带一道闸：**回收站目录还没搬回来就不摘那一行**——留着行至少元数据还在
- * （与旧实现"目录退不回就不摘行"同一条判据）。
+ * 账本挂回去。清册行的反向动作带一道闸：**回收站目录还没搬回来就不摘那一行**，留着行至少元数据还在。
  */
 async function memberMove(
   deps: CoreDeps,
@@ -171,7 +170,7 @@ async function memberMove(
       // 搬完之后才把「离开可见面」补上：摘活体与如实通告都不抛，且只在完全搬成之后有意义。
       onDone: 'leave',
       /** 组级回滚：先按相反顺序退步骤，再判「目录与账本两件写都回去了吗」。
-       *  这一行此前已经收过 `api-session/removed`；不发「回来了」它就会在客户端消失到重连为止。
+       *  这一行已经收过 `api-session/removed`；不发「回来了」它就会在客户端消失到重连为止。
        *  「退没退成」由 journal 的逐步结果交出来，这里只读键，不自己累计布尔。 */
       onUndone: (undo) => ({
         kind: 'return',

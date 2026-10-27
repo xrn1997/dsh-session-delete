@@ -1,27 +1,9 @@
 /**
- * 「删除」的确认框——**挂在 `shell.overlay` 上的宿主组件**，加它读的那个模块级现场。
+ * 「删除」确认框，挂在 shell.overlay 上；菜单行只负责发请求。
  *
- * 为什么确认框不能住在菜单行里（这是本文件存在的唯一理由）：**宿主的菜单行随菜单一起卸载**。
- * 真产物 `Menu` 的渲染是
- * `const list = open && jsxs(MenuSurface, { … children: [items.map(renderEntry), children] })`
- * （asar @22074291 逐字；`children` 就是本插件那一行所在的槽位投影）——`open === false` 时
- * **槽位行根本不渲染**，行连同它的整棵子树卸载。而按官方契约，按下这一行先 `setMenuOpen(false)`
- * 收起菜单正是正解（官方 README 的第三方行示例逐字 `onSelect={() => { setMenuOpen(false); … }}`，
- * 宿主自己的 pin / rename / fork / archive 四行同样这么做）。两条一起成立 ⇒ 确认框若住在行里，
- * 它会在菜单收起的那一帧被**连坐卸载**（`createPortal` 只改 DOM 归属，**不改 React 生命周期**），
- * 真机上「移入回收站」永远点不到。
- *
- * 所以按宿主自己的配方把"请求"与"确认"拆开（同一条路：宿主对会话行的撤销提示就是这么做的，
- * `ctx.slots.inject("shell.overlay", … id: "workspace.row-toast" …, RowActionToast)`）：
- *
- * - **菜单行只发请求**：`DeleteMenuItem` 把 `{ sessionId, title }` 写进本文件的模块级现场；
- * - **确认框由本文件的宿主渲染与提交**：`DeleteConfirmHost` 挂在 `shell.overlay` 上，从现场读请求，
- *   自己持有这趟的闸与 failure。于是「提交删除 → 失败原文上屏 → 再点一次重试 → 成功后发撤销提示」
- *   整条链路都在菜单子树之外，菜单关不关都不影响它。
- *
- * 现场是**模块级**的（本仓既有的客户端模式：视图内路由与跨卸载的现场都住在模块级 store，
- * 见 `undo-notices.ts`），状态源是 `store.ts` 的 `createStore`（内部用 React 自带的
- * `useSyncExternalStore`）——不为此引新的状态库。
+ * 宿主菜单行随菜单关闭而卸载，确认框若住在行内会被连坐卸载，因此把请求与确认拆开：
+ * 菜单行把 {sessionId,title} 写进模块级 store，DeleteConfirmHost 在 overlay 读取并提交。
+ * 这样提交、失败原文、重试与撤销提示都在菜单子树之外，开合菜单不影响它们。
  */
 import { useEffect, useState } from 'react'
 import { useBusyGate } from './busy-gate.js'
@@ -65,7 +47,7 @@ export function requestDelete(input: { sessionId: string; title: string }): void
 }
 
 /** 收起确认框（用户点「取消」/「关闭」、或删除成功后收工）。 */
-export function clearDeleteRequest(): void {
+function clearDeleteRequest(): void {
   requestStore.set(null)
 }
 

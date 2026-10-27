@@ -1,18 +1,10 @@
 /**
- * 宿主会话行的**DOM 适配**：可见行解析、全选判定、模式内的整行点击守卫。
+ * 宿主会话行的 DOM 适配：可见行解析、全选判定、模式内整行点击守卫。
  *
- * 从 `batch-select.tsx` 拆出来的理由：选中集本身（模式 + 名单）只住 `batch-selection-store.ts`；
- * 本文件只回答**页面上**的两件事——"现在 DOM 里有哪些可选的会话行"与"在这个行上点一下算不算选中"。
- * 两边的唯一交界是 `data-row-key`（宿主会话行的稳定标记）和行尾兜底登记的那张 `rowInfo` 表。
- *
- * **为什么渲染走快照**：可见行是组件树之外的状态（宿主的 DOM）。每个组件各自在渲染期查一遍，
- * 同一帧看到什么就取决于副作用顺序，而且 DOM 变了也不会触发重渲染。这里交给 `useSyncExternalStore`：
- * DOM 观察（`MutationObserver`）与行登记都留在本适配器里，只把缓存标脏并通告订阅者；组件读缓存快照，
- * 干净时拿到同一个引用（React 的 snapshot 契约），脏了才重读。事件路径（全选）仍走 `readVisibleSelectableRows`
- * 的当场读。裁决见 ADR-0015。
- *
- * **为什么整行点击要抢在 document 捕获阶段**：宿主的会话行自己带 `onClick = open(sessionId)`，
- * 第三方没有官方的"别切会话"开关；模式内点行要变成"勾/取消"，只能抢在 React 根监听之前把事件吃掉。
+ * 选中集（模式 + 名单）只住 batch-selection-store.ts；本文件只回答页面上的两件事：
+ * 当前 DOM 里有哪些可选行，以及在某一行上点击是否算选中。交界是 data-row-key 与行尾登记的
+ * rowInfo。渲染走 useSyncExternalStore 快照（ADR-0015）；事件路径（全选）走当场读。
+ * 模式内整行点击在 document 捕获阶段拦截，避免触发宿主的会话切换。
  */
 import { useEffect, useSyncExternalStore } from 'react'
 import {

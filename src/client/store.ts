@@ -1,5 +1,5 @@
 /**
- * 客户端**模块级快照 store** 的唯一实现（2026-10-20）。
+ * 客户端**模块级快照 store** 的唯一实现。
  *
  * 为什么要有它：浏览器半有一批"跨卸载的现场"——回收站修订号（`trash-store.ts`）、单删请求
  * （`delete-confirm.tsx`）、批量删除请求（`batch-confirm.tsx`）、撤销提示（`undo-notices.ts`）、

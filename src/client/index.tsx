@@ -1,78 +1,23 @@
 /**
- * 浏览器半入口（CJS 单文件闭包工厂的 `factory` 体，构建契约见 tsdown.config.ts）。
+ * 浏览器半入口：注册全部槽位贡献，并在注册前探测取数通道。
  *
- * 共交付**十个**槽位贡献（2026-10-17 起，批量删除再加五件），分四类：
+ * 槽位贡献的注册面见 docs/architecture.md §3，语义归属见 §4 的主人清单；
+ * 本文件只做注册与槽位接线。
+ * 两行菜单项的 order 与分隔线由下方注册调用和行包装拥有，均排在宿主官方四行之后。
  *
- * - `sidebar.workspaces.session.menu.item` —— 两行：「多选」入口（`BatchSelectMenuItem`，order 850）
- *   与「删除」菜单行（`DeleteMenuItem`，order 900）。多选入口按下后进入多选模式（再按一次退出）
- *   并收菜单；删除行**只发请求**（把 `{sessionId, title}` 写进 `delete-confirm.tsx` 的模块级现场）。
- * - `sidebar.session.row.leading` —— 行首 16px 格的勾选框（`BatchPickCheckbox`，2026-10-17）。
- *   **只在多选模式内渲染**（入口在「⋯ → 多选」，不常驻）。宿主在「有状态点（运行中/待确认/未读完成）」
- *   与归档行不渲染这一格 ⇒ 那些行由下面行尾那颗兜底；槽位只投 `sessionId`，标题
- *   （`displayTitle`）从 root hook 的 `byId[id].title` 读。
- * - `sidebar.workspaces.session.row.action` —— 行尾悬停排的**兜底勾选开关**（`BatchPickButton`）。
- *   座位原文："一行一颗图标按钮（动作不适用于这一行时可以不渲染）、动作归自己"，且**排内点击不误开
- *   会话** ⇒ 兜底开关不需要处理事件传播。两条与前一条不会同时出现（`ui.css` 的 `:has` 隐藏规则）。
- *   它还负责把每行的标题／运行态登记给模式内的整行点击守卫（`host-rows.ts`）。
- *   与 overlay 上的**浮条**（`BatchBar`）、**批量确认框**（`BatchConfirmHost`）合起来才是批量删除那一套。
- *   模式内点整行会拦截宿主的会话切换（document 捕获守卫）；执行仍走 `POST /apply`，单删那三件一律不动。
- * - `shell.overlay` —— 菜单之外的**四个**常驻宿主（各一次 `slots.inject`，与宿主自己对
- *   `conversation.chat.node` 连写十几次 `inject` 的写法同形）：
- *   ① 撤销提示 `UndoToast`；② 删除确认框 `DeleteConfirmHost`；③ 批量浮条 `BatchBar`；
- *   ④ 批量确认框 `BatchConfirmHost`。**它们不是额外入口**：四样东西都必须
- *   活在菜单之外（真产物 `Menu` 是 `open && jsxs(MenuSurface, { … children: [items.map(renderEntry),
- *   children] })`，`open === false` 时槽位行根本不渲染、行随菜单一起卸载，见 delete-confirm.tsx 的头注）。
- * - **回收站入口 = 一对座位**（同一次探测之后、同一个同步块里注册）：
- *   ① `sidebar.panellist` —— 全局面板列表里的一行（占用者 `TrashPanelIcon`，只出 glyph）；
- *   ② `main` —— 同字 key 的中央面板（占用者 `TrashPanel`，清单本体）。
- *   **两条必须同批**：`ctx.layout.selectPanel(panelId)` 逐字 `if (panelId !== null &&
- *   !this.hasMainPanel(panelId)) throw new Error(...)`（asar @21199710）——只有行、没有面板时，
- *   用户点一下就是运行期抛错；反过来先有面板也没有入口。
+ * 槽位出处（宿主产物，不是猜的；换代先复核）：
+ * - sidebar.workspaces.session.menu.item：声明 asar @46391872；数据面投影 @46271806；
+ *   menuOpenState hook 工厂 @46195835；宿主四行 @46392466 起。
+ * - shell.overlay：声明 asar @21206189。
+ * - sidebar.panellist：声明 @44796980；行渲染 @44783481；label 解析 @44795361（thunk 随 locale）。
+ * - main：渲染 @21185725；id 与 panellist 同字，selectPanel 只校验已注册 @21199710。
  *
- * **为什么不是底栏（2026-09-30 实测裁决，判据全在下面三行）**：`sidebar.footer.action` 的**惯用形**是
- * 「42px 整行 + 图标 + 文字 + 右对齐 12px 计数」——官方 `client-ui-cordis` 的占用者 CSS 是
- * `.layer{flex:none;width:100%;height:42px}`，而座位容器只有 `.footerActions{display:flex}`
- * （无 gap、无 wrap）⇒ 我们交的 `Button ghost/sm` 小药丸贴底栏，与下方 42px 的「设置」行不同形。
- * **判据随宿主组成走，不是常量**：2026-09-30 隔离活宿主实测里 `ui-cordis` 虽在组成树里，它的
- * 客户端半并没有挂上那条占用者（槽位渲染为空、零子节点）——所以"被第二个租户整条挤出去"只在
- * 占用者真挂上时才发生；不变的是我们**不是这条座位的惯用形**。
+ * 硬约束：
+ * - inject 只写宿主必给的 slots；可选服务走 ctx.get。理由与代价见 docs/architecture.md §3。
+ * - apply 同步返回、绝不抛；先探 GET /ping，探测不过则不注册任何贡献（用入口不出现表达不可用）。
  *
- * 槽位名与注册形状是从宿主产物里**读出来**的，不是猜的：
- * - 菜单槽声明：asar @46391872 `ctx.slots.declare({ name: "sidebar.workspaces", children: {
- *   "sidebar.workspaces.session.menu.item": { kind: "list", scope: "root", inject: { hooks: {
- *   menuOpenState: menuOpenStateFactory, shortcuts: ctx.shortcuts.catalog } } } …`；
- *   数据面投影 @46271806 `renderSlot("sidebar.workspaces.session.menu.item", { sessionId: node.id,
- *   displayTitle: row.title }, { hookContext: menuOpenState })`——`menuOpenStateFactory = (_standard,
- *   state) => () => state`（@46195835），所以这一行拿到的 prop 是 hook `useMenuOpenState`；
- *   宿主自己的四行注册 @46392466 起（pin 100 / rename 200 / fork 300 / archive 400）——本插件取
- *   **order 900**，落在官方动作之后，并用 `separatorBefore` 与它们隔一条分隔线。
- * - 浮层槽声明：asar @21206189 `"shell.overlay": { kind: "list", scope: "root" }`。
- * - 面板行槽：座位目录原文「Global panel icons. Each list id addresses the matching main panel;
- *   the sidebar owns the button and resolves its label from list metadata」；声明在 `ui-sidebar`
- *   的 `sidebar` 注册项 children 里（asar @44796980 区）`"sidebar.panellist": { kind: "list",
- *   scope: "root" }`；行本体渲染 @44783481 `PanelRow` → `<Tooltip disabled={wide}>` 包一个
- *   `<button class=panelRow aria-current={active ? "page" : undefined} onClick={selectPanel(id)}>`，
- *   内含 `.panelGlyph`（`renderSlot("sidebar.panellist", { size: wide ? 16 : 18, active }, { only: id })`）
- *   与 `.panelTitle`（`wide` 时才有）。**名字取自注册元数据**：`syncPanels` 逐字
- *   `label: resolveSlotLabel(options.label) ?? id`（@44795361）——所以本插件把 `label` 写进注册项。
- * - 中央面板槽：座位目录 `main`（`kind: "keyed"`, `scope: "root"`，"Central panel selected by
- *   sidebar entry id"，保留键 `conversation`，`replaceRisk: shadows-shipped-ui`）；宿主渲染
- *   @21185725 `renderSlot("main", {}, { entryKey: usePanelInfo((info) => info.activePanelId) ??
- *   "conversation" })`。**id 不得撞车**：座位目录原文「reusing a shipped id puts you in THAT cell
- *   and replaces it」——静默替换比抛错更难发现，所以两个 id 都带插件专属前缀。
- * - **面板 id 与 main 的 key 是同一个字**（官方：list id 寻址同 id 的中央面板）。`selectPanel`
- *   只校验 main 里有没有注册、不校验 id 形状（@21199710），点号斜杠都不是问题。
- *
- * 宿主 ctx 用**本地窄镜像**（AGENTS.md：只声明用到的成员 + 一次强转；不装宿主类型包、
- * 不做 `declare module` 增强）。
- *
- * **`inject` 只声明一定存在的东西**：全仓只有 `slots` 一项——它是浏览器侧槽位注册表、
- * 宿主必给。**取数通道不进 `inject`**：通道是"同源 fetch 我们自己的前缀路由"（见 `remote.ts` 头注），
- * 它是不是在**只有探测才知道**（`await probeChannel(...)`），
- * 声明它既表达不了这件事，写错的代价又极高——前端启动自检对「有客户端模块但没激活成功」走的是
- * 致命路径（`Error: web boot: 1 entry did not activate` ⇒ 桌面壳 `reportFatal("web-boot")`
- * 杀掉整个进程）。
- * 所以：**`apply` 同步返回、绝不抛**，注册挂在探测的续拍上；探测不过就一个贡献都不注册。
+ * 宿主 ctx 用本地窄镜像（AGENTS.md：只声明用到的成员 + 一次强转；不装宿主类型包、
+ * 不做 declare module 增强）。
  */
 import { BatchBar } from './batch-bar.js'
 import { BatchConfirmHost } from './batch-confirm.js'
@@ -264,7 +209,7 @@ async function activate(client: ClientContextLike): Promise<void> {
     ),
   )
 
-  // ①' 行首勾选框：多选模式内的主勾选（2026-10-17）。宿主只在没有状态点、非归档的行渲染这一格；
+  // ①' 行首勾选框：多选模式内的主勾选。宿主只在没有状态点、非归档的行渲染这一格；
   // 槽位只投 sessionId，标题由 root hook 补。勾选是原生 Checkbox，自己挡住冒泡（不误开会话）。
   client.slots.inject(LEADING_SLOT, () =>
     client.slots.register(
@@ -299,7 +244,7 @@ async function activate(client: ClientContextLike): Promise<void> {
     ),
   )
 
-  // ②'' 批量删除的两件浮层（2026-10-17）：浮条与批量确认框。与单删那两件同理，各一次 `inject`、
+  // ②'' 批量删除的两件浮层：浮条与批量确认框。与单删那两件同理，各一次 `inject`、
   // 都住在 overlay 上——浮条要跟着每行的勾选开关重绘，确认框必须脱离行子树的生命周期。
   client.slots.inject(OVERLAY_SLOT, () =>
     client.slots.register(
