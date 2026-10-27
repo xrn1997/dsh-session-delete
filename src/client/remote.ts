@@ -158,8 +158,9 @@ async function requestEnvelope<T>(path: string, init: RequestInit): Promise<Remo
 
 /**
  * 前缀路由的 fetch 实现。**相对路径**：不拼 base、不认 origin——页面本身就是从宿主 web server
- * 加载的，同源是这条薄线的全部前提（也是它敢不带凭据的原因：宿主那行 URL 上的 browser-trust token
- * 不是这条通道的凭据，栅栏在 Node 半那一侧按 Origin/Referer 判）。
+ * 加载的，同源是这条薄线的全部前提。本机（含转发落在回环的桌面壳）靠回环 + Origin/Referer 过栅栏；
+ * 远程（LAN / 反代）客户端另由宿主 `connection` 判「已认证的 Web 身份」，所以这条通道**只对**
+ * `dsh web` 打印的 URL 打开过的页面成立（凭据是那行 URL 换来的 cookie，不是插件自己的秘密）。
  */
 export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): RawSessionDeleteRemote {
   const post = (body: Record<string, unknown>): RequestInit => ({

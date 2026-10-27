@@ -73,6 +73,11 @@ _Avoid_: 账本（本仓「账本」指宿主工作区注册表；清册读面�
 路由记录上的一格：`none` / `list`（真相读，先对账）/ `raw`（索引快照，不对账）。读段与 `/empty` 的处理函数只消费路由交来的 `RouteRead`，不自己挑 `ledger.list()` / `raw()`；`/apply` 的写动词读面归动词自己（谁写谁读）。_唯一实现_：`src/api/route-table.ts` 的 `RouteSpec.read` 与 `RouteRead`（由 `src/api/dispatch.ts` 交出去）。
 _Avoid_: 纯度（纯度管是否进到达序链；`count` 是 pure/不读，`detail` 是 pure/raw）。
 
+**请求栅栏**（request trust fence）
+打到 `/dsh-session-delete-api` 的请求归不归本插件办，两件事分开说：**归属**（Host 是否属于本次部署——回环名 / 监听 bind 字面量）与**身份**（远程客户端是否带宿主已认证的 Web 身份，承宿主 `connection` 服务）。裁决三词：`allowed` / `untrusted`（归属不对）/ `unauthenticated`（归属对、缺身份），两条 403 原文按裁决各回各的。Origin / Referer 只是附加约束，与 Host 同名不构成归属证明。
+_唯一实现_：`src/api/request-trust.ts` 的 `judgeRequest`（身份面住 `src/ports/connection-port.ts` 的 `ConnectionPort`）。裁决见 ADR-0022 / ADR-0023。
+_Avoid_: 同源栅栏（归属不看 Origin 同不同名；DNS rebinding 下同名照样是外人）；认证 / 登录（身份承宿主，插件不建立也不校验凭据）。
+
 **同批已带走集**（batch carried set）
 同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记、恢复/彻底删除按条目 id 记，各一个 adapter；它决定这一条还该不该交给动词，entry 适配另交 purge 一份收缩中的当前只读视图（盘上后代要按清册里还在的 id 排除）。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
 _唯一实现_：`src/verbs/batch-carried.ts`

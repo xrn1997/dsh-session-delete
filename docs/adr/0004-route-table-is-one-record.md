@@ -34,7 +34,7 @@ Status: accepted
 ## 边界
 
 - **不给段名做动态发现**：九个段名是硬契约，`wire.ts` 仍是它们的家；`route-table.ts` 只负责「怎么处理」。
-- **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这两条上：栅栏与状态在 `src/api/dispatch.ts`，失败信封在 `src/remote/map-error.ts`。
+- **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这几处：请求栅栏在 `src/api/request-trust.ts`，状态在 `src/api/dispatch.ts`，失败信封在 `src/remote/map-error.ts`。
 
 ## 后果
 

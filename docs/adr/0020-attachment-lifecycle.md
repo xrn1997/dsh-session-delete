@@ -10,7 +10,7 @@ Status: accepted
 - 剩余引用源读不出 ⇒ 本次跳过，宁可留孤儿也不删共享（判据住 `src/trash/attachments.ts`）。目录里有子目录、或规范日志旁还有非空临时日志 / 明文日志等读不懂的文件，同样按读不出处理：规范日志只覆盖本目录，那些文件里有没有引用无法回答。
 - 普通文件（`file-objects` / `files`）只渲染不代删：硬链接与 Windows 只读属性的删除语义另立一项。
 - 未发送草稿的附件只在客户端内存，磁盘扫描不可见；这是已知残余风险。
-- `GET /attachment` 仍过同源栅栏（`src/api/dispatch.ts`）：跨源 `no-cors` 且 `no-referrer` 的 `<img>` 会让 `Origin` / `Referer` 都缺席，从本机回环来源放行 ⇒ 知道内容哈希的一方可把对应图片跨源渲染。暴露面只有图片字节本身，寻址只认 id，没有越界读；同源读面（含 `GET /attachment-orphans` 的对象哈希清单）不会把清单交给跨源页面（no-cors 响应不可读）。
+- `GET /attachment` 仍过请求栅栏（`src/api/request-trust.ts`）：跨源 `no-cors` 且 `no-referrer` 的 `<img>` 会让 `Origin` / `Referer` 都缺席，从本机回环来源放行 ⇒ 知道内容哈希的一方可把对应图片跨源渲染。暴露面只有图片字节本身，寻址只认 id，没有越界读；同源读面（含 `GET /attachment-orphans` 的对象哈希清单）不会把清单交给跨源页面（no-cors 响应不可读）。
 - 不新增自动过期、定时 GC 或常驻孤儿入口；剩余存量由插件设置页的维护卡手动清理（ADR-0021），不走一次性脚本。
 
 ## 被否掉的替代

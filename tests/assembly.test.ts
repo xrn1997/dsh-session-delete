@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as plugin from '../src/index.js'
 import { createHostPort } from '../src/ports/host-port.js'
 import { createMemberPresence } from '../src/verbs/member-presence.js'
 import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
-import { unescapeProjectKey } from '../src/shared/wire.js'
+import { SESSION_DELETE_API_PREFIX, unescapeProjectKey } from '../src/shared/wire.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import type { DeleteDeps } from '../src/deps.js'
 import type { TrashEntry } from '../src/trash/entry.js'
@@ -872,5 +876,128 @@ describe('清单的 storage domain 绑定', () => {
     expect(disposed).toBeInstanceOf(Promise)
     finishClose()
     await disposed
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Node 半组合根的接线（src/index.ts）
+ * ------------------------------------------------------------------ */
+
+/** 一次注册进来的前缀路由（宿主 `webServer.register` 的入参形状）。 */
+interface RegisteredRoute {
+  kind: string
+  path: string
+  handler: (req: never, res: never) => Promise<void>
+}
+
+/**
+ * 组合根用自己的夹具（上面那份 `makeEnv` 只喂端口，不喂 `webServer` / `effect`）：只声明 `apply`
+ * 真正碰到的成员，所以写错的成员名会让用例红，而不是被夹具喂绿。
+ *
+ * 为什么值得钉：`bindHost` 与 `connection` 这两根线**掉了也不会报错**——插件照常激活、本机照常工作，
+ * 症状只是「局域网客户端全部 403」，正是 ADR-0022 要修的那个缺陷本身。判据层（`judgeRequest`）的
+ * 矩阵在 `tests/request-trust.test.ts`，这里钉的是「组合根真把那两份事实喂给了它」。
+ */
+function makeRootEnv(over: {
+  /** `webServer.host`：监听器 bind 的那个 IP 字面量。缺席 = 老代次没有这个 getter。 */
+  bindHost?: string
+  /** `ctx.get('connection')` 的替身；可以用 `setConnection` 模拟"服务晚到"。 */
+  connection?: unknown
+} = {}) {
+  const routes: RegisteredRoute[] = []
+  const effects: string[] = []
+  const gets: string[] = []
+  let connection = over.connection
+  const ctx = {
+    // 探针只打 `GET /ping`（路由表里唯一"不碰清册、不碰盘、不进链"的一段），域开不到这里。
+    storageDomain: { open: async () => { throw new Error('ping 不该开域') } },
+    workspaceRegistry: { list: () => [], archivedSessionIds: [] },
+    get: (name: string) => { gets.push(name); return name === 'connection' ? connection : undefined },
+    // 真 cordis 的语义：`effect(fn)` 当场跑 `fn()` 拿 disposer——路由就是在那一刻注册的。
+    effect: (fn: () => unknown, label?: string) => { effects.push(String(label)); fn(); return undefined },
+    webServer: {
+      ...(over.bindHost === undefined ? {} : { host: over.bindHost }),
+      register: (route: RegisteredRoute) => { routes.push(route); return () => {} },
+    },
+  }
+  return { ctx, routes, effects, gets, setConnection: (value: unknown) => { connection = value } }
+}
+
+/** 打一发 `GET /ping` 到注册进来的那个 handler。栅栏的全部输入就是 headers 与源地址。 */
+async function ping(
+  route: RegisteredRoute,
+  headers: Record<string, string>,
+  remoteAddress: string,
+): Promise<{ status: number; body: { ok: boolean; value?: unknown; error?: { message?: string } } }> {
+  let status = 0
+  let text = ''
+  const req = { method: 'GET', url: `${route.path}/ping`, headers, socket: { remoteAddress } }
+  const res = {
+    writeHead: (code: number) => { status = code },
+    end: (chunk?: string) => { text = chunk ?? '' },
+  }
+  await route.handler(req as never, res as never)
+  return { status, body: JSON.parse(text) as { ok: boolean; value?: unknown; error?: { message?: string } } }
+}
+
+describe('Node 半组合根的接线', () => {
+  // `apply` 里的 `resolveHome()` 读 `$DSH_HOME`：指到临时目录，绝不让探针碰这台机器的真数据根。
+  let home: string
+  let savedHome: string | undefined
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'dshdel-root-'))
+    savedHome = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+  })
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = savedHome
+    rmSync(home, { recursive: true, force: true })
+  })
+
+  const applyWith = (over: Parameters<typeof makeRootEnv>[0] = {}) => {
+    const env = makeRootEnv(over)
+    plugin.apply(env.ctx as never)
+    expect(env.routes.length).toBe(1)
+    return env
+  }
+
+  it('前缀路由按官方那三格挂上，两条 effect 各有自己的标签', () => {
+    const env = applyWith()
+    expect(env.routes[0].kind).toBe('prefix')
+    expect(env.routes[0].path).toBe(SESSION_DELETE_API_PREFIX)
+    expect(env.effects).toEqual(['session-delete.manifest', 'session-delete: /dsh-session-delete-api routes'])
+  })
+
+  it('栅栏的 bindHost 取自 webServer.host：本机用 LAN IP 自访放行；getter 缺席则 fail-closed', async () => {
+    const headers = { host: '192.168.50.199:3080' }
+    const wired = applyWith({ bindHost: '192.168.50.199' })
+    expect(await ping(wired.routes[0], headers, '127.0.0.1'))
+      .toMatchObject({ status: 200, body: { ok: true, value: 'pong' } })
+    // 老代次没有 `host` getter：bind 字面量判不出归属，身份层又缺席 ⇒ 拒（退化，不是放行）。
+    const legacy = applyWith()
+    expect((await ping(legacy.routes[0], headers, '127.0.0.1')).status).toBe(403)
+  })
+
+  // `connection` 若被组合根在激活时取一次，服务晚到就永远缺席（LAN 全 403 且难排查）——
+  // 判据住 `src/ports/connection-port.ts`，这里钉的是组合根确实走的是那条惰性端口。
+  it('栅栏的身份面每次请求走 ctx.get("connection")：缺席拒、宿主认可放行、服务晚到也认', async () => {
+    const env = applyWith()
+    const remote = { host: 'dsh.internal:3080' }
+    const from = '192.168.50.77'
+
+    expect(await ping(env.routes[0], remote, from))
+      .toMatchObject({ status: 403, body: { ok: false, error: { message: '非受信来源' } } })
+    expect(env.gets).toContain('connection')
+
+    env.setConnection({ requestRejection: () => undefined })
+    expect(await ping(env.routes[0], remote, from))
+      .toMatchObject({ status: 200, body: { ok: true, value: 'pong' } })
+
+    // 宿主回 401 = 归属对、缺身份 ⇒ 原文指路（不是「非受信来源」）。
+    env.setConnection({ requestRejection: () => 401 })
+    const denied = await ping(env.routes[0], remote, from)
+    expect(denied.status).toBe(403)
+    expect(denied.body.error?.message).toMatch(/宿主的 Web 身份/)
   })
 })

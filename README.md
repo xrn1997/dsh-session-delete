@@ -118,6 +118,10 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 回收站目录只负责文件；恢复还要挂回工作区账本（旧版本留下的归档态条目会迁移式取消归档）。手工搬回不是恢复，下一次读清单会把对应行对账掉。请在面板里点「恢复」。
 
+**把宿主绑到局域网地址后，操作报「需要宿主的 Web 身份」或「非受信来源」？**
+
+本插件的取数门槛与宿主自己的 `/api` 同一套口径：本机与桌面壳照旧，局域网 / 反向代理客户端则要求你已经用 `dsh web` 打印的那一行 URL 打开过页面（宿主签发的 Web 身份）——缺的就是这枚身份时，原文写「需要宿主的 Web 身份」。原文写「非受信来源」说的是另一件事：这条请求的归属不成立，`Host` 不被认为是本次部署的地址，或 `Origin` / `Referer` 与它对不上。常见成因有三种：用自定义域名（含 hosts 文件）访问，却没把它写进宿主 `client-connection` 的 `trustedHosts`——宿主自己的页面同样要求这一条；反向代理改写了 `Host`，它必须保留客户端的原始 `Host`，改写成回环地址时浏览器请求会因 `Origin` / `Referer` 对不上被拒，而不带这两个头的工具请求会被当成本机请求（那一支不要求 Web 身份）；或者当前宿主代次没有提供身份服务（`connection`），那时远程请求一律拒——升级宿主，或改从本机访问。绑定时另有一条前提：宿主只接受具体接口地址、拒绝 `0.0.0.0`，请绑到某个具体 IP（例如 `webserver.host: 192.168.50.199`）。
+
 ## 开发
 
 构建、本地调试、门控、真机验证与发版见 [`docs/development.md`](docs/development.md)；提交信息与 PR 约定见 [`CONTRIBUTING.md`](CONTRIBUTING.md)；架构地图与主人清单见 [`docs/architecture.md`](docs/architecture.md)；界面规格见 [`docs/ui-spec.md`](docs/ui-spec.md)；文档分层与放置见 [`docs/AGENTS.md`](docs/AGENTS.md)；裁决见 [`docs/adr/`](docs/adr/README.md)；发布历史见 [`CHANGELOG.md`](CHANGELOG.md)。历史取舍在 git 历史里，README 不复述。

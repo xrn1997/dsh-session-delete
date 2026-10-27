@@ -36,14 +36,14 @@
 - **通道是自建薄线，不是官方 `remote.<namespace>`**：官方 remote 只能由生成的 Typert 描述符经 `ctx.remote.$mount(...)` 挂上，第三方没有动态发现这一步（裁决与被否掉的替代见 ADR-0009）。所以走宿主 web server 上的插件专属前缀路由 `/dsh-session-delete-api`——`src/api/dispatch.ts` ↔ `src/client/remote.ts` 同源 fetch，信封与官方 unary 面同形（`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）。
 - **段名只有九个**（`src/shared/wire.ts`）：`GET /list`、`GET /ping`、`POST /detail`、`POST /apply`、`POST /empty`、`GET /orphans`、`GET /attachment`、`GET /attachment-orphans`、`POST /attachment-clean`。五个动作全部走 `POST /apply`（`delete` / `restore` / `purge` / `count` / `orphan-clean`），其中 `count` 是纯读、其余四个是写动作。`GET /attachment` 是唯一的二进制段：只发附件字节，失败仍回 JSON 信封；`GET /attachment-orphans` 是孤儿附件报告（纯读），`POST /attachment-clean` 是它的聚合清理（写动作）。一组 id 进、逐条结果出，**单条就是长度为 1 的批量，不留第二条执行路径**。
 - **状态语义**：请求本身不对用它自己的 4xx（400 请求体 / 405 方法 / 404 未知路由，栅栏拒 403）；**操作失败**回 200 + 信封——浏览器半先解信封再看状态，别把这两类混成一个 200。
-- **同源栅栏认得桌面壳那条路**：桌面壳 `forwardWebRequest` 转发前删掉 `host`/`origin`/`cookie`/`sec-fetch-site` ⇒ 真机请求没有 `Origin`、只有 `Referer: dsh-app://app/`。判据按 `protocol` + `host` 比，**不能比 `URL.origin`**（`dsh-app:` 不是 WHATWG special scheme，`new URL('dsh-app://app/').origin` 是字符串 `"null"`）；漏认它 = 真机探测永远 403、所有入口都不出现，而 headless 直连 http 的过门读数完全看不出来。判据住 `src/api/dispatch.ts`。
+- **请求栅栏分「归属」与「身份」两件事**：归属看 Host 是否属于本次部署（回环名 / 监听 bind 字面量），头栅栏另外否决 `sec-fetch-site: cross-site`、要求 Origin / Referer 与 Host 同 authority（桌面壳的 `dsh-app://app/` 是唯一例外）；远程客户端再要过宿主 `connection.requestRejection`（宿主的 Host 白名单 + 已认证 live peer），服务缺席时远程一律拒。绑定策略归宿主 webserver 配置（只接受具体接口 IP、拒绝 wildcard），栅栏不替它决定可达性，也不建立身份。判据住 `src/api/request-trust.ts`，裁决见 ADR-0022 / ADR-0023。
 - 改动生效分两条路：浏览器半靠宿主 HMR 热推；Node 半必须重启宿主。
 - **浏览器半一条 `@deepseek-ai/*` 的 import 都不许有**（type-only 也不留）：宿主客户端包随宿主换代而变、不过类型检查，一个抛错的组件会把整个槽位条目打空。要用的控件/图标按官方处方抄进 `src/client/ui/*`（类名 `sd-` 前缀、`@keyframes` 改名、只留 `--dsw-*` token），来源表在 `src/client/ui/ui.css` 文件头。
 
 ## 2. Node 半的分层与依赖方向
 
 ```
-ports/     端口与适配（HostPort / FsPort / Home / PresenceCapability）
+ports/     端口与适配（HostPort / FsPort / Home / PresenceCapability / ConnectionPort）
    ▲
 trash/  ·  log/          ← 领域部件：条目形状、清册 ledger（真相读 = 对账 + 读；pure 读面读 raw）与对账、storage-manifest（宿主 storage 域绑定）、组语义、日志走帧
    ▲
@@ -55,7 +55,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 ```
 
 - deps.ts 的 CoreDeps 是动词与 API 共享的五项基础（fs / host / ledger / home / presence）；`fs` 是 `CoreFsPort`（不含 `removeDir` / `removeFile`），`host` 是 `HostCorePort`（不含在场三件）。`DeleteSessionDeps = CoreDeps & { now }` 只给会话删除；`RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort,'removeDir' | 'removeFile'> }` 只给永久删除的执行与分发（`executeRemoval` 及把能力交给它的 purge / orphan-clean）；`DeleteDeps = DeleteSessionDeps & RemovalDeps` 是组合根装出的全量面（`/apply` 分发同时够到两者）。装配只在 index.ts 一处；动词之间不再互相 import 依赖面 interface。
-- **宿主端口按角色切三片**：身份与归属（`HostIdentityPort`）、在场通告（`HostPresencePort`）、会话语料（`HostCorpusPort`），同住 `src/ports/host-port.ts`；`HostPort` 是三者相交的复合别名，生产 adapter 只有 `createHostPort`。**动词只拿 `HostCorePort`**（不含在场三件）；在场能力由 `CoreDeps.presence` 提供，端口形状住 `src/ports/presence-port.ts`、实现住 `src/verbs/member-presence.ts`。`evictLive` 的 agent handle 捕获住 `src/ports/agent-handles.ts`（adapter 内部，不进端口类型）。裁决见 ADR-0019（角色切分与在场协议一个家承 ADR-0007 / ADR-0005）。
+- **宿主端口按角色切三片**：身份与归属（`HostIdentityPort`）、在场通告（`HostPresencePort`）、会话语料（`HostCorpusPort`），同住 `src/ports/host-port.ts`；`HostPort` 是三者相交的复合别名，这三片的适配只由 `createHostPort` 提供。**动词只拿 `HostCorePort`**（不含在场三件）；在场能力由 `CoreDeps.presence` 提供，端口形状住 `src/ports/presence-port.ts`、实现住 `src/verbs/member-presence.ts`。宿主服务的另外两个窄镜像各按用处分家：agent handle 捕获住 `src/ports/agent-handles.ts`（adapter 内部，不进端口类型），请求栅栏用的 Web 身份面住 `src/ports/connection-port.ts`（ADR-0022）。裁决见 ADR-0019（角色切分与在场协议一个家承 ADR-0007 / ADR-0005）。
 - **语料缺席是显式的**：两个语料读面都交 `CorpusRead<T>` = `{ available: true, value }` | `{ available: false }`，不带原因串；形状住 `src/ports/host-port.ts`。**缺席之后怎么办归调用方**：删除只删父、count 报 0、`/list` 与 purge 静默降级、`/orphans` 与经 `loadOrphanGroups` 的 `orphan-clean` 响亮失败。裁决见 ADR-0019（语料面承 ADR-0007，未翻）。
 - **读面是路由记录的一格**：`read` 与 `RouteRead` 的词义与读法见 `CONTEXT.md`「路由读面」，段名归属见 `docs/architecture.md` §4；裁决见 ADR-0004 / ADR-0012。
 - **`verbs` 不 import `api`**：路由层只搬运，业务判据全在动词与部件。
@@ -125,7 +125,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 逐条 `/apply` 写入的收尾顺序与 `WritePresentation` 的按 action 判别形状（main-view 收尾 → 失效回收站（delete / restore）→ 撤销通告 / 详情缓存，按 action 各一条，含 `anySuccess` 门与恢复的两个座位） | `src/client/write-settlement.ts` | 关/开/忘主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、什么时机跑（`src/client/write.ts`） |
 | 无主子会话的扫描与分组（谁算孤儿、传递闭包与去重） | `src/verbs/orphan-subagents.ts` | 删哪些目录、报多少字节、谁挡活体（归 `src/verbs/live-admission.ts`）；回收站里的组 |
 | 失败码的措辞与映射、回滚失败的措辞与合并（`details.rollbackFailures`；码本身住 `wire.ts`） | `src/verbs/errors.ts` + `src/remote/map-error.ts` | 上屏文案 |
-| 同源栅栏（桌面壳那条只留 Referer 的路） | `src/api/dispatch.ts` | 操作失败的信封（那是 `map-error`） |
+| 请求栅栏（归属：Host / Origin / Referer 与桌面壳那条只留 Referer 的路；身份：远程客户端过宿主 `connection`） | `src/api/request-trust.ts` | 操作失败的信封（那是 `map-error`）；绑定与 TLS（宿主 webserver 配置）；身份凭据本身（宿主 `dsh-client-connection`） |
 | 客户端可见文案 | `src/client/copy.ts` | 服务端错误原文；渠道错误原文除外（`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale） |
 | 清册的取数编排与清空的聚合回执（清单状态的词义见 `CONTEXT.md`「清单状态」；对外只有 `refreshAll` / `refreshAfterWrite` 两个重读意图，`reloadRows` 只是 implementation 细节；最新票（`createLatestWins`，词表见 `CONTEXT.md`）、在飞的旧响应不许盖新态、输给后发读的读不清场；`refreshAll` / `refreshAfterWrite` 的清单读失败把清单置为 `unknown`；清空失败同样落 `unknown`、作废在飞读并收掉旧附件提示；清空的附件读数上屏归本模块，行为见 `docs/ui-spec.md` §3；写动作与清空走调用方传入的同一枚 `gate`，不另造第二枚闸；清空成功顺带调用撤销通知台的整条清空（落点全没了；现场归 `src/client/undo-notices.ts`）） | `src/client/use-trash-query.ts` | 服务端算的那个数；busy 的生命周期（`src/client/busy-gate.ts`）；孤儿检查/清理（归 `src/client/use-maintenance.ts`，ADR-0021） |
 | 回收站清单的选择面（多选态、勾选集合、组头三态派生、`ordered` 的可见顺序） | `src/client/use-trash-selection.ts` | 谁能接住孩子（`src/trash/groups.ts`）；键盘与焦点（`src/client/trash-nav.ts`） |

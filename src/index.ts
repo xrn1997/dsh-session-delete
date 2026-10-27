@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import { createApiHandler } from './api/dispatch.js'
+import { createConnectionPort } from './ports/connection-port.js'
 import { createFsPort } from './ports/fs-port.js'
 import { createHostPort } from './ports/host-port.js'
 import { resolveHome } from './ports/home.js'
@@ -31,6 +32,10 @@ export const name = '@xrn1997/dsh-session-delete'
  * `super(ctx, "webServer")`），服务名与 `register({kind:'prefix', path, handler})` 的形状按
  * `dsh-host-webserver/lib/index.js` 与 `README.md` 原文读实，不是猜的。
  *
+ * `connection` 只喂请求栅栏的远程支（`src/api/request-trust.ts` ②），按 `ctx.get` 可选读：
+ * 服务缺席时插件照常激活，远程客户端 fail-closed。它不进 `inject`——写进去会让没有 web 组成的
+ * profile 整个停在 pending。
+ *
  * 清册的三层各有各的家：raw 绑定 `src/trash/storage-manifest.ts`、读面（对账 + 读）`src/trash/ledger.ts`、
  * 数据根 `src/ports/home.ts`。这里只把它们接起来，任何一层都不在组合根里长判据。
  */
@@ -40,8 +45,11 @@ export const inject = ['workspaceRegistry', 'storageDomain', 'webServer']
  * 装配
  * ------------------------------------------------------------------ */
 
-/** 宿主 web server 的窄镜像（只声明用到的那一个成员 + 一次强转；不装宿主类型包）。 */
+/** 宿主 web server 的窄镜像（只声明用到的成员 + 一次强转；不装宿主类型包）。
+ *  `host` 是监听器绑定的那个具体接口 IP 字面量（宿主拒绝 wildcard 绑定）——请求栅栏拿它判
+ *  「Host 属于本次部署」；老代次没有这个 getter 时按缺席处理。 */
 interface WebServerLike {
+  readonly host?: string
   register(route: {
     kind: 'prefix'
     path: string
@@ -70,11 +78,12 @@ export function apply(ctx: Context): void {
     now: () => Date.now(),
   }
   const webServer = (ctx as unknown as { webServer: WebServerLike }).webServer
+  const connection = createConnectionPort(ctx)
   ctx.effect(() => {
     const dispose = webServer.register({
       kind: 'prefix',
       path: SESSION_DELETE_API_PREFIX,
-      handler: createApiHandler(deps),
+      handler: createApiHandler(deps, { bindHost: webServer.host, connection }),
     })
     return () => { dispose() }
   }, 'session-delete: /dsh-session-delete-api routes')

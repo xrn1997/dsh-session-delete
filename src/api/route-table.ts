@@ -201,7 +201,7 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     purity: 'pure',
     read: 'raw',
     response: 'json',
-    // 读单条详情也走 POST：`requireString`、同源栅栏、错误映射这一整套都挂在同一张路由表上
+    // 读单条详情也走 POST：`requireString`、请求栅栏、错误映射这一整套都挂在同一张路由表上
     // （`body:'json'` 决定它在处理前预读一次请求体）；改成 GET query 只是把同一道栅栏再写一遍
     // （栅栏只写一遍——段名的方法 / 纯度 / 读面 / body 就住这张表，ADR-0004）。
     // 读的是清册 **raw 索引**（`read` 的 raw 面），**不对账**：本段声明为 pure、不进到达序链，而对账会写

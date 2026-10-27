@@ -1,6 +1,6 @@
 // Node 半路由层（`/dsh-session-delete-api`）——**薄线**的那一半
 //
-// 照本机既有插件的做法：分发器是**纯构造器**（`createApiHandler(deps)`），不依赖 Cordis，
+// 照本机既有插件的做法：分发器是**纯构造器**（`createApiHandler(deps, trust)`），不依赖 Cordis，
 // 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
 //
 // 钉住的是**契约**，不是实现细节：
@@ -10,12 +10,14 @@
 //  ② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
-//  ⑤ 取数通道的**同源栅栏**：跨源请求拒掉，且拒之前一个副作用都不发生。
+//  ⑤ **请求栅栏**：归属不对与远程缺身份都回 403，且拒之前一个副作用都不发生。
 import http from 'node:http'
 import zlib from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiHandler } from '../src/api/dispatch.js'
+import type { RequestTrustFacts } from '../src/api/request-trust.js'
+import { ABSENT_CONNECTION, ALLOWED_CONNECTION, UNAUTHENTICATED_CONNECTION } from './support/connection-stub.js'
 import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyOutcome } from '../src/shared/wire.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
@@ -89,9 +91,14 @@ afterEach(async () => {
   while (servers.length > 0) await (servers.pop() as () => Promise<void>)()
 })
 
-/** 起真 http server（127.0.0.1:0）承载分发器——与宿主把我们的 handler 挂进前缀路由同形。 */
-async function start(deps: DeleteDeps, mountPrefix = true): Promise<string> {
-  const handler = createApiHandler(deps)
+/** 栅栏事实缺省成「监听回环、身份层缺席」= 改动前那条只有本机的口径；要测远程支的用例自己传
+ *  `bindHost` / `connection`。 */
+async function start(
+  deps: DeleteDeps,
+  mountPrefix = true,
+  trust: Partial<RequestTrustFacts> = {},
+): Promise<string> {
+  const handler = createApiHandler(deps, { bindHost: '127.0.0.1', connection: ABSENT_CONNECTION, ...trust })
   const server = http.createServer((req, res) => {
     void handler(req, res).catch(() => { /* 分发器内部已写错误信封，这里只兜底 */ })
   })
@@ -774,7 +781,7 @@ describe('路由层 · 自检（不静默吞）', () => {
   })
 })
 
-describe('路由层 · 同源栅栏', () => {
+describe('路由层 · 请求栅栏', () => {
   // 栅栏不认段名也不认动作：这里钉的是 `/apply` 那**一段**（写口），形状与退役前的四条一段一致。
   const body = applyBody('delete', ['session-abc'])
   const json = { 'content-type': 'application/json' }
@@ -828,6 +835,69 @@ describe('路由层 · 同源栅栏', () => {
     const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
     expect(res.status).toBe(403)
     expect(await manifest.list()).toEqual([])
+  })
+
+  // DNS rebinding 的形状：攻击页把域名重绑到本机，浏览器照发回环源地址，Origin 与 Host 同写攻击域名。
+  // 比「Origin === Host」会放行；判据必须是 Host 属于本次部署（回环名 / bind 字面量），见 ADR-0023。
+  it('重绑形态（Host 与 Origin 同写外来域名、源地址回环）被挡：403，且一个副作用都不发生', async () => {
+    const { deps, manifest, fs } = makeDeps()
+    const base = await start(deps)
+    const res = await rawCall(base, ROUTES.apply, 'POST',
+      { ...json, host: 'evil.example:3080', origin: 'http://evil.example:3080' },
+      body)
+    expect(res.status).toBe(403)
+    expect(fs.rename).not.toHaveBeenCalled()
+    expect(await manifest.list()).toEqual([])
+  })
+
+  it('`sec-fetch-site: cross-site` 一律挡（按名字伪造不了，浏览器自己带）', async () => {
+    const { deps, manifest } = makeDeps()
+    const base = await start(deps)
+    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, 'sec-fetch-site': 'cross-site' }, body)
+    expect(res.status).toBe(403)
+    expect(await manifest.list()).toEqual([])
+  })
+
+  // 远程支：Host 是「本次部署的 Host 白名单」之外还得过宿主身份。Host 用反代常见形态
+  // `dsh.internal`——它既不回环也不是 bind 字面量，本机支不接它，只能走 connection。
+  describe('远程支：身份承宿主 connection 服务', () => {
+    const remoteHeaders = { ...json, host: 'dsh.internal:3080' }
+
+    it('宿主认可（requestRejection 回 undefined）⇒ 放行', async () => {
+      const { deps, manifest } = makeDeps()
+      const base = await start(deps, true, { connection: ALLOWED_CONNECTION })
+      const res = await rawCall(base, ROUTES.apply, 'POST', remoteHeaders, body)
+      expect(res.status).toBe(200)
+      expect(JSON.parse(res.text)).toMatchObject({ ok: true })
+      expect((await manifest.list()).length).toBe(1)
+    })
+
+    it('宿主拒（缺身份）⇒ 403，原文说清需要宿主 Web 身份', async () => {
+      const { deps, manifest } = makeDeps()
+      const base = await start(deps, true, { connection: UNAUTHENTICATED_CONNECTION })
+      const res = await rawCall(base, ROUTES.apply, 'POST', remoteHeaders, body)
+      expect(res.status).toBe(403)
+      expect(JSON.parse(res.text)).toMatchObject({ ok: false })
+      expect((JSON.parse(res.text) as { error: { message: string } }).error.message).toMatch(/宿主的 Web 身份/)
+      expect(await manifest.list()).toEqual([])
+    })
+
+    it('connection 服务缺席 ⇒ 远程一律拒，且原文按非受信来源（不提示去换不存在的身份）', async () => {
+      const { deps, manifest } = makeDeps()
+      const base = await start(deps)
+      const res = await rawCall(base, ROUTES.apply, 'POST', remoteHeaders, body)
+      expect(res.status).toBe(403)
+      expect((JSON.parse(res.text) as { error: { message: string } }).error.message).toBe('非受信来源')
+      expect(await manifest.list()).toEqual([])
+    })
+
+    it('本机用 LAN IP 自访（Host 是 bind 字面量、源地址回环）走本机支放行，不需要 connection', async () => {
+      const { deps, manifest } = makeDeps()
+      const base = await start(deps, true, { bindHost: '192.168.50.199' })
+      const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, host: '192.168.50.199:3080' }, body)
+      expect(res.status).toBe(200)
+      expect((await manifest.list()).length).toBe(1)
+    })
   })
 })
 
@@ -1471,7 +1541,7 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
     expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes)
   })
 
-  it('GET /attachment 也过同源栅栏：跨源 Origin 403，且不读盘', async () => {
+  it('GET /attachment 也过请求栅栏：跨源 Origin 403，且不读盘', async () => {
     const made = makeDeps()
     const base = await start(made.deps)
     const res = await rawCall(base, query(imageId, 'image'), 'GET', { origin: 'https://evil.example' })
