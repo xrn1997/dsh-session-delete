@@ -5,10 +5,18 @@
 - [src/index.ts](file://src/index.ts)
 - [src/shared/wire.ts](file://src/shared/wire.ts)
 - [src/api/dispatch.ts](file://src/api/dispatch.ts)
+- [src/api/route-table.ts](file://src/api/route-table.ts)
 - [src/verbs/orphan-subagents.ts](file://src/verbs/orphan-subagents.ts)
 - [tests/orphan-subagents.test.ts](file://tests/orphan-subagents.test.ts)
+- [docs/adr/0021-maintenance-settings.md](file://docs/adr/0021-maintenance-settings.md)
 - [README.md](file://README.md)
 </cite>
+
+## 更新摘要
+**变更内容**   
+- 回收站面板不再扫孤儿（ADR-0016 被 ADR-0021 取代），维护卡接管孤儿扫描与维护
+- `/orphans` 端点的读面从 `raw` 改为 `list`（写动作必须对账）
+- 更新了端点定义、扫描语义、与清理动作的关系等章节以反映这些变化
 
 ## 目录
 1. [简介](#简介)
@@ -22,9 +30,11 @@
 9. [故障排查](#故障排查)
 
 ## 简介
-`GET /orphans` 是“删除会话”插件暴露的一个纯读扫描接口，用于回答：**哪些子会话的父已经彻底消失了**。它遍历宿主当前语料和回收站清册，找出那些既不在宿主会话列表、也不在回收站中的父所对应的子会话组；返回根会话、总数、字节数和按项目分组的统计。
+`GET /orphans` 是"删除会话"插件暴露的一个纯读扫描接口，用于回答：**哪些子会话的父已经彻底消失了**。它遍历宿主当前语料和清册，找出那些既不在宿主会话列表、也不在回收站中的父所对应的子会话组；返回根会话、总数、字节数和按项目分组的统计。
 
 该接口不写任何文件：不修改会话日志、不清理目录、不改动回收站清册，也不修改宿主投影缓存或附件。真正的清理通过 `/apply?action=orphan-clean&ids=[...]` 完成。
+
+自 ADR-0021 起，回收站面板不再扫描孤儿会话，孤儿扫描与维护职责移交至插件设置页的"维护"卡。`/orphans` 端点仍保留为纯读接口，供维护卡调用。
 
 ## 端点定义
 
@@ -38,25 +48,29 @@
 | 是否写盘 | 否 |
 | 是否修改回收站清册 | 否 |
 | 是否修改宿主会话状态 | 否 |
+| 读面类型 | `list`（对账后的清册行） |
 
 路由段名由共享 wire 契约声明，Node 半注册在 `/dsh-session-delete-api` 前缀下；浏览器半同源 fetch 同一路径。
+
+**重要变更**：读面已从 `raw`（索引快照）改为 `list`（对账后的清册行）。这是因为写动作必须对账，确保扫描结果基于最新的、已对账的清册数据，避免因手工搬进 `session-trash/` 但尚未写入清册行的父目录被误判为"父没了"。
 
 **章节来源**
 - [src/shared/wire.ts:38-56](file://src/shared/wire.ts#L38-L56)
 - [src/index.ts:10-19](file://src/index.ts#L10-L19)
+- [src/api/route-table.ts:156-166](file://src/api/route-table.ts#L156-L166)
 
 ## 扫描语义
 
-### 什么是“无主子会话”
-一个会话被认定为“无主子会话”，必须同时满足：
+### 什么是"无主子会话"
+一个会话被认定为"无主子会话"，必须同时满足：
 1. 它是子代理会话（`subagent`）。
 2. 它有父会话 `parentSessionId`。
 3. 该父会话 **既不在宿主当前语料中，也不在回收站清册里**。
 
-如果父会话仍在宿主列表中，或者只是被移进回收站，那不属于孤儿；后者属于“ stranded ”（滞留）关系，应由用户显式决定恢复或随父一起处理。
+如果父会话仍在宿主列表中，或者只是被移进回收站，那不属于孤儿；后者属于"滞留"关系，应由用户显式决定恢复或随父一起处理。
 
 ### 分组与传递闭包
-每个孤儿组以那个“父没了”的子会话作为根，并通过宿主语料的父子关系收集它的传递闭包——包括直接子会话、孙代以及更深层后代。同一会话只归一组，避免环状数据造成重复计数。
+每个孤儿组以那个"父没了"的子会话作为根，并通过宿主语料的父子关系收集它的传递闭包——包括直接子会话、孙代以及更深层后代。同一会话只归一组，避免环状数据造成重复计数。
 
 ### 去重规则
 - 已知父集合会去掉会话 id 上的 `session-` 前缀后再比对，因此同一父在不同宿主代次写法下不会误判。
@@ -66,7 +80,7 @@
 ```mermaid
 flowchart TD
     Start["开始扫描"] --> LoadCorpus["读取宿主会话语料"]
-    LoadCorpus --> LoadTrash["读取回收站清册"]
+    LoadCorpus --> LoadTrash["读取回收站清册 list()"]
     LoadCorpus --> BuildKnown["构建已知父集合<br/>语料 + 回收站"]
     LoadTrash --> BuildKnown
     BuildKnown --> ScanSessions["遍历语料中的子代理会话"]
@@ -93,7 +107,7 @@ flowchart TD
 
 | 字段 | 类型 | 含义 |
 | --- | --- | --- |
-| `roots` | `string[]` | 每个孤儿组的根会话 id。根是那个“父已不存在”的子会话，不是整个闭包里的所有会话。 |
+| `roots` | `string[]` | 每个孤儿组的根会话 id。根是那个"父已不存在"的子会话，不是整个闭包里的所有会话。 |
 | `totalSessions` | `number` | 所有孤儿组成员的会话数合计，即 `roots` 所属各组的传递闭包大小之和。 |
 | `totalBytes` | `number` | 所有组成员盘上目录字节合计。这是扫描时刻的快照，不代表未来清理释放的精确值。 |
 | `missingParents` | `number` | 失踪父的数量，按去前缀后的父 id 去重后统计。 |
@@ -106,7 +120,7 @@ flowchart TD
 
 注意：
 - `roots` 只列出每组一个根，不展开整棵闭包。
-- `groups` 是“项目维度”的扁平列表，不是嵌套树。
+- `groups` 是"项目维度"的扁平列表，不是嵌套树。
 - `groups` 按字节降序排列，便于界面优先展示残留最多的项目。
 - `missingParents` 是去重后的父数量，不等于 `roots.length`。
 
@@ -207,9 +221,12 @@ POST /dsh-session-delete-api/apply
 - 清理不会把孤儿移进回收站；孤儿没有回收站行可删。
 - 如果部分目录已缺失，清理仍可继续处理其他成员，并在失败中附带已删除数量和字节。
 
+**重要架构变更**：根据 ADR-0021，回收站面板不再扫描孤儿会话。孤儿扫描与维护职责已移交至插件设置页的"维护"卡。维护卡采用手动触发模式：用户点击"检查"按钮才执行扫描，点击"清理"按钮才执行清理。这避免了每次打开回收站面板都触发全量扫描的性能开销。
+
 **章节来源**
 - [src/shared/wire.ts:58-74](file://src/shared/wire.ts#L58-L74)
 - [src/verbs/orphan-subagents.ts:202-231](file://src/verbs/orphan-subagents.ts#L202-L231)
+- [docs/adr/0021-maintenance-settings.md](file://docs/adr/0021-maintenance-settings.md)
 
 ## 与 /list 的区别
 
@@ -222,14 +239,18 @@ POST /dsh-session-delete-api/apply
 | 输出内容 | 回收站条目及衍生读数 | 孤儿根、闭包统计、项目分组 |
 | 清理入口 | 回收站条目走 `delete` / `restore` / `purge` | 孤儿根走 `orphan-clean` |
 | 安全语义 | 可能变更回收站可见性 | 纯读，不含正文，no-cors 回包 opaque |
+| 读面类型 | `list`（对账后的清册行） | `list`（对账后的清册行） |
 
 换言之：
-- `/list` 面向“已经进了回收站的东西”。
-- `/orphans` 面向“父已经彻底没了、连回收站都没有的行”。
+- `/list` 面向"已经进了回收站的东西"。
+- `/orphans` 面向"父已经彻底没了、连回收站都没有的行"。
+
+**重要变更**：两者的读面现在都是 `list`（对账后的清册行），而非之前的 `raw`（索引快照）。这确保了写动作必须基于对账后的数据进行，避免因未对账的清册行导致误判。
 
 **章节来源**
 - [src/shared/wire.ts:38-74](file://src/shared/wire.ts#L38-L74)
 - [src/api/dispatch.ts:105-109](file://src/api/dispatch.ts#L105-L109)
+- [src/api/route-table.ts:156-166](file://src/api/route-table.ts#L156-L166)
 
 ## 性能与错误处理
 
@@ -241,9 +262,9 @@ POST /dsh-session-delete-api/apply
 - 若宿主会话语料很大，客户端应先使用 `/list` 做基础刷新，再调用 `/orphans`，避免频繁触发完整扫描。
 
 ### 错误处理
-- 如果宿主会话查询服务不可用，`loadOrphanGroups` 会抛出 `io` 类错误，而不是假装“零条孤儿”。这是有意设计：拿不到语料不能冒充空结果。
+- 如果宿主会话查询服务不可用，`loadOrphanGroups` 会抛出 `io` 类错误，而不是假装"零条孤儿"。这是有意设计：拿不到语料不能冒充空结果。
 - 如果某个会话路径非法，扫描会拒绝，防止递归删除泄漏出会话根目录。
-- 扫描本身不写文件，所以错误通常意味着“无法完成报告”，而不是“部分清理已完成”。
+- 扫描本身不写文件，所以错误通常意味着"无法完成报告"，而不是"部分清理已完成"。
 - 网络层失败会以统一信封返回，包含 `code`、`message` 和可选 `details`。
 
 ```mermaid
@@ -260,7 +281,7 @@ sequenceDiagram
     alt 宿主服务不可用
         API-->>Client: "RemoteFailure(code='io')"
     else 正常语料
-        API->>Manifest: "读取回收站清册"
+        API->>Manifest: "读取回收站清册 list()"
         Manifest-->>API: "清册记录"
         API->>FS: "逐个孤儿成员量目录字节"
         FS-->>API: "字节或不存在"
@@ -280,21 +301,26 @@ sequenceDiagram
 
 | 现象 | 可能原因 | 建议 |
 | --- | --- | --- |
-| 返回 `code='io'` | 宿主会话查询服务未就绪 | 重启宿主或确认宿主版本支持该服务；不要把它解释为“没有孤儿”。 |
+| 返回 `code='io'` | 宿主会话查询服务未就绪 | 重启宿主或确认宿主版本支持该服务；不要把它解释为"没有孤儿"。 |
 | `roots` 为空但盘上仍有目录 | 父仍在宿主列表或回收站中 | 这不是孤儿；应通过回收站面板恢复或彻底删除父。 |
 | `missingParents` 小于 `roots.length` | 多个孤儿根共享同一个失踪父 | 这是预期去重行为。 |
 | `groups` 中项目目录比预期多 | 根与会话后代位于不同项目目录 | 检查会话的 `projectDir`，这反映的是盘上归属而非 UI 分组。 |
 | 清理后仍有少量目录 | 部分目录已缺失或清理中途失败 | 查看 `orphan-clean` 回执中的 `removed`、`freedBytes` 与失败详情。 |
 | 客户端看不到 `/orphans` | 宿主插件未激活或服务不可用 | 重启宿主；插件不可用时不应注册入口。 |
+| 回收站面板不显示孤儿 | ADR-0021 已移除面板扫描 | 孤儿扫描已移至插件设置页的"维护"卡，请在那里点击"检查"按钮。 |
 
 补充说明：
-- 插件文档明确“无主残留”的父会话不在回收站中，面板只在扫描到时提示，由用户决定是否清理，且“绝不自动跑”。
+- 插件文档明确"无主残留"的父会话不在回收站中，面板只在扫描到时提示，由用户决定是否清理，且"绝不自动跑"。
 - 回收站与宿主会话目录同卷，搬移依赖原子 rename；孤儿清理直接删除目录，不走回收站。
+- **重要变更**：根据 ADR-0021，回收站面板不再扫描孤儿会话。孤儿扫描与维护职责已移交至插件设置页的"维护"卡。维护卡采用手动触发模式，用户需主动点击"检查"按钮才执行扫描。
 
 **章节来源**
 - [README.md:17-27](file://README.md#L17-L27)
 - [README.md:68-84](file://README.md#L68-L84)
 - [tests/orphan-subagents.test.ts:105-147](file://tests/orphan-subagents.test.ts#L105-L147)
+- [docs/adr/0021-maintenance-settings.md](file://docs/adr/0021-maintenance-settings.md)
 
 ## 结论
-`GET /orphans` 是一个安全的纯读扫描端点，职责是回答“哪些孤儿会话存在、它们有多大、分布在哪些项目”。它不负责清理；清理通过 `/apply?action=orphan-clean&ids=[...]` 显式触发。对于运维和调试而言，区分 `/list`（回收站清单）与 `/orphans`（父已消失的孤儿）很重要：前者管理已进入回收站的会话，后者管理宿主语料与回收站都无法认领的残留会话。
+`GET /orphans` 是一个安全的纯读扫描端点，职责是回答"哪些孤儿会话存在、它们有多大、分布在哪些项目"。它不负责清理；清理通过 `/apply?action=orphan-clean&ids=[...]` 显式触发。对于运维和调试而言，区分 `/list`（回收站清单）与 `/orphans`（父已消失的孤儿）很重要：前者管理已进入回收站的会话，后者管理宿主语料与回收站都无法认领的残留会话。
+
+**架构演进**：根据 ADR-0021，孤儿扫描的职责已从回收站面板移至插件设置页的"维护"卡。这一变更避免了每次打开回收站面板都触发全量扫描的性能开销，同时保持了手动触发的纪律性。`/orphans` 端点仍保留为纯读接口，供维护卡调用，其读面已从 `raw` 改为 `list`，确保写动作必须基于对账后的数据。

@@ -1,21 +1,24 @@
 # 知识卡导出索引文件
 schema_version: 1
 locale: zh-CN
-commit: 6010dffe8a8ddf1ec6226f58634922f8497117cd
+commit: f3a48d79c17ab6dbf09967924eec3c661daaeb27
 branch: main
-exported_at: "2026-10-19T13:36:46Z"
+exported_at: "2026-10-28T01:18:08Z"
 modules:
     root:
-        dir_name: DeepSeek Harness 会话删除插件（根包）
-        title: DeepSeek Harness 会话删除插件（根包）
+        dir_name: DeepSeek Harness 会话删除插件（根包配置）
+        title: DeepSeek Harness 会话删除插件（根包配置）
         scope:
             - README.md
-            - .gitignore
+            - CONTRIBUTING.md
+            - AGENTS.md
+            - CONTEXT.md
             - package.json
             - pnpm-workspace.yaml
             - pnpm-lock.yaml
             - tsconfig.json
-            - vitest.config.ts
+            - tsconfig.build.json
+            - tsdown.config.ts
             - cordis.patch.yml
             - screenshots.json
         source_files: []
