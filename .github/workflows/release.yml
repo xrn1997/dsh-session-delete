@@ -1,0 +1,157 @@
+name: Release
+
+# 发版资产：`V*` tag push 时把 `pnpm pack` 的 tarball 挂到 GitHub Release，给不想构建的
+# 用户一条免构建的安装路径（`lib/` 仍不入库，仓库 URL 的 github:/git: 直装依旧不支持）。
+# 决策与被否方案见 `ADR-0025`；安装 URL 与发版步骤住 `README.md`「安装」与
+# `docs/development.md`「发版流程」。
+
+on:
+  push:
+    tags: ['V*']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # 与 ci.yml 相同：pnpm 版本住 packageManager，Node 版本两处各写一次。
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # 先验 tag 再装依赖与跑门：版本对不上时立刻红，不必烧安装与整套门。
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node -e "const v=require('./package.json').version; if (process.env.GITHUB_REF_NAME !== 'V'+v) { console.error('tag ' + process.env.GITHUB_REF_NAME + ' does not match package version V' + v); process.exit(1) }"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 与 ci.yml 跑同一组门；tag 不保证落在 main 上，产物必须自证。
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+      - name: Pack tarball
+        run: |
+          # `pnpm pack` 会再跑一次 `prepack`（build）；保留这条生命周期，让 tarball 自己证明它能被产出。
+          mkdir -p dist
+          pnpm pack --pack-destination dist
+          expected=$(node -p "const p = require('./package.json'); p.name.replace('@', '').replace('/', '-') + '-' + p.version + '.tgz'")
+          # 钉版本 URL 写的就是这个文件名（README「安装」）；scoped 包名到文件名的改名规则变了这里先红。
+          test -f "dist/$expected" || { echo "dist/ has no $expected"; exit 1; }
+          # 稳定别名给 releases/latest/download 用，README 里的 URL 不随版本腐烂。
+          cp "dist/$expected" dist/dsh-session-delete.tgz
+          echo "TGZ=dist/$expected" >> "$GITHUB_ENV"
+
+      - name: Verify tarball contents
+        run: |
+          # 期望的包内树从 package.json 推导，不在 workflow 里抄第二份清单（清单的家是 `files`）。
+          # 两条判据：构建产物与随包资源整树进包（少一件 = `files` 忘了加）；`exports` 等挂载面点名的
+          # 路径真在包里（挂载面断了就不用等宿主报错）。反向也查：契约没点名的文件不许混进用户机器。
+          cat > "$RUNNER_TEMP/verify-tarball.cjs" <<'NODE'
+          const { readdirSync, readFileSync } = require("node:fs");
+          const { execFileSync } = require("node:child_process");
+          const { join } = require("node:path");
+
+          const tgz = process.argv[2];
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+
+          const shippedDirs = ["lib", "locale"];
+          const walk = (dir) =>
+            readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+              d.isDirectory() ? walk(join(dir, d.name)) : [join(dir, d.name).replaceAll("\\", "/")],
+            );
+
+          const surface = [];
+          const collect = (v) => {
+            if (typeof v === "string") {
+              if (!v.includes("*")) surface.push(v.replace(/^\.\//, ""));
+            } else if (v && typeof v === "object") {
+              Object.values(v).forEach(collect);
+            }
+          };
+          [pkg.main, pkg.types, pkg.icon, pkg.exports, pkg.dsh?.bundle?.patch].forEach(collect);
+
+          const expected = new Set([...shippedDirs.flatMap(walk), "package.json", "README.md", "LICENSE", ...surface]);
+          const actual = new Set(
+            execFileSync("tar", ["-tzf", tgz], { encoding: "utf8" })
+              .split("\n")
+              .filter((l) => l.startsWith("package/") && !l.endsWith("/"))
+              .map((l) => l.slice(8)),
+          );
+
+          const missing = [...expected].filter((p) => !actual.has(p));
+          const undeclared = [...actual].filter((p) => !expected.has(p));
+          for (const p of missing) console.error("tarball missing " + p);
+          for (const p of undeclared) console.error("tarball carries a file the contract does not name: " + p);
+          process.exit(missing.length || undeclared.length ? 1 : 0);
+          NODE
+          node "$RUNNER_TEMP/verify-tarball.cjs" "$TGZ"
+
+      # 同一份 artifact 两个用途：dry run 的产物；tag 运行时给 publish job 交接。
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: dsh-session-delete-tarball
+          path: dist/*.tgz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release assets
+    needs: build
+    # dispatch 即使在 tag ref 上也只是干跑；只有 push tag 才发布。
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      # gh release create --generate-notes 要读本地 git 历史与上一个 tag。
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Download tarball artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dsh-session-delete-tarball
+          path: dist
+
+      - name: Publish GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          prerelease=()
+          case "$tag" in *-*) prerelease=(--prerelease) ;; esac
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.tgz --clobber
+            if [ "${#prerelease[@]}" -gt 0 ]; then gh release edit "$tag" --prerelease; fi
+          else
+            gh release create "$tag" dist/*.tgz --verify-tag --title "$tag" --generate-notes "${prerelease[@]}"
+          fi

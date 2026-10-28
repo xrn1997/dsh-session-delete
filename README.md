@@ -47,7 +47,13 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 装完**重启宿主**（Node 半不走 HMR）。卸载只移除插件，`$DSH_HOME/session-trash/`（默认 `~/.dsh/session-trash/`）下已有的目录不会被自动清理。
 
-也可以离线分发：`pnpm pack` 出 tarball 后 `dsh plugin --profile <profile> add ./xrn1997-dsh-session-delete-<版本>.tgz`（scoped 包的文件名带作者段）。包里带预构建产物（`prepack` 会替你跑 `build`），这条路不需要为构建脚本授权。
+装法：
+
+- **npm 安装**（推荐）：使用预构建产物，秒装、无需构建授权。
+- **GitHub Release 装**（不依赖本包在 npm 上的发布，也不需要构建工具链）：发版工作流在 `V*` tag 上产出预构建 tarball。装最新 Release：
+  `dsh plugin --profile <profile> add https://github.com/xrn1997/dsh-session-delete/releases/latest/download/dsh-session-delete.tgz`
+  钉版本就换成 `https://github.com/xrn1997/dsh-session-delete/releases/download/V<版本>/xrn1997-dsh-session-delete-<版本>.tgz`；tarball 自带 `lib/`，装的是预构建产物，宿主能否挂载仍由兼容闸与真机验证决定。宿主不认 URL 形态的参数时，把 `.tgz` 下到本地再按下面离线分发那条装。Releases 页还没有对应版本时，用 npm 或离线分发。
+- **离线分发**：`pnpm pack` 出 tarball 后 `dsh plugin --profile <profile> add ./xrn1997-dsh-session-delete-<版本>.tgz`（scoped 包的文件名带作者段）。包里带预构建产物（`prepack` 会替你跑 `build`），这条路不需要为构建脚本授权。
 
 **兼容性分两层，别混**：
 

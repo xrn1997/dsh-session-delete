@@ -29,6 +29,7 @@
 | `0021` | 孤儿会话与孤儿附件为什么只在插件设置页手动检查/清理、为什么共住一张维护卡（回收站面板不再自动扫；被否：自动扫、留在面板、一次性脚本） |
 | `0022` | 非回环客户端（LAN / 反代部署）为什么不再被回环 socket 挡住、归属怎么判、远程身份为什么承宿主的 `connection.requestRejection`（被否：issue 的「同源 Origin/Referer 任一存在即放行」、只支持本机、插件自配 trustedHosts、复刻 cookie 校验） |
 | `0023` | 请求归属为什么只由 Host 决定、回环 socket 为什么不是 rebinding 的豁免（Origin==Host 只证同名，不证归属） |
+| `0025` | 发版为什么在 `V*` tag 上产出 GitHub Release 预构建 tarball、为什么 CI 不代发 npm（被否：恢复 `prepare`、`lib/` 入库、CI 代发 npm、只保留 npm） |
 
 ## 文档与真相
 

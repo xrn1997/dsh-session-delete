@@ -188,5 +188,5 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 会话日志读取 | `src/log/session-log.ts`、`src/log/zstd-frames.ts` |
 | 面板 / 交互 / 写入座位 | 本文 §3；`docs/ui-spec.md`；`src/client/write-seats.ts`、`src/client/write-settlement.ts` |
 | 插件页维护卡 | 本文 §3；`docs/ui-spec.md` §5；ADR-0021 |
-| 宿主接入 / 打包 / 发版 | 本文 §1；`docs/development.md` |
+| 宿主接入 / 打包 / 发版 | 本文 §1；`docs/development.md`；ADR-0025 |
 | 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`；`CONTRIBUTING.md`、`CHANGELOG.md` |
