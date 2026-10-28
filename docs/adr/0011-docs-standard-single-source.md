@@ -1,6 +1,6 @@
 # 文档标准单源：核心文件、ADR 格式与文档门清单
 
-Status: accepted
+Status: superseded by 0024
 
 本仓固定一套文档标准：核心文件、ADR 格式与文档门检查清单各只有一份，仓内差异只在 `docs/AGENTS.md` 声明。原 ADR-0010 的分层与「过程文档不入库」保留；它关于 ADR 格式、AGENTS 预算单位与文档治理文件位置的条款由本篇取代。
 

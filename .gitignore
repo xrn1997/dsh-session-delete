@@ -42,5 +42,9 @@ Thumbs.db
 .task-scratch/
 .worktrees/
 
+# 本地调试临时文件（probe 页面等）——只忽略仓库根层：
+# 无斜杠的 `tmp-*` 会递归匹配任意深度，把 tests/ 下任何 tmp-*.ts 静默漏掉入库。
+/tmp-*
+
 # 视觉工具产物（截图 / 裁剪 / OCR / 预览等 QA 中间件）——本机调试证据，不入库
 .dsh-vision-toolkit/

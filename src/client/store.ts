@@ -5,7 +5,7 @@
  * （`delete-confirm.tsx`）、批量删除请求（`batch-confirm.tsx`）、撤销提示（`undo-notices.ts`）、
  * 批量选中集（`batch-selection-store.ts`）等。它们都挂在 `shell.overlay` / `main` / 菜单行这些
  * 互不相邻的座位上，模块级是唯一的共同点。
- * 在这之前每个文件各写一遍「`let` 现场 + `Set<() => void>` + `notify` + `useSyncExternalStore`」，
+ * 在这之前每个文件各写一遍「`let` 现场 + 监听集合 + `notify` + `useSyncExternalStore`」，
  * 各自的 seq / revision 也在分头维护。现在订阅/通告只住这一处。
  *
  * 另有一个**懒读快照**变体（`createLazyStore`）：值由组件树之外的事实源（宿主 DOM）现读，

@@ -75,7 +75,7 @@ export interface TrashPanelController {
   confirmApply(action: 'purge' | 'restore', ids: readonly string[]): Promise<void>
 }
 
-/** 失败按**哪一条**记：只有 `entryId === selected.id` 的失败会进详情块，别的条目失败不会串台。 */
+/** 失败按**哪一条**记：只有失败那条与当前选中行同 id 时才会进详情块，别的条目失败不会串台。 */
 interface DetailFailure {
   entryId: string
   message: string
@@ -140,7 +140,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   )
 
   // 清单换了（别处删了一条、恢复成功、彻底删除成功）：选中那条已经不在了就让位，并把它的缓存丢掉。
-  // 下面那条自动选中以 `selectedId === null` 为门，所以这一拍（选中还在）它不抢；清场落地后的下一拍才接住。
+  // 下面那条自动选中以「尚未选中」为门，所以这一拍（选中还在）它不抢；清场落地后的下一拍才接住。
   useEffect(() => {
     if (entries === null || selectedId === null) return
     if (entries.some((entry) => entry.id === selectedId)) return

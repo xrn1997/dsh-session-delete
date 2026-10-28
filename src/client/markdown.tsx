@@ -47,7 +47,7 @@ function componentsFor(t: Translate): Components {
 
 /**
  * `memo` 是必需的而不是优化：`react-markdown@10.1.0` 里**一处 memoization 都没有**（读实
- * `node_modules/react-markdown/lib/index.js:175-178`——`Markdown()` 每次调用都 `createProcessor(options)`
+ * `node_modules/react-markdown/lib/index.js`——`Markdown()` 每次调用都 `createProcessor(options)`
  * 再 `runSync(parse(file))`，`MarkdownHooks` 那一支也一样），而面板任何一次重渲（悬停、↑↓、
  * 「刚刚删除」那句要读 `Date.now()`）都会走到这里 ⇒ 不按住就是每条助手回复每拍重解析一遍。
  * 按住的条件是 `text` 与**探针 `localeKey`**（调用方在渲染时算好的一句固定键译文 `t('common.close')`）。

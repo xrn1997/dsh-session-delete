@@ -146,7 +146,18 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
 | 抄来的官方控件样式（`sd-` 前缀）与点名的自造差异 | `src/client/ui/ui.css` 文件头那张来源表 | token 的取值 |
 
-## 5. 数据与生命周期
+## 5. seam：可测性怎么落
+
+- **路由层是纯构造器**：`src/api/dispatch.ts` 的 `createApiHandler(deps, trust)` 不依赖 Cordis，用真 `node:http` server 承载——`tests/api.test.ts` 钉每一段的 method / 形状 / 信封 / 失败码原文。
+- **动词层走记录型世界**：`tests/support/world.ts` 的 `createLogWorld` 用声明式读数描述盘与宿主，并按**发生顺序**记 fs / host 两端调用——删除的「摘账本 → 搬目录 → 摘活体 → 通告」是一条顺序断言，不是散点断言。
+- **领域纯函数直接喂结构**：`src/trash/groups.ts`、`src/trash/reconcile.ts`、`src/trash/entry.ts`、`src/shared/wire.ts` 的判据各有一条不起服务、不碰盘的钉子。
+- **宿主端口用本地窄镜像 + 假 adapter**：`tests/ports.test.ts` / `tests/host-roles.test.ts` 钉角色切分，`tests/support/fake-deps.ts` 是动词用例共用的一份内存 adapter。
+- **装配只在 `index.ts`，由 `tests/assembly.test.ts` 端到端钉**：插件模块面、前缀路由、槽位与 effect 的注册形状。
+- **客户端是假 adapter 驱动真实组件**：`tests/client/index.test.tsx` 用假 `ctx` 与假 `fetch` 跑真 `apply`，其余客户端用例按读者分的依赖束注入；不是渲染快照。
+- **日志读面用真 zstd 帧**：`tests/session-log.test.ts` 与 `tests/zstd-frames.test.ts` 直接造多帧数据，不替身编解码。
+- **门的分工**见 `AGENTS.md` 的「必须过的门」；真机验证的走法见 `docs/development.md` 的「真机验证」。
+
+## 6. 数据与生命周期
 
 - 运行时数据全住数据根（`$DSH_HOME/`，默认 `~/.dsh/`）：会话本体 `sessions/<项目目录>/<会话目录>/`（宿主的），回收站本体 `session-trash/<条目 id>/` 与清册（宿主 storage 域，介质在 `storages/`）。**回收站必须与 `sessions/` 同卷**（搬移靠整目录 `rename`，原子）。
 - **`session-trash/` 目录是唯一需要手动动的地方**：真相读（`list()`）先与目录对账（多出的目录重建出行、目录没了摘行、认不出的当外人），由 `src/trash/ledger.ts` 保证；纯读面 `/orphans` 与 `/detail` 只读 `raw()`，不对账、不写行（`/detail` 遇到“行在、目录不在”照旧判 `io`，不靠对账摘行），`orphan-clean` 等写动作先 `list()` 再扫。`storages/` 那份是内部索引，外面改它要重启宿主才生效。
@@ -160,3 +171,22 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - 会话日志是**多帧 zstd**：只读版本号最大的那代，绝不拼代（判据与用例住 `src/log/session-log.ts`、`src/log/zstd-frames.ts` 与 `tests/session-log.test.ts`、`tests/zstd-frames.test.ts`）。
 - **附件库在 `$DSH_HOME/attachments/v1`**：图片在 `objects/`，普通文件在 `file-objects/` + `files/`，宿主所有、没有删除接口。永久删除只清**独占图片副本**——被删会话引用、且剩余任何会话/派生存储都不再引用；共享副本保留，`$DSH_HOME` 之外的源文件不受影响；普通文件只渲染、不代删。剩余引用源读不出就整体跳过（宁可留孤儿也不删共享）。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。
 - **孤儿附件也只有手动这一条路**：`GET /attachment-orphans` 报告、`POST /attachment-clean` 聚合清理，都由设置页维护卡在用户点「检查 / 清理」时发起；没有自动检测、没有定时器，面板挂载不读它。报告与清理共用同一套引用扫描（全部会话日志 + 全部 `session-trash` 目录 + `storages` / `cache` JSON），但每次调用各自现扫：任一读不出就报告失败、清理零删，不折成 0。判据住 `src/trash/attachments.ts`，裁决见 ADR-0021。
+
+## 7. 改动面 → 先读什么
+
+表只指路，不复制口径：真正的主人在本文 §4、ADR 与代码注释。
+
+| 改动面 | 先读 |
+| --- | --- |
+| 段名 / 线上形状 / 失败码 | 本文 §4 的 `src/shared/wire.ts` 行；ADR-0003；`src/api/route-table.ts` |
+| 路由 / 请求栅栏 / 远程身份 | 本文 §1、§4；`src/api/request-trust.ts`；ADR-0009、ADR-0022、ADR-0023 |
+| 删除 / 恢复 / 归档语义 | 本文 §6；`src/verbs/delete-session.ts`、`src/verbs/restore-session.ts`；ADR-0008 |
+| 批量与逐步撤销 | 本文 §4 的 `batch` / `member-journal` / `batch-carried` 行；ADR-0002 |
+| 永久删除 / 活体准入 | 本文 §4 的 `permanent-removal` / `live-admission` 行；ADR-0006 |
+| 附件与孤儿清理 | 本文 §6；`src/trash/attachments.ts`；ADR-0020、ADR-0021 |
+| 清册 / 对账 | `src/trash/ledger.ts`、`src/trash/reconcile.ts`；ADR-0012 |
+| 会话日志读取 | `src/log/session-log.ts`、`src/log/zstd-frames.ts` |
+| 面板 / 交互 / 写入座位 | 本文 §3；`docs/ui-spec.md`；`src/client/write-seats.ts`、`src/client/write-settlement.ts` |
+| 插件页维护卡 | 本文 §3；`docs/ui-spec.md` §5；ADR-0021 |
+| 宿主接入 / 打包 / 发版 | 本文 §1；`docs/development.md` |
+| 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`；`CONTRIBUTING.md`、`CHANGELOG.md` |

@@ -8,7 +8,7 @@
  * Esc 交还焦点那条判据住 `trash-nav.test.tsx`：控制器只管 `back()` 这一个入口，不查 DOM。
  *
  * 行为口径与 `trash-panel.tsx` 现有的函数体逐条对齐：命中缓存不重读、失败不缓存、清单换版时
- * 选中不见才让位、自动选中只认 `selectedId === null`、失效通告只戳一次重读、动作成功丢详情缓存、
+ * 选中不见才让位、自动选中只认「尚未选中」、失效通告只戳一次重读、动作成功丢详情缓存、
  * 失败原文按条目留。
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
@@ -420,7 +420,7 @@ describe('面板控制器 · 自动选中', () => {
     expect(m.deps.detail).not.toHaveBeenCalled()
   })
 
-  it('选中的那条被清掉后，下一拍自动接住新清单第一条（自动选中只认 selectedId === null）', async () => {
+  it('选中的那条被清掉后，下一拍自动接住新清单第一条（自动选中只认「尚未选中」）', async () => {
     const m = mount({ entries: [A, B], ordered: [A, B], canAutoSelect: true })
     await waitFor(() => expect(m.result.current.detail.kind).toBe('ready'))
     expect(m.result.current.selectedId).toBe('a')

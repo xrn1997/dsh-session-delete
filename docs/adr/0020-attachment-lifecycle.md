@@ -27,4 +27,4 @@ Status: accepted
 
 批量永久删除（清空回收站、批量 purge）逐条重扫剩余引用源：每删一条都要把活动会话、回收站目录与派生存储再走一遍，规模越大越慢。当前规模接受这一成本；home 变大后改成批级只扫一次，而不是现在就加缓存与失效协议。
 
-锚点：`src/trash/attachments.ts`；`src/api/attachment.ts`；`src/verbs/permanent-removal.ts`；`tests/attachments.test.ts`；`docs/architecture.md` §5；ADR-0006。
+锚点：`src/trash/attachments.ts`；`src/api/attachment.ts`；`src/verbs/permanent-removal.ts`；`tests/attachments.test.ts`；`docs/architecture.md` §6；ADR-0006。

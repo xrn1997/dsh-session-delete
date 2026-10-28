@@ -133,7 +133,7 @@ function PickLeadingRow({
   t: Translate
 }) {
   const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
-  // 与宿主 `sessionTitle()` 同一口径（`title?.trim() ?? ''`），免得两颗入口给确认框的标题不一样。
+  // 与宿主 `sessionTitle()` 同一口径（trim 后空串兜底），免得两颗入口给确认框的标题不一样。
   const title = select((state) => state?.byId?.[sessionId]?.title?.trim() ?? '')
   return <BatchPickCheckbox sessionId={sessionId} title={title} t={t} />
 }

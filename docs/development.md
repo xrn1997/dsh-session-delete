@@ -13,22 +13,9 @@ pnpm test         # vitest run
 pnpm typecheck    # tsc --noEmit
 ```
 
-GitHub Actions 在 push 到 `main` 与每个 PR 上跑同一组门：`pnpm typecheck`、`pnpm test`、`pnpm build`，最后 `npm pack --dry-run` 验证发布清单。工作流住 `.github/workflows/ci.yml`，pnpm 版本由 `package.json` 的 `packageManager` 指定。**真机验证不在 CI 内**，仍按下面「真机验证」走。
-
 **`lib/` 是构建产物且不入库**，任何从源码目录链进 profile 的安装方式都不会替你构建它——先 `pnpm build`。四条分发路：`link:` 要自己构建；npm 发布由 `prepack` 兜；`pnpm pack` 出的 tarball 也由 `prepack` 构建（`dsh plugin --profile <profile> add ./….tgz`）；源码 git 直装没有构建（本仓没有 `prepare`，那条路现在是死的）。
 
 改动生效分两半：**浏览器半**（`src/client/`）由宿主 HMR 推到浏览器，无需重启；**Node 半**不在热重载链路内，必须重启宿主。
-
-> **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
-
-`pnpm test` 里还有一道**文档门**（`tests/docs.test.ts`）：它扫 `AGENTS.md` / `CONTEXT.md` / `README.md` / `CONTRIBUTING.md` / `CHANGELOG.md`、`docs/**` 与 `src/**`、`tests/**` 的正文与注释，钉住点名的 `src/`、`tests/`、`docs/`、`locale/` 路径真实存在、已废的文档称呼不再出现、`§N` 指路活着、相对链接与锚点指得到东西、ADR 标题 / `Status` / `锚点：` 齐全、索引双向完整且没有重复行、README 截图清单与本地文件双向一致、README 的窗口/真机名单/徽章从 `package.json` 投影、主人清单/界面规格/文档标准各只有一份、根 `AGENTS.md` 预算；具体判据以该文件为准。路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。`tests/docs.test.ts` 自己从语料里排除：它的正文必须引用已废称呼与历史设计稿目录名，扫自己必然自红；这是唯一的自排除，不是白名单。
-
-`pnpm typecheck` 也带一道门：`tsconfig.json` 开着 `isolatedModules` 与 `verbatimModuleSyntax`，所以 `AGENTS.md` 门 5 那条「跨插件一律 `import type`」不是风格建议——把类型面写成值 import 直接编译红，不需要靠评审记性。门 5 的另一半（浏览器半一条 `@deepseek-ai/*` 的 import 都不许有，type-only 也不留）不归编译器管：宿主包就装在 `devDependencies` 里，值 import 照样解析得到。那一半的门是 `pnpm test` 里 `tests/skeleton.test.ts` 的「跨插件 import 红线」源码扫描——两半各钉各的，别把两条判据都记到 typecheck 头上。
-
-## 复核门（改过那一层就要过）
-
-- **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
-- **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；非宿主的 npm 依赖落 `dependencies`（不是 `peerDependencies`）、不进 `PLATFORM_MODULES`，可以 inline，但带 `imports` 分流的依赖走同文件的 `resolveBrowserBranchImport`——只认那类 `#` 请求，且同级真有 `.browser.js` 才接，否则返回 `null` 让纯度门重新响（`unified → vfile` 的 `#minpath` 分流就是实例）。为什么这么收，见 `docs/architecture.md` §1 与 §2。
 
 ## 本地源码调试
 
@@ -38,6 +25,23 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 ```
 
 `link:` 只建目录链接、不替你构建；卸载只移除插件，`$DSH_HOME/session-trash/`（默认 `~/.dsh/session-trash/`）下的已有目录不会被清理。
+
+## 门（自动）
+
+三道门即开头命令块里的 `pnpm test` / `pnpm typecheck` / `pnpm build`；`pnpm typecheck` 与 `pnpm test` 必须同批跑，发版前逐个确认退出码。
+
+GitHub Actions 在 push 到 `main` 与每个 PR 上跑同一组门：`pnpm typecheck`、`pnpm test`、`pnpm build`，最后 `npm pack --dry-run` 验证发布清单。工作流住 `.github/workflows/ci.yml`，pnpm 版本由 `package.json` 的 `packageManager` 指定。**真机验证不在 CI 内**，仍按下面「真机验证」走。
+
+> **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
+
+**文档门是三件套**：`tests/docs-liveness.test.ts`（文档与代码注释的引用活性与引用形态、职责边界、ADR 形状、README 投影与截图清单）、`tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号在生产代码里现查得到）与 `tests/comment-altitude.test.ts`（注释不抄代码表达式）。**具体判据以这三份测试本身为准**，这里只留操作口径：路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。`tests/docs-liveness.test.ts` 与 `tests/comment-altitude.test.ts` 各自从语料里排除自身（前者正文必须引用已废称呼，后者的合成样品故意含抄写形）；自排除不是白名单。
+
+`pnpm typecheck` 也带一道门：`tsconfig.json` 开着 `isolatedModules` 与 `verbatimModuleSyntax`，所以 `AGENTS.md` 那条「跨插件一律 `import type`」不是风格建议——把类型面写成值 import 直接编译红，不需要靠评审记性。另一条「浏览器半一条 `@deepseek-ai/*` 的 import 都不许有，type-only 也不留」不归编译器管：宿主包就装在 `devDependencies` 里，值 import 照样解析得到。那一半的门是 `pnpm test` 里 `tests/skeleton.test.ts` 的「跨插件 import 红线」源码扫描——两半各钉各的，别把两条判据都记到 typecheck 头上。
+
+### 复核门（改过那一层就要过）
+
+- **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
+- **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；非宿主的 npm 依赖落 `dependencies`（不是 `peerDependencies`）、不进 `PLATFORM_MODULES`，可以 inline，但带 `imports` 分流的依赖走同文件的 `resolveBrowserBranchImport`——只认那类 `#` 请求，且同级真有 `.browser.js` 才接，否则返回 `null` 让纯度门重新响（`unified → vfile` 的 `#minpath` 分流就是实例）。为什么这么收，见 `docs/architecture.md` §1 与 §2。
 
 ## 真机验证（硬约束，别跳）
 
@@ -55,7 +59,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 ## 发版流程
 
 1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm build`，退出码逐个看过（0/0/0）。
-2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，逐提交明细留 git。
+2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写，逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交、打 annotated tag `Vx.y.z`、push。
 4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。

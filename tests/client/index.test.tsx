@@ -363,7 +363,7 @@ describe('apply 的装配面', () => {
     expect(panelMain?.key).toBe(PANEL_ID)
     // 行的名字由**注册元数据**给（宿主 `resolveSlotLabel(options.label)` 解析后画在行上），
     // 不是我们组件里写的字——所以这条必须钉在注册项上。**给的是 thunk**：官方
-    // `resolveSlotLabel` 逐字 `typeof label === 'function' ? label() : label`，其 JSDoc 即
+    // `resolveSlotLabel` 逐字按「函数就调用、否则取原值」收口，其 JSDoc 即
     // "thunks follow the active locale"，而宿主又挂了 `ctx.locale.subscribe(syncPanels)`
     // ⇒ 切语言时这一行跟着走（`copy.ts` 头注）。
     const label = panelRow?.label
