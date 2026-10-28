@@ -7,7 +7,7 @@
 
 给 DeepSeek Harness（DSH）加一个**删除会话**的能力。DSH 官方有归档、没有删除——归档只是把会话从列表里挪走，文件还在。本插件补上删除，并且让删除可恢复：删除 = 移入回收站，另有一个显式的「彻底删除」。
 
-![回收站面板：左列是按项目分组的会话清单，右栏是选中那条的元信息与正文，页脚是整页唯一的实心红按钮「清空回收站…」](https://raw.githubusercontent.com/xrn1997/dsh-session-delete/main/docs/screenshots/screenshot-01.png)
+![回收站面板：左列是按项目分组的会话清单，右栏是选中那条的元信息与正文，页脚是整页唯一的实心红按钮「清空回收站…」](docs/screenshots/screenshot-01.png)
 
 - 安装：`dsh plugin --profile <profile> add @xrn1997/dsh-session-delete`
 - 许可：[Apache-2.0](LICENSE)
@@ -58,13 +58,13 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 **删一条**：会话行「⋯」→「删除」→ 确认框。确认框在点之前就说明**这一组**的规模（「含 N 个子会话，将一起移入回收站」，N>0 才出现），删完那条提示点「撤销」即恢复。
 
-![会话行的「⋯」菜单：宿主原有动作之后，本插件加了「多选」与红色的「删除」两行](https://raw.githubusercontent.com/xrn1997/dsh-session-delete/main/docs/screenshots/screenshot-02.png)
+![会话行的「⋯」菜单：宿主原有动作之后，本插件加了「多选」与红色的「删除」两行](docs/screenshots/screenshot-02.png)
 
 删除按**整组**走：父会话在盘上的子会话与更深后代一起移走（传递闭包，一层层取到底）——那些行宿主本来就不显示。任一成员在跑（**包括列表里看不见的子会话**）⇒ 整组拒绝、零副作用，报的是那个运行中的 id；本插件不替用户终止正在进行的活。
 
 **删一批**：会话行「⋯」→「多选」进入显式模式。模式内点整行勾选/取消且**不切换会话**，行首出勾选框，浮条常驻（0 条也给退出入口），同一位置在「全选 / 取消全选」之间切换。确认框逐条列出这批会话，执行是一次批量请求：部分失败不关框、原文落在失败那一行，按钮变成「重试这 N 条」，成功的 6 秒内可整批撤销。
 
-![批量删除模式：两行已勾选，浮条显示「已选 2 条」与展开的已选清单，动作是「移入回收站 2 条」与「退出多选」](https://raw.githubusercontent.com/xrn1997/dsh-session-delete/main/docs/screenshots/screenshot-03.png)
+![批量删除模式：两行已勾选，浮条显示「已选 2 条」与展开的已选清单，动作是「移入回收站 2 条」与「退出多选」](docs/screenshots/screenshot-03.png)
 
 **管回收站**：侧栏面板里的「回收站」一行（与「插件」同层）。左清单右详情（中央列更窄时改成下钻，「← 返回清单」回来），按项目分组、组头可折叠、两栏之间那根线可拖。详情只列你真实发的提问与助手的文字，宿主注入的上下文与工具调用不进正文；助手文字按 Markdown 排版，你的提问保持原话。
 
