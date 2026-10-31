@@ -1,10 +1,21 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { createMemoryManifest } from '../src/trash/manifest.js'
+import { createStorageManifest, type StorageDomainLike } from '../src/trash/manifest.js'
+import type { TrashEntry } from '../src/trash/entry.js'
 import { trashEntry } from './support/world.js'
 
+/** 生产绑定只认 `StorageDomainLike`；用内存域钉住 `createStorageManifest` 的排序与整条覆盖语义。 */
+function memoryDomain(): StorageDomainLike {
+  const rows = new Map<string, TrashEntry>()
+  return {
+    async readAll() { return [...rows.values()] },
+    async put(record) { rows.set(record.id, record) },
+    async delete(key) { rows.delete(key) },
+  }
+}
+
 describe('清单', () => {
-  let m: ReturnType<typeof createMemoryManifest>
-  beforeEach(() => { m = createMemoryManifest() })
+  let m: ReturnType<typeof createStorageManifest>
+  beforeEach(() => { m = createStorageManifest(memoryDomain()) })
 
   it('加入后能列出，按删除时间倒序（最近的在前）', async () => {
     await m.add(trashEntry('a', { deletedAt: 100 }))

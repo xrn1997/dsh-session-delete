@@ -30,7 +30,7 @@ const manifest = JSON.parse(
 }
 
 /** 本插件真跑过的宿主代次（桌面版实测）。新增一代先在这里落账，再同步 dshReleases。 */
-const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3']
+const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5']
 
 /** 完整功能的最低宿主代次（2026-10-19 **CLI 台架**实测：四个槽位齐全、激活零错误、ping 通）。
  *  它只决定 `engines.dsh` 的地板——**台架读数不进 `dshReleases`**（那份只收真机跑过的代次）。

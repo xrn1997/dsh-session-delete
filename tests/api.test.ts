@@ -349,8 +349,9 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     expect(rows[0]!.strandedBytes).toBeUndefined()
   })
 
-  // ADR-0006 第六处行为差异：`releaseBytes` 改念盘上实测之后，某条可见行的目录读不了（非 ENOENT）
-  // 会让整个清单读失败——迁移前这一格只念清册、不碰盘，那些世界照样列得出清单。回执形状钉在信封上。
+  // ADR-0027 决定 2 / 后果（原 ADR-0006 第六处行为差异）：`releaseBytes` 改念盘上实测之后，
+  // 某条可见行的目录读不了（非 ENOENT）会让整个清单读失败——迁移前这一格只念清册、不碰盘，
+  // 那些世界照样列得出清单。回执形状钉在信封上。
   it('/list 某条行目录读不了（EACCES）⇒ 200 + io，不拿 0 冒充「它会释放多少」', async () => {
     const row = entry('a')
     const { deps, fs } = makeDeps({ seed: [row] })
@@ -915,11 +916,58 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     expect(status).toBe(200)
     expect(envelope.ok).toBe(true)
     expect(envelope.value as Record<string, unknown>).toMatchObject({
-      entryId: entryIdOf('session-a'), cwd: 'C:/p', createdAt: 1, messages: [],
+      entryId: entryIdOf('session-a'), cwd: 'C:/p', createdAt: 1, blocks: [], olderCursor: null,
     })
     // 清册已有的字段不上线：清单里的大小与详情里的大小必须是同一个数
     expect(Object.keys(envelope.value as object)).not.toContain('sizeBytes')
     expect(Object.keys(envelope.value as object)).not.toContain('deletedAt')
+  })
+
+  it('分页游标：不带 before 取尾部一页，带 before 取更早一页；计数始终是全日志的', async () => {
+    const { deps, fs } = makeDeps({ seed })
+    const lines = [
+      JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' }),
+      ...Array.from({ length: 35 }, (_unused, i) => JSON.stringify({
+        type: 'user/message', time: i,
+        data: { source: { kind: 'user' }, content: [{ type: 'text', text: `第${i}条` }] },
+      })),
+    ]
+    fs.readFile.mockImplementation(async () => zlib.zstdCompressSync(Buffer.from(lines.join('\n') + '\n', 'utf8')))
+    const base = await start(deps)
+
+    const tail = await call(base, ROUTES.detail, {
+      method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') },
+    })
+    const tailValue = tail.body.value as {
+      blocks: Array<{ kind: string; text: string }>
+      olderCursor: number | null
+      userMessageCount: number
+    }
+    expect(tailValue.blocks).toHaveLength(30)
+    expect(tailValue.blocks[0]).toMatchObject({ kind: 'user', text: '第5条' })
+    expect(tailValue.blocks[29]).toMatchObject({ kind: 'user', text: '第34条' })
+    expect(tailValue.olderCursor).toBe(5)
+    expect(tailValue.userMessageCount).toBe(35)
+
+    const older = await call(base, ROUTES.detail, {
+      method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a'), [PARAMS.before]: 5 },
+    })
+    const olderValue = older.body.value as { blocks: Array<{ text: string }>; olderCursor: number | null }
+    expect(olderValue.blocks).toHaveLength(5)
+    expect(olderValue.blocks[0]).toMatchObject({ text: '第0条' })
+    expect(olderValue.olderCursor).toBeNull()
+  })
+
+  it('before 不是非负整数 ⇒ 400，并点名字段（请求本身不对，不是操作失败）', async () => {
+    const { deps } = makeDeps({ seed })
+    const base = await start(deps)
+    for (const before of [-1, 1.5, '5']) {
+      const failure = await failureOf(base, ROUTES.detail, {
+        method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a'), [PARAMS.before]: before },
+      })
+      expect(failure.status, String(before)).toBe(400)
+      expect(failure.message).toContain(PARAMS.before)
+    }
   })
 
   it('entryId 不在清册 ⇒ trash-empty，且一次文件读都不做', async () => {

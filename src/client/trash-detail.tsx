@@ -4,19 +4,33 @@
  * 三条界面约束：
  * - 动作（恢复/彻底删除）留在清单行右侧；详情只负责看。
  * - 标题优先用清册标题，空串才回落到日志的 session/title。
- * - 注入条数与截断条数必须上屏，避免正文变少被误读成“会话只有这些内容”。
+ * - 正文是**块**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给
+ *   标签 + 首行摘要（工具另给状态）。注入也铺进正文——这是对宿主 Chat 的有意偏离（它隐藏普通注入，
+ *   而这里的目标是「删之前看全」）；条数另进元信息表。
  *
- * 助手正文走 Markdown，用户提问保持原话；样式 token 与差异见 ui/markdown.css 文件头。
- * 附件随消息位置渲染：用户气泡之上、助手正文之后；附件是那条消息的内容，不单开区块。
+ * 助手正文与思考走 Markdown，用户提问保持原话；工具参数/结果走等宽纯文本（限高可滚）。
+ * 附件随块位置渲染：用户气泡之上、助手正文之后、工具展开体末尾。
  */
-import { type CSSProperties } from 'react'
+import {
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import { AttachmentStrip } from './attachment-view.js'
-import { absoluteText, agoText, type Translate } from './copy.js'
+import { absoluteText, agoText, type CopyKey, type Translate } from './copy.js'
+import type { TrashDetailBlockWire, TrashDetailInjectionBlockWire, TrashDetailTextBlockWire } from '../shared/wire.js'
 import type { TrashDetailLike, TrashEntryLike } from './remote.js'
 import { MarkdownBody } from './markdown.js'
 import { Button } from './ui/Button.js'
 import { fileSizeText } from './ui/format.js'
-import { IconWarningOutlineRegular } from './ui/icons.js'
+import {
+  IconChevronDownOutlineRegular,
+  IconChevronRightOutlineRegular,
+  IconWarningOutlineRegular,
+} from './ui/icons.js'
 import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 
 export type TrashDetailState =
@@ -24,6 +38,18 @@ export type TrashDetailState =
   | { kind: 'loading'; entry: TrashEntryLike }
   | { kind: 'failed'; entry: TrashEntryLike; message: string }
   | { kind: 'ready'; entry: TrashEntryLike; detail: TrashDetailLike }
+
+/** 「加载更早」这一块（在飞/失败 + 滚动容器）整体过手：`TrashDetail` 只转交，谁画正文谁拆开用。
+ *  四样东西是一个概念（分页读面）的四个格子，打包走一个名字，不再逐样穿透组件边界。 */
+export interface DetailPager {
+  /** 更早一页正在读。 */
+  loadingOlder: boolean
+  /** 更早一页读失败的原文；正文本身仍是 ready。 */
+  olderFailure: string | null
+  onLoadOlder: () => void
+  /** 详情栏的滚动容器；prepend 更早一页后按高度差补偿滚动位置。 */
+  scrollRef?: RefObject<HTMLDivElement | null>
+}
 
 export interface TrashDetailProps {
   state: TrashDetailState
@@ -33,6 +59,7 @@ export interface TrashDetailProps {
   wide: boolean
   onRetry: () => void
   onBack: () => void
+  pager: DetailPager
   t: Translate
 }
 
@@ -113,6 +140,102 @@ const STATUS_BLOCK: CSSProperties = {
   borderRadius: 'var(--dsw-radius-lg)',
 }
 
+/* ── 块与折叠头 ───────────────────────────────────────────── */
+
+const BLOCK: CSSProperties = { display: 'flex', flexDirection: 'column', minWidth: 0 }
+
+/** 折叠头：与清单组头共用 `sd-disclosure-row` 的布局/悬停/无障碍；这里把 button 的 UA 样式压掉。 */
+const BLOCK_ROW: CSSProperties = {
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  font: 'inherit',
+  textAlign: 'start',
+  width: '100%',
+  minWidth: 0,
+  gap: 6,
+}
+
+/** 标签不参与收缩：摘要是 `1 1 auto`，标签若也可缩，长结果会把「工具调用 / 来源」挤成几个字。 */
+const BLOCK_TITLE: CSSProperties = {
+  ...ELLIPSIS,
+  flex: 'none',
+  maxWidth: '50%',
+  fontWeight: 500,
+  fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
+}
+
+const BLOCK_SUMMARY: CSSProperties = {
+  ...ELLIPSIS,
+  flex: '1 1 auto',
+  minWidth: 0,
+  fontSize: 12,
+  lineHeight: '18px',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
+const BLOCK_META: CSSProperties = {
+  flex: 'none',
+  fontSize: 11.5,
+  lineHeight: '18px',
+  color: 'var(--dsw-alias-label-tertiary)',
+  whiteSpace: 'nowrap',
+}
+
+const BLOCK_BODY: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  padding: '8px 0 4px calc(22px + var(--dsh-content-font-delta, 0px))',
+  minWidth: 0,
+}
+
+const PLAIN_BODY: CSSProperties = {
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+  fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
+  lineHeight: '20px',
+  color: 'var(--dsw-alias-label-secondary)',
+}
+
+/** 工具参数/结果：等宽、保留换行、限高自滚——一段工具输出可能比整页还长。 */
+const CODE_BLOCK: CSSProperties = {
+  margin: 0,
+  padding: '8px 10px',
+  background: 'var(--dsw-alias-bg-layer-2)',
+  border: '0.5px solid var(--dsw-alias-border-l4)',
+  borderRadius: 'var(--dsw-radius-md)',
+  fontFamily: 'var(--ds-font-family-code)',
+  fontSize: 12,
+  lineHeight: '18px',
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+  maxHeight: 320,
+  overflow: 'auto',
+}
+
+const SECTION_LABEL: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: '16px',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
+const TOOLBAR: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  flexWrap: 'wrap',
+  minWidth: 0,
+}
+
+const TRUNCATED: CSSProperties = {
+  fontSize: 11.5,
+  lineHeight: '16px',
+  color: 'var(--dsw-alias-label-tertiary)',
+}
+
+const ERROR_TEXT: CSSProperties = { color: 'var(--dsw-alias-state-error-primary)' }
+
 const HOUR = 3600000
 const DAY = 86400000
 
@@ -122,12 +245,14 @@ function timeText(ms: number): string {
 }
 
 /** 活跃跨度：不足一天给小时，超过给天——都是"这条会话活了多久"这一个问题的答案。
- *  两端任一缺省就**不答**：`Math.max(1, …)` 会把"不知道"报成"1 小时"，那是一条编出来的账。 */
+ *  两端任一缺省就**不答**（不把"不知道"报成任何量级）；不足一小时说"不足 1 小时"，
+ *  不把 10 分钟舍入成 1 小时冒充整点。 */
 function spanText(from: number, to: number, t: Translate): string | undefined {
   if (from === 0 || to === 0) return undefined
   const ms = Math.max(0, to - from)
+  if (ms < HOUR) return t('detail.value.spanLessThanHour')
   return ms < DAY
-    ? t('detail.value.spanHours', { n: Math.max(1, Math.round(ms / HOUR)) })
+    ? t('detail.value.spanHours', { n: Math.round(ms / HOUR) })
     : t('detail.value.spanDays', { n: Math.round(ms / DAY) })
 }
 
@@ -138,7 +263,232 @@ function titleOf(entry: TrashEntryLike, detail: TrashDetailLike | undefined, t: 
   return t('common.untitled')
 }
 
-export function TrashDetail({ state, busy, wide, onRetry, onBack, t }: TrashDetailProps) {
+/** 折叠头的摘要：第一行非空文字。 */
+function firstLine(text: string): string {
+  const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? ''
+  return line.trim()
+}
+
+/** Markdown 块的摘要去掉粗体星号（与宿主 ReasoningRow 同一手法）；纯文本块照原样。 */
+function markdownSummary(text: string): string {
+  return firstLine(text).replaceAll('**', '')
+}
+
+/** 宿主当前发过的 `source.kind` 全在这里；日志词表随宿主代次增长，新值先落到「其他上下文」。 */
+const INJECTION_LABEL_KEYS = {
+  'runtime-context': 'detail.injection.runtimeContext',
+  'time-context': 'detail.injection.timeContext',
+  'agent-instructions': 'detail.injection.agentInstructions',
+  'skill-catalog': 'detail.injection.skillCatalog',
+  'agent-message': 'detail.injection.agentMessage',
+  'subagent-settled': 'detail.injection.subagentSettled',
+  'tool-jobs': 'detail.injection.toolJobs',
+  'skill-invocation': 'detail.injection.skillInvocation',
+  'user-approval': 'detail.injection.userApproval',
+  'goal': 'detail.injection.goal',
+} as const satisfies Record<string, CopyKey>
+
+/** 来源标签 + 悬停原串：认不出的 kind 收进「其他上下文」，原串留在 title。 */
+function injectionLabel(kind: string, t: Translate): { text: string; title: string } {
+  const key = (INJECTION_LABEL_KEYS as Record<string, CopyKey>)[kind]
+  if (key !== undefined) {
+    const text = t(key)
+    return { text, title: text }
+  }
+  // 空串是日志里就没有来源；非空但认不出只把原串交给 title，不让英文 slug 混进中文正文。
+  return { text: t('detail.injection.other'), title: kind === '' ? t('detail.injection.other') : kind }
+}
+
+function toolStatus(status: 'ok' | 'error' | 'unfinished', t: Translate): string {
+  if (status === 'ok') return t('detail.block.status.ok')
+  if (status === 'error') return t('detail.block.status.error')
+  return t('detail.block.status.unfinished')
+}
+
+type DisclosureBlockWire = Exclude<TrashDetailBlockWire, { kind: 'user' } | { kind: 'assistant' }>
+
+function isDisclosureBlock(block: TrashDetailBlockWire): block is DisclosureBlockWire {
+  return block.kind !== 'user' && block.kind !== 'assistant'
+}
+
+interface DisclosureProps {
+  block: DisclosureBlockWire
+  label: string
+  /** 悬停原文（标签是映射后的人话时用）；缺省与 `label` 相同。 */
+  title?: string
+  summary: string
+  status?: { text: string; error: boolean }
+  time: string
+  open: boolean
+  onToggle: (id: string) => void
+  children: ReactNode
+}
+
+/** 一个可折叠块：折叠头一行（chevron + 标签 + 摘要 + 可选状态 + 时间），展开体由调用方给。 */
+function Disclosure({ block, label, title, summary, status, time, open, onToggle, children }: DisclosureProps) {
+  return (
+    <div data-sd-block={block.kind} style={BLOCK}>
+      <button
+        type="button"
+        className="sd-disclosure-row"
+        data-expandable=""
+        aria-expanded={open}
+        onClick={() => onToggle(block.id)}
+        style={BLOCK_ROW}
+      >
+        <span className="sd-disclosure-leading" style={{ marginRight: 0 }} aria-hidden="true">
+          {open ? <IconChevronDownOutlineRegular size={14} /> : <IconChevronRightOutlineRegular size={14} />}
+        </span>
+        <span style={BLOCK_TITLE} title={title ?? label}>{label}</span>
+        {summary === '' ? null : <span style={BLOCK_SUMMARY} title={summary}>{summary}</span>}
+        {status === undefined ? null : (
+          <span style={status.error ? { ...BLOCK_META, ...ERROR_TEXT } : BLOCK_META}>{status.text}</span>
+        )}
+        <span style={BLOCK_META}>{time}</span>
+      </button>
+      {open ? <div data-sd-block-body style={BLOCK_BODY}>{children}</div> : null}
+    </div>
+  )
+}
+
+interface BlockRenderContext {
+  open: ReadonlySet<string>
+  toggle: (id: string) => void
+  localeKey: string
+  t: Translate
+}
+
+/** 单块载荷闸截断后的提示：各块共用同一句，别有的画省略号、有的只画字。 */
+function TruncatedNote({ t }: { t: Translate }) {
+  return <div style={TRUNCATED}>{t('detail.block.truncated')}</div>
+}
+
+/** 展开体走 Markdown 的折叠块（思考、压缩摘要）。 */
+function markdownFold(block: TrashDetailTextBlockWire, label: string, context: BlockRenderContext): ReactNode {
+  const { open, toggle, localeKey, t } = context
+  return (
+    <Disclosure
+      key={block.id}
+      block={block}
+      label={label}
+      summary={markdownSummary(block.text)}
+      time={timeText(block.time)}
+      open={open.has(block.id)}
+      onToggle={toggle}
+    >
+      <MarkdownBody text={block.text} t={t} localeKey={localeKey} />
+      {block.truncated ? <TruncatedNote t={t} /> : null}
+    </Disclosure>
+  )
+}
+
+/** 展开体走等宽原文的折叠块（注入、系统消息）：这两类带附件。 */
+function plainFold(
+  block: TrashDetailTextBlockWire | TrashDetailInjectionBlockWire,
+  label: string,
+  context: BlockRenderContext,
+  title?: string,
+): ReactNode {
+  const { open, toggle, t } = context
+  return (
+    <Disclosure
+      key={block.id}
+      block={block}
+      label={label}
+      title={title}
+      summary={firstLine(block.text)}
+      time={timeText(block.time)}
+      open={open.has(block.id)}
+      onToggle={toggle}
+    >
+      <div style={PLAIN_BODY}>{block.text}</div>
+      <AttachmentStrip attachments={block.attachments} t={t} align="start" />
+      {block.truncated ? <TruncatedNote t={t} /> : null}
+    </Disclosure>
+  )
+}
+
+/** 块联合新增成员而 `renderBlock` 没跟上时这里编译失败；运行时只可能是前后半版本错配，画空不炸整栏。 */
+function unhandledBlock(block: never): null {
+  void block
+  return null
+}
+
+function renderBlock(block: TrashDetailBlockWire, context: BlockRenderContext): ReactNode {
+  const { open, toggle, localeKey, t } = context
+  switch (block.kind) {
+    case 'user':
+      return (
+        <div key={block.id} data-sd-msg="user" style={USER_ROW}>
+          <div style={META_LINE}>{`${t('detail.role.user')} · ${timeText(block.time)}`}</div>
+          <AttachmentStrip attachments={block.attachments} t={t} align="end" />
+          {/* 纯附件块没有可说的话 ⇒ 不铺一只空气泡；图/文件名就是这一条的内容。 */}
+          {block.text === '' ? null : (
+            <div data-sd-bubble style={BUBBLE}>{block.text}</div>
+          )}
+          {block.truncated ? <TruncatedNote t={t} /> : null}
+        </div>
+      )
+    case 'assistant':
+      return (
+        <div key={block.id} data-sd-msg="assistant" style={ASSISTANT_ROW}>
+          <div style={META_LINE}>{`${t('detail.role.assistant')} · ${timeText(block.time)}`}</div>
+          <MarkdownBody text={block.text} t={t} localeKey={localeKey} />
+          {block.truncated ? <TruncatedNote t={t} /> : null}
+          <AttachmentStrip attachments={block.attachments} t={t} align="start" />
+        </div>
+      )
+    case 'reasoning':
+      return markdownFold(block, t('detail.block.reasoning'), context)
+    case 'tool':
+      return (
+        <Disclosure
+          key={block.id}
+          block={block}
+          label={block.name === '' ? t('detail.block.tool') : block.name}
+          summary={firstLine(block.result) || firstLine(block.args)}
+          status={{ text: toolStatus(block.status, t), error: block.status === 'error' }}
+          time={timeText(block.time)}
+          open={open.has(block.id)}
+          onToggle={toggle}
+        >
+          <div style={SECTION_LABEL}>{t('detail.block.args')}</div>
+          <pre style={CODE_BLOCK}>{block.args === '' ? '—' : block.args}</pre>
+          <div style={SECTION_LABEL}>{t('detail.block.result')}</div>
+          {block.status === 'unfinished' && block.result === ''
+            ? <div style={META_LINE}>{t('detail.block.noResult')}</div>
+            : <pre style={CODE_BLOCK}>{block.result === '' ? '—' : block.result}</pre>}
+          <AttachmentStrip attachments={block.attachments} t={t} align="start" />
+          {block.argsTruncated || block.resultTruncated ? <TruncatedNote t={t} /> : null}
+        </Disclosure>
+      )
+    case 'injection': {
+      const label = injectionLabel(block.sourceKind, t)
+      return plainFold(
+        block,
+        `${t('detail.block.injection')} · ${label.text}`,
+        context,
+        `${t('detail.block.injection')} · ${label.title}`,
+      )
+    }
+    case 'system':
+      return plainFold(block, t('detail.block.system'), context)
+    case 'compaction':
+      return markdownFold(block, t('detail.block.compaction'), context)
+    default:
+      return unhandledBlock(block)
+  }
+}
+
+export function TrashDetail({
+  state,
+  busy,
+  wide,
+  onRetry,
+  onBack,
+  pager,
+  t,
+}: TrashDetailProps) {
   if (state.kind === 'idle') {
     return (
       <div
@@ -199,7 +549,15 @@ export function TrashDetail({ state, busy, wide, onRetry, onBack, t }: TrashDeta
         </div>
       ) : null}
 
-      {detail === undefined ? null : <ReadyBody entry={entry} detail={detail} t={t} />}
+      {detail === undefined ? null : (
+        <ReadyBody
+          key={entry.id}
+          entry={entry}
+          detail={detail}
+          pager={pager}
+          t={t}
+        />
+      )}
     </div>
   )
 }
@@ -237,22 +595,78 @@ function Meta({ label, title, children }: { label: string; title?: string; child
   )
 }
 
+interface ReadyBodyProps {
+  entry: TrashEntryLike
+  detail: TrashDetailLike
+  pager: DetailPager
+  t: Translate
+}
+
 /**
- * 有内容：元信息（时间 → 体量 → 位置三组的顺序）+ 正文。
+ * 有内容：元信息（时间 → 体量 → 位置三组的顺序）+ 折叠块。
  *
- * 页面上**两本账分开读**：`提问`/`回复` 是过滤后的条数（注入那些由 `injectedCount` 单独说清，不并进
- * 这两个数），**不受载荷闸影响**；正文是闸过的那一份（单条超限截断、累计到顶后整条不显示）。
- * 于是「计数 421、正文 200」可以同时成立——怎么过滤、两个闸各是多少归 `src/trash/detail.ts`，这里只摆数。
+ * 页面上**两本账分开读**：元信息里的计数是整条日志的（注入条数也在表里）；
+ * 正文是分页取回来的块。`olderCursor` 非空时顶部出「加载更早」。
+ * 折叠状态只活在这个组件里；切条目用 `key={entry.id}` 重挂载，不会把 A 的展开状态带到 B。
  */
-function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashDetailLike; t: Translate }) {
-  // 回收站的目录名就是条目 id（CONTEXT.md 的「条目」条），转义那部分不承载额外信息 ⇒ 原样摆，完整串交给 title。
-  const folder = entry.id
-  const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
+function ReadyBody({ entry, detail, pager, t }: ReadyBodyProps) {
+  const { loadingOlder, olderFailure, onLoadOlder, scrollRef } = pager
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
+  /** 更早一页要 prepend 时的块数；换页回来（组件重挂载）这份意图会丢，那是可接受的边界。 */
+  const pendingScroll = useRef<{ blocks: number } | null>(null)
+  /** 上一次布局后的滚动高度：合并更早一页时用它算**真正插进来的高度**，不把请求在飞期间的
+   *  滚动或折叠变化也算进去。 */
+  const lastHeight = useRef<number | null>(null)
+
   // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（markdown.tsx 头注）。
   const localeKey = t('common.close')
-  // 文本与附件都为空的条目是附件总量闸用尽后的防御形态（纯附件消息）：
-  // 它既没有字也没有图，画出来只是一条空行 ⇒ 整条不画。计数仍是 `detail` 那两本账，不在这里改。
-  const messages = detail.messages.filter((message) => message.text !== '' || message.attachments.length > 0)
+  const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
+  const disclosureBlocks = detail.blocks.filter(isDisclosureBlock)
+  const allOpen = disclosureBlocks.length > 0 && disclosureBlocks.every((block) => open.has(block.id))
+
+  const toggle = (id: string): void => {
+    setOpen((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const toggleAll = (): void => {
+    setOpen(allOpen ? new Set() : new Set(disclosureBlocks.map((block) => block.id)))
+  }
+
+  const loadOlder = (): void => {
+    const element = scrollRef?.current
+    if (element !== null && element !== undefined) {
+      pendingScroll.current = { blocks: detail.blocks.length }
+    }
+    onLoadOlder()
+  }
+
+  // 更早一页 prepend 后补偿滚动位置：读者正看着的那一块不因上方长出新内容而跳走。
+  // 加的是**当前** `scrollTop`（请求在飞时读者可能继续滚动），高度差只取这一拍真正插进来的部分。
+  useLayoutEffect(() => {
+    const element = scrollRef?.current
+    const pending = pendingScroll.current
+    if (element === null || element === undefined || pending === null) return
+    if (detail.blocks.length !== pending.blocks) {
+      pendingScroll.current = null
+      if (lastHeight.current !== null) {
+        element.scrollTop += element.scrollHeight - lastHeight.current
+      }
+      return
+    }
+    if (!loadingOlder) pendingScroll.current = null
+  }, [detail.blocks.length, loadingOlder, scrollRef])
+
+  // 每次布局后记下高度：它在合并更早一页的那一拍就是「插入前」的高度（滚动不触发渲染，
+  // 折叠开合会先渲染、顺带把这笔高度更新掉）。
+  useLayoutEffect(() => {
+    const element = scrollRef?.current
+    if (element !== null && element !== undefined) lastHeight.current = element.scrollHeight
+  })
+
   return (
     <>
       <dl style={META}>
@@ -271,57 +685,39 @@ function ReadyBody({ entry, detail, t }: { entry: TrashEntryLike; detail: TrashD
         <Meta label={t('detail.field.userMessages')}>{String(detail.userMessageCount)}</Meta>
         <Meta label={t('detail.field.assistantMessages')}>{String(detail.assistantMessageCount)}</Meta>
         <Meta label={t('detail.field.toolCalls')}>{String(detail.toolCallCount)}</Meta>
+        <Meta label={t('detail.field.injections')}>{String(detail.injectedCount)}</Meta>
         <Meta label={t('detail.field.models')}>{detail.models.join(', ') || '—'}</Meta>
         <Meta label={t('detail.field.project')} title={project}>{project}</Meta>
         <Meta label={t('detail.field.sessionId')} title={entry.sessionId}>{entry.sessionId}</Meta>
-        <Meta label={t('detail.field.trashDir')} title={folder}>{folder}</Meta>
+        <Meta label={t('detail.field.trashDir')} title={entry.id}>{entry.id}</Meta>
         <Meta label={t('detail.field.wasArchived')}>
           {entry.wasArchived ? t('detail.value.yes') : t('detail.value.no')}
         </Meta>
       </dl>
 
-      <div style={META_LINE}>
-        {detail.injectedCount > 0 ? t('detail.messages.hidden', { count: detail.injectedCount }) : ''}
-        {detail.omittedByPayloadCap > 0
-          ? `${detail.injectedCount > 0 ? ' · ' : ''}${t('detail.messages.omitted', { count: detail.omittedByPayloadCap })}`
-          : ''}
+      <div style={TOOLBAR}>
+        {detail.olderCursor === null ? null : (
+          <Button variant="outline" size="sm" disabled={loadingOlder} onClick={loadOlder}>
+            {loadingOlder ? t('detail.loadOlder.loading') : t('detail.loadOlder')}
+          </Button>
+        )}
+        {olderFailure === null ? null : (
+          <span role="status" style={{ ...META_LINE, minWidth: 0, wordBreak: 'break-word' }}>{olderFailure}</span>
+        )}
+        {disclosureBlocks.length === 0 ? null : (
+          <span style={{ marginLeft: 'auto' }}>
+            <Button variant="ghost" size="sm" onClick={toggleAll}>
+              {allOpen ? t('detail.collapseAll') : t('detail.expandAll')}
+            </Button>
+          </span>
+        )}
       </div>
 
-      {messages.length === 0 ? (
+      {detail.blocks.length === 0 ? (
         <div style={META_LINE}>{t('detail.noBody')}</div>
       ) : (
         <div style={THREAD}>
-          {messages.map((message, index) => (
-            <div
-              key={`${message.time}-${index}`}
-              data-sd-msg={message.role}
-              style={message.role === 'user' ? USER_ROW : ASSISTANT_ROW}
-            >
-              <div style={META_LINE}>
-                {`${message.role === 'user' ? t('detail.role.user') : t('detail.role.assistant')} · ${timeText(message.time)}`}
-              </div>
-              {/* 助手的 `text` 段本身就是 markdown 源，照宿主那样渲；**用户的提问是原话**，
-                  渲成 markdown 会把"我打过的那串反斜杠"改掉样子——所以只有助手侧过 MarkdownBody。 */}
-              {message.role === 'user' ? (
-                <>
-                  <AttachmentStrip attachments={message.attachments} t={t} align="end" />
-                  {/* 纯附件消息没有可说的话 ⇒ 不铺一只空气泡；图/文件名就是这一条的内容。 */}
-                  {message.text === '' && !message.truncated ? null : (
-                    <div data-sd-bubble style={BUBBLE}>
-                      {message.text}
-                      {message.truncated ? '…' : ''}
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <MarkdownBody text={message.text} t={t} localeKey={localeKey} />
-                  {message.truncated ? <div style={META_LINE}>…</div> : null}
-                  <AttachmentStrip attachments={message.attachments} t={t} align="start" />
-                </>
-              )}
-            </div>
-          ))}
+          {detail.blocks.map((block) => renderBlock(block, { open, toggle, localeKey, t }))}
         </div>
       )}
     </>

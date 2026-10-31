@@ -22,12 +22,22 @@ export interface HostRowInfo {
   readonly live: boolean
 }
 
+/** 一条登记：它是什么 + 此刻有几颗行尾开关在用它。 */
+interface HostRowRegistration {
+  readonly info: HostRowInfo
+  owners: number
+}
+
 /**
  * 守卫从 `data-row-key` 反解出 sessionId，但拿不到槽位投影的标题／运行态 ⇒ 行尾兜底那颗
  * （它对每个非空行都渲染，哪怕 CSS 把整排藏起来）在 effect 里把这两件登记进这张表。
- * 只增不删：会话 id 不复用，行被过滤掉也不会拿旧标题冒充新行。
+ * 生命周期跟着**行尾开关的挂载**走：卸载即注销（{@link unregisterHostRowInfo}），
+ * 表的大小被"当前渲染的行"钉住，而不是随用过的会话只增不减；行重挂载时 effect 会重新登记。
+ *
+ * **按挂载实例计数**：同一个会话在 DOM 里可能有两行（重复行），两行各挂一颗行尾开关；
+ * 其中一颗卸载时不能把另一颗还在用的登记一起摘掉——那会让这一行从"全选"里消失、标题也变空。
  */
-const rowInfo = new Map<string, HostRowInfo>()
+const rowInfo = new Map<string, HostRowRegistration>()
 
 /**
  * 渲染侧快照 + DOM 观察：订阅脚手架住 `store.ts` 的 `createLazyStore`；这里只提供读法与
@@ -60,12 +70,29 @@ const visibleRows = createLazyStore<readonly PickItem[]>(EMPTY_ROWS, readVisible
 
 /**
  * 行尾兜底勾选开关登记一行：模式内与模式外都要登记（守卫进模式的那一帧就得有标题）。
- * 只有标题／运行态**真的变了**才标脏：重渲染时的同值登记不该把快照翻新一遍。
+ * 每次登记算**多一个挂载实例**；只有标题／运行态**真的变了**才标脏：重渲染时的同值登记
+ * 不该把快照翻新一遍。
  */
 export function registerHostRowInfo(sessionId: string, info: HostRowInfo): void {
   const current = rowInfo.get(sessionId)
-  if (current?.title === info.title && current.live === info.live) return
-  rowInfo.set(sessionId, info)
+  const owners = (current?.owners ?? 0) + 1
+  const changed = current === undefined
+    || current.info.title !== info.title
+    || current.info.live !== info.live
+  rowInfo.set(sessionId, { info, owners })
+  if (changed) visibleRows.invalidate()
+}
+
+/** 行尾开关卸载时调用：那一行已经离开渲染树，登记跟着走。
+ *  还有别的挂载实例在用同一行（重复行）就只减计数，不摘登记。 */
+export function unregisterHostRowInfo(sessionId: string): void {
+  const current = rowInfo.get(sessionId)
+  if (current === undefined) return
+  if (current.owners > 1) {
+    current.owners -= 1
+    return
+  }
+  rowInfo.delete(sessionId)
   visibleRows.invalidate()
 }
 
@@ -84,10 +111,10 @@ export function readVisibleSelectableRows(): PickItem[] {
     if (!key.startsWith('session:')) continue
     const sessionId = key.slice('session:'.length)
     if (sessionId === '' || seen.has(sessionId)) continue
-    const info = rowInfo.get(sessionId)
-    if (info === undefined || info.live) continue
+    const entry = rowInfo.get(sessionId)
+    if (entry === undefined || entry.info.live) continue
     seen.add(sessionId)
-    rows.push({ sessionId, title: info.title })
+    rows.push({ sessionId, title: entry.info.title })
   }
   return rows
 }
@@ -175,9 +202,9 @@ export function useSelectionRowClickGuard(): void {
       if (!key.startsWith('session:')) return
       const sessionId = key.slice('session:'.length)
       if (sessionId === '') return
-      const info = rowInfo.get(sessionId)
-      if (info?.live === true) return
-      togglePick({ sessionId, title: info?.title ?? '' })
+      const entry = rowInfo.get(sessionId)
+      if (entry?.info.live === true) return
+      togglePick({ sessionId, title: entry?.info.title ?? '' })
     }
     document.addEventListener('click', handle, true)
     document.addEventListener('dblclick', handle, true)

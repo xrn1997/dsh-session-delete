@@ -126,17 +126,61 @@ export interface TrashDetailAttachmentWire {
   height?: number
 }
 
-/** 单条详情里的一条消息（`trash/detail.ts` 读出来的那一份）。
- *  `attachments` 必填：没有附件就是空数组（界面上"这一条带没带附件"不靠字段缺席判断）。 */
-export interface TrashDetailMessageWire {
-  role: 'user' | 'assistant'
+/** 单条详情里的一块正文（`trash/detail.ts` 读出来的那一份）。
+ *
+ *  **判别联合**：`kind` 决定这块怎么画、哪些字段有意义。`attachments` 在每种块上都必填
+ *  （没有附件就是空数组）——"这一条带没带附件"不靠字段缺席判断。
+ *  `truncated` / `argsTruncated` / `resultTruncated` 说的是**单块载荷闸**截过一刀；
+ *  分页游标（`olderCursor`）管的是"更早的块还没取"，两者不是同一件事。
+ *  出线的每块**都有内容**（非空正文或至少一个附件；工具块的名字与状态就是内容）：判据住
+ *  `src/trash/detail.ts`，空块不建也不出线，渲染侧不用兜。 */
+export interface TrashDetailTextBlockWire {
+  kind: 'user' | 'assistant' | 'reasoning' | 'system' | 'compaction'
+  /** 块在整条日志里的稳定序号（分页游标也用它）；跨页不重复。 */
+  id: string
   time: number
   text: string
   truncated: boolean
   attachments: TrashDetailAttachmentWire[]
 }
 
-/** 回收站单条详情的线上形状（`POST /detail`）。 */
+/** 宿主注入的上下文（`user/message` 里 `source.kind !== 'user'` 的那些）。 */
+export interface TrashDetailInjectionBlockWire {
+  kind: 'injection'
+  id: string
+  time: number
+  /** 日志里的 `source.kind` 原串（`runtime-context` / `agent-instructions` / …；日志里没写就是空串）；界面自己映射标签。 */
+  sourceKind: string
+  text: string
+  truncated: boolean
+  attachments: TrashDetailAttachmentWire[]
+}
+
+/** 一次工具调用：`tool/call` 建块、`tool/result` 按 `callId` 回填。
+ *  `unfinished` = 日志走完也没等到结果（会话可能在工具执行中被杀），不是失败。 */
+export interface TrashDetailToolBlockWire {
+  kind: 'tool'
+  id: string
+  time: number
+  callId: string
+  name: string
+  status: 'ok' | 'error' | 'unfinished'
+  args: string
+  argsTruncated: boolean
+  result: string
+  resultTruncated: boolean
+  attachments: TrashDetailAttachmentWire[]
+}
+
+export type TrashDetailBlockWire =
+  | TrashDetailTextBlockWire
+  | TrashDetailInjectionBlockWire
+  | TrashDetailToolBlockWire
+
+/** 回收站单条详情的线上形状（`POST /detail`）。
+ *
+ *  正文按块分页：`blocks` 是当前这一页（从新往旧取），`olderCursor` 指向更早一页的边界；
+ *  计数是**整条日志**的，不受分页影响。 */
 export interface TrashDetailWire {
   entryId: string
   /** 日志 header 里的原串（**无损**，比从 `projectKey` 反推那一路强；组头怎么念项目名见 `src/client/trash-view.ts` 的 `projectLabel`，那是另一回事）。 */
@@ -148,11 +192,14 @@ export interface TrashDetailWire {
   models: string[]
   turnCount: number
   userMessageCount: number
+  /** 日志里**每一条** assistant/message 记录（含只带 reasoning / tool-call 的那些）。 */
   assistantMessageCount: number
   toolCallCount: number
+  /** 宿主注入的上下文块数（空文本且无附件的注入不建块，也不计）。 */
   injectedCount: number
-  messages: TrashDetailMessageWire[]
-  omittedByPayloadCap: number
+  blocks: TrashDetailBlockWire[]
+  /** 更早一页的块序号；`null` = 已经到顶。把它原样回传给 `POST /detail` 的 `before`。 */
+  olderCursor: number | null
 }
 
 /** 一次永久删除顺带、或一次孤儿附件清理的附件读数。`skipped` 有值 = 这一轮**部分或整体没清**：
@@ -216,6 +263,8 @@ export interface OrphanCleanStatsWire {
  *  附件段是 **query 参数**（GET 二进制响应，没有请求体）。 */
 export const PARAMS = {
   entryId: 'entryId',
+  /** `/detail` 的分页游标：只取这个块序号之前的块。缺省 = 从尾部取。 */
+  before: 'before',
   action: 'action',
   ids: 'ids',
   attachmentId: 'id',

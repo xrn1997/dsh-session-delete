@@ -11,11 +11,12 @@
  * 首帧读一次当前宽度，之后跟着 RO 走；读到 0 就是窄档 ⇒ **窄档是默认、宽档要被证明**。
  * RO 缺席（不可能的宿主）时停在窄档：功能一条不少，只是同屏两栏变成下钻。
  */
-import { useEffect, useState, type RefObject } from 'react'
+import { useLayoutEffect, useState, type RefObject } from 'react'
 
 export function usePanelWidth(ref: RefObject<HTMLElement | null>): number {
   const [width, setWidth] = useState(0)
-  useEffect(() => {
+  // 首帧就要拿到宽度：`useEffect` 会让宽视口先按 0 画一帧窄档，再跳成两栏。
+  useLayoutEffect(() => {
     const el = ref.current
     if (el === null) return
     setWidth(el.getBoundingClientRect().width)

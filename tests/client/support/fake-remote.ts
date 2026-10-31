@@ -27,7 +27,7 @@ export const EMPTY_ORPHANS: OrphanReportWire = {
 const DETAIL_FIXTURE: TrashDetailLike = {
   entryId: 'fake', cwd: '', createdAt: 0, lastActivity: 0, logTitle: '', models: [],
   turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
-  injectedCount: 0, omittedByPayloadCap: 0, messages: [],
+  injectedCount: 0, blocks: [], olderCursor: null,
 }
 
 export function createFakeRemote(over: Partial<FakeRemote> = {}): FakeRemote {

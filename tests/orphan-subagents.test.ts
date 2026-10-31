@@ -91,6 +91,18 @@ describe('扫描报告与清理', () => {
     })
   })
 
+  it('只量请求点名的根：孤儿清理不为没点的组递归量树', async () => {
+    const { d, fs } = deps([
+      s('session-a', { parentSessionId: 'gone-a' }),
+      s('session-b', { parentSessionId: 'gone-b' }),
+    ])
+
+    const groups = await loadOrphanGroups(d, [], ['session-a'])
+
+    expect(groups.map((group) => group.root.sessionId)).toEqual(['session-a'])
+    expect(fs.sizeOfDir.mock.calls.map(([p]) => p)).toEqual([sessionDirOf('--p--', 'session-a', HOME)])
+  })
+
   it('清册行由调用方交：传进来的行决定谁是孤儿，动词不再自己挑 raw', async () => {
     const { d } = deps([s('session-root', { parentSessionId: 'session-trashed' })])
     expect(await loadOrphanGroups(d, [])).toHaveLength(1)

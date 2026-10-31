@@ -92,16 +92,18 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
-  it('POST 到 /detail，请求体是 { entryId }（字段名与 Node 半同源）', async () => {
+  it('POST 到 /detail，请求体是 { entryId }；带游标时多一格 before（字段名与 Node 半同源）', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       calls.push({ path, init })
-      return envelope({ entryId: 'e1', messages: [] })
+      return envelope({ entryId: 'e1', blocks: [], olderCursor: null })
     })
     await expect(createHttpRemote().detail('e1')).resolves.toMatchObject({ ok: true })
+    await expect(createHttpRemote().detail('e1', 12)).resolves.toMatchObject({ ok: true })
     expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.detail}`)
     expect(calls[0]!.init?.method).toBe('POST')
     expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.entryId]: 'e1' })
+    expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({ [PARAMS.entryId]: 'e1', [PARAMS.before]: 12 })
     vi.unstubAllGlobals()
   })
 

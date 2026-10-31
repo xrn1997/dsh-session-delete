@@ -102,11 +102,11 @@ const DETAIL: TrashDetailLike = {
   assistantMessageCount: 1,
   toolCallCount: 3,
   injectedCount: 7,
-  messages: [
-    { role: 'user', time: 1, text: '先看改动', truncated: false, attachments: [] },
-    { role: 'assistant', time: 2, text: '改动分四层', truncated: false, attachments: [] },
+  blocks: [
+    { kind: 'user', id: '0', time: 1, text: '先看改动', truncated: false, attachments: [] },
+    { kind: 'assistant', id: '1', time: 2, text: '改动分四层', truncated: false, attachments: [] },
   ],
-  omittedByPayloadCap: 0,
+  olderCursor: null,
 }
 
 /** 一次 `apply` 的逐条成功结果（判别联合要的是**字面量**动作，所以按动作分支造，不靠展开）。 */
@@ -155,7 +155,8 @@ function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { c
     // 探测走这一问（不再每次页面加载都跑一遍全表对账）
     [SESSION_DELETE_API_PREFIX + ROUTES.ping]: async () => raw.ping(),
     // 两条纯读要有座位：面板挂载读详情、确认框打开那一刻问一次计数
-    [SESSION_DELETE_API_PREFIX + ROUTES.detail]: async (body) => raw.detail(body['entryId'] as string),
+    [SESSION_DELETE_API_PREFIX + ROUTES.detail]: async (body) =>
+      raw.detail(body['entryId'] as string, body['before'] as number | undefined),
     // 写动词一段收口：`/apply` 按 body 里的动作与 ids 分派（与 Node 半那张路由表同形）
     [SESSION_DELETE_API_PREFIX + ROUTES.apply]: async (body) =>
       raw.apply(body['action'] as never, body['ids'] as string[]),

@@ -175,6 +175,23 @@ describe('批量确认框', () => {
     expect(applyOutcomes).toHaveBeenCalledTimes(3)
   })
 
+  it('重试轮收缩后汇总子会话数只算还在名单里的（不把已移走的算进去）', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      action === 'count' ? countOutcomes(ids, { a: 2, b: 3 }) : deleteOutcomes(ids, ['b']),
+    )
+    requestDeleteBatch([
+      { sessionId: 'a', title: 'A' },
+      { sessionId: 'b', title: 'B' },
+    ])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    expect(await screen.findByText('含 5 个子会话，将一起移入回收站。')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站 2 条' }))
+    expect(await screen.findByText(/会话目录不在盘上/)).toBeInTheDocument()
+    expect(screen.getByText('含 3 个子会话，将一起移入回收站。')).toBeInTheDocument()
+    expect(screen.queryByText('含 5 个子会话，将一起移入回收站。')).not.toBeInTheDocument()
+  })
+
   it('整批失败：失败原文落行、不发撤销横幅，但回收站照样收到失效通告', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
       action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids),

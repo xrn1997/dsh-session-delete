@@ -55,6 +55,10 @@ export interface TrashPanelController {
   readonly selectedId: string | null
   readonly drilled: boolean
   readonly detail: TrashDetailState
+  /** 更早一页正在读（只对当前选中那条有意义）。 */
+  readonly loadingOlder: boolean
+  /** 更早一页读失败的原文（只对当前选中那条有意义；正文本身仍是 ready）。 */
+  readonly olderFailure: string | null
   /** 待确认的那一批（确认框的开合）；确认落地后由控制器收起。 */
   readonly pending: PendingAction | null
   /** 恢复确认框要摆的这一批（按勾选顺序；清单里已找不到的 id 滤掉）。 */
@@ -62,6 +66,8 @@ export interface TrashPanelController {
   /** 恢复/彻底删除/批量 的失败原文，按条目 id 存：切走再回来还在。 */
   readonly actionFailure: Readonly<Record<string, string>>
   select(entry: TrashEntryLike, options?: { drill?: boolean }): Promise<void>
+  /** 按当前详情的 `olderCursor` 读更早一页，拼到现有块前面。 */
+  loadOlder(): Promise<void>
   retry(): void
   back(): void
   /** 构造待确认动作（唯一入口：新增一种确认只改 `PendingAction` 与确认框，不再加一串转调）。 */
@@ -81,15 +87,74 @@ interface DetailFailure {
   message: string
 }
 
+/**
+ * 「渲染态 + 同步镜像」成对出现时的唯一写口：setter 同步更新 ref。`setState` 要等下一拍，
+ * 而落地判「用户还在不在这一条」（`loadOlder` 的晚到结果）是同一 tick 里的事。写只走 setter——
+ * 再手写一处 `ref.current = x` 就是第二份同步，两处迟早漂移。
+ */
+function useSyncedRef<T>(initial: T): [T, (value: T) => void, { readonly current: T }] {
+  const ref = useRef(initial)
+  const [value, setValue] = useState(initial)
+  const set = useCallback((next: T): void => {
+    ref.current = next
+    setValue(next)
+  }, [])
+  return [value, set, ref]
+}
+
+/** 在飞句柄的动作面：四个方法都是稳定引用，可以放心进 callback / effect 的依赖。 */
+interface InFlight {
+  /** 渲染位摆到这一条（`null` 收掉）：在飞早退前也要摆——loading 得跟着选中走。 */
+  show(id: string | null): void
+  /** 登记一条在飞；这一条已经在飞就回 false（调用方早退，不发第二条）。 */
+  begin(id: string): boolean
+  /** 落地收尾：摘登记；渲染位还指着自己才收（晚到的别按掉新的一拍）。 */
+  end(id: string): void
+  /** 全收：清单换版把选中那条收走时，这一趟的分页账也跟着清。 */
+  clear(): void
+}
+
+/**
+ * 在飞句柄：`/detail` 与「更早一页」各持一份。两条时间线各有自己的载体，别混——判重在
+ * **同步**这一侧（`begin`：同一 tick 连点不发第二条；登记按条目，A 在飞不挡 B，也绝不放
+ * 同一条进两条），上屏在 **state** 那一侧（渲染位单槽要等下一拍，只回答「当前这条转不转圈」）。
+ * 置位/清位只走这四个方法，不再一对 state+ref 镜像各写一份同步。
+ */
+function useInFlight(): readonly [string | null, InFlight] {
+  const flying = useRef(new Set<string>())
+  const [shownId, setShownId] = useState<string | null>(null)
+  const show = useCallback((id: string | null): void => setShownId(id), [])
+  const begin = useCallback((id: string): boolean => {
+    if (flying.current.has(id)) return false
+    flying.current.add(id)
+    return true
+  }, [])
+  const end = useCallback((id: string): void => {
+    flying.current.delete(id)
+    setShownId((current) => (current === id ? null : current))
+  }, [])
+  const clear = useCallback((): void => {
+    flying.current.clear()
+    setShownId(null)
+  }, [])
+  const flight = useMemo<InFlight>(() => ({ show, begin, end, clear }), [show, begin, end, clear])
+  return [shownId, flight] as const
+}
+
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
   const { deps, gate, query, ordered, canAutoSelect } = input
   const { list, refreshAll, refreshAfterWrite, emptyTrash, noteAttachmentCleanup } = query
   const entries = listView(list).rows
 
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [selectedId, setSelectedId, selectedIdRef] = useSyncedRef<string | null>(null)
   const [drilled, setDrilled] = useState(false)
-  const [loadingId, setLoadingId] = useState<string | null>(null)
+  const [detailShown, detailFlight] = useInFlight()
   const [detailFailure, setDetailFailure] = useState<DetailFailure | null>(null)
+  const [olderShown, olderFlight] = useInFlight()
+  const [olderFailureState, setOlderFailure] = useState<DetailFailure | null>(null)
+  /** 缓存是 ref：合并更早一页后要有一个**必然变化**的 state 把新对象推上屏（极快的响应会把
+   *  分页渲染位的置位/清位合批成净零变化，React 会直接 bail out）。 */
+  const [detailVersion, setDetailVersion] = useState(0)
   const [pending, setPending] = useState<PendingAction | null>(null)
   const [actionFailure, setActionFailure] = useState<Readonly<Record<string, string>>>({})
   /** 面板存活期内每条只读一次（本机量级不值得预读，也不值得重复读）。 */
@@ -122,22 +187,66 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   const select = useCallback(
     async (entry: TrashEntryLike, options: { drill?: boolean } = {}): Promise<void> => {
       setSelectedId(entry.id)
+      setOlderFailure(null)
       if (options.drill === true) setDrilled(true)
       if (detailCache.current.has(entry.id)) {
-        setLoadingId(null)
+        detailFlight.show(null)
         setDetailFailure(null)
         return
       }
-      setLoadingId(entry.id)
+      // loading 先摆到这一条上，**再**判在飞：在飞时早退也得让 loading 跟着选中走。
+      // 反过来写（先判在飞、后摆 loading）会留下一条卡死的路：A 在飞 → 选 B → 再选 A，
+      // A 的回执落地时 loading 还指着 B，没有任何 state 变化，详情块永远停在 loading。
+      detailFlight.show(entry.id)
       setDetailFailure(null)
+      // 同一条在飞时不重复发 `/detail`（宽档双击同一行会打两条）。
+      if (!detailFlight.begin(entry.id)) return
       const outcome = await callRemote(() => deps.detail(entry.id))
       // 只收自己那一拍的 loading：期间已经切到别的条目时，别把新的那一拍按掉。
-      setLoadingId((current) => (current === entry.id ? null : current))
+      detailFlight.end(entry.id)
       if (outcome.ok) detailCache.current.set(entry.id, outcome.value)
       else setDetailFailure({ entryId: entry.id, message: outcome.failure.message })
     },
-    [deps],
+    [deps, detailFlight],
   )
+
+  /**
+   * 按当前详情的 `olderCursor` 取更早一页，拼到现有块前面。
+   *
+   * 三条判据：没有游标 / 这一条已有更早页在飞 ⇒ 不发请求（同一 tick 连点、或切走再切回都撞
+   * 在飞登记——晚到的第二条注定落不了屏，白打一次往返）；用户已经切走或缓存已被换掉 ⇒ 晚到的
+   * 页**不落屏**（A 的更早页不许盖掉 B）；失败只走 `olderFailure`，已读到的正文照旧是 ready。
+   */
+  const loadOlder = useCallback(async (): Promise<void> => {
+    const entryId = selectedId
+    if (entryId === null) return
+    const cached = detailCache.current.get(entryId)
+    if (cached === undefined || cached.olderCursor === null) return
+    // 渲染位先摆到这一条，**再**判在飞（与 `select` 同一条顺序）：另一条占过这个槽之后切回来点，
+    // 这一条其实已经在读——不先摆，按钮看着可点却静默无动作。摆了也只是按一次 loading，
+    // `begin` 回 false 就不发第二条。
+    olderFlight.show(entryId)
+    setOlderFailure(null)
+    if (!olderFlight.begin(entryId)) return
+
+    const cursor = cached.olderCursor
+    const outcome = await callRemote(() => deps.detail(entryId, cursor))
+    olderFlight.end(entryId)
+    // 晚到结果只在「用户还在这一条」时落屏：状态闭包读到的是发请求那一刻的选中，判最新值走镜像。
+    if (selectedIdRef.current !== entryId) return
+    const current = detailCache.current.get(entryId)
+    if (current !== cached) return
+    if (outcome.ok) {
+      detailCache.current.set(entryId, {
+        ...current,
+        blocks: [...outcome.value.blocks, ...current.blocks],
+        olderCursor: outcome.value.olderCursor,
+      })
+      setDetailVersion((version) => version + 1)
+      return
+    }
+    setOlderFailure({ entryId, message: outcome.failure.message })
+  }, [deps, selectedId, olderFlight])
 
   // 清单换了（别处删了一条、恢复成功、彻底删除成功）：选中那条已经不在了就让位，并把它的缓存丢掉。
   // 下面那条自动选中以「尚未选中」为门，所以这一拍（选中还在）它不抢；清场落地后的下一拍才接住。
@@ -146,8 +255,10 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (entries.some((entry) => entry.id === selectedId)) return
     detailCache.current.delete(selectedId)
     setSelectedId(null)
+    olderFlight.clear()
     setDrilled(false)
-  }, [entries, selectedId])
+    setOlderFailure(null)
+  }, [entries, selectedId, setSelectedId, olderFlight])
 
   // 宽档没有「下钻」这一层：从窄档拖宽后把残留的 `drilled` 收掉，缩回去时不至于直接停在详情页。
   // 它不改选中、不清详情；宽档右栏本来就在读这一条。
@@ -180,7 +291,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
 
   const detail = useMemo<TrashDetailState>(() => {
     if (selected === null) return { kind: 'idle' }
-    if (loadingId === selected.id) return { kind: 'loading', entry: selected }
+    if (detailShown === selected.id) return { kind: 'loading', entry: selected }
     const cached = detailCache.current.get(selected.id)
     if (cached !== undefined) return { kind: 'ready', entry: selected, detail: cached }
     if (detailFailure?.entryId === selected.id) {
@@ -189,7 +300,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     // 兜底：选中了、这一拍没有在飞的读、缓存刚被某个动作清掉（恢复 / 整批 / 清空）——先按
     // 「读着」摆着，下一次 `select` 或清单换版会把状态推到 ready / failed / idle，不会永久停在这里。
     return { kind: 'loading', entry: selected }
-  }, [selected, loadingId, detailFailure])
+  }, [selected, detailShown, detailFailure, detailVersion])
+
+  /** 分页/失败都只对当前选中那条上屏；切到别的条目时它们是别人家的旧账。 */
+  const loadingOlder = selectedId !== null && olderShown === selectedId
+  const olderFailure = olderFailureState !== null && olderFailureState.entryId === selectedId
+    ? olderFailureState.message
+    : null
 
   /** 「重试」只重读当前这一条，不牵清单。 */
   const retry = useCallback((): void => {
@@ -218,6 +335,21 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     for (const id of successIds) detailCache.current.delete(id)
   }, [])
 
+  /** 清掉这些行的旧失败；没有任何一行挂着失败时原样返回，不触发多余的一拍。 */
+  const clearRowFailures = useCallback((ids: readonly string[]): void => {
+    setActionFailure((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const id of ids) {
+        if (Object.hasOwn(next, id)) {
+          delete next[id]
+          changed = true
+        }
+      }
+      return changed ? next : current
+    })
+  }, [])
+
   /**
    * 单条恢复：**先清掉这一行的旧失败**（再点一次不该还挂着上一次的原文），再把整趟交给面板恢复座位。
    * 成功要丢详情缓存 + 重读清单——缓存不失效的话，这条会话再被删回来时会直接摆出上一世的正文。
@@ -228,11 +360,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * outcome 不再流向 query——孤儿重扫判据已不在面板（ADR-0021）。
    */
   const restore = useCallback(async (entry: TrashEntryLike): Promise<void> => {
-    setActionFailure((current) => {
-      const next = { ...current }
-      delete next[entry.id]
-      return next
-    })
+    clearRowFailures([entry.id])
     const outcome = await restoreFromPanel({
       deps,
       ids: [entry.id],
@@ -244,7 +372,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     })
     const failure = outcome.failures.get(entry.id)
     if (failure !== undefined) failRow(entry.id, failure)
-  }, [clearDetailCache, deps, entries, failRow, gate, refreshAfterWrite])
+  }, [clearDetailCache, clearRowFailures, deps, entries, failRow, gate, refreshAfterWrite])
 
   /**
    * 批量彻底删除 / 批量恢复**共用这一条**：一次 `apply` 把整批交给 Node 半，逐条成败住在
@@ -252,6 +380,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 不能断言哪几条落地：原文保守地铺到每一个 id（别让清单看起来"删成功了"），清单照样重读。
    */
   const confirmApply = useCallback(async (action: 'purge' | 'restore', ids: readonly string[]): Promise<void> => {
+    // 这一趟碰到的行先清掉旧失败：再点一次不该还挂着上一次的原文。
+    clearRowFailures(ids)
     // 成败都走同一段收尾（写完框就收、清单就重读）。无主子会话的重扫已不在面板：要不要扫由设置页
     // 维护卡的手动检查决定（ADR-0021），这里只交"重读"本身。
     // 附件读数只住在 purge 的回执里：信封成功就交摘要那半（逐条全失败时摘要也没有读数 ⇒ 旧提示会收掉），
@@ -273,7 +403,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       for (const [id, message] of outcome.failures) next[id] = message
       return next
     })
-  }, [clearDetailCache, deps, entries, gate, refreshAfterWrite, noteAttachmentCleanup])
+  }, [clearDetailCache, clearRowFailures, deps, entries, gate, refreshAfterWrite, noteAttachmentCleanup])
 
   /**
    * 确认框上的「确认」按 `pending` 的形状分派：三条按条目标都委托 `confirmApply`（一段 `/apply`）；
@@ -297,10 +427,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     selectedId,
     drilled,
     detail,
+    loadingOlder,
+    olderFailure,
     pending,
     pendingEntries,
     actionFailure,
     select,
+    loadOlder,
     retry,
     back,
     request,

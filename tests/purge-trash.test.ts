@@ -188,8 +188,8 @@ describe('彻底删除', () => {
     expect(await manifest.list()).toHaveLength(1)
   })
 
-  // 迁移前后有意接受的差异（ADR-0006 行为差异第 1 条）：过去 purge 只查盘上后代，target 自己在跑也照删；
-  // 现在计划先查 targets、再查后代，任一在跑整条拒绝。
+  // 迁移前后有意接受的差异（ADR-0027 决定 3；原 ADR-0006 行为差异第 1 条）：过去 purge 只查盘上后代，
+  // target 自己在跑也照删；现在计划先查 targets、再查后代，任一在跑整条拒绝。
   it('target 自己在跑 ⇒ live，同样零副作用（目标不再能绕过活体准入）', async () => {
     const { fs, host, purge, manifest } = deps([trashEntry('p')])
     host.isLive = vi.fn(async (id: string) => id === 'p')

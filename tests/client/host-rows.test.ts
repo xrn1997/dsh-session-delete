@@ -15,6 +15,7 @@ import {
   registerHostRowInfo,
   resetHostRows,
   selectAllVisible,
+  unregisterHostRowInfo,
   useSelectionRowClickGuard,
   useVisibleSelectableRows,
 } from '../../src/client/host-rows.js'
@@ -137,9 +138,36 @@ describe('readVisibleSelectableRows', () => {
     ])
   })
 
+  it('重复行：一颗行尾开关卸载，另一颗还在用的登记要留着', () => {
+    registerHostRowInfo('a', { title: 'A', live: false })
+    registerHostRowInfo('a', { title: 'A', live: false })
+    fakeRow('a')
+    fakeRow('a')
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
+
+    // 其中一行离开渲染树：另一行还挂着，登记不能被一起摘掉。
+    unregisterHostRowInfo('a')
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
+
+    unregisterHostRowInfo('a')
+    expect(readVisibleSelectableRows()).toEqual([])
+  })
+
   it('没有被渲染出来的行（折叠/过滤）不出现；DOM 里没有行时回空表', () => {
     registerHostRowInfo('hidden', { title: 'Hidden', live: false })
     expect(readVisibleSelectableRows()).toEqual([])
+  })
+
+  it('注销登记后不再用旧标题选中这一行（行尾开关卸载 = 这一行离开渲染树）', () => {
+    registerHostRowInfo('a', { title: 'A', live: false })
+    fakeRow('a')
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
+
+    unregisterHostRowInfo('a')
+    expect(readVisibleSelectableRows()).toEqual([])
+    // 行重新挂载时行尾开关会重新登记。
+    registerHostRowInfo('a', { title: 'A', live: false })
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
   })
 })
 

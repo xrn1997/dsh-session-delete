@@ -8,15 +8,6 @@ export interface ManifestPort {
   remove(id: string): Promise<void>
 }
 
-export function createMemoryManifest(seed: TrashEntry[] = []): ManifestPort {
-  const rows = new Map<string, TrashEntry>(seed.map(e => [e.id, e]))
-  return {
-    async list() { return [...rows.values()].sort((a, b) => b.deletedAt - a.deletedAt) },
-    async add(e) { rows.set(e.id, e) },
-    async remove(id) { rows.delete(id) },
-  }
-}
-
 /** 宿主 storage domain 的最小面。这是**接缝**，不是对宿主 API 的断言：
  *  探针只枚举到 `ctx.storageDomain` 有 `open` / `get` / `domains` / `reserved` 等成员，
  *  **没有**枚举 `open()` 返回的 domain 句柄面 ⇒ 真实绑定由 `src/trash/storage-manifest.ts` 的

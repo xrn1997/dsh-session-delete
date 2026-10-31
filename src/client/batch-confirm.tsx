@@ -124,7 +124,11 @@ function BatchConfirmDialog({
 
   const ids = current.items.map((item) => item.sessionId)
   const failedIds = [...failures.keys()]
-  const totalKids = counts === null ? 0 : [...counts.values()].reduce((sum, n) => sum + n, 0)
+  // 只合计**当前名单**：counts 是开框那一刻取的整批读数，重试轮收缩后不能把已经移走的条目
+  // 的子会话再算进汇总句（逐行 chip 本来就按 id 查，不受影响）。
+  const totalKids = counts === null
+    ? 0
+    : current.items.reduce((sum, item) => sum + (counts.get(item.sessionId) ?? 0), 0)
 
   useEffect(() => {
     let alive = true

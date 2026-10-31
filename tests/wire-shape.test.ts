@@ -118,12 +118,12 @@ describe('两半共用同一份形状（不是两份互相镜像）', () => {
     expect([entryMirror, purgeMirror, detailMirror]).toEqual([true, true, true])
   })
 
-  it('详情消息的附件字段是必填数组；附件统计是可选字段', () => {
-    const message: TrashDetailWire['messages'][number] = {
-      role: 'user', time: 1, text: '', truncated: false, attachments: [],
+  it('详情块的附件字段是必填数组；附件统计是可选字段', () => {
+    const block: TrashDetailWire['blocks'][number] = {
+      kind: 'user', id: '0', time: 1, text: '', truncated: false, attachments: [],
     }
     const purge: PurgeStatsWire = { removed: 1, freedBytes: 2, attachments: { removed: 1, freedBytes: 2, failed: 0 } }
-    expect(message.attachments).toEqual([])
+    expect(block.attachments).toEqual([])
     expect(purge.attachments?.failed).toBe(0)
   })
 

@@ -3,11 +3,11 @@
 [![CI](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-session-delete.svg)](https://www.npmjs.com/package/@xrn1997/dsh-session-delete)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tested with DSH 0.2.0-rc.2 … 0.2.1-rc.3](https://img.shields.io/badge/DSH-0.2.0--rc.2%20%E2%80%A6%200.2.1--rc.3-brightgreen)](#安装)
+[![Tested with DSH 0.2.0-rc.2 … 0.2.1-rc.5](https://img.shields.io/badge/DSH-0.2.0--rc.2%20%E2%80%A6%200.2.1--rc.5-brightgreen)](#安装)
 
 给 DeepSeek Harness（DSH）加一个**删除会话**的能力。DSH 官方有归档、没有删除——归档只是把会话从列表里挪走，文件还在。本插件补上删除，并且让删除可恢复：删除 = 移入回收站，另有一个显式的「彻底删除」。
 
-![回收站面板：左列是按项目分组的会话清单，右栏是选中那条的元信息与正文，页脚是整页唯一的实心红按钮「清空回收站…」](docs/screenshots/screenshot-01.png)
+![回收站面板：左列是按项目分组的会话清单，右栏是选中那条的元信息与按块折叠的正文，页脚是整页唯一的实心红按钮「清空回收站…」](docs/screenshots/screenshot-01.png)
 
 - 安装：`dsh plugin --profile <profile> add @xrn1997/dsh-session-delete`
 - 许可：[Apache-2.0](LICENSE)
@@ -58,7 +58,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 **兼容性分两层，别混**：
 
 - **装得上**由 `package.json` 的 `engines.dsh` 决定：宿主拿运行中的版本比这个区间，不满足即拒绝并回滚。窗口是 **`>=0.1.7-rc.2 <0.3.0-0`**（预发布版本参与匹配）。地板是**完整功能**的最低代次：`0.1.7-rc.2` 在 CLI 台架上验过四个槽位齐全、激活零错误；更低的 `0.1.7-rc.1` 缺行首勾选槽位，`0.1.5` 及以前连会话行入口都没有。
-- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列桌面真机实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3**（均 `compatible`）。窗口内的其他代次装得上但没在桌面真机上验过；窗口外的一律拒装。
+- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列桌面真机实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5**（均 `compatible`）。窗口内的其他代次装得上但没在桌面真机上验过；窗口外的一律拒装。
 
 ## 用法
 
@@ -72,7 +72,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 ![批量删除模式：两行已勾选，浮条显示「已选 2 条」与展开的已选清单，动作是「移入回收站 2 条」与「退出多选」](docs/screenshots/screenshot-03.png)
 
-**管回收站**：侧栏面板里的「回收站」一行（与「插件」同层）。左清单右详情（中央列更窄时改成下钻，「← 返回清单」回来），按项目分组、组头可折叠、两栏之间那根线可拖。详情只列你真实发的提问与助手的文字，宿主注入的上下文与工具调用不进正文；助手文字按 Markdown 排版，你的提问保持原话。
+**管回收站**：侧栏面板里的「回收站」一行（与「插件」同层）。左清单右详情（中央列更窄时改成下钻，「← 返回清单」回来），按项目分组、组头可折叠、两栏之间那根线可拖。详情按块展示这条会话的对话全量：你的提问、宿主注入的上下文、助手文字与思考、工具调用与结果、系统消息与压缩摘要。注入、思考、工具等默认折叠，可逐块或一键展开；长会话顶部有「加载更早」。助手文字与思考按 Markdown 排版，你的提问保持原话。
 
 - **恢复**：单条不需要确认框，放回原项目目录（删除前你自己归档过的仍保持归档；旧版本留下的归档态条目会迁移式取消归档）。原工作区已被删掉也照常恢复（跳过账本挂接，归入「未分组」），清单行在点之前就说这句。
 - **批量恢复 / 批量彻底删除**：工具栏「多选」进入，页脚换成两颗动作按钮。组头那颗是**三态**勾选框，点它选上这个项目的全部会话（含折叠起来看不见的）。两者都先确认，逐条执行、失败不连坐，失败的原文留在它自己那行。

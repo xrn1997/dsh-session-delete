@@ -32,7 +32,7 @@ Status: accepted
 2. **落地形状仍住 `trash/entry.ts`**：`TrashEntry` 是清册那一行，与线上那一行**不是同一个东西**
    （线上多了六个现算现给的读数，其中 `releaseBytes` 是必填的那一个）。两者由一个**显式投影** `toWire(row, readouts)` 连接
    （**2026-10-20 就地订正**：本节原文写的是 `toWire(row)`；`readouts` 现在是必填入参，`releaseBytes` 由只读计划
-   实测后递进来，投影不再拿 `row.sizeBytes` 现加——字节口径归 ADR-0006。其余五个只读数缺席仍表示"这次没算"。）。
+   实测后递进来，投影不再拿 `row.sizeBytes` 现加——字节口径归 ADR-0027。其余五个只读数缺席仍表示"这次没算"。）。
 3. **投影不许用 spread 继承**：`const wire: TrashRowWire = { id: row.id, sessionId: row.sessionId, … }`
    ——显式字面量让「线上多一个必填字段」变成一次编译错误；`...row` 会把它悄悄带过去。
 4. **运行期必填清单搬回 `entry.ts`**，紧贴接口，并由一条骨架测试拿完整样本对象比对键集；

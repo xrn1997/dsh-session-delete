@@ -36,11 +36,12 @@ const ORPHANS = {
 const detailFixture: TrashDetailLike = {
   entryId: 'a', cwd: 'C:/develop/p', createdAt: 1, lastActivity: 2, logTitle: '日志里的标题',
   models: ['m-1'], turnCount: 1, userMessageCount: 1, assistantMessageCount: 1, toolCallCount: 3,
-  injectedCount: 7, omittedByPayloadCap: 0,
-  messages: [
-    { role: 'user', time: 1, text: '先看改动', truncated: false, attachments: [] },
-    { role: 'assistant', time: 2, text: '改动分四层', truncated: false, attachments: [] },
+  injectedCount: 7,
+  blocks: [
+    { kind: 'user', id: '0', time: 1, text: '先看改动', truncated: false, attachments: [] },
+    { kind: 'assistant', id: '1', time: 2, text: '改动分四层', truncated: false, attachments: [] },
   ],
+  olderCursor: null,
 }
 
 /** 逐条 `/apply` 回执：面板的恢复走单条读法（N=1 的 `null` 是协议错）⇒ 成功支要让 support 给真行，
@@ -239,6 +240,69 @@ describe('回收站面板 · 两栏与下钻', () => {
   })
 })
 
+describe('回收站面板 · 详情分页与折叠状态', () => {
+  const reasoningBlock = (id: string, text: string) => ({
+    kind: 'reasoning' as const, id, time: 1, text, truncated: false, attachments: [],
+  })
+
+  it('点「加载更早」真的走 loadOlder：二次 /detail 带游标，早页 prepend 在尾页之前', async () => {
+    const tail: TrashDetailLike = {
+      ...detailFixture,
+      blocks: [{ kind: 'user', id: '10', time: 1, text: '尾页正文', truncated: false, attachments: [] }],
+      olderCursor: 10,
+    }
+    const older: TrashDetailLike = {
+      ...detailFixture,
+      blocks: [{ kind: 'user', id: '7', time: 1, text: '更早正文', truncated: false, attachments: [] }],
+      olderCursor: null,
+    }
+    const deps = makeDeps({
+      detail: vi.fn(async (_entryId: string, before?: number) => (before === undefined ? tail : older)),
+    })
+    const { container } = renderWide(deps)
+
+    expect(await screen.findByText('尾页正文')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
+    expect(await screen.findByText('更早正文')).toBeInTheDocument()
+    expect(deps.detail).toHaveBeenLastCalledWith('a', 10)
+
+    const messages = [...container.querySelectorAll('[data-dsh-session-delete="trash-detail"] [data-sd-msg]')]
+      .map((node) => node.textContent ?? '')
+    expect(messages[0]).toContain('更早正文')
+    expect(messages[1]).toContain('尾页正文')
+  })
+
+  it('切换条目重置折叠：A 展开的块不带去 B，切回 A 也回到默认折叠', async () => {
+    const two = [
+      { ...rows[0]!, id: 'a', title: '第一条' },
+      { ...rows[0]!, id: 'b', title: '第二条' },
+    ]
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      detail: vi.fn(async (entryId: string) => ({
+        ...detailFixture,
+        entryId,
+        blocks: [reasoningBlock(entryId, `${entryId} 的思考正文`)],
+      })),
+    })
+    renderWide(deps)
+
+    const fold = await screen.findByRole('button', { name: /思考/ })
+    fireEvent.click(fold)
+    expect(fold).toHaveAttribute('aria-expanded', 'true')
+
+    fireEvent.click(screen.getByRole('option', { name: /第二条/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false'))
+    expect(screen.getByText('b 的思考正文')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('option', { name: /第一条/ }))
+    await waitFor(() => expect(screen.getByText('a 的思考正文')).toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
+    // 切回来读的是缓存，不重发 /detail。
+    expect(deps.detail).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('回收站面板 · 键盘', () => {
   const two = [
     { ...rows[0], id: 'a', projectDir: '--p--', title: '第一条', deletedAt: 300 },
@@ -279,6 +343,18 @@ describe('回收站面板 · 键盘', () => {
     expect(row).toHaveAttribute('aria-selected', 'true')
     expect(document.activeElement).toBe(row)
     expect(deps.detail).toHaveBeenCalledTimes(1)
+  })
+
+  it('条目 id 带引号：交还焦点仍按属性值找行，不把 id 拼进选择器', async () => {
+    const awkward = [{ ...rows[0], id: 'a"b', projectDir: '--p--', title: '带引号的那条', deletedAt: 300 }]
+    const deps = makeDeps({ list: vi.fn(async () => awkward) })
+    renderNarrow(deps)
+    fireEvent.click(await screen.findByRole('option', { name: /带引号的那条/ }))
+    await screen.findByRole('button', { name: '← 返回清单' })
+    fireEvent.keyDown(document, { key: 'Escape' })
+    const row = screen.getByRole('option', { name: /带引号的那条/ })
+    expect(row).toHaveAttribute('aria-selected', 'true')
+    expect(document.activeElement).toBe(row)
   })
 
   it('下钻里打开确认框：Esc 只关框，下钻不退；再按才回清单', async () => {

@@ -1,6 +1,6 @@
 # ADR-0006 — 永久删除的计划与执行只有一个家：`src/verbs/permanent-removal.ts`
 
-Status: accepted
+Status: superseded by 0027
 
 ## 背景
 

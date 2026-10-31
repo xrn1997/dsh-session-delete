@@ -13,8 +13,8 @@ import { executeRemoval, planTrashRemoval } from './permanent-removal.js'
  * `trash-empty` 的原文点得出用户点的是哪一条（原文要上屏，点名承重），批量语义仍在批量层。
  *
  * **这条动词只做两件事：拿目标、把计划交给执行器**。量目录、筛盘上后代、活体准入与"先退归档集、
- * 再摘账本、最后删目录"的顺序都住 `verbs/permanent-removal.ts`——计划只读，执行器只写，计划就是
- * 执行前的闸（别在这里再长出一段手写步骤）。
+ * 再摘账本、最后删目录"的顺序都住 `verbs/permanent-removal.ts`——计划只读，执行器不再量、只在第一笔
+ * 写前补一次只读的活体复查，计划是执行前的第一道闸（别在这里再长出一段手写步骤）。
  *
  * **这条动词不做回滚**：目录删掉就没有"退回去"这回事（删到一半失败时已删目录不回滚；
  * 带部分计数的 `details` 回执只属于 `orphan-clean`，purge 的 `removed` / `freedBytes` 仍只在成功回执里给）。

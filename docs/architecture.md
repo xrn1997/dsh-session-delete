@@ -59,7 +59,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - **语料缺席是显式的**：两个语料读面都交 `CorpusRead<T>` = `{ available: true, value }` | `{ available: false }`，不带原因串；形状住 `src/ports/host-port.ts`。**缺席之后怎么办归调用方**：删除只删父、count 报 0、`/list` 与 purge 静默降级、`/orphans` 与经 `loadOrphanGroups` 的 `orphan-clean` 响亮失败。裁决见 ADR-0019（语料面承 ADR-0007，未翻）。
 - **读面是路由记录的一格**：`read` 与 `RouteRead` 的词义与读法见 `CONTEXT.md`「路由读面」，段名归属见 `docs/architecture.md` §4；裁决见 ADR-0004 / ADR-0012。
 - **`verbs` 不 import `api`**：路由层只搬运，业务判据全在动词与部件。
-- **活体准入的判据住 `src/verbs/live-admission.ts` 的 `assertNoLive`**：逐个问、任一在跑就整组拒绝、短路；**什么时候查、查哪些 id 归调用方**——永久删除仍把准入放在计划里、在任何写之前（ADR-0006），删除与孤儿清理各自交自己的名单。
+- **活体准入的判据住 `src/verbs/live-admission.ts` 的 `assertNoLive`**：逐个问、任一在跑就整组拒绝、短路；**什么时候查、查哪些 id 归调用方**——永久删除的时机住 `docs/architecture.md` §4 的「永久删除的计划与执行」行（ADR-0027），删除与孤儿清理各自交自己的名单。
 - **宿主类型面用本地窄镜像**（`src/ports/host-port.ts` 与 `src/ports/agent-handles.ts` 各只声明用到的成员 + 一次强转）：不装宿主类型包、不做 `declare module` 增强——npm 上的宿主包与运行中的宿主不同代，引包等于拿错了契约。
 - **跨插件一律 `import type`**，值 import 是与生态的红线。
 
@@ -95,15 +95,16 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 在场能力的动词面（成员离场 / 归位 / 一批归位的三条签名） | `src/ports/presence-port.ts` 的 `PresenceCapability` | 三态与真值表、宿主调用顺序（归 `src/verbs/member-presence.ts`）；宿主端口的角色切分（归 `src/ports/host-port.ts`） |
 | 一次成员移动的步骤、反向动作与逐步 undo 结果（`restored(key)`） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
 | 组级成员移动的顺序、组根结果与整组回滚。调用方直接拿根结果，不索引数组；跟随者按序拿根结果。 | `src/verbs/move-group.ts` | 单成员步骤（`src/verbs/member-journal.ts`）；谁算一组（`src/trash/groups.ts`） |
-| 永久删除的计划与执行（成员 / 目录 / 字节 / 部分回执；成功回执的字节念计划、执行期只记进度） | `src/verbs/permanent-removal.ts` | 活体准入归 `src/verbs/live-admission.ts`（这里只决定它在计划里、任何写之前跑）；组语义归 `src/trash/groups.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
+| 永久删除的计划与执行（成员 / 目录 / 字节 / 部分回执；成功回执的字节念计划、执行期只记进度） | `src/verbs/permanent-removal.ts` | 活体准入的判据归 `src/verbs/live-admission.ts`（这里只决定时机与名单：计划期查 targets 与枚举到的盘上后代，执行器第一笔写前用 `plan.unarchive` 再查一次）；组语义归 `src/trash/groups.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
 | 附件内容块提取 / ID 与路径闸 / 剩余引用扫描 / 独占计划与执行 | `src/trash/attachments.ts` | 什么时候删（归 `src/verbs/permanent-removal.ts`）；源文件与普通文件的删除（目前不删） |
-| 活体准入的判据与那句原文（逐个问、任一在跑整组拒绝、短路） | `src/verbs/live-admission.ts` 的 `assertNoLive` | 什么时候查、查哪些 id（调用方给：永久删除在计划里，删除与孤儿清理各交名单） |
+| 活体准入的判据与那句原文（逐个问、任一在跑整组拒绝、短路） | `src/verbs/live-admission.ts` 的 `assertNoLive` | 什么时候查、查哪些 id（调用方给：永久删除见「永久删除的计划与执行」行，删除与孤儿清理各交名单） |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` | 对账 |
 | 清册读的两个读面（`list()` = 对账 + 读，供 `/list`、`/empty` 与写动词；`raw()` = 不对账、不写行，供 pure 的 `/orphans` 与 `/detail`） | `src/trash/ledger.ts` | 存储域绑定、对账的具体目录判据；哪一段拿哪一面归 `src/api/route-table.ts` |
 | 清册与 `session-trash/` 目录的对账 | `src/trash/reconcile.ts` | 目录里读哪一代日志 |
 | 会话日志的选代与走帧（多帧 zstd） | `src/log/session-log.ts` + `src/log/zstd-frames.ts` | 正文该显示什么 |
-| 详情给谁看、给多少（`source.kind` 过滤、正文两个载荷闸、附件每消息 20 个与总量 200 个两道闸、计数不过闸） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`） |
+| 详情给谁看、给多少（块投影：user/assistant/reasoning/tool/injection/system/compaction；`source.kind` 分 user/injection；工具 call/result 按 `callId` 配对；单块字符闸、每页块数 + 页级字符闸 + `olderCursor` 游标；附件每块/每页两道闸；计数不过闸） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`）；折叠怎么画（`src/client/trash-detail.tsx`） |
 | 正文怎么排版成 DOM（裸 HTML、链接与图片的收口） | `src/client/markdown.tsx` + `src/client/ui/markdown.css` | 抄来的宿主消息行样式 |
+| 详情块的折叠呈现（默认折叠、摘要、工具状态、全部展开/折叠、加载更早、prepend 后滚动补偿） | `src/client/trash-detail.tsx` | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存（`src/client/use-trash-panel-controller.ts`） |
 | 详情与维护卡预览的附件渲染 / 放大 / 失败占位 / 清理提示的呈现 | `src/client/attachment-view.tsx` | 什么时候出清理提示（面板归 `src/client/use-trash-query.ts`、维护卡归 `src/client/use-maintenance.ts`）；附件二进制怎么读（归 `src/api/attachment.ts`） |
 | 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
 | 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/reconcile.ts`） |
@@ -140,7 +141,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期；latest-wins 句柄 `createLatestWins` 的 compare-and-set） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
 | 宿主会话列表的批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
 | 宿主行快照订阅（DOM 观察 + 行登记；渲染侧只读快照）与整行点击守卫 | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
-| 回收站面板状态机（选中 / 详情缓存 / 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
+| 回收站面板状态机（选中 / 详情缓存 / 详情分页（`olderCursor`、在飞、晚到不落屏）/ 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
 | 各张确认框的 busy 关框规则 | `src/client/confirm-close.ts` 的 `useIdleClose` | 各框的按钮文案与禁用呈现 |
 | 槽位贡献与注册（含设置页按 bundle 包名寻址的 keyed 槽位） | `src/client/index.tsx` | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
@@ -182,7 +183,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 路由 / 请求栅栏 / 远程身份 | 本文 §1、§4；`src/api/request-trust.ts`；ADR-0009、ADR-0022、ADR-0023 |
 | 删除 / 恢复 / 归档语义 | 本文 §6；`src/verbs/delete-session.ts`、`src/verbs/restore-session.ts`；ADR-0008 |
 | 批量与逐步撤销 | 本文 §4 的 `batch` / `member-journal` / `batch-carried` 行；ADR-0002 |
-| 永久删除 / 活体准入 | 本文 §4 的 `permanent-removal` / `live-admission` 行；ADR-0006 |
+| 永久删除 / 活体准入 | 本文 §4 的 `permanent-removal` / `live-admission` 行；ADR-0027 |
 | 附件与孤儿清理 | 本文 §6；`src/trash/attachments.ts`；ADR-0020、ADR-0021 |
 | 清册 / 对账 | `src/trash/ledger.ts`、`src/trash/reconcile.ts`；ADR-0012 |
 | 会话日志读取 | `src/log/session-log.ts`、`src/log/zstd-frames.ts` |

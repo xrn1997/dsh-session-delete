@@ -737,6 +737,18 @@ describe('executeRemoval：执行器', () => {
     expect(deps.fs.exists).not.toHaveBeenCalled()
   })
 
+  it('计划之后、执行之前有会话转为在跑 ⇒ 执行器再查一次 live，拒绝且零写', async () => {
+    const root = entry('session-p')
+    const { deps } = execWorld({ rows: [root], sizes: { [trashDirOf(root.id, HOME)]: 100 } })
+    const plan = await planTrashRemoval(deps, [root], [root])
+    // 计划期准入已通过；模拟附件引用全 home 扫描期间用户 resume 了这条会话。
+    deps.host.isLive = vi.fn(async (id: string) => id === 'session-p')
+
+    await expect(executeRemoval(deps, plan)).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    expect(deps.host.unarchive).not.toHaveBeenCalled()
+    expect(deps.fs.removeDir).not.toHaveBeenCalled()
+  })
+
   it('成功回执的字节念计划里的 bytes（执行器不另算一遍）', async () => {
     const root = entry('session-p')
     const rootDir = trashDirOf(root.id, HOME)
@@ -811,10 +823,10 @@ describe('executeRemoval：执行器', () => {
 
     const error = await failureOf(executeRemoval(deps, plan))
 
-    // 失败仍用删回收站那一段的标签；trash 计划不带部分回执（回执只由 kind='orphan' 派生）。
+    // 失败标签说清是摘清册行、不是删目录；trash 计划不带部分回执（回执只由 kind='orphan' 派生）。
     expect(error).toMatchObject({
       code: 'sessiondelete/io',
-      message: '删除回收站目录失败：Error: manifest boom',
+      message: '摘除回收站条目失败：Error: manifest boom',
     })
     expect(error.details).toBeUndefined()
     // 那一行没摘走：清册里还剩它。

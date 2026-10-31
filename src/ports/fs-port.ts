@@ -26,7 +26,7 @@ export interface FsPort {
   removeFile(p: string): Promise<void>
 }
 
-/** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0006）。 */
+/** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0027）。 */
 export type CoreFsPort = Omit<FsPort, 'removeDir' | 'removeFile'>
 
 /** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
@@ -47,6 +47,8 @@ export function createFsPort(): FsPort {
     async rename(from, to) {
       // 目标已存在一律失败：Linux 的 rename 会静默替代**空目录**，Windows 不会——"搬进回收站/放回
       // 会话目录"是这里唯一的目录搬迁动作，被替代 = 数据消失。把两个平台的语义钉成同一个。
+      // 检查与 rename 之间仍有一个窗口（Linux 上恰好此时长出空目录会被覆盖）；本机可信部署
+      // 接受这一残余竞态，不加锁——加锁会把一次本地搬移变成跨进程协议。
       if (existsSync(to)) throw new Error(`目标已存在，拒绝覆盖：${to}`)
       try {
         await rename(from, to)

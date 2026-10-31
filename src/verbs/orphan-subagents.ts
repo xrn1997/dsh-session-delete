@@ -84,18 +84,27 @@ export function orphanGroupsOf(
  *
  *  `listSessions()` 回 `{ available: false }` 时**必须抛**：那是宿主的会话语料服务没挂，不是"这个家没有孤儿"。
  *  拿缺席当空语料 ⇒ 报告说"零条孤儿"、界面上一句"没有要清理的"，而盘上真有几百 MB——那是假话，
- *  所以这里按 `io` 响亮失败（AGENTS.md：`available: false` 意味着服务缺席，扫描方不许冒充读数）。 */
+ *  所以这里按 `io` 响亮失败（AGENTS.md：`available: false` 意味着服务缺席，扫描方不许冒充读数）。
+ *
+ *  `roots` 只收请求点名的那几组、**在量字节之前过滤**：`/orphans` 不传（报告全部），
+ *  `orphan-clean` 传这次的根——否则点一组会把整个家所有孤儿的树都递归量一遍。 */
 export async function loadOrphanGroups(
   deps: CoreDeps,
   /** 调用方选好并交来的清册行：`/orphans` 交 `read.rows()`，`orphan-clean` 交 `ledger.list()`。 */
   trash: readonly TrashEntry[],
+  /** 只要这些根（两边都去 `session-` 前缀再比）；缺席 = 全量扫描。 */
+  roots?: readonly string[],
 ): Promise<readonly OrphanGroup[]> {
   const read = await deps.host.listSessions()
   if (!read.available) {
     throw verbError('io', '无主子会话扫描需要宿主的 sessionQuery.listSessions')
   }
   const corpus = read.value
-  const groups = orphanGroupsOf(corpus, trash.map((entry) => entry.sessionId))
+  const all = orphanGroupsOf(corpus, trash.map((entry) => entry.sessionId))
+  const wanted = roots === undefined ? undefined : new Set(roots.map((root) => bareSessionId(root)))
+  const groups = wanted === undefined
+    ? all
+    : all.filter((group) => wanted.has(bareSessionId(group.root.sessionId)))
   const out: OrphanGroup[] = []
   for (const group of groups) {
     const members: OrphanMember[] = []

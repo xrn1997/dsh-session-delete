@@ -137,7 +137,8 @@ async function applyOrphanClean(deps: RemovalDeps, ids: readonly string[]): Prom
   // 对账交回的行直接给扫描，不再读第二遍 raw 索引。
   const trash = await deps.ledger.list()
   // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。
-  const groups = await loadOrphanGroups(deps, trash)
+  // 只量请求点名的根：报告可能列着几十组，这里不该为没被点的那几组递归量树。
+  const groups = await loadOrphanGroups(deps, trash, ids)
   const byRoot = new Map(groups.map(group => [bareSessionId(group.root.sessionId), group]))
   // 组内没有回收站这一层可退：`cleanOrphanGroup` 的 live 准入在任何写之前（整组拒绝、零副作用）；
   // 删到一半失败时已删目录不回滚，失败错误的 `details` 带 `{ removed, freedBytes }` 作为部分回执，

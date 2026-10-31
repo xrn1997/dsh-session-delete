@@ -127,7 +127,7 @@ export interface RawSessionDeleteRemote {
   attachmentOrphans(): Promise<RemoteResult<AttachmentOrphanReportWire>>
   /** 聚合写：只删上一条报告那一刻无引用的图片对象，回 `AttachmentCleanupWire`。 */
   attachmentClean(): Promise<RemoteResult<AttachmentCleanupWire>>
-  detail(entryId: string): Promise<RemoteResult<TrashDetailLike>>
+  detail(entryId: string, before?: number): Promise<RemoteResult<TrashDetailLike>>
   /** 一组 id 上的同一个动作。顶层信封的 `ok:false` 只表示**整次调用**没办成（路由自检、栅栏之外）；
    *  单条动作的成败住在 `ApplyOutcome` 里——这是批量接口的判据，别在信封层找它。 */
   apply(action: ApplyAction, ids: readonly string[]): Promise<RemoteResult<ApplyOutcome[]>>
@@ -176,8 +176,11 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
       requestEnvelope<AttachmentOrphanReportWire>(prefix + ROUTES.attachmentOrphans, { method: 'GET' }),
     // 这一段没有入参；空 JSON 体只是让 POST 与其余写段同一形状（路由表声明 body: none，不读它）。
     attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(prefix + ROUTES.attachmentClean, post({})),
-    detail: (entryId) =>
-      requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({ [PARAMS.entryId]: entryId })),
+    detail: (entryId, before) =>
+      requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({
+        [PARAMS.entryId]: entryId,
+        ...(before === undefined ? {} : { [PARAMS.before]: before }),
+      })),
     apply: (action, ids) =>
       requestEnvelope<ApplyOutcome[]>(prefix + ROUTES.apply, post({ [PARAMS.action]: action, [PARAMS.ids]: [...ids] })),
     empty: () => requestEnvelope<PurgeResultLike>(prefix + ROUTES.empty, post({})),
@@ -240,7 +243,7 @@ export interface SessionDeleteRemote {
   scanAttachmentOrphans(): Promise<AttachmentOrphanReportWire>
   /** 清掉报告那一刻无引用的图片副本（聚合回执）。 */
   cleanAttachmentOrphans(): Promise<AttachmentCleanupWire>
-  detail(entryId: string): Promise<TrashDetailLike>
+  detail(entryId: string, before?: number): Promise<TrashDetailLike>
   /** 一段管所有写动作：一次调用把整批办完，逐条结果原样交回组件。 */
   applyOutcomes(action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]>
   /** 清空回收站（聚合回执）。 */
@@ -287,7 +290,7 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
     scanOrphans: () => raw.orphans().then((result) => unwrapRemoteResult(result)),
     scanAttachmentOrphans: () => raw.attachmentOrphans().then((result) => unwrapRemoteResult(result)),
     cleanAttachmentOrphans: () => raw.attachmentClean().then((result) => unwrapRemoteResult(result)),
-    detail: (entryId) => raw.detail(entryId).then((result) => unwrapRemoteResult(result)),
+    detail: (entryId, before) => raw.detail(entryId, before).then((result) => unwrapRemoteResult(result)),
     applyOutcomes: applyOnce,
     emptyTrash: () => raw.empty().then((result) => unwrapRemoteResult(result)),
   }

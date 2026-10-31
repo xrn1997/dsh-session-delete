@@ -18,6 +18,7 @@ import type {
   TrashDetailLike,
   TrashEntryLike,
 } from '../../src/client/remote.js'
+import type { TrashDetailBlockWire } from '../../src/shared/wire.js'
 import { afterDelete, afterRestore, bindMainView, resetMainView } from '../../src/client/main-view.js'
 import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
 import {
@@ -72,6 +73,10 @@ const CHILD: TrashEntryLike = {
   title: 'Child',
 }
 
+const userBlock = (text: string, id = text): TrashDetailBlockWire => ({
+  kind: 'user', id, time: 0, text, truncated: false, attachments: [],
+})
+
 function detailOf(id: string): TrashDetailLike {
   return {
     entryId: id,
@@ -85,8 +90,8 @@ function detailOf(id: string): TrashDetailLike {
     assistantMessageCount: 0,
     toolCallCount: 0,
     injectedCount: 0,
-    omittedByPayloadCap: 0,
-    messages: [],
+    blocks: [],
+    olderCursor: null,
   }
 }
 
@@ -193,6 +198,55 @@ describe('面板控制器 · 选中与详情缓存', () => {
       pending.resolve(detailA)
     })
     expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailA })
+  })
+
+  it('同一条在飞时不重复发 /detail（宽档双击不会打两条）', async () => {
+    const pending = deferred<TrashDetailLike>()
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementationOnce(() => pending.promise)
+
+    let first!: Promise<void>
+    act(() => {
+      first = m.result.current.select(A)
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      pending.resolve(detailOf('a'))
+      await first
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+  })
+
+  it('在飞时切走再切回：回执落地后详情块是 ready（不会卡在 loading）', async () => {
+    const pendingA = deferred<TrashDetailLike>()
+    const pendingB = deferred<TrashDetailLike>()
+    const m = mount({ entries: [A, B] })
+    m.deps.detail
+      .mockImplementationOnce(() => pendingA.promise)
+      .mockImplementationOnce(() => pendingB.promise)
+
+    // 选 A（在飞）→ 选 B → 再选 A：A 的回执落地时 loading 必须已经指着 A，
+    // 否则那条回执带不动任何 state 变化，详情块永远停在 loading。
+    act(() => {
+      void m.result.current.select(A)
+      void m.result.current.select(B)
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      pendingB.resolve(detailOf('b'))
+    })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+
+    await act(async () => {
+      pendingA.resolve(detailOf('a'))
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
   })
 
   it('命中缓存：切走再切回不重读，也不经过 loading', async () => {
@@ -311,6 +365,196 @@ describe('面板控制器 · 选中与详情缓存', () => {
       pending.resolve(detailOf('a'))
     })
     expect(m.result.current.detail.kind).toBe('ready')
+  })
+})
+
+describe('面板控制器 · 详情分页', () => {
+  it('loadOlder：按缓存里的 olderCursor 读更早一页，拼到前面并更新游标', async () => {
+    const m = mount({ entries: [A] })
+    const tail = { ...detailOf('a'), blocks: [userBlock('尾', '10')], olderCursor: 10 }
+    const older = { ...detailOf('a'), blocks: [userBlock('早', '0')], olderCursor: null }
+    m.deps.detail.mockResolvedValueOnce(tail)
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+
+    m.deps.detail.mockResolvedValueOnce(older)
+    await act(async () => {
+      await m.result.current.loadOlder()
+    })
+
+    expect(m.deps.detail).toHaveBeenLastCalledWith('a', 10)
+    expect(m.result.current.detail).toEqual({
+      kind: 'ready',
+      entry: A,
+      detail: { ...tail, blocks: [userBlock('早', '0'), userBlock('尾', '10')], olderCursor: null },
+    })
+  })
+
+  it('loadOlder 在飞时 loadingOlder 为真，重复调用不重复读', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockResolvedValueOnce({ ...detailOf('a'), blocks: [userBlock('尾', '5')], olderCursor: 5 })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+
+    const pending = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => pending.promise)
+    act(() => {
+      void m.result.current.loadOlder()
+      void m.result.current.loadOlder()
+    })
+    expect(m.result.current.loadingOlder).toBe(true)
+    expect(m.deps.detail).toHaveBeenCalledTimes(2)
+
+    await act(async () => {
+      pending.resolve({ ...detailOf('a'), blocks: [userBlock('早', '0')], olderCursor: null })
+    })
+    expect(m.result.current.loadingOlder).toBe(false)
+  })
+
+  it('loadOlder 还在飞时切走再切回，还在飞的那条不发第二条（第二条注定落不了屏，白打往返）', async () => {
+    const m = mount({ entries: [A, B] })
+    const tailA = { ...detailOf('a'), blocks: [userBlock('A尾', '7')], olderCursor: 7 }
+    m.deps.detail.mockResolvedValueOnce(tailA)
+    const slow = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => slow.promise)
+    m.deps.detail.mockResolvedValueOnce(detailOf('b'))
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+
+    let loading!: Promise<void>
+    act(() => {
+      loading = m.result.current.loadOlder()
+    })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    await act(async () => {
+      void m.result.current.loadOlder()
+    })
+    // 调用只有三条：A 详情、A 的更早页（在飞）、B 详情；切回 A 再点不再发。
+    expect(m.deps.detail).toHaveBeenCalledTimes(3)
+    expect(m.result.current.loadingOlder).toBe(true)
+
+    await act(async () => {
+      slow.resolve({ ...detailOf('a'), blocks: [userBlock('A早', '0')], olderCursor: null })
+      await loading
+    })
+    expect(m.result.current.detail).toEqual({
+      kind: 'ready',
+      entry: A,
+      detail: { ...tailA, blocks: [userBlock('A早', '0'), userBlock('A尾', '7')], olderCursor: null },
+    })
+    expect(m.result.current.loadingOlder).toBe(false)
+  })
+
+  // 渲染位只有一个槽：A 的分页在飞、B 又占过这个槽之后切回 A，A 点「加载更早」曾静默无动作
+  // （当时 `begin` 判重放在 `show` 之前，界面看不出这一条其实已经在读）。点一下必须回到加载态，且仍不重发。
+  it('两条各有更早页在飞时切回 A：点 A 的分页要回到加载态，不是静默 no-op', async () => {
+    const m = mount({ entries: [A, B] })
+    const tailA = { ...detailOf('a'), blocks: [userBlock('A尾', '7')], olderCursor: 7 }
+    const tailB = { ...detailOf('b'), blocks: [userBlock('B尾', '9')], olderCursor: 9 }
+    const slowA = deferred<TrashDetailLike>()
+    const slowB = deferred<TrashDetailLike>()
+    m.deps.detail
+      .mockResolvedValueOnce(tailA) // 选 A
+      .mockImplementationOnce(() => slowA.promise) // A 的更早页（在飞）
+      .mockResolvedValueOnce(tailB) // 选 B
+      .mockImplementationOnce(() => slowB.promise) // B 的更早页（在飞）
+    await act(async () => { await m.result.current.select(A) })
+    let loadA!: Promise<void>
+    act(() => { loadA = m.result.current.loadOlder() })
+    expect(m.result.current.loadingOlder).toBe(true)
+
+    await act(async () => { await m.result.current.select(B) })
+    let loadB!: Promise<void>
+    act(() => { loadB = m.result.current.loadOlder() })
+    expect(m.result.current.loadingOlder).toBe(true)
+
+    await act(async () => { await m.result.current.select(A) })
+    act(() => { void m.result.current.loadOlder() })
+    // A 的请求还在飞：界面必须报「正在加载更早」，且不能再发第二条（第二条注定落不了屏）。
+    expect(m.result.current.loadingOlder).toBe(true)
+    expect(m.deps.detail).toHaveBeenCalledTimes(4)
+
+    await act(async () => {
+      slowA.resolve({ ...detailOf('a'), blocks: [userBlock('A早', '0')], olderCursor: null })
+      slowB.resolve({ ...detailOf('b'), blocks: [userBlock('B早', '0')], olderCursor: null })
+      await Promise.all([loadA, loadB])
+    })
+    expect(m.result.current.detail).toEqual({
+      kind: 'ready',
+      entry: A,
+      detail: { ...tailA, blocks: [userBlock('A早', '0'), userBlock('A尾', '7')], olderCursor: null },
+    })
+    expect(m.result.current.loadingOlder).toBe(false)
+  })
+
+  it('loadOlder 失败：原文单独上屏，不把已读到的正文按成 failed；切走即清', async () => {
+    const m = mount({ entries: [A, B] })
+    const tail = { ...detailOf('a'), blocks: [userBlock('尾', '5')], olderCursor: 5 }
+    m.deps.detail.mockResolvedValueOnce(tail)
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+
+    m.deps.detail.mockRejectedValueOnce(new Error('更早的页读不出来'))
+    await act(async () => {
+      await m.result.current.loadOlder()
+    })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: tail })
+    expect(m.result.current.olderFailure).toBe('更早的页读不出来')
+    expect(m.result.current.loadingOlder).toBe(false)
+
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    expect(m.result.current.olderFailure).toBeNull()
+  })
+
+  it('olderCursor 为 null 时 loadOlder 什么都不做', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    await act(async () => {
+      await m.result.current.loadOlder()
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.loadingOlder).toBe(false)
+  })
+
+  it('A 的更早页晚到不盖掉 B：选中切走后旧页结果不落屏', async () => {
+    const m = mount({ entries: [A, B] })
+    const tailA = { ...detailOf('a'), blocks: [userBlock('A尾', '7')], olderCursor: 7 }
+    m.deps.detail.mockResolvedValueOnce(tailA)
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+
+    const slow = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => slow.promise)
+    let loading!: Promise<void>
+    act(() => {
+      loading = m.result.current.loadOlder()
+    })
+    await act(async () => {
+      await m.result.current.select(B)
+    })
+    await act(async () => {
+      slow.resolve({ ...detailOf('a'), blocks: [userBlock('A早', '0')], olderCursor: null })
+      await loading
+    })
+
+    expect(m.result.current.selectedId).toBe('b')
+    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.olderFailure).toBeNull()
+    expect(m.result.current.loadingOlder).toBe(false)
   })
 })
 
@@ -798,6 +1042,22 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.actionFailure).toEqual({ a: '路由自检失败', b: '路由自检失败' })
     expect(m.result.current.pending).toBeNull()
     expect(m.refreshAfterWrite).toHaveBeenCalledTimes(refreshBefore + 1)
+  })
+
+  // 与单条 `restore` 同款：再点一次先清掉这一趟碰到的那几行旧失败，别让上一次原文挂着。
+  it('confirmApply 再点一次先清这一趟的旧失败：重试成功就该没有那一行', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a', 'b'], ['b'], '第二条删不掉'))
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a', 'b'])
+    })
+    expect(m.result.current.actionFailure).toEqual({ b: '第二条删不掉' })
+
+    m.deps.applyOutcomes.mockResolvedValueOnce(purgeOutcomes(['a', 'b']))
+    await act(async () => {
+      await m.result.current.confirmApply('purge', ['a', 'b'])
+    })
+    expect(m.result.current.actionFailure).toEqual({})
   })
 
   it('失败原文按条目留着：切走再回来还在，别条的成败不串台', async () => {

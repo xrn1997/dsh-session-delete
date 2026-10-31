@@ -59,6 +59,11 @@ _Avoid_: 垃圾桶、删除列表（会把它说成一个 UI 或一个临时缓�
 回收站里的一行。`id` = `<删除时刻 UTC>-<原目录名>`，**回收站目录名就是它**，恢复也靠它反推原目录名。形状与路径闸住 `src/trash/entry.ts`。
 _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 
+**详情块（detail block）**:
+回收站详情正文的一格，判别联合：`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`tool` 由 `tool/call` 建块、`tool/result` 按 `callId` 回填；turn/step/job/request 这类簿记事件不成块。每次只回尾部一页，页有块数与正文总量两道闸（单块另有字符闸）；`olderCursor` 是块在日志里的序号（分页边界），不是时间戳。
+_唯一实现_: `src/trash/detail.ts` 的 `readTrashDetail` / `PageBuilder`；线上形状住 `src/shared/wire.ts` 的 `TrashDetailBlockWire`。
+_Avoid_: 消息（消息是日志里的 `user/message` / `assistant/message`；一条消息可以拆成多个块，工具块来自 `tool/call` 而不是 assistant content）。
+
 **清册（manifest）**:
 条目的索引，住在宿主 storage 域（介质在数据根下的 `storages/`）。它是**内部索引、不用手碰**；外部真正的事实来源是 `session-trash/` 里那些目录，两者由**对账**拉平。清册只记文件里真有的事实：随盘上随时变的数（还剩几个孩子、这次释放多少）现算现给、不落清册。
 _Avoid_: 索引、数据库（清册是宿主 storage 域里的内部索引，但不是一个可查询的数据库）。
@@ -103,7 +108,7 @@ _唯一实现_: `src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrph
 _Avoid_: 运行中（“运行中”可能指 agent 正在跑；活体指宿主内存里 attach 着的会话）。
 
 **活体准入（live admission）**:
-一次写之前逐个问「这个会话在宿主内存里 attach 着吗」；任一在跑就整组拒绝、零副作用，原文点名那一个会话。**什么时候查、查哪些 id 归调用方**——永久删除仍把准入放在计划里、在任何写之前（ADR-0006）。
+一次写之前逐个问「这个会话在宿主内存里 attach 着吗」；任一在跑就整组拒绝、零副作用，原文点名那一个会话。**什么时候查、查哪些 id 归调用方**——永久删除的时机住 `docs/architecture.md` §4「永久删除的计划与执行」行（ADR-0027），删除与孤儿清理各自交名单。
 _唯一实现_: `src/verbs/live-admission.ts` 的 `assertNoLive`。
 _Avoid_: 安全检查（太泛；这里专指写之前那一次逐个问活体）。
 
@@ -113,7 +118,7 @@ _唯一实现_: `src/verbs/permanent-removal.ts` 的 `executeRemoval`（计划�
 _Avoid_: 彻底删除与永久删除混用（本仓统一说「永久删除」；界面文案可以另说）。
 
 **永久删除计划（permanent removal plan）**:
-一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，只写、不再量、不再判活体。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。计划与执行住 `src/verbs/permanent-removal.ts`（成功回执的字节念计划、执行期只记进度）；**活体准入的判据**住 `src/verbs/live-admission.ts`，计划只决定它在任何写之前跑。裁决见 ADR-0006。
+一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，不再量；第一笔写前的活体复查见「活体准入」。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。计划与执行住 `src/verbs/permanent-removal.ts`（成功回执的字节念计划、执行期只记进度）；**活体准入的判据**住 `src/verbs/live-admission.ts`。裁决见 ADR-0027。
 
 **成员在场（member presence）**:
 一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；动词经 `CoreDeps.presence` 的 `PresenceCapability` 调用（端口形状住 `src/ports/presence-port.ts`）。批量恢复仍由 `src/verbs/batch.ts` 发起一次 `announceRestored(ids)`（单条就是长度为 1 的批，ADR-0014）。

@@ -63,6 +63,16 @@ function requireString(body: JsonBody, field: string): string {
   return value
 }
 
+/** `/detail` 的分页游标：缺省 = 从尾部取；给了就必须是非负整数（负数、小数、字符串都算请求不对）。 */
+function optionalCursor(body: JsonBody): number | undefined {
+  const value = body?.[PARAMS.before]
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw routeError('bad-request', 400, `请求体字段 ${PARAMS.before} 需是非负整数`)
+  }
+  return value
+}
+
 /**
  * `/apply` 的五个动作与各自的**静态纯度**。一张表两个用途：动作名单由键派生，纯度也从同一格读——
  * 新增动作必须同时给出纯度，漏了编译不过；新加一个纯读动作也不会再静默落进 `chained`。
@@ -207,7 +217,10 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 读的是清册 **raw 索引**（`read` 的 raw 面），**不对账**：本段声明为 pure、不进到达序链，而对账会写
     // 清册行（写动作必须排在链上）。行在 raw 里而目录不在时详情自己判 `io`，不靠对账把行摘掉。
     run: async (deps, body, read) =>
-      readTrashDetail({ fs: deps.fs, rows: () => read.rows(), home: deps.home })(requireString(body, PARAMS.entryId)),
+      readTrashDetail({ fs: deps.fs, rows: () => read.rows(), home: deps.home })(
+        requireString(body, PARAMS.entryId),
+        optionalCursor(body),
+      ),
   },
 }
 

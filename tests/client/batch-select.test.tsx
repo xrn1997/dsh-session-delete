@@ -41,6 +41,21 @@ describe('行信息登记（守卫读的那张表）', () => {
       row.remove()
     }
   })
+
+  // 登记表跟着开关的挂载走：行被宿主卸掉后不能再拿旧标题冒充「当前可见」。
+  it('开关卸载即注销：DOM 行还在也不再被全选收进去', () => {
+    const row = document.createElement('div')
+    row.setAttribute('data-row-key', 'session:s1')
+    document.body.appendChild(row)
+    try {
+      const { unmount } = render(<BatchPickButton sessionId="s1" title="行尾登记的名字" />)
+      expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行尾登记的名字' }])
+      unmount()
+      expect(readVisibleSelectableRows()).toEqual([])
+    } finally {
+      row.remove()
+    }
+  })
 })
 
 describe('多选态行首勾选框', () => {

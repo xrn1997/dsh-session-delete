@@ -15,7 +15,7 @@
  */
 import { useEffect, type ReactElement } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
-import { registerHostRowInfo } from './host-rows.js'
+import { registerHostRowInfo, unregisterHostRowInfo } from './host-rows.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
 import { readReceipt } from './receipt.js'
 import { togglePick, useSelection } from './batch-selection-store.js'
@@ -106,8 +106,10 @@ export function BatchPickButton({
   const { selecting, picks } = useSelection()
   const on = picks.some((candidate) => candidate.sessionId === sessionId)
   // 模式内与模式外都登记：守卫在进入模式的那一帧就要有标题，不能等这一行重挂载。
+  // 卸载即注销：宿主的行被删/被过滤掉之后，登记表不该替它继续记着（同一行有多颗时按计数减）。
   useEffect(() => {
     registerHostRowInfo(sessionId, { title, live })
+    return () => { unregisterHostRowInfo(sessionId) }
   }, [sessionId, title, live])
   if (!selecting) return null
   const name = title === '' ? t('common.untitled') : title

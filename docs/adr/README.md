@@ -13,7 +13,7 @@
 | `0003` | 线上形状为什么住 `src/shared/wire.ts`、落地形状为什么留 `src/trash/entry.ts`，投影为什么必须显式写一遍 |
 | `0004` | 段名的方法 / 纯度 / 读面 / body 为什么是一条记录，`dispatch` 为什么只读它 |
 | `0005` | 成员离场 / 归位通告为什么收进 `src/verbs/member-presence.ts` 一个家（当时四个动词六处调用各写、三态与归位条件各拼各的）（已被 `0019` 取代） |
-| `0006` | 永久删除为什么收进 `src/verbs/permanent-removal.ts` 一个只读计划 + 执行器（当时 purge 与 orphan 各手写一遍删除序列，purge 还借 journal 放没有反向动作的步骤；`/list` 念的是清册里记的旧 `sizeBytes`） |
+| `0006` | 永久删除为什么收进 `src/verbs/permanent-removal.ts` 一个只读计划 + 执行器（当时 purge 与 orphan 各手写一遍删除序列，purge 还借 journal 放没有反向动作的步骤；`/list` 念的是清册里记的旧 `sizeBytes`）（已被 `0027` 取代） |
 | `0007` | 宿主端口为什么按角色切成身份 / 在场 / 语料三片、语料缺席为什么显式成 `CorpusRead`（当时 19 个方法平铺一个接口、缺席有 `undefined`/`{}`/`[]` 三种形状、三个 BFS 口共用一次遍历）（已被 `0019` 取代） |
 | `0008` | 回收站为什么与归档解耦、删除为什么必须把 session + agent 一起摘掉（当时删除用归档藏会话、`evictLive` 只摘 session，恢复后旧 agent 拦住 prompt） |
 | `0009` | 通道为什么走插件专属前缀路由、不挂官方 `remote.<namespace>`（第三方拿不到 Typert 描述符的动态发现挂载点） |
@@ -30,6 +30,8 @@
 | `0022` | 非回环客户端（LAN / 反代部署）为什么不再被回环 socket 挡住、归属怎么判、远程身份为什么承宿主的 `connection.requestRejection`（被否：issue 的「同源 Origin/Referer 任一存在即放行」、只支持本机、插件自配 trustedHosts、复刻 cookie 校验） |
 | `0023` | 请求归属为什么只由 Host 决定、回环 socket 为什么不是 rebinding 的豁免（Origin==Host 只证同名，不证归属） |
 | `0025` | 发版为什么在 `V*` tag 上产出 GitHub Release 预构建 tarball、为什么 CI 不代发 npm（被否：恢复 `prepare`、`lib/` 入库、CI 代发 npm、只保留 npm） |
+| `0026` | 回收站详情为什么从“过滤后的消息”改成“对话全量块”：注入/思考/工具都进正文、宿主式折叠、游标分页（被否：复用宿主加载/渲染、Trajectory 逐事件全量、一次返回只提高总闸） |
+| `0027` | 永久删除为什么仍是计划 + 执行器、活体准入为什么在计划期与首笔写前各查一次（被否：只靠计划期准入、逐条复查、把附件扫描挪进计划） |
 
 ## 文档与真相
 

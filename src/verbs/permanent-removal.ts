@@ -1,6 +1,6 @@
 /**
  * 永久删除的测量、计划与执行：先记录目录/字节/账本归属，再按计划动盘。
- * 计划函数只读；活体准入在计划阶段、任何写之前完成。
+ * 计划函数只读；活体准入在计划阶段、任何写之前完成，执行器动第一笔写前再查一次。
  */
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
@@ -203,7 +203,8 @@ function totalBytes(items: readonly { readonly bytes: number }[]): number {
 
 /**
  * purge 的删除计划：`targets` 由调用方按组语义（`trash/groups.ts`）选好，这里只量、只筛、只查活体。
- * **计划函数就是执行前的闸**——调用方拿到计划才允许写，所以准入必须发生在任何写之前。
+ * **计划函数是执行前的第一道闸**——调用方拿到计划才允许写；计划与第一笔写之间的窗口由
+ * `executeRemoval` 在首笔写前复查（见该函数头注）。
  *
  * - `trash` 按 targets 原序逐个实测（目录缺席的行 `present:false` / 0 字节，但清册行仍要摘）。
  * - 盘上后代经 `selectStrandedMembers` 选出（一次问全部 targets、排除全部清册 id、bare id 全局只计划一次）。
@@ -212,7 +213,7 @@ function totalBytes(items: readonly { readonly bytes: number }[]): number {
  * - `attachments` 由被删目录（targets + 这些成员）里的图片引用与全部剩余引用源算独占；共享的保留、
  *   剩余引用源读不出就整体跳过（判据住 `trash/attachments.ts`，这里只接线）。
  * - 活体准入在量目录与任何写之前逐个查 targets 与**全部枚举到的**盘上后代；任一在跑就整条拒绝、
- *   零副作用。没有跳过它的开关——计划就是执行前的闸（ADR-0006）。
+ *   零副作用。没有跳过它的开关；执行器首笔写前还会用计划里的 `unarchive` 名单复查（ADR-0027）。
  * - `sessionQuery` 缺席时端口回 `{ available: false }` ⇒ members 为空、不抛（盘上残留留给 `GET /orphans` 兜底）。
  */
 export async function planTrashRemoval(
@@ -275,8 +276,15 @@ export async function planOrphanRemoval(
 }
 
 /**
- * 按计划执行一次永久删除：只写、不再量、不再判活体（计划就是执行前的闸）。回执的字节念计划
- * （`plan.bytes`），执行期不再累加一遍。
+ * 按计划执行一次永久删除：不再量。回执的字节念计划（`plan.bytes`），执行期不再累加一遍。
+ *
+ * **计划 + 执行器、准入查两遍**（ADR-0027）：计划期准入证明计划成立时没有会话在跑；执行器首笔写前
+ * 再用同一份名单复查，补上附件扫描撑开的窗口。
+ *
+ * 计划期准入与第一笔写之间还隔着附件引用的全 home 扫描（`planImageAttachmentRemoval`），大 home
+ * 上那是秒级窗口——期间用户 resume 一个会话，它的目录随后仍会被删。所以动任何写之前用计划里同一份
+ * 会话名单**再查一次活体**（只读、廉价）；这一查失败仍然零写入。名单取 `plan.unarchive`：
+ * 它覆盖所有会被删目录的会话（回收站行与盘上成员），目录已不在的成员没有可删的东西。
  *
  * 顺序：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行
  * （在才删目录 → 摘清册行 → 通告成员离场）→ 逐条盘上成员（删目录 → 通告成员离场）→ 逐条附件对象。
@@ -296,6 +304,8 @@ export async function executeRemoval(
   deps: RemovalDeps,
   plan: RemovalPlan,
 ): Promise<{ removed: number; freedBytes: number; attachments: AttachmentCleanupWire }> {
+  // 计划→执行的窗口由附件引用扫描撑开；动第一笔写前重查同一份名单（理由见函数头注）。
+  await assertNoLive(deps.host, plan.unarchive)
   const presence = deps.presence
   let removed = 0
   /** 删到这一刻已经腾出的**进度**：只喂 `orphan` 的部分回执；成功回执念计划的合计（`plan.bytes`）。 */
@@ -346,7 +356,7 @@ export async function executeRemoval(
     try {
       await deps.ledger.remove(row.entry.id)
     } catch (error) {
-      fail('删除回收站目录失败', error, row.entry.sessionId)
+      fail('摘除回收站条目失败', error, row.entry.sessionId)
     }
     removed += 1
     await presence.memberGone(row.entry.sessionId)

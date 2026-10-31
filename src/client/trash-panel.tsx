@@ -192,6 +192,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
 
   const listRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
+  /** 详情栏的滚动容器：分页 prepend 后按高度差补偿滚动位置（归 `trash-detail.tsx` 消费）。 */
+  const detailScrollRef = useRef<HTMLDivElement | null>(null)
   const width = usePanelWidth(rootRef)
   const wide = width >= SPLIT_MIN_WIDTH
   /**
@@ -219,10 +221,18 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     toggleCheck, toggleGroupCheck, groupFullyChecked, groupPartiallyChecked,
   } = selection
 
-  /** 行的 DOM 查询留给面板；导航只拿"把焦点还给哪一行"这个动作（不认行选择器）。 */
+  /** 行的 DOM 查询留给面板；导航只拿"把焦点还给哪一行"这个动作（不认行选择器）。
+   *  按属性值自己比，不把 `entryId` 拼进选择器：id 只挡路径分隔符（`trash/entry.ts`），另一半是
+   *  宿主给的目录名，带引号时选择器直接抛。 */
   const focusRow = useCallback((entryId: string): void => {
-    const node = listRef.current?.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`)
-    node?.focus()
+    const rows = listRef.current?.querySelectorAll<HTMLElement>('[data-entry-id]')
+    if (rows === undefined) return
+    for (const row of rows) {
+      if (row.getAttribute('data-entry-id') === entryId) {
+        row.focus()
+        return
+      }
+    }
   }, [])
 
   /**
@@ -527,7 +537,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   )
 
   const detailPane = (
-    <div data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
+    <div ref={detailScrollRef} data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
       <div style={DETAIL_INNER}>
         <TrashDetail
           state={controller.detail}
@@ -535,6 +545,12 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           wide={split}
           onRetry={() => controller.retry()}
           onBack={() => controller.back()}
+          pager={{
+            loadingOlder: controller.loadingOlder,
+            olderFailure: controller.olderFailure,
+            onLoadOlder: () => { void controller.loadOlder() },
+            scrollRef: detailScrollRef,
+          }}
           t={t}
         />
       </div>

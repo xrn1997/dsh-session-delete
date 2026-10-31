@@ -5,7 +5,7 @@
 import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
-import { createMemoryManifest } from '../src/trash/manifest.js'
+import { createMemoryManifest } from './support/memory-manifest.js'
 import { reconcileTrash } from '../src/trash/reconcile.js'
 import { trashEntry } from './support/world.js'
 

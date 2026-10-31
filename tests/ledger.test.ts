@@ -2,7 +2,7 @@ import zlib from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { makeEntryId } from '../src/trash/entry.js'
 import { createTrashLedger } from '../src/trash/ledger.js'
-import { createMemoryManifest } from '../src/trash/manifest.js'
+import { createMemoryManifest } from './support/memory-manifest.js'
 import { createFakeFs } from './support/fake-deps.js'
 import { trashEntry } from './support/world.js'
 
