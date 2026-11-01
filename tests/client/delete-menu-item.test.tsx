@@ -102,6 +102,26 @@ describe('确认框', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('连点两次「移入回收站」：第二趟被同步挡回 ⇒ 只发一条删除，框也不提前收', async () => {
+    // `busy` 是 state、要等下一拍才把主按钮按灰，同一 tick 的连点只能靠闸的同步判重挡住。
+    // 挡回来的那一趟**不许**冒充「跑了、没有失败」：收框就等于替在飞那一趟宣布成功，而它真失败时
+    // 原文要落在这个已经被卸掉的框上（issue #8 第 8 条）。
+    let release: (value: unknown) => void = () => {}
+    const del = vi.fn(() => new Promise((resolve) => { release = resolve }))
+    renderScene({ sessionId: 's', title: 't' }, deps(fakeApply({ delete: del })))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
+    act(() => {
+      const confirmButton = screen.getByRole('button', { name: '移入回收站' })
+      fireEvent.click(confirmButton)
+      fireEvent.click(confirmButton)
+    })
+    await waitFor(() => expect(del).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    // 在飞那一趟自己的结论照旧落地：它成功，框才收。
+    release({ id: 'e1' })
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('确认框正文明说可恢复，主按钮不是红色的动作名', () => {
     renderScene({ sessionId: 's', title: 't' }, deps(fakeApply({ delete: vi.fn() })))
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))

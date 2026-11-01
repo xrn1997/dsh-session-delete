@@ -511,6 +511,7 @@ export function TrashDetail({
 
   const entry = state.entry
   const detail = state.kind === 'ready' ? state.detail : undefined
+  const title = titleOf(entry, detail, t)
 
   return (
     <div style={SHELL}>
@@ -521,8 +522,8 @@ export function TrashDetail({
           </Button>
         )}
         <div style={{ minWidth: 0 }}>
-          <div style={{ ...ELLIPSIS, fontSize: 15, fontWeight: 600, lineHeight: '22px' }} title={titleOf(entry, detail, t)}>
-            {titleOf(entry, detail, t)}
+          <div style={{ ...ELLIPSIS, fontSize: 15, fontWeight: 600, lineHeight: '22px' }} title={title}>
+            {title}
           </div>
         </div>
       </div>

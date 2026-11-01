@@ -220,9 +220,9 @@ describe('浏览器半平台模块表', () => {
 describe('抄本表点名的自造差异（界面保真复核门：除 ui.css 文件头点名的那些外一律与官方明文逐属性一致）', () => {
   const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
 
-  it('文件头点名的六条自造规则真在表里（声明与实现对上）', () => {
+  it('文件头点名的七条自造规则真在表里（声明与实现对上）', () => {
     expect(css).toContain('.sd-resizing {')
-    // 2026-10-16 补的第二条：清单行是 role="option" 的可聚焦 div，键盘焦点必须有可见描边
+    // 2026-10-16 补的第二条：清单行是 role="row" 的可聚焦 div，键盘焦点必须有可见描边
     expect(css).toContain('[data-dsh-session-delete="trash-row"]:focus-visible {')
     // 2026-10-17 补的第三条：官方那颗 iconButton 只有常态与 hover，勾选开关要按下/禁用两档
     expect(css).toContain(".sd-rowaction-button[aria-pressed='true'] {")
@@ -233,7 +233,9 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     expect(css).toContain('[data-seat="leading"]) .sd-batch-pick-action')
     // 第六条：宿主行首 16×20 格里那层 inline-flex 包装
     expect(css).toContain('.sd-batch-pick-leading {')
-    expect(/六处不是抄本/.test(css)).toBe(true)
+    // 第七条：撤销横幅在飞时那颗动作要有禁用档（Toast 的 action 自带 color，UA 默认置灰不生效）
+    expect(css).toContain('.sd-toast-action:disabled {')
+    expect(/七处不是抄本/.test(css)).toBe(true)
     // 组头 reset 是文件头点名的例外，七项必须全在**组头那一块**的 inline 样式里（不能只 reset text-align）。
     const panel = readFileSync(fileURLToPath(new URL('../src/client/trash-panel.tsx', import.meta.url)), 'utf8')
     const headStyle = /trash-group-head[\s\S]*?style=\{\{([\s\S]*?)\}\}/.exec(panel)?.[1] ?? ''
@@ -241,7 +243,7 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     for (const prop of ["background: 'none'", "border: 'none'", 'padding: 0', "font: 'inherit'", "textAlign: 'start'", "'1 1 auto'", 'gap: 6']) {
       expect(headStyle, `组头 reset 缺 ${prop}`).toContain(prop)
     }
-    expect(css.split('本插件自造的第').length - 1).toBe(6)
+    expect(css.split('本插件自造的第').length - 1).toBe(7)
   })
 
   it('批量浮条按内容展开：width:max-content + max-width，避免左半屏收缩把按钮挤到第二行', () => {

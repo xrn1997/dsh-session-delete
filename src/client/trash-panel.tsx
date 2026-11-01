@@ -85,6 +85,9 @@ const DETAIL_RESERVE = 489
 const HANDLE_STEP = 20
 /** 详情正文的收口宽度：中央列再宽也不把文字拉成长线。 */
 const DETAIL_TEXT_MAX_WIDTH = 860
+/** 清单 grid 的列数：条目行恒为两格（常态：内容 + 动作；多选态：勾选框占内容前的一格、动作列退场）；
+ *  组头只有一格，用 colspan 横跨整行——各行列数一致是 grid 的播报契约（ADR-0028）。 */
+const LIST_COLUMN_COUNT = 2
 
 /**
  * 页面骨架：撑满中央列（`height:100%` 落在 `.centerCol` 这个有定高的网格项上），自收滚动。
@@ -173,6 +176,16 @@ function deletedAgo(at: number, now: number, t: Translate): string {
   return unit === 'now'
     ? t('trash.row.deletedNow')
     : t('trash.row.deletedAgo', { n, unit: unitWord(unit, t) })
+}
+
+/**
+ * 行的 DOM id。entry id 里可能带空白/引号（目录名只挡路径分隔符），直接拼进 HTML id 是非法值、
+ * `aria-activedescendant` 也会失配——所以**在 DOM 这一侧编码**（issue #8 第 7 条）：`data-entry-id`
+ * 仍留原始 id，焦点交还按属性值比对不受影响。entry id 本身不许改形：它是回收站目录名，
+ * 恢复要按它反推原目录名放回（`trash/entry.ts` 的往返契约）。
+ */
+function domRowId(entryId: string): string {
+  return `sd-trash-${encodeURIComponent(entryId)}`
 }
 
 /* 「这一次彻底删除会释放多少」**不在这里算**：它是存储侧的事实（本行 + 跟着进来的孩子
@@ -284,15 +297,22 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   /**
    * 清单容器（roving tabindex 的唯一 tab 巢）。`flex:'1 1 auto'` 撑起空态居中的父链；
    * `min-height:auto` 让长清单保持内容高，滚动交给外层。
+   *
+   * ARIA 模式是 **grid** 而不是 listbox（为什么：裁决见 ADR-0028）。只有真有行时才挂 grid
+   * 与它的 aria：失败/加载/空态是一块普通内容，不是「空的 grid」，generic div 不背 aria 名字。
    */
+  const gridActive = view.failure === null && hasEntries
   const list = (
     <div
       ref={listRef}
       data-dsh-session-delete="trash-list"
-      role="listbox"
-      aria-label={t('detail.list.label')}
-      aria-activedescendant={nav.activeDescendantId === null ? undefined : `sd-trash-${nav.activeDescendantId}`}
-      aria-multiselectable={selectMode ? true : undefined}
+      role={gridActive ? 'grid' : undefined}
+      aria-label={gridActive ? t('detail.list.label') : undefined}
+      aria-colcount={gridActive ? LIST_COLUMN_COUNT : undefined}
+      aria-activedescendant={
+        gridActive && nav.activeDescendantId !== null ? domRowId(nav.activeDescendantId) : undefined
+      }
+      aria-multiselectable={gridActive && selectMode ? true : undefined}
       tabIndex={-1}
       onKeyDown={nav.onListKeyDown}
       style={{ display: 'flex', flexDirection: 'column', gap: 16, flex: '1 1 auto', minWidth: 0 }}
@@ -355,6 +375,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         groups.map((group) => (
           <section
             key={group.projectDir}
+            role="rowgroup"
             data-dsh-session-delete="trash-group"
             aria-label={group.label}
             style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}
@@ -366,53 +387,62 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                 `text-align:center` 会渗进里面的文字（真机上项目名整个居中就是这个），显式压成 `start`；
                 ② 多选态下勾选框住在按钮**外面**——`<input>` 是交互内容，不能嵌进 `<button>`。 */}
             <div
+              role="row"
               data-dsh-session-delete="trash-group-row"
               style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
             >
-              {selectMode ? (
-                <Checkbox
-                  checked={groupFullyChecked(group)}
-                  indeterminate={groupPartiallyChecked(group)}
-                  label={t('trash.select.group', { project: group.label, count: group.entries.length })}
-                  onChange={() => { toggleGroupCheck(group) }}
-                />
-              ) : null}
-              <button
-                type="button"
-                className="sd-disclosure-row"
-                data-dsh-session-delete="trash-group-head"
-                data-expandable=""
-                aria-expanded={!isCollapsed(group.projectDir)}
-                onClick={() => { toggleGroup(group.projectDir) }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  padding: 0,
-                  font: 'inherit',
-                  textAlign: 'start',
-                  flex: '1 1 auto',
-                  gap: 6,
-                }}
+              {/* 组头一格收下勾选框与折叠钮：row 的直接子代必须是 cell（rowgroup > row > gridcell）。
+                  组头行也是 row，这一格 colspan 横跨整行，与条目行的两格对齐列数。 */}
+              <div
+                role="gridcell"
+                aria-colspan={LIST_COLUMN_COUNT}
+                style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '1 1 auto', minWidth: 0 }}
               >
-                <span className="sd-disclosure-leading" aria-hidden="true">
-                  {isCollapsed(group.projectDir)
-                    ? <IconChevronRightOutlineRegular size={14} />
-                    : <IconChevronDownOutlineRegular size={14} />}
-                </span>
-                <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-label-tertiary)' }} aria-hidden="true">
-                  <IconFolderOpenOutlineRegular size={13} />
-                </span>
-                <span
-                  className="sd-disclosure-title"
-                  style={{ ...ELLIPSIS, minWidth: 0, flex: '1 1 auto', fontWeight: 500 }}
-                  title={group.projectDir}
+                {selectMode ? (
+                  <Checkbox
+                    checked={groupFullyChecked(group)}
+                    indeterminate={groupPartiallyChecked(group)}
+                    label={t('trash.select.group', { project: group.label, count: group.entries.length })}
+                    onChange={() => { toggleGroupCheck(group) }}
+                  />
+                ) : null}
+                <button
+                  type="button"
+                  className="sd-disclosure-row"
+                  data-dsh-session-delete="trash-group-head"
+                  data-expandable=""
+                  aria-expanded={!isCollapsed(group.projectDir)}
+                  onClick={() => { toggleGroup(group.projectDir) }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    font: 'inherit',
+                    textAlign: 'start',
+                    flex: '1 1 auto',
+                    gap: 6,
+                  }}
                 >
-                  {group.label}
-                </span>
-                <span style={{ marginLeft: 'auto', flex: 'none', fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' }}>
-                  {t('trash.group.count', { count: group.entries.length })}
-                </span>
-              </button>
+                  <span className="sd-disclosure-leading" aria-hidden="true">
+                    {isCollapsed(group.projectDir)
+                      ? <IconChevronRightOutlineRegular size={14} />
+                      : <IconChevronDownOutlineRegular size={14} />}
+                  </span>
+                  <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-label-tertiary)' }} aria-hidden="true">
+                    <IconFolderOpenOutlineRegular size={13} />
+                  </span>
+                  <span
+                    className="sd-disclosure-title"
+                    style={{ ...ELLIPSIS, minWidth: 0, flex: '1 1 auto', fontWeight: 500 }}
+                    title={group.projectDir}
+                  >
+                    {group.label}
+                  </span>
+                  <span style={{ marginLeft: 'auto', flex: 'none', fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' }}>
+                    {t('trash.group.count', { count: group.entries.length })}
+                  </span>
+                </button>
+              </div>
             </div>
 
             {isCollapsed(group.projectDir) ? null : group.entries.map((entry) => {
@@ -424,8 +454,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
               return (
                 <div
                   key={entry.id}
-                  id={`sd-trash-${entry.id}`}
-                  role="option"
+                  id={domRowId(entry.id)}
+                  role="row"
                   aria-selected={selectMode ? isChecked : isSelected}
                   tabIndex={entry.id === nav.tabStopId ? 0 : -1}
                   data-dsh-session-delete="trash-row"
@@ -442,15 +472,18 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   }}
                 >
                   {/* 勾选框在**标题左侧**（照用户给的参考图那一版布局）。两颗动作按钮这时整排退场：
-                      一次只给一种动作语义，不会在批量确认框旁边再手滑点到单条「彻底删除…」。 */}
+                      一次只给一种动作语义，不会在批量确认框旁边再手滑点到单条「彻底删除…」。
+                      勾选框住进自己的 gridcell：row 的直接子代必须是 cell，交互内容在 cell 里才够得着。 */}
                   {selectMode ? (
-                    <Checkbox
-                      checked={isChecked}
-                      label={t('trash.select.row', { title })}
-                      onChange={() => { toggleCheck(entry.id) }}
-                    />
+                    <div role="gridcell" style={{ display: 'flex', alignItems: 'center' }}>
+                      <Checkbox
+                        checked={isChecked}
+                        label={t('trash.select.row', { title })}
+                        onChange={() => { toggleCheck(entry.id) }}
+                      />
+                    </div>
                   ) : null}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: '1 1 auto', minWidth: 0 }}>
+                  <div role="gridcell" style={{ display: 'flex', flexDirection: 'column', gap: 1, flex: '1 1 auto', minWidth: 0 }}>
                     <div style={{ ...ELLIPSIS, fontSize: 14, lineHeight: '20px' }} title={entry.title === '' ? undefined : entry.title}>
                       {title}
                     </div>
@@ -500,7 +533,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   </div>
                   {/* 两颗动作按钮住在行右侧；选中态只改卡片底色与描边，不抢动作位置。多选态整排退场。 */}
                   {selectMode ? null : (
-                    <div style={{ display: 'flex', gap: 6, flex: 'none' }}>
+                    <div role="gridcell" style={{ display: 'flex', gap: 6, flex: 'none' }}>
                       <Button
                         variant="outline"
                         size="sm"

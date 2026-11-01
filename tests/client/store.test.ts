@@ -4,7 +4,7 @@
 // `reset` 只给测试收场（回初值 + seq 清零）。`use()` 走 React 自带的 `useSyncExternalStore`。
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { createLatestWins, createLazyStore, createStore } from '../../src/client/store.js'
+import { createLatestWins, createLazyStore, createStore, useLatest } from '../../src/client/store.js'
 
 describe('createStore', () => {
   it('get() 回最初那一份引用（不是拷贝）', () => {
@@ -210,5 +210,18 @@ describe('createLatestWins', () => {
     const a = one.issue()
     two.issue()
     expect(a.current).toBe(true)
+  })
+})
+
+describe('useLatest', () => {
+  it('ref 身份跨渲染不变，内容跟上最新输入（回调可安全进 effect 依赖）', () => {
+    const { result, rerender } = renderHook(({ value }) => useLatest(value), {
+      initialProps: { value: { n: 1 } },
+    })
+    const first = result.current
+    expect(first.current).toEqual({ n: 1 })
+    rerender({ value: { n: 2 } })
+    expect(result.current).toBe(first)
+    expect(first.current).toEqual({ n: 2 })
   })
 })

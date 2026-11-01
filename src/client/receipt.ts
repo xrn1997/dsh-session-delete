@@ -130,8 +130,10 @@ export function readSingleReceipt<A extends ApplyAction>(
 export interface ReceiptSummary {
   readonly successIds: readonly string[]
   readonly neutralIds: readonly string[]
-  /** failed + missing（通道没回）；neutral 单独在 `neutralIds`，部分计数只从 failed 的 details 取。 */
+  /** failed + missing（通道没回）；neutral 单独在 `neutralIds`。 */
   readonly failed: readonly { readonly id: string; readonly error: RemoteFailure }[]
+  /** 部分计数的累加语义只住这里：只从 failed 的 `details` 取 `removed`/`freedBytes` 并按批相加
+   *  （"删了一半才炸"的那部分释放量）；neutral / missing 不带 details，不参与累加。 */
   readonly partial: { readonly removed: number; readonly freedBytes: number }
   /** 这次动作真正落地的 id。**域由 `action` 定**：delete 是条目 id（撤销名单），restore 是会话 id
    *  （回盘名单）；purge / count / orphan-clean 没有可撤销的落地 id，恒为空。

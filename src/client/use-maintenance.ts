@@ -103,7 +103,9 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
 
   /**
    * 一次孤儿检查（不碰 busy / phase）。交回这张票是否仍是赢家：清理后的重查被后发的检查顶掉时，
-   * 由赢家负责把读数与 busy 一起收尾，输家什么都不落地。
+   * 由赢家负责把读数与 busy 一起收尾，输家什么都不落地。**输家不许替赢家清 `phase`**——phase 归
+   * 赢下最新票的那一趟收尾，输家提前清会在赢家还在飞时把界面摆成空闲（忙碌收尾与
+   * `use-trash-query.ts` 的空闲判定是两套写法，判据不同源，别互相抄）。
    */
   const rescanOrphans = useCallback(async (): Promise<boolean> => {
     const ticket = orphanLatest.issue()
@@ -151,7 +153,7 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
       setOrphanPhase(null)
       return
     }
-    // 回执读法只住 `receipt.ts`：not-found 是 neutral，missing/io 是真失败，部分计数从 details 取。
+    // 回执判读只住 `receipt.ts`（三态判读与 partial 的累加语义都在那里）；这里只消费摘要。
     const { summary } = summarizeReceipt(readReceipt('orphan-clean', roots, outcome.value))
     // 重查先落地：它会在成功时清掉旧提示；这一趟的后果必须在它之后才摆。
     const current = await rescanOrphans()

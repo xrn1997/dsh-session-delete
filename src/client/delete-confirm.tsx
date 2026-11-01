@@ -33,7 +33,7 @@ export const TARGET_CARD = {
 export interface DeleteRequest {
   /** 每次发布递增：换一个会话就重挂载确认框，busy / failure 不带着上一条请求的记忆。 */
   seq: number
-  /** 要删的会话 id——原样透给 `sessiondelete/delete`。 */
+  /** 要删的会话 id——原样透给删除写入（`apply` 的 `delete` 动作；段名与动作住 `shared/wire.ts`）。 */
   sessionId: string
   /** 删除那一刻的会话名（槽位投影的 `displayTitle`）：只用于确认框文案与撤销提示。 */
   title: string
@@ -116,6 +116,10 @@ function ConfirmDialog({
       { sessionId: current.sessionId, title: current.title },
       gate,
     )
+    // `undefined` 是闸把这一趟挡回来了（连点的第二下）：这一趟没跑 ⇒ 框不收、这里不再追加失败
+    // （进入时清旧失败那一下已在同一动作里发生），界面后果全归在飞那一趟（收了就会把那一趟的
+    // 失败原文丢在已经卸载的框上）。
+    if (failure === undefined) return
     if (failure !== null) {
       setFailure(failure)
       return

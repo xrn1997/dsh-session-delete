@@ -16,6 +16,7 @@ import {
   ROUTES,
   SESSION_DELETE_API_PREFIX,
   isDSHRemoteError,
+  isRemoteResult,
   type ApplyAction,
   type ApplyOutcome,
   type ApplyValueByAction,
@@ -140,7 +141,8 @@ export interface RawSessionDeleteRemote {
 /**
  * 一次 HTTP 往返 → 信封。**`ok:false` 也是落地**（返回，不抛）；只有往返本身失败才抛：
  * 打不通（宿主没起来 / 路由没挂）或回的不是信封（前缀路由缺席时请求会落到 SPA 兜底处理器上，
- * 回的是 index.html）。两种抛都带原文，组件侧的 `failureOf` 会把它们显示成 `client/unknown` + 原因。
+ * 回的是 index.html；中间层也可能回 `{}` / `{"error":"…"}` 这类非信封 JSON——判形住
+ * `isRemoteResult`，两种都落同一条诊断）。两种抛都带原文，组件侧的 `failureOf` 会把它们显示成 `client/unknown` + 原因。
  */
 async function requestEnvelope<T>(path: string, init: RequestInit): Promise<RemoteResult<T>> {
   let response: Response
@@ -149,11 +151,18 @@ async function requestEnvelope<T>(path: string, init: RequestInit): Promise<Remo
   } catch (reason) {
     throw new Error(`取数通道打不通：${reason instanceof Error ? reason.message : String(reason)}`)
   }
+  let body: unknown
   try {
-    return (await response.json()) as RemoteResult<T>
+    body = await response.json()
   } catch {
+    // 非 JSON（SPA 兜底的 index.html）：落成下面同一个「不是信封」诊断。
+    body = undefined
+  }
+  // 判形不过（中间层回 `{}` / `{"error":"…"}` 这类垃圾）与解析失败同诊断：失败路径正是最需要可读性的地方。
+  if (!isRemoteResult(body)) {
     throw new Error(`取数通道回的不是信封（HTTP ${String(response.status)}）`)
   }
+  return body as RemoteResult<T>
 }
 
 /**

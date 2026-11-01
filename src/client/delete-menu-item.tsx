@@ -32,7 +32,7 @@ import { MenuItemButton } from './ui/MenuItemButton.js'
 import { Tooltip } from './ui/Tooltip.js'
 
 export interface DeleteMenuItemProps {
-  /** 宿主菜单槽投影的会话 id，原样透给 `sessiondelete/delete`（浏览器半不自己拼 id）。 */
+  /** 宿主菜单槽投影的会话 id，原样透给删除写入（`apply` 的 `delete` 动作；段名与动作住 `shared/wire.ts`，浏览器半不自己拼 id）。 */
   sessionId: string
   /** 宿主菜单槽投影的 `displayTitle`：只用于确认框与提示文案，不参与任何请求。 */
   title: string

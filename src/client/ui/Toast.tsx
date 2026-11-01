@@ -34,6 +34,8 @@ const FADE_MS = 1000
 export interface ToastAction {
   label: string
   onClick: () => void
+  /** 在飞/不可用时按灰并挡住点击（Toast 是本地配方，动作面按调用点的需要长）。 */
+  disabled?: boolean
 }
 
 export interface ToastProps {
@@ -85,6 +87,7 @@ export function Toast({ text, icon, tone, holdMs = DEFAULT_HOLD_MS, actions, onD
             key={action.label}
             type="button"
             className="sd-toast-action"
+            disabled={action.disabled}
             onClick={action.onClick}
           >
             {action.label}

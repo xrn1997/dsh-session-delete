@@ -15,6 +15,9 @@
  * 调用方各写一遍自增序号，现在只住这一处。它只拥有 compare-and-set——防抖、轮询、焦点策略仍是
  * 调用方的现场，不搬进来。
  *
+ * 以及一枚**引用归一 hook**（`useLatest`）：输入逐渲染换新对象时，回调经它只读最新那一份，
+ * 身份恒稳、可安全进 effect 依赖。这一形状也只住这一处，调用方不再各写一遍「ref + 每渲染写回」。
+ *
  * 语义（四条，别在调用方另算一遍）：
  * - `set` / `update` 用 `Object.is` 判"变过"：同一个引用不重渲染（React 的 snapshot 契约要求）。
  * - `publish(make)` 递增**本实例**的 seq（从 1 起）并**总是**通告——seq 是组件重挂载的 key
@@ -22,7 +25,7 @@
  * - `subscribe` 回退订函数；`use()` 就是 `useSyncExternalStore(subscribe, get, get)`。
  * - `reset()` 只给测试收场：回最初那份引用、seq 清零，值没变就不通告。
  */
-import { useSyncExternalStore } from 'react'
+import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 export interface ClientStore<T> {
   get(): T
@@ -179,4 +182,16 @@ export function createLatestWins(): LatestWins {
       seq += 1
     },
   }
+}
+
+/**
+ * 引用归一：输入允许调用方逐渲染换新对象，回调只经这份 ref 读**最新**那一份，于是依赖它的回调
+ * 身份恒稳、调用方的 effect 可以放心把它们当依赖——「输入必须是稳定引用」的隐式契约就此不存在
+ * （issue #8 第 3 条）。写回在 effect 里（提交后），与 React 的渲染期只读约定一致。
+ * 这一形状的唯一实现：别在调用方再手写一份「useRef + 每渲染写回」。
+ */
+export function useLatest<T>(value: T): { readonly current: T } {
+  const ref = useRef(value)
+  useEffect(() => { ref.current = value })
+  return ref
 }

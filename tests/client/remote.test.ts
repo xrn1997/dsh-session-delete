@@ -6,7 +6,7 @@
 //
 // 信封形状（`RemoteResult`）、失败形状（`RemoteFailure`）与标记位判别（`isDSHRemoteError`）的家是
 // 两半共用的 `src/shared/wire.js`；这里验的是**浏览器半对它们的使用**：判别、原文兜底、注入面展开。
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   PARAMS,
   ROUTES,
@@ -25,6 +25,11 @@ import {
   type SessionDeleteRemote,
 } from '../../src/client/remote.js'
 import type { TrashPanelDeps } from '../../src/client/trash-panel.js'
+
+afterEach(() => {
+  // 断言失败时也把 fetch 还原；否则下一条用例会拿着上一条的 stub 跑（新增用例不再依赖 finally）。
+  vi.unstubAllGlobals()
+})
 
 const FAILURE: RemoteFailure = { code: 'sessiondelete/live', message: '会话正在运行' }
 
@@ -127,6 +132,31 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
     })
     await expect(probeChannel(createHttpRemote())).resolves.toBe(true)
     expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`])
+    vi.unstubAllGlobals()
+  })
+})
+
+describe('createHttpRemote · 非信封 JSON 的诊断（issue #8 第 1 条）', () => {
+  const json = (body: unknown) =>
+    new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
+
+  it('中间层回 {} 或 {"error":"…"} 时：抛「回的不是信封」，不是 TypeError、不是 "undefined" 上屏', async () => {
+    for (const body of [{}, { error: 'boom' }, { ok: 'yes', value: 1 }]) {
+      vi.stubGlobal('fetch', async () => json(body))
+      await expect(createHttpRemote().list()).rejects.toThrow(/取数通道回的不是信封/)
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('合法信封照旧放行：{ok:true,value} 原样落地（guard 不误伤）', async () => {
+    vi.stubGlobal('fetch', async () => json({ ok: true, value: [{ id: 'a' }] }))
+    await expect(createHttpRemote().list()).resolves.toEqual({ ok: true, value: [{ id: 'a' }] })
+    vi.unstubAllGlobals()
+  })
+
+  it('{ok:false,error:{code,message}} 仍是落地（返回不抛）', async () => {
+    vi.stubGlobal('fetch', async () => json({ ok: false, error: { code: 'sessiondelete/io', message: '读清单失败' } }))
+    await expect(createHttpRemote().list()).resolves.toMatchObject({ ok: false })
     vi.unstubAllGlobals()
   })
 })

@@ -7,6 +7,7 @@
  * 会话行的动作把请求写进一个模块级 store，`shell.overlay` 里的 `workspace.row-toast` 读它。
  */
 import { zhTranslate, type Translate } from './copy.js'
+import { useBusyGate } from './busy-gate.js'
 import type { OneShotDeps } from './remote.js'
 import {
   clearUndoNotice,
@@ -23,8 +24,11 @@ import { restoreFromUndo } from './write-seats.js'
 export type UndoToastDeps = OneShotDeps
 
 /** 撤销：单条与批量都走**一次** `applyOutcomes('restore', ids)`（`runWrite` 判读；单条带 `single: true`，
- *  null 是协议错）；失败就把原因换到同一条横幅上，不静默。 */
-async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
+ *  null 是协议错）；失败就把原因换到同一条横幅上，不静默。多条逐条失败时横幅要说清**条数与各条
+ *  原因**（原因去重）——只显第一条会把条数与其余原因折没（issue #8 第 5 条）；单条失败仍原文上屏。
+ *  整趟包进这一条横幅自己的闸（连点防重与按灰都归 `busy-gate.ts`，不在这里另造一套）。
+ *  闸只包这一层：座位不再传闸——`runWrite` 见闸会再包一次，双套会让外层 busy 提前落下。 */
+async function undo(deps: UndoToastDeps, current: UndoNotice, t: Translate): Promise<void> {
   const ids = current.kind === 'one' ? [current.entryId] : current.entryIds
   if (current.kind === 'one' && current.entryId === '') return
   // 外部恢复座位：settlement 负责重开删除时被关掉的会话（只认 main-view 自己记过的）并让清单重读；
@@ -38,7 +42,12 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
   const failure = outcome.failures.values().next().value
   if (failure !== undefined) {
     // 信封成功 ≠ 每一条都撤销成功：逐条失败时横幅要换成失败原文，不能假装撤销成功。
-    failNotice(current, failure)
+    failNotice(current, outcome.failures.size > 1
+      ? t('undo.failedBatch', {
+        n: outcome.failures.size,
+        reasons: [...new Set(outcome.failures.values())].join(' · '),
+      })
+      : failure)
     return
   }
   // 成功只收掉自己那条：期间若已发布新删除的横幅，不能被这次收尾顺手清掉。
@@ -52,7 +61,14 @@ async function undo(deps: UndoToastDeps, current: UndoNotice): Promise<void> {
 export function UndoToast({ deps, t = zhTranslate }: { deps: UndoToastDeps; t?: Translate }) {
   const current = useUndoNotice()
   if (current === null) return null
+  // 每条通知一个以 seq 为 key 的躯体：闸跟着通知走——旧撤销还在飞时来了新删除，新横幅的
+  // 「撤销」不许被旧那一趟按灰（issue #8 第 8 条的在飞闸按通知隔离）。
+  return <NoticeToast key={current.seq} deps={deps} current={current} t={t} />
+}
 
+/** 一条通知的躯体：busy 生命周期归 `useBusyGate`（连点的同步判重也在闸里），这里只组合呈现。 */
+function NoticeToast({ deps, current, t }: { deps: UndoToastDeps; current: UndoNotice; t: Translate }) {
+  const gate = useBusyGate()
   const { seq, failure } = current
   if (failure !== undefined) {
     return (
@@ -78,7 +94,13 @@ export function UndoToast({ deps, t = zhTranslate }: { deps: UndoToastDeps; t?: 
       }
       holdMs={UNDO_HOLD_MS}
       actions={
-        canUndo ? [{ label: t('undo.undo'), onClick: () => void undo(deps, current) }] : undefined
+        canUndo
+          ? [{
+              label: t('undo.undo'),
+              disabled: gate.busy,
+              onClick: () => { void gate.around(() => undo(deps, current, t)) },
+            }]
+          : undefined
       }
       onDone={clearUndoNotice}
     />

@@ -303,6 +303,22 @@ export function isDSHRemoteError(value: unknown): value is RemoteFailure {
   return candidate.isDSHRemoteError === true && typeof candidate.code === 'string'
 }
 
+/**
+ * 运行期判形「这段 JSON 是不是信封」。中间层（反代 / SPA 兜底）会回 `{}`、`{"error":"…"}` 这类
+ * 不是信封的 JSON；判形不过就该走「回的不是信封」诊断，而不是把垃圾喂给展开层炸出
+ * TypeError / "undefined" 上屏（issue #8 第 1 条）。判据就是两臂的形状：`ok` 必须是布尔，
+ * `ok:true` 须带 `value` 键（值可以是 null），`ok:false` 的 `error` 须是带 string `code`/`message` 的对象。
+ */
+export function isRemoteResult(value: unknown): value is RemoteResult<unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const body = value as { ok?: unknown; value?: unknown; error?: unknown }
+  if (typeof body.ok !== 'boolean') return false
+  if (body.ok) return 'value' in body
+  if (typeof body.error !== 'object' || body.error === null) return false
+  const error = body.error as { code?: unknown; message?: unknown }
+  return typeof error.code === 'string' && typeof error.message === 'string'
+}
+
 /* ── 失败码与那个目录名：**两半都知道**的事实，所以住这一处（ADR-0003） ──────────────
  * 浏览器半要认 `not-found`（「这一组已经不在了」是中性提示、不是失败），也要在页脚念出回收站在哪；
  * Node 半要产出同一批码、拼同一个路径。两边各写一个字面量，就是两本账。 */

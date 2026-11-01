@@ -27,18 +27,20 @@
  * 折叠头那一半（没有 `data-state` 那档状态点）、宽度把手的视觉与光标。**没抄进来的就是本插件不用的**，
  * 不预先铺开——宿主那套里还有几十个变体与控件，抄全了等于把它的表面积整个搬进来。
  *
- * **六处不是抄本**：① `.sd-resizing`（拖动期间挂在面板根上、关掉文字选中）——宿主那份没有对应的类，
+ * **七处不是抄本**：① `.sd-resizing`（拖动期间挂在面板根上、关掉文字选中）——宿主那份没有对应的类，
  * 它的把手由 JS 侧的 pointer capture 承担；② `[data-dsh-session-delete="trash-row"]:focus-visible`
  * （清单那一行的键盘焦点描边，复用选中态那枚 `ghost-active-border`）——宿主那套表里行不是可聚焦
- * div，我们这一行是 `role="option"` 且要吃 ↑↓，而这一代 `--dsw-focus-ring-color` 是 `transparent`；
+ * div，我们这一行是 `role="row"` 且要吃 ↑↓，而这一代 `--dsw-focus-ring-color` 是 `transparent`；
  * ③ `.sd-rowaction-button` 的 `[aria-pressed='true']` 与 `:disabled` 两档（2026-10-17）——
  * 官方那颗 `iconButton` 只有常态与 hover，勾选开关要有"按下"和"这条删不动"两档，token 与回收站
  * 选中行同源（`--dsw-alias-button-ghost-active-*`）；④ `.sd-batch-bar`（同日）——宿主没有"浮条"
  * 这件控件，四件 token 自拼；⑤ 宿主行的批量选中底色与兜底隐藏（同日改版）——宿主的行选中态不归
  * 第三方，整行可见性靠 `data-row-key` + `:has`，token 与回收站选中行同源；行首格在场时行尾兜底退场；
  * ⑥ `.sd-batch-pick-leading`（同日）——宿主行首那格只给 16×20，勾选框要一层 inline-flex 包装才压得回
- * 同样大小，官方没有这层包装。
- * 整张表里就这六条是我们自造的，标在这里，
+ * 同样大小，官方没有这层包装；⑦ `.sd-toast-action:disabled`（2026-11-01）——撤销横幅在飞时那颗动作要
+ * 看着就按不动，官方 Toast 的 action 没有禁用档，而我们这份自带 `color`、浏览器默认置灰不生效，
+ * 档位与③的禁用档同源（`opacity` + `not-allowed`）。
+ * 整张表里就这七条是我们自造的，标在这里，
  * 下次做「与官方逐条比对」时它属于**已知差异**，不是漂移。
  *
  * **另有一处已知差异不住在本文件**：回收站组头那颗按钮的整套 UA reset。宿主 `DisclosureRow` 那份是
@@ -46,7 +48,7 @@
  * flex 基线一起渗进来（真机上就是项目名整条居中，2026-10-15 截图）。它写在
  * `src/client/trash-panel.tsx` 组头那一行的 inline 样式上，**具体 reset 了哪几项由
  * `tests/skeleton.test.ts` 逐条钉住**（不在这里再抄一份名单）——所以「与官方逐条比对」时本表仍然只数
- * 上面那六条，这条不算进抄本差异。
+ * 上面那些，这条不算进抄本差异。
  */
 
 /* ────────────────────────── Button ────────────────────────── */
@@ -375,6 +377,15 @@
   opacity: 0.8;
 }
 
+/* 本插件自造的第七条（不是抄本，见文件头点名）：撤销横幅在飞时那颗动作要**看着就按不动**。
+   官方 Toast 的 action 只有常态与 hover，没有禁用档；而 `.sd-toast-action` 自带 `color`，
+   浏览器默认的置灰根本不生效（真机上只会看见一个光标照常是手、点下去没反应的「撤销」）。
+   禁用档与行尾勾选开关同源（`opacity` + `not-allowed`），不新造颜色。 */
+.sd-toast-action:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 @keyframes sd-toast-in {
   from {
     opacity: 0;
@@ -649,7 +660,7 @@ button.sd-disclosure-leading {
   cursor: col-resize;
 }
 
-/* 本插件自造的第二条（不是抄本，见文件头点名）：清单行是 `role="option"` 的可聚焦 div，而这一代
+/* 本插件自造的第二条（不是抄本，见文件头点名）：清单行是 `role="row"` 的可聚焦 div，而这一代
    `--dsw-focus-ring-color` 逐字是 `transparent`（2026-10-15 实测）——不自己描一条，键盘走
    ↑↓ 选会话时就没有任何焦点可见性。描边**复用选中态那枚** `ghost-active-border`，不新造颜色；
    0.5px 与 `outline-offset: 1px` 是行的描边宽度与一档外移，不动布局（outline 不进滚动区）。 */

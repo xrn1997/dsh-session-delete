@@ -293,6 +293,24 @@ describe('维护卡文案', () => {
   })
 })
 
+// 撤销横幅的批量失败摘要（issue #8 第 5 条）：条数 + 各条原因；zh 是真源、en 逐键镜像。
+describe('撤销横幅 · 批量失败摘要', () => {
+  it('undo.failedBatch 两套都出话：占位符插得进去、en 不是键名也不带中文', () => {
+    expect(zhTranslate('undo.failedBatch', { n: 3, reasons: '会话正在运行 · 项目目录不在' })).toBe(
+      '3 条会话未能撤销：会话正在运行 · 项目目录不在',
+    )
+    const service = fakeLocale()
+    createTranslate(contextWith(service))
+    const [ns, dicts] = service.register.mock.calls[0] as [
+      string,
+      { zh: Record<string, string>; en: Record<string, string> },
+    ]
+    expect(dicts.en['undo.failedBatch'], ns).toBeDefined()
+    expect(dicts.en['undo.failedBatch']).not.toBe('undo.failedBatch')
+    expect(dicts.en['undo.failedBatch']).not.toMatch(/[\u4e00-\u9fff]/)
+  })
+})
+
 describe('splitOn（整句一个键，按内嵌段切开渲染）', () => {
   it('按内嵌的那一段切开，前后原样', () => {
     expect(splitOn('这会移除文件，之后不可恢复。', '之后不可恢复')).toEqual([

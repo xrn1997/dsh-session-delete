@@ -145,6 +145,9 @@ function BatchConfirmDialog({
     setFailures(new Map())
     // 首轮发全部；重试轮只发失败的那些——上一轮已把请求现场收缩到失败名单，`current.items` 就是那一批。
     const failed = await deleteSessionsFromBatch(deps, current.items.map((item) => item.sessionId), gate)
+    // 被闸挡回的那一趟什么都没跑：不改勾选、不收框，也不再追加失败（进入时清旧失败那一下已在同一
+    // 动作里发生）——界面后果全部归在飞的那一趟（判据住 `busy-gate.ts`）。
+    if (failed === undefined) return
     shrinkPicksToFailures([...failed.keys()])
     if (failed.size === 0) {
       clearDeleteBatchRequest()

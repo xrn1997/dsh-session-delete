@@ -91,6 +91,43 @@ describe('取数编排 · 最新票', () => {
   })
 })
 
+// issue #8 第 3 条：刷新链曾经押在「deps 对象引用稳定」的隐式契约上——调用方逐渲染传新
+// deps 字面量就会形成「refresh → setList → 重渲 → reload 身份变 → effect 再 refresh」的环。
+// 契约根治：hook 内部 ref 归一，返回的回调身份恒稳、调用时读最新 deps。
+describe('取数编排 · deps 引用不需稳定', () => {
+  it('deps 每次渲染换新对象也不换回调身份，且调用时读的是最新 deps', async () => {
+    const first = deps()
+    const { result, rerender } = renderHook(
+      (p: { d: FakeRemote }) => useTrashQuery({ deps: p.d, t: zhTranslate, gate: { busy: false, around: passThrough } }),
+      { initialProps: { d: first } },
+    )
+    const stable = {
+      refreshAll: result.current.refreshAll,
+      refreshAfterWrite: result.current.refreshAfterWrite,
+      emptyTrash: result.current.emptyTrash,
+      noteAttachmentCleanup: result.current.noteAttachmentCleanup,
+    }
+    const second = deps()
+    const third = deps()
+    rerender({ d: second })
+    rerender({ d: third })
+    expect(result.current.refreshAll).toBe(stable.refreshAll)
+    expect(result.current.refreshAfterWrite).toBe(stable.refreshAfterWrite)
+    expect(result.current.emptyTrash).toBe(stable.emptyTrash)
+    expect(result.current.noteAttachmentCleanup).toBe(stable.noteAttachmentCleanup)
+
+    // 身份稳了还不够：回调必须读**最新**那一份 deps，不许把旧的冻进闭包。
+    await act(async () => { await result.current.refreshAll() })
+    expect(third.list).toHaveBeenCalledTimes(1)
+    expect(second.list).not.toHaveBeenCalled()
+    expect(first.list).not.toHaveBeenCalled()
+    await act(async () => { await result.current.emptyTrash() })
+    expect(third.emptyTrash).toHaveBeenCalledTimes(1)
+    expect(second.emptyTrash).not.toHaveBeenCalled()
+    expect(first.emptyTrash).not.toHaveBeenCalled()
+  })
+})
+
 // 孤儿会话的检查/清理 2026-10-27 搬进插件设置页的维护卡（手动触发）：面板不再自动扫，
 // 也不再有自己的孤儿读面。这一条钉的是"面板这一侧真的不再开口"——任何一次挂载读、写后读或清空
 // 都不许顺手打 `/orphans`（否则又回到"用户没点却在扫"的老状态）。
@@ -238,6 +275,19 @@ describe('取数编排 · 清空走注入的闸', () => {
     expect(result.current.list.status).toBe('ready')
     await act(async () => { await result.current.emptyTrash() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清空失败' })
+  })
+
+  it('闸挡回（这一趟没跑）⇒ 交回 undefined 而不是 false：不发 /empty，清单与附件提示都不动', async () => {
+    // `false` 说的是「跑过、没清成」；挡回来的那趟什么都没跑，调用方要能把两者分开（否则会收框、丢缓存）。
+    const blocked: Around = async () => undefined
+    const { d, result } = mount({}, blocked)
+    await act(async () => { await result.current.refreshAll() })
+    const beforeList = result.current.list
+    const beforeNotice = result.current.attachmentNotice
+    await act(async () => { expect(await result.current.emptyTrash()).toBeUndefined() })
+    expect(d.emptyTrash).not.toHaveBeenCalled()
+    expect(result.current.list).toBe(beforeList)
+    expect(result.current.attachmentNotice).toBe(beforeNotice)
   })
 
   it('emptyTrash 失败作废在飞的清单读：晚到的旧读不能把 unknown 盖回 ready', async () => {

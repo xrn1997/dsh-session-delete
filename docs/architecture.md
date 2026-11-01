@@ -82,7 +82,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 
 | 语义 | 唯一主人 | 它不回答什么 |
 | --- | --- | --- |
-| 段名 / 线上形状 / 线上失败码与它的读法（前缀判定 `isSessionDeleteCodeError`、取动词词 `verbCodeOf`）/ 回收站目录名 | `src/shared/wire.ts` | 业务判据 |
+| 段名 / 线上形状 / 线上失败码与它的读法（前缀判定 `isSessionDeleteCodeError`、取动词词 `verbCodeOf`）/ 信封的运行期判形 `isRemoteResult` / 回收站目录名 | `src/shared/wire.ts` | 业务判据 |
 | 写 `/apply` 回执的读法与**摘要**（缺 id / null 幂等 / 单条 null 的协议错 / 逐条失败 / orphan-clean 的 not-found 中性；成功 / 中性 / 失败 / 部分计数与**按动作取**的落地 id 一次派生） | `src/client/receipt.ts` | 各写入面的呈现；线上形状归 `src/shared/wire.ts` |
 | 附件清理读数在回执里的聚合（跨 `ok` 相加、`skipped` 取第一条）与「跳过半句」的拼装判据（面板与维护卡共用） | `src/client/receipt.ts`；面板后半句在 `src/client/use-trash-query.ts`、维护卡后半句在 `src/client/use-maintenance.ts` | 独占判定（归 `src/trash/attachments.ts`）；服务端算的字节 |
 | 段名的方法 / 纯度 / **读面** / body 预读 | `src/api/route-table.ts` | 怎么处理 |
@@ -119,9 +119,9 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | Node 半的依赖面（CoreDeps 五项 / DeleteSessionDeps / RemovalDeps / DeleteDeps 全量面；`CoreFsPort` 不含 `removeDir` / `removeFile`，`HostCorePort` 不含在场三件，`presence` 是能力面） | `src/deps.ts` | 各动词的调用顺序 |
 | 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开、面板恢复后忘掉） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量） |
 | 撤销横幅的现场、seq、停留时长、按条目熄灭与整条清空（`clearUndoNotice`） | `src/client/undo-notices.ts` | 何时发布（发布决定归 `src/client/write-settlement.ts`；`anySuccess` 与落地名单由 `src/client/receipt.ts` 的摘要给出）、发布的形与标题（归 `src/client/write-seats.ts`）；Toast 呈现归 `src/client/undo-toast.tsx` |
-| 撤销横幅的呈现（Toast 宿主与撤销动作的组合） | `src/client/undo-toast.tsx` | 现场 / seq / 发布与熄灭（归 `src/client/undo-notices.ts`）；恢复座位（归 `src/client/write-seats.ts`） |
+| 撤销横幅的呈现（Toast 宿主与撤销动作的组合；每条通知以 seq 为 key 各持一枚闸，旧撤销在飞不按灰新横幅；闸包整趟、座位不再传闸，双套会让外层 busy 提前落下） | `src/client/undo-toast.tsx` | 现场 / seq / 发布与熄灭（归 `src/client/undo-notices.ts`）；恢复座位（归 `src/client/write-seats.ts`）；busy 的生命周期与同实例防重（归 `src/client/busy-gate.ts`） |
 | 逐条 `/apply` 的写入座位（每个界面位置的呈现材质、闸与重读通道：菜单单删 / 批量删除 / 外部撤销恢复 / 面板恢复 / 面板永久删除） | `src/client/write-seats.ts` | 收尾顺序（`src/client/write-settlement.ts`）、重读策略（`src/client/use-trash-query.ts`）、各面的本地状态；孤儿清理不走座位（归设置页维护卡，ADR-0021） |
-| 「这一趟还算忙」的 busy 生命周期（开闸 / 落地或抛错都放回 / 各实例互不影响，不做引用计数） | `src/client/busy-gate.ts` 的 `useBusyGate` | 防抖、排队、重读（那些是 `src/client/write.ts` 的 `runWrite` 的整趟）；谁该禁用（各面自己） |
+| 「这一趟还算忙」的 busy 生命周期（开闸 / 落地或抛错都放回 / 各实例互不影响 / 同一实例在飞时再包一趟同步挡回、那一趟不执行，不做引用计数） | `src/client/busy-gate.ts` 的 `useBusyGate` | 防抖、排队、重读（那些是 `src/client/write.ts` 的 `runWrite` 的整趟）；谁该禁用（各面自己）；挡回来的那一趟怎么收尾（`runWrite` 与座位交回 `undefined`，各面自己决定不改什么） |
 | 一次逐条 `/apply` 写入的生命周期（apply → 信封 → 回执摘要 → settlement → refresh；`count` / `orphan-clean` 没有呈现材质，settlement 不为它们做事；`/empty` 聚合回执仍归 `use-trash-query.ts`）；座位绑定归 `src/client/write-seats.ts`，`runWrite` 收按 action 切开的呈现材质，并把 `apply → settle → refresh` 整趟包进传入的闸 | `src/client/write.ts` 的 `runWrite` | 回执判读（`src/client/receipt.ts`）、按 action 的收尾顺序（`src/client/write-settlement.ts`）、各面的本地状态 |
 | 逐条 `/apply` 写入的收尾顺序与 `WritePresentation` 的按 action 判别形状（main-view 收尾 → 失效回收站（delete / restore）→ 撤销通告 / 详情缓存，按 action 各一条，含 `anySuccess` 门与恢复的两个座位） | `src/client/write-settlement.ts` | 关/开/忘主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、什么时机跑（`src/client/write.ts`） |
 | 无主子会话的扫描与分组（谁算孤儿、传递闭包与去重） | `src/verbs/orphan-subagents.ts` | 删哪些目录、报多少字节、谁挡活体（归 `src/verbs/live-admission.ts`）；回收站里的组 |
@@ -138,7 +138,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 孤儿附件的报告段（报告把扫描折成数量/字节 + 对象清单 `id`/`bytes`，清单最多 200 条供设置页预览、读不出就抛 `io`） | `src/api/attachment-orphans.ts` | 什么算孤儿、删哪些对象（`src/trash/attachments.ts`）；什么时候清（设置页维护卡手动触发，ADR-0021）；清理段直接由路由接 `src/trash/attachments.ts` |
 | 孤儿附件的扫描与聚合清理（只认 `attachments/v1/objects` 下 `<2 hex>/<64 hex>`；引用源读不出就整份跳过） | `src/trash/attachments.ts` 的 `scanOrphanImageAttachments` / `cleanOrphanImageAttachments` | 什么时候清（归设置页维护卡，ADR-0021）；普通文件与缓存的处置（不碰，见 ADR-0020） |
 | 动过回收站之后谁重读（失效通告台，只有一个修订号） | `src/client/trash-store.ts` | 动了什么、谁动的（清单本体永远问宿主） |
-| 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期；latest-wins 句柄 `createLatestWins` 的 compare-and-set） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
+| 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期；latest-wins 句柄 `createLatestWins` 的 compare-and-set；输入引用归一 `useLatest`） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
 | 宿主会话列表的批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
 | 宿主行快照订阅（DOM 观察 + 行登记；渲染侧只读快照）与整行点击守卫 | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
 | 回收站面板状态机（选中 / 详情缓存 / 详情分页（`olderCursor`、在飞、晚到不落屏）/ 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |

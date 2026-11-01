@@ -19,6 +19,7 @@ import {
   type TrashEntryLike,
 } from './remote.js'
 import { useTrashRevision } from './trash-store.js'
+import { useLatest } from './store.js'
 import type { TrashDetailState } from './trash-detail.js'
 import { listView, type TrashQuery } from './use-trash-query.js'
 import type { WriteOutcome } from './write.js'
@@ -36,7 +37,8 @@ export type PendingAction =
  * 控制器要的面。`query` 取五样：清单（选中从它里面找）、`refreshAll`（挂载与显式重试）、
  * `refreshAfterWrite`（失效与写后）、清空（面板的写动作那一半）、`noteAttachmentCleanup`（purge 回执里
  * 附件那半句交给查询侧拼句子上屏）。`ordered` 是键盘/自动选中用的"屏幕上的顺序"（只含展开的组），
- * 由面板算好传进来——布局常量不搬进控制器。
+ * 由面板算好传进来——布局常量不搬进控制器。输入的引用**不需稳定**：失效 effect 的判据只有
+ * `revision`，refresh 回调经 `useLatest` 读最新那一份（判据住 `store.ts`）。
  */
 export interface TrashPanelControllerInput {
   deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
@@ -162,17 +164,21 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   /** 挂载那一拍读一次清单，之后失效通告只走写后刷新（两条名字不同，读法是同一条）。 */
   const firstRefresh = useRef(true)
 
+  /** 失效重读的载体：refresh 回调经 `useLatest` 读最新那一份（判据住 `store.ts`），
+   *  失效 effect 的判据只有 `revision`。 */
+  const refreshers = useLatest({ refreshAll, refreshAfterWrite })
+
   // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍重读清单。
   // 无主子会话不再顺带扫：那是设置页维护卡的手动动作（ADR-0021）。
   const revision = useTrashRevision()
   useEffect(() => {
     if (firstRefresh.current) {
       firstRefresh.current = false
-      void refreshAll()
+      void refreshers.current.refreshAll()
       return
     }
-    void refreshAfterWrite()
-  }, [refreshAll, refreshAfterWrite, revision])
+    void refreshers.current.refreshAfterWrite()
+  }, [revision])
 
   // 清单未知时，确认框不许留着：看不见的行不许继续被确认；写入在飞时不收（那一趟还在跑）。
   // `pending` 也进依赖：打开那一刻清单已经未知时同样要收，不能只靠「进入 unknown」这一次迁移。
@@ -354,7 +360,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 单条恢复：**先清掉这一行的旧失败**（再点一次不该还挂着上一次的原文），再把整趟交给面板恢复座位。
    * 成功要丢详情缓存 + 重读清单——缓存不失效的话，这条会话再被删回来时会直接摆出上一世的正文。
    * 失败也重读：组回滚可能自己失败（`details.rollbackFailures`），清单不能继续摆旧行。
-   * 「重读也在这趟里」由 `runWrite` 的闸保证：旧清单还在屏上时同一个动作不能被再点一次。
+   * 「重读也在这趟里」由 `runWrite` 的闸保证：旧清单还在屏上时同一个动作不能被再点一次——再点那一次
+   * 被同步挡回、整趟不跑（座位交回 `undefined`），这一行保持原样，等在飞那一趟的结论。
    * 单条恢复走 `single` 读法，`already-gone` 不可能出现，座位里那条查找兜底在此不会命中。
    * 座位的 refresh 仍按 `WriteOutcome` 给（那只信封里没有附件读数要转交）：这里只把它换成"重读"这一个动作，
    * outcome 不再流向 query——孤儿重扫判据已不在面板（ADR-0021）。
@@ -370,6 +377,9 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       refreshAfterWrite: () => refreshAfterWrite(),
       clearDetailCache,
     })
+    // 被闸挡回的那一趟什么都没跑：这一行的成败由在飞那一趟说，这里不再补失败原文
+    // （进入时清旧失败那一下已在同一动作里发生）。
+    if (outcome === undefined) return
     const failure = outcome.failures.get(entry.id)
     if (failure !== undefined) failRow(entry.id, failure)
   }, [clearDetailCache, clearRowFailures, deps, entries, failRow, gate, refreshAfterWrite])
@@ -397,6 +407,9 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     const outcome = action === 'purge'
       ? await purgeFromPanel(seat)
       : await restoreFromPanel({ ...seat, entries })
+    // 座位被闸挡回（这一趟没跑）：框、清单、逐行原文的后续都由在飞那一趟收尾；这里不再追加后果
+    // （进入时清旧失败那一下已在同一动作里发生）。
+    if (outcome === undefined) return
     if (outcome.failures.size === 0) return
     setActionFailure((current) => {
       const next = { ...current }
@@ -417,6 +430,9 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (target.kind === 'entries') return confirmApply('purge', target.ids)
     if (target.kind === 'restore') return confirmApply('restore', target.ids)
     const emptied = await emptyTrash()
+    // `undefined` 是闸把这一趟挡回来了（连点的第二下）：这一趟没跑 ⇒ 框不收、详情缓存不丢，
+    // 界面后果全归在飞那一趟。
+    if (emptied === undefined) return
     setPending(null)
     if (emptied) detailCache.current.clear()
   }, [confirmApply, emptyTrash, pending])

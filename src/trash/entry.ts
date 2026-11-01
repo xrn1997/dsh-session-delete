@@ -2,7 +2,8 @@ import { TRASH_DIR_NAME } from '../shared/wire.js'
 
 /** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<原目录名>`）——**它不是随手起的键**：
  *  回收站目录名就是它，恢复也按它反推出原目录名放回（CONTEXT.md 的「条目」条），所以 id 的形状有契约意义。
- *  其余字段在删除那一刻就地取。 */
+ *  目录名里的空白/引号照原样进 id（往返契约压倒 HTML 合法性——DOM id 的编码归浏览器半的
+ *  `trash-panel.tsx`）。其余字段在删除那一刻就地取。 */
 export interface TrashEntry {
   id: string
   sessionId: string

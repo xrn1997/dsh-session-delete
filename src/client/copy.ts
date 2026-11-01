@@ -229,6 +229,8 @@ const ZH = {
   'undo.moved': '{title} 已移入回收站',
   'undo.session': '会话',
   'undo.undo': '撤销',
+  // 逐条失败且不止一条：条数 + 各条原因（去重后由调用方拼进 {reasons}）——只显第一条会把其余原因折没。
+  'undo.failedBatch': '{n} 条会话未能撤销：{reasons}',
 } as const
 
 export type CopyKey = keyof typeof ZH
@@ -432,6 +434,7 @@ const EN: Record<CopyKey, string> = {
   'undo.moved': '{title} was moved to the trash',
   'undo.session': 'the session',
   'undo.undo': 'Undo',
+  'undo.failedBatch': '{n} sessions could not be undone: {reasons}',
 }
 
 export type CopyParams = Readonly<Record<string, string | number>>

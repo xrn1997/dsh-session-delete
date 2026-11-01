@@ -60,7 +60,8 @@ describe('删除座位', () => {
     }
     const failures = await deleteSessionsFromBatch(deps, ['s1', 's2'], gate())
     expect(mocks.publishUndoBatchNotice).toHaveBeenCalledWith({ entryIds: ['e1'], n: 1 })
-    expect([...failures.entries()]).toEqual([['s2', '删不动']])
+    // 这枚闸是新的、没被占 ⇒ 座位一定跑完并交出失败表（被挡回那一路见下面「闸在飞时」那条）。
+    expect([...failures!.entries()]).toEqual([['s2', '删不动']])
   })
 
   it('一条都没落地：不发布没有落点的撤销横幅', async () => {
@@ -124,5 +125,36 @@ describe('面板座位', () => {
     expect(mocks.dismissUndoNotice).toHaveBeenCalledWith(['e1'])
     expect(clearDetailCache).toHaveBeenCalledWith(['e1'])
     expect(mocks.forgetMainView).not.toHaveBeenCalled()
+  })
+})
+
+// 连点时第二趟被同步挡回（真闸的判据住 `busy-gate.ts`）：这一趟**没跑**，座位就得交出「没跑」。
+// 曾经挡回的是 `undefined as T`——调用方照 `outcome.failures` 读，连点反而当场 TypeError。
+describe('座位 · 闸在飞时这一趟不跑', () => {
+  /** 已被占住的闸：只注入真闸挡回时的那个形状（任务一次都不执行）。 */
+  const flying = (): BusyGate => ({
+    busy: true,
+    around: vi.fn(async () => undefined) as unknown as BusyGate['around'],
+  })
+
+  it('三个交回 outcome 的座位都回 undefined，单删座位回「这一趟没跑」；一次都不发 /apply、不结算', async () => {
+    const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [])
+    const deps = { applyOutcomes }
+    const g = flying()
+
+    await expect(deleteSessionsFromBatch(deps, ['s1'], g)).resolves.toBeUndefined()
+    await expect(purgeFromPanel({
+      deps, ids: ['e1'], gate: g, refreshAfterWrite: vi.fn(async () => {}), clearDetailCache: vi.fn(),
+    })).resolves.toBeUndefined()
+    await expect(restoreFromPanel({
+      deps, ids: ['e1'], entries: null, gate: g, refreshAfterWrite: vi.fn(async () => {}), clearDetailCache: vi.fn(),
+    })).resolves.toBeUndefined()
+    // 单删座位不许把「没跑」折成 `null`（那是「跑了、这条没有失败」，确认框会据此收框）。
+    await expect(deleteSessionFromMenu(deps, { sessionId: 's1', title: 'T' }, g)).resolves.toBeUndefined()
+
+    expect(applyOutcomes).not.toHaveBeenCalled()
+    expect(mocks.invalidateTrash).not.toHaveBeenCalled()
+    expect(mocks.publishUndoNotice).not.toHaveBeenCalled()
+    expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
   })
 })

@@ -182,9 +182,9 @@ describe('清单导航 · Enter / Space', () => {
     expect(h.select).not.toHaveBeenCalled()
     expect(h.toggleCheck).not.toHaveBeenCalled()
 
-    // 事件从行（role=option）本身起来时仍归清单。
+    // 事件从行（role=row）本身起来时仍归清单。
     const row = document.createElement('div')
-    row.setAttribute('role', 'option')
+    row.setAttribute('role', 'row')
     act(() => { m.result.current.onListKeyDown(keyDown('Enter', row).event) })
     expect(h.select).toHaveBeenLastCalledWith(B, { drill: true })
   })

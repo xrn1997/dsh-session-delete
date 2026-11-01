@@ -281,4 +281,53 @@ describe('批量撤销横幅', () => {
     // e2 失败不许连坐 e1 的重开：横幅报原文、主视图照样回到 e1。
     await waitFor(() => expect(openSession).toHaveBeenCalledWith('session-a'))
   })
+
+  it('批量撤销多条逐条失败：横幅说清失败条数与各条原因（去重），不许只显第一条', async () => {
+    // issue #8 第 5 条：`failures.values().next().value` 把多条不同原因折成一句，条数与其余原因全没了。
+    const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [
+      { id: 'e1', action: 'restore', ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } },
+      { id: 'e2', action: 'restore', ok: false, error: { code: 'sessiondelete/project-missing', message: '项目目录不在' } },
+      { id: 'e3', action: 'restore', ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } },
+    ])
+    publishUndoBatchNotice({ entryIds: ['e1', 'e2', 'e3'], n: 3 })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    // 三条失败、两种原因：条数 3、两条原因都在、同一原因去重只出一次。
+    await waitFor(() => expect(screen.getByText('3 条会话未能撤销：会话正在运行 · 项目目录不在')).toBeInTheDocument())
+  })
+
+  it('撤销在飞时来了新删除：新横幅的撤销不被旧那一趟按灰（闸按通知隔离）', async () => {
+    let resolveOld!: (value: ApplyOutcome[]) => void
+    const applyOutcomes = vi.fn((_action: string, ids: readonly string[]) => {
+      if (ids[0] === 'e1') return new Promise<ApplyOutcome[]>((resolve) => { resolveOld = resolve })
+      return Promise.resolve(restoreOutcomes(ids))
+    })
+    publishUndoNotice({ entryId: 'e1', title: 'T' })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled()
+
+    // 旧撤销还在飞：新删除发布新横幅（seq 递增 ⇒ 重挂载、另一枚闸）。
+    act(() => { publishUndoNotice({ entryId: 'e2', title: 'U' }) })
+    const fresh = screen.getByRole('button', { name: '撤销' })
+    expect(fresh).not.toBeDisabled()
+    fireEvent.click(fresh)
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
+    expect(applyOutcomes).toHaveBeenLastCalledWith('restore', ['e2'])
+    await act(async () => { resolveOld(restoreOutcomes(['e1'])) })
+  })
+
+  it('撤销在飞时连点只发一条 /apply，按钮在飞期间禁用（issue #8 第 8 条）', async () => {
+    let resolveApply!: (value: ApplyOutcome[]) => void
+    const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((resolve) => { resolveApply = resolve }))
+    publishUndoNotice({ entryId: 'e1', title: 'T' })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+    const button = screen.getByRole('button', { name: '撤销' })
+    fireEvent.click(button)
+    fireEvent.click(button)
+    expect(applyOutcomes).toHaveBeenCalledTimes(1)
+    expect(button).toBeDisabled()
+    await act(async () => { resolveApply(restoreOutcomes(['e1'])) })
+    await waitFor(() => expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument())
+  })
 })

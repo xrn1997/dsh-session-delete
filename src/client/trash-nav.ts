@@ -43,12 +43,12 @@ export interface TrashNav {
   onListKeyDown(event: ReactKeyboardEvent<HTMLElement>): void
 }
 
-/** 事件是不是清单自己的：从行（`role="option"`）或容器起来才算；行内按钮 / 勾选框的 Enter / Space
+/** 事件是不是清单自己的：从行（`role="row"`）或容器起来才算；行内按钮 / 勾选框的 Enter / Space
  *  归它们自己。测试里的窄事件没有 `target`，按清单自己的处理。 */
 function isListOwnedEvent(event: ReactKeyboardEvent<HTMLElement>): boolean {
   const target = event.target as HTMLElement | null | undefined
   if (target == null || target === event.currentTarget) return true
-  return typeof target.getAttribute === 'function' && target.getAttribute('role') === 'option'
+  return typeof target.getAttribute === 'function' && target.getAttribute('role') === 'row'
 }
 
 export function useTrashNav(input: TrashNavInput): TrashNav {
@@ -77,7 +77,7 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
       const target = ordered[index >= 0 ? index : 0]
       if (target === undefined) return
       event.preventDefault()
-      // 多选态下 Enter/Space 说的是"勾上/取消这一条"，光标仍由 ↑↓ 移动（listbox 的常规分工）。
+      // 多选态下 Enter/Space 说的是"勾上/取消这一条"，光标仍由 ↑↓ 移动（grid 的常规分工）。
       if (selectMode) {
         toggleCheck(target.id)
         return

@@ -130,9 +130,10 @@ function harness() {
   })
   const refreshAll = vi.fn(async (): Promise<void> => {})
   const refreshAfterWrite = vi.fn(async (): Promise<void> => {})
-  // `TrashQuery.emptyTrash` 交回的是"这一趟是否落地"，不是聚合回执（回执在 use-trash-query 里）。
-  // 真实实现自己会套 `around` + `refreshAfterWrite`，所以控制器对 `kind:'all'` 不再补第二层。
-  const emptyTrash = vi.fn(async (): Promise<boolean> => true)
+  // `TrashQuery.emptyTrash` 交回的是"这一趟的三种下场"（`true` 清了 / `false` 没清成 / `undefined` 被闸挡回、没跑），
+  // 不是聚合回执（回执在 use-trash-query 里）。真实实现自己会套 `around` + `refreshAfterWrite`，
+  // 所以控制器对 `kind:'all'` 不再补第二层。
+  const emptyTrash = vi.fn(async (): Promise<boolean | undefined> => true)
   // 附件读数上屏归 query（拼句子与清旧提示都在那一侧）；这里只钉"控制器把哪一份交过去"。
   const noteAttachmentCleanup = vi.fn((_a: unknown): void => {})
   const input = (over: Over = {}): TrashPanelControllerInput => ({
@@ -1172,6 +1173,51 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.detail.kind).toBe('ready')
   })
 
+  it('confirmPurge 被闸挡回（`undefined` = 这一趟没跑）：框不收、详情缓存不丢', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => {
+      await m.result.current.select(A)
+    })
+    m.emptyTrash.mockResolvedValueOnce(undefined)
+    act(() => {
+      m.result.current.request({ kind: 'all' })
+    })
+
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    // 挡回来的那一趟不许冒充"跑过"：收框＝宣布这次点击有结论，而结论要在飞那一趟手里。
+    expect(m.result.current.pending).not.toBeNull()
+    // 没清成 ⇒ "仍在盘上"这一事实没变，缓存照用。
+    act(() => {
+      void m.result.current.select(A)
+    })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail.kind).toBe('ready')
+  })
+
+  it('confirmApply / restore 被闸挡回（`undefined` = 这一趟没跑）：不发 /apply、框不收、行失败不动', async () => {
+    // 座位交回 undefined 时，控制器不许把它折成「跑了、没有失败」：那会收框、丢在飞那一趟的结论。
+    const blockedGate: BusyGate = { busy: true, around: async <T,>(_task: () => Promise<T>) => undefined }
+    const m = mount({ entries: [A], gate: blockedGate })
+    act(() => {
+      m.result.current.request({ kind: 'entry', entry: A })
+    })
+
+    await act(async () => {
+      await m.result.current.confirmPurge()
+    })
+    expect(m.deps.applyOutcomes).not.toHaveBeenCalled()
+    expect(m.result.current.pending).not.toBeNull()
+    expect(m.result.current.actionFailure).toEqual({})
+
+    await act(async () => {
+      await m.result.current.restore(A)
+    })
+    expect(m.deps.applyOutcomes).not.toHaveBeenCalled()
+    expect(m.result.current.actionFailure).toEqual({})
+  })
+
   it('没有 pending 时 confirmPurge 什么都不做', async () => {
     const m = mount({ entries: [A] })
     await act(async () => {
@@ -1258,5 +1304,46 @@ describe('面板控制器 · 失效通告', () => {
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.detail.kind).toBe('ready')
     expect(m.deps.detail).toHaveBeenCalledTimes(1)
+  })
+
+  it('query 回调每渲染换新身份也不重发取数，且失效时读最新那一份', async () => {
+    // 模拟调用方逐渲染传新字面量（issue #8 第 3 条的环）：回调身份与闭包都按代次换新。
+    // 只断言"没重发"不够——若 ref 冻在初代，失效时仍会调用旧闭包；按代次记录才钉得住 freshness。
+    const calls = vi.fn((_kind: 'refreshAll' | 'refreshAfterWrite', _generation: number): void => {})
+    const deps = createFakeRemote({
+      detail: vi.fn(async (id: string) => detailOf(id)),
+      applyOutcomes: vi.fn(async () => [] as ApplyOutcome[]),
+    })
+    let generation = 0
+    const input = (): TrashPanelControllerInput => {
+      const current = generation++
+      return {
+        deps,
+        gate: openGate,
+        query: {
+          list: { status: 'ready', rows: [A] },
+          refreshAll: async () => { calls('refreshAll', current) },
+          refreshAfterWrite: async () => { calls('refreshAfterWrite', current) },
+          emptyTrash: async () => true,
+          noteAttachmentCleanup: () => {},
+        },
+        ordered: [A],
+        canAutoSelect: false,
+      }
+    }
+    const view = renderHook((p: TrashPanelControllerInput) => useTrashPanelController(p), { initialProps: input() })
+    view.rerender(input())
+    view.rerender(input())
+    view.rerender(input())
+    expect(calls.mock.calls).toEqual([['refreshAll', 0]])
+
+    act(() => {
+      invalidateTrash()
+    })
+    await waitFor(() => expect(calls).toHaveBeenLastCalledWith('refreshAfterWrite', 3))
+    expect(calls.mock.calls).toEqual([
+      ['refreshAll', 0],
+      ['refreshAfterWrite', 3],
+    ])
   })
 })

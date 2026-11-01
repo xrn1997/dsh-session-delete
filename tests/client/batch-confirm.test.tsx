@@ -82,6 +82,26 @@ describe('批量确认框', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('同一 tick 连点两次「移入回收站」：第二趟被同步挡回 ⇒ 只发一条删除，框不提前收', async () => {
+    let release!: (value: ApplyOutcome[]) => void
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<ApplyOutcome[]> => {
+      if (action === 'count') return countOutcomes(ids)
+      return new Promise<ApplyOutcome[]>((resolve) => { release = resolve })
+    })
+    requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    const confirm = await screen.findByRole('button', { name: '移入回收站 1 条' })
+    act(() => {
+      fireEvent.click(confirm)
+      fireEvent.click(confirm)
+    })
+    await waitFor(() => expect(applyOutcomes.mock.calls.filter(([action]) => action === 'delete')).toHaveLength(1))
+    // 挡回来的那一趟没有结论：框留在原地，等第一条真落地。
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    release(deleteOutcomes(['a']))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
   it('标题随条数：1 条是单删那句，多条是「删除这些 N 个会话？」', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
       action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids),

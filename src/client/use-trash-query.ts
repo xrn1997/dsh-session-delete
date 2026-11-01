@@ -6,6 +6,9 @@
  * - 读不到就说读不到：失败进 `unknown`（原文上屏），不折成"空的"。
  * - 附件读数只住在写动作的回执里：清单重读读不出来，所以它单独一条提示、**最新的写赢**。
  *
+ * 输入的引用**不需稳定**：`deps` / `t` / `gate` 经 `useLatest` 归一（判据住 `store.ts`），
+ * 返回的四个回调身份恒稳，可安全进调用方 effect 的依赖。
+ *
  * 无主子会话的检查/清理**不在这一面**：那是插件设置页维护卡的手动动作（`use-maintenance.ts`）。
  * 面板挂载、写后重读与清空都只碰清单，一次都不自动扫（ADR-0021）。
  */
@@ -13,7 +16,7 @@ import { useCallback, useState } from 'react'
 import type { BusyGate } from './busy-gate.js'
 import { callRemote, type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
 import { clearUndoNotice } from './undo-notices.js'
-import { createLatestWins } from './store.js'
+import { createLatestWins, useLatest } from './store.js'
 import type { Translate } from './copy.js'
 import { attachmentSkippedSentence } from './receipt.js'
 import type { AttachmentCleanupWire } from '../shared/wire.js'
@@ -59,8 +62,10 @@ export interface TrashQuery {
   /** 写后/失效通告：与 `refreshAll` 同一条读。两个名字留着是因为调用点问的是两件事
    *  （"用户要看现在的"与"别处动过了，跟上"），不是两条路径。清单读失败时旧行进 `unknown`。 */
   refreshAfterWrite(): Promise<void>
-  /** 清空回收站（聚合回执）：成功就熄掉撤销横幅并重读，失败就把清单置为未知并摆上原文。交回是否成功。 */
-  emptyTrash(): Promise<boolean>
+  /** 清空回收站（聚合回执）：成功就熄掉撤销横幅并重读，失败就把清单置为未知并摆上原文。
+   *  三种形状各有意思：`true` = 清空落地了；`false` = 这一趟跑了但没清成（原文已在清单那块上屏）；
+   *  `undefined` = 闸把这一趟挡回来了、什么都没跑（调用方不收框，等在飞那一趟的结论）。 */
+  emptyTrash(): Promise<boolean | undefined>
 }
 
 export function useTrashQuery({
@@ -76,18 +81,21 @@ export function useTrashQuery({
   const [list, setList] = useState<TrashListState>({ status: 'loading' })
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null)
 
+  /** 输入引用归一（判据住 `store.ts` 的 `useLatest`）：回调经它读最新输入，身份恒稳。 */
+  const latest = useLatest({ deps, t, gate })
+
   /** 清单的唯一读法：签到一张票再发请求；输给后发的读时这一次什么都不落地（不让旧响应盖掉新状态）。 */
   const [reloadLatest] = useState(createLatestWins)
   const reload = useCallback(async (): Promise<void> => {
     const ticket = reloadLatest.issue()
-    const outcome = await callRemote(() => deps.list())
+    const outcome = await callRemote(() => latest.current.deps.list())
     if (!ticket.current) return
     if (!outcome.ok) {
       setList({ status: 'unknown', failure: outcome.failure.message })
       return
     }
     setList({ status: 'ready', rows: outcome.value })
-  }, [deps, reloadLatest])
+  }, [reloadLatest])
 
   /**
    * 附件读数上屏：`skipped`（这一轮部分或整体没敢清）优先于 `failed`（逐文件真出错）——前者是原因，
@@ -102,17 +110,19 @@ export function useTrashQuery({
     }
     // 跳过半句与维护卡共用同一判据（`receipt.ts`）；面板只在「没有跳过但有逐文件失败」时报数，
     // 全清干净不上屏（面板不拿"清了 0 件 / 清了几件"占一行）。
-    const skipped = attachmentSkippedSentence(a, t)
+    const skipped = attachmentSkippedSentence(a, latest.current.t)
     if (skipped !== null) {
       setAttachmentNotice(skipped)
       return
     }
-    setAttachmentNotice(a.failed > 0 ? t('trash.attachments.failed', { count: a.failed }) : null)
-  }, [t])
+    setAttachmentNotice(a.failed > 0 ? latest.current.t('trash.attachments.failed', { count: a.failed }) : null)
+  }, [])
 
   // 清空是**聚合回执**、不是 `/apply` 座位：`emptyTrash` 自己包闸（别在外面再套一层，双套会让外层 busy 提前落下）。
-  const emptyTrash = useCallback((): Promise<boolean> => gate.around(async () => {
-    const outcome = await callRemote(() => deps.emptyTrash())
+  // 被闸挡回的那一趟原样交回 `undefined`（这一趟没跑），不许在这里折成 `false`——`false` 说的是「跑过、没清成」，
+  // 而那一趟的原文已经上过屏；调用方要能把两者分开。
+  const emptyTrash = useCallback((): Promise<boolean | undefined> => latest.current.gate.around(async () => {
+    const outcome = await callRemote(() => latest.current.deps.emptyTrash())
     if (!outcome.ok) {
       // 清空失败在这块界面上的落点就是"清单未知"：回收站此刻是什么样我们不知道，旧行也不能继续可操作。
       // 同时作废在飞的清单读——晚到的旧读不能把这一拍又盖回 ready。
@@ -131,7 +141,7 @@ export function useTrashQuery({
     // 已经发生的事情与"此刻清单长什么样"无关）。
     noteAttachmentCleanup(outcome.value.attachments)
     return true
-  }), [gate, deps, reload, reloadLatest, noteAttachmentCleanup])
+  }), [reload, reloadLatest, noteAttachmentCleanup])
 
   return {
     list,

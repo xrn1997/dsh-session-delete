@@ -87,6 +87,8 @@ describe('回收站面板', () => {
     render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) })} />)
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '清空回收站…' })).not.toBeInTheDocument()
+    // 空态是普通内容块，不是「空的 grid」：没有行时不挂 grid 与它的 aria（ADR-0028）。
+    expect(screen.queryByRole('grid')).toBeNull()
   })
 
   // jsdom 没有布局，"居中"只能钉那条链本身：单列外壳与清单容器都吃 `flex:1 1 auto`，
@@ -104,7 +106,7 @@ describe('回收站面板', () => {
   it('行右侧的「恢复」调 restore 并带上条目 id（动作住在行内，2026-10-15 真机反馈后回归原形）', async () => {
     const deps = makeDeps()
     renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a']))
   })
@@ -112,11 +114,11 @@ describe('回收站面板', () => {
   it('窄档点行内动作按钮不顺手下钻：按钮不冒泡成整行点击', async () => {
     const deps = makeDeps()
     renderNarrow(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a']))
     // 还在清单里；若按钮点击冒泡到整行，窄档会切到详情、这一行从 DOM 消失。
-    expect(screen.getByRole('option', { name: /code-review/ })).toBeInTheDocument()
+    expect(screen.getByRole('row', { name: /code-review/ })).toBeInTheDocument()
   })
 
   // 原工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）⇒ 恢复照常回盘、落在「未分组」。
@@ -125,12 +127,12 @@ describe('回收站面板', () => {
     const gone = render(
       <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0]!, workspaceMissing: true }]) })} />,
     )
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     expect(within(row).getByText('原工作区已不存在，恢复后归入未分组')).toBeInTheDocument()
     gone.unmount()
 
     render(<TrashPanel deps={makeDeps()} />)
-    await screen.findByRole('option', { name: /code-review/ })
+    await screen.findByRole('row', { name: /code-review/ })
     expect(screen.queryByText(/原工作区已不存在/)).toBeNull()
   })
 
@@ -166,7 +168,7 @@ describe('回收站面板', () => {
       }))),
     })
     renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
     expect(await screen.findByRole('status')).toHaveTextContent(/原项目目录已不存在/)
   })
@@ -175,7 +177,7 @@ describe('回收站面板', () => {
 describe('回收站面板 · 两栏与下钻', () => {
   it('宽档：清单在左（420 定宽、动作在行右侧）、详情在右', async () => {
     const { container } = renderWide(makeDeps())
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     // 两颗动作住在行里，且点击它们不许把"选中"改掉（选中是点行，不是点按钮）
     expect(within(row).getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['恢复', '彻底删除…'])
     expect(row).toHaveAttribute('aria-selected', 'true') // 宽档自动选中就是这一条
@@ -188,14 +190,14 @@ describe('回收站面板 · 两栏与下钻', () => {
   it('窄档：先只有清单（动作照样在行右侧），点行才下钻出详情；「← 返回清单」回得去且选中还在', async () => {
     const deps = makeDeps()
     const { container } = renderNarrow(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     expect(within(row).getByRole('button', { name: '恢复' })).toBeInTheDocument()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).not.toBeInTheDocument()
 
     fireEvent.click(row)
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '← 返回清单' }))
-    expect(screen.getByRole('option', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('row', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
     expect(deps.detail).toHaveBeenCalledTimes(1)
   })
@@ -203,13 +205,13 @@ describe('回收站面板 · 两栏与下钻', () => {
   it('宽度是跟着中央列走的：从宽变窄不重取数，选中还在，再点一下就回到那条详情', async () => {
     const deps = makeDeps()
     const view = renderWide(deps)
-    fireEvent.click(await screen.findByRole('option', { name: /code-review/ }))
+    fireEvent.click(await screen.findByRole('row', { name: /code-review/ }))
     await screen.findByText('先看改动')
     // 变窄之后不硬塞一个"正在下的钻"：回到清单，选中留着，点一下就用缓存回来了（不重读、不重列）
     act(() => { view.observer.pump(400) })
-    expect(screen.getByRole('option', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('row', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByText('先看改动')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('option', { name: /code-review/ }))
+    fireEvent.click(screen.getByRole('row', { name: /code-review/ }))
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
     expect(deps.detail).toHaveBeenCalledTimes(1)
     expect(deps.list).toHaveBeenCalledTimes(1)
@@ -219,7 +221,7 @@ describe('回收站面板 · 两栏与下钻', () => {
     const deps = makeDeps()
     renderWide(deps)
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('row', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('详情读失败只坏详情那一块：清单仍可选、行内动作仍可点', async () => {
@@ -230,7 +232,7 @@ describe('回收站面板 · 两栏与下钻', () => {
     })
     renderWide(deps)
     expect(await screen.findByRole('status')).toHaveTextContent(/第 2 帧解压失败/)
-    const row = screen.getByRole('option', { name: /code-review/ })
+    const row = screen.getByRole('row', { name: /code-review/ })
     expect(within(row).getByRole('button', { name: '恢复' })).toBeEnabled()
     // 「重试」只重读那一条，不牵清单
     deps.detail.mockResolvedValue(detailFixture)
@@ -291,11 +293,11 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     fireEvent.click(fold)
     expect(fold).toHaveAttribute('aria-expanded', 'true')
 
-    fireEvent.click(screen.getByRole('option', { name: /第二条/ }))
+    fireEvent.click(screen.getByRole('row', { name: /第二条/ }))
     await waitFor(() => expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false'))
     expect(screen.getByText('b 的思考正文')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('option', { name: /第一条/ }))
+    fireEvent.click(screen.getByRole('row', { name: /第一条/ }))
     await waitFor(() => expect(screen.getByText('a 的思考正文')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
     // 切回来读的是缓存，不重发 /detail。
@@ -312,13 +314,13 @@ describe('回收站面板 · 键盘', () => {
   it('ArrowDown 第一次落到第一条、第二次走到下一条；Enter 在窄档进下钻', async () => {
     const deps = makeDeps({ list: vi.fn(async () => two) })
     renderNarrow(deps)
-    const first = await screen.findByRole('option', { name: /第一条/ })
+    const first = await screen.findByRole('row', { name: /第一条/ })
     // 还没选中任何东西时，ArrowDown 的标准语义是"落到第一项"，不是跳过第一项
     fireEvent.keyDown(first, { key: 'ArrowDown' })
-    expect(screen.getByRole('option', { name: /第一条/ })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('row', { name: /第一条/ })).toHaveAttribute('aria-selected', 'true')
     fireEvent.keyDown(first, { key: 'ArrowDown' })
-    expect(screen.getByRole('option', { name: /第二条/ })).toHaveAttribute('aria-selected', 'true')
-    fireEvent.keyDown(screen.getByRole('option', { name: /第二条/ }), { key: 'Enter' })
+    expect(screen.getByRole('row', { name: /第二条/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(screen.getByRole('row', { name: /第二条/ }), { key: 'Enter' })
     expect(await screen.findByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
     expect(screen.getByText('先看改动')).toBeInTheDocument()
   })
@@ -326,20 +328,20 @@ describe('回收站面板 · 键盘', () => {
   it('ArrowUp 从第一条回到最后一条（清单里是环，不是撞墙）', async () => {
     const deps = makeDeps({ list: vi.fn(async () => two) })
     renderNarrow(deps)
-    const first = await screen.findByRole('option', { name: /第一条/ })
+    const first = await screen.findByRole('row', { name: /第一条/ })
     fireEvent.keyDown(first, { key: 'ArrowDown' })
-    fireEvent.keyDown(screen.getByRole('option', { name: /第一条/ }), { key: 'ArrowUp' })
-    expect(screen.getByRole('option', { name: /第二条/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(screen.getByRole('row', { name: /第一条/ }), { key: 'ArrowUp' })
+    expect(screen.getByRole('row', { name: /第二条/ })).toHaveAttribute('aria-selected', 'true')
   })
 
   it('下钻里按 Esc 退回清单：选中不变，焦点交还给那一行', async () => {
     const deps = makeDeps({ list: vi.fn(async () => two) })
     renderNarrow(deps)
-    fireEvent.click(await screen.findByRole('option', { name: /第二条/ }))
+    fireEvent.click(await screen.findByRole('row', { name: /第二条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
-    const row = screen.getByRole('option', { name: /第二条/ })
+    const row = screen.getByRole('row', { name: /第二条/ })
     expect(row).toHaveAttribute('aria-selected', 'true')
     expect(document.activeElement).toBe(row)
     expect(deps.detail).toHaveBeenCalledTimes(1)
@@ -349,18 +351,32 @@ describe('回收站面板 · 键盘', () => {
     const awkward = [{ ...rows[0], id: 'a"b', projectDir: '--p--', title: '带引号的那条', deletedAt: 300 }]
     const deps = makeDeps({ list: vi.fn(async () => awkward) })
     renderNarrow(deps)
-    fireEvent.click(await screen.findByRole('option', { name: /带引号的那条/ }))
+    fireEvent.click(await screen.findByRole('row', { name: /带引号的那条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
     fireEvent.keyDown(document, { key: 'Escape' })
-    const row = screen.getByRole('option', { name: /带引号的那条/ })
+    const row = screen.getByRole('row', { name: /带引号的那条/ })
     expect(row).toHaveAttribute('aria-selected', 'true')
     expect(document.activeElement).toBe(row)
+  })
+
+  it('条目 id 含空白：DOM id 合法且与 aria-activedescendant 同源，data-entry-id 仍是原始 id', async () => {
+    // 目录名只挡路径分隔符，空白是合法字符：HTML id 归 DOM 侧编码，entry id 本身不许改形
+    // （它是回收站目录名，恢复要按它反推原目录名）。issue #8 第 7 条。
+    const awkward = [{ ...rows[0]!, id: '20261019T120000Z-my session', title: '带空白的那条' }]
+    const { container } = renderWide(makeDeps({ list: vi.fn(async () => awkward) }))
+    const row = await screen.findByRole('row', { name: /带空白的那条/ })
+    expect(row.id).not.toMatch(/\s/)
+    expect(row.id).toBe(`sd-trash-${encodeURIComponent('20261019T120000Z-my session')}`)
+    expect(row.getAttribute('data-entry-id')).toBe('20261019T120000Z-my session')
+    // 宽档自动选中第一条 ⇒ activedescendant 必须指向同一枚 DOM id
+    await waitFor(() =>
+      expect(container.querySelector('[data-dsh-session-delete="trash-list"]')!.getAttribute('aria-activedescendant')).toBe(row.id))
   })
 
   it('下钻里打开确认框：Esc 只关框，下钻不退；再按才回清单', async () => {
     const deps = makeDeps({ list: vi.fn(async () => two) })
     renderNarrow(deps)
-    fireEvent.click(await screen.findByRole('option', { name: /第二条/ }))
+    fireEvent.click(await screen.findByRole('row', { name: /第二条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
     fireEvent.click(screen.getByRole('button', { name: '清空回收站…' }))
     await screen.findByRole('dialog')
@@ -380,7 +396,7 @@ describe('回收站面板 · 键盘', () => {
       })),
     })
     renderNarrow(deps)
-    fireEvent.click(await screen.findByRole('option', { name: /第二条/ }))
+    fireEvent.click(await screen.findByRole('row', { name: /第二条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
     fireEvent.click(screen.getByRole('button', { name: '清空回收站…' }))
     const dialog = within(await screen.findByRole('dialog'))
@@ -397,13 +413,47 @@ describe('回收站面板 · 键盘', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
-  it('清单那一块是 listbox：每行一个 option，选中的带 aria-selected', async () => {
+  it('清单那一块是 grid：每行一个 row，选中的带 aria-selected；组是带名字的 rowgroup', async () => {
     const deps = makeDeps({ list: vi.fn(async () => two) })
     renderWide(deps)
-    const list = await screen.findByRole('listbox')
+    const list = await screen.findByRole('grid')
     expect(list).toHaveAccessibleName('回收站清单')
-    expect(within(list).getAllByRole('option')).toHaveLength(2)
-    expect(within(list).getAllByRole('option').filter((row) => row.getAttribute('aria-selected') === 'true')).toHaveLength(1)
+    // 组头行没有 aria-selected，用它把条目行从 row 总数里分出来。
+    const rows = within(list).getAllByRole('row').filter((row) => row.hasAttribute('aria-selected'))
+    expect(rows).toHaveLength(2)
+    expect(rows.filter((row) => row.getAttribute('aria-selected') === 'true')).toHaveLength(1)
+    // 组不再是具名 section（映射成 region，会打断 grid→row 的所有权链）：是带名字的 rowgroup。
+    const group = within(list).getByRole('rowgroup')
+    expect(group).toHaveAccessibleName(group.querySelector('.sd-disclosure-title')?.textContent ?? '')
+  })
+
+  it('行内动作按钮住在 gridcell 里、树里没有任何 option（option 的后代会被 AT 抹平）', async () => {
+    const deps = makeDeps({ list: vi.fn(async () => rows) })
+    renderWide(deps)
+    const row = await screen.findByRole('row', { name: /code-review/ })
+    expect(document.querySelector('[role="option"]')).toBeNull()
+    expect(within(row).getAllByRole('gridcell').length).toBeGreaterThan(0)
+    for (const button of within(row).getAllByRole('button')) {
+      expect(button.closest('[role="gridcell"]')).not.toBeNull()
+    }
+  })
+
+  it('列数一致是显式声明的：grid 带 colcount，组头一格 colspan 横跨，条目行恒两格（多选态不变）', async () => {
+    const deps = makeDeps({ list: vi.fn(async () => two) })
+    renderWide(deps)
+    const list = await screen.findByRole('grid')
+    expect(list).toHaveAttribute('aria-colcount', '2')
+    // 组头行也是 row：唯一一格横跨整行，列数才与条目行对得上。
+    const headRow = within(list).getAllByRole('row').find((row) => !row.hasAttribute('aria-selected'))
+    const headCells = within(headRow!).getAllByRole('gridcell')
+    expect(headCells).toHaveLength(1)
+    expect(headCells[0]).toHaveAttribute('aria-colspan', '2')
+    const entryRows = within(list).getAllByRole('row').filter((row) => row.hasAttribute('aria-selected'))
+    for (const row of entryRows) expect(within(row).getAllByRole('gridcell')).toHaveLength(2)
+    // 多选态勾选框占内容前的一格、动作列退场：格数与列数声明都不变。
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    expect(list).toHaveAttribute('aria-colcount', '2')
+    for (const row of entryRows) expect(within(row).getAllByRole('gridcell')).toHaveLength(2)
   })
 })
 
@@ -442,7 +492,7 @@ describe('回收站面板 · 其余行为', () => {
       list: vi.fn().mockResolvedValueOnce(rows).mockResolvedValueOnce([]),
       })
     renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     await screen.findByText('先看改动')
     fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
@@ -453,7 +503,7 @@ describe('回收站面板 · 其余行为', () => {
   it('行里的「彻底删除…」也要先确认，确认后走一次 purge（N=1 的批量）', async () => {
     const deps = makeDeps()
     renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
     expect(deps.applyOutcomes).not.toHaveBeenCalled()
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
@@ -471,7 +521,7 @@ describe('回收站面板 · 其余行为', () => {
       })),
     })
     renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
     expect(await screen.findByText('已删除会话，但 2 个附件未能清理')).toBeInTheDocument()
@@ -483,7 +533,7 @@ describe('回收站面板 · 其余行为', () => {
     const group = [{ ...rows[0]!, sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]
     const deps = makeDeps({ list: vi.fn(async () => group) })
     renderWide(deps)
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText(/1\.5KB/)).toBeInTheDocument()
@@ -521,6 +571,8 @@ describe('回收站面板 · 其余行为', () => {
     })
     render(<TrashPanel deps={deps} />)
     await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(1))
+    // 读数失败也是普通内容块：没有可导航的行，就不挂 grid。
+    expect(screen.queryByRole('grid')).toBeNull()
     fireEvent.click(await screen.findByRole('button', { name: '重试' }))
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
     expect(deps.list).toHaveBeenCalledTimes(2)
@@ -533,7 +585,10 @@ describe('回收站面板 · 其余行为', () => {
     render(<TrashPanel deps={deps} />)
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
     expect(screen.getByText('正在读回收站…')).toBeInTheDocument()
+    // 加载中也还没有行：容器不挂 grid（ADR-0028）。
+    expect(screen.queryByRole('grid')).toBeNull()
     release(rows)
+    expect(await screen.findByRole('grid')).toBeInTheDocument()
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
   })
 })
@@ -633,7 +688,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     const deps = makeDeps({ list: vi.fn(async () => [row]) })
     renderWide(deps)
     expect(await screen.findByText(/可释放 226KB/)).toBeInTheDocument()
-    fireEvent.click(within(screen.getByRole('option', { name: /code-review/ })).getByRole('button', { name: '彻底删除…' }))
+    fireEvent.click(within(screen.getByRole('row', { name: /code-review/ })).getByRole('button', { name: '彻底删除…' }))
     expect(within(screen.getByRole('dialog')).getByText(/226KB/)).toBeInTheDocument()
   })
 
@@ -651,7 +706,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // 整页只有一块实心红（2026-10-01 立的层级，两栏改版一步没让）。
   it('危险动作分两档：行内那把只有字色，实心红仍然只有「清空回收站…」', async () => {
     renderWide(makeDeps())
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     const danger = within(row).getByRole('button', { name: '彻底删除…' })
     expect(danger.classList.contains('sd-button-ghost')).toBe(true)
     expect(danger.style.color).toBe('var(--dsw-alias-state-error-primary)')
@@ -671,7 +726,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
       { ...rows[0]!, id: 'b', sessionId: 'session-b', title: '另一条会话' },
     ]
     const { container } = renderWide(makeDeps({ list: vi.fn(async () => twoRows) }))
-    const row = await screen.findByRole('option', { name: /code-review/ })
+    const row = await screen.findByRole('row', { name: /code-review/ })
     expect(row.style.background).toBe('var(--dsw-alias-button-ghost-active-fill)')
     expect(row.style.border).toContain('var(--dsw-alias-button-ghost-active-border)')
     // 两行才谈得上"未选中"：只渲一行时宽档必然把那唯一一行自动选中，未选中那一侧无从断言。
@@ -1051,8 +1106,8 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     expect(screen.queryByText('第一条')).toBeNull()
   })
 
-  it('多选态：listbox 声明可多选，aria-selected 说的是勾选；退出后回到"选中看详情"那套', async () => {
-    // 用宽档：窄档点行会下钻，清单整块离开 DOM，那时候量不到 listbox 的 aria。
+  it('多选态：grid 声明可多选，aria-selected 说的是勾选；退出后回到"选中看详情"那套', async () => {
+    // 用宽档：窄档点行会下钻，清单整块离开 DOM，那时候量不到 grid 的 aria。
     const { container } = renderWide(depsOf())
     await screen.findByText('第一条')
     const list = container.querySelector('[data-dsh-session-delete="trash-list"]')!
@@ -1183,14 +1238,14 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
 
   it('盒子正好 900 就分栏（断点是含边界的 ≥）', async () => {
     const { container } = renderAt(900, makeDeps())
-    await screen.findByRole('option', { name: /code-review/ })
+    await screen.findByRole('row', { name: /code-review/ })
     expect(container.querySelector('[role="separator"]')).not.toBeNull()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).not.toBeNull()
   })
 
   it('差 1 px（899）就走下钻：既没有把手也没有右栏', async () => {
     const { container } = renderAt(899, makeDeps())
-    await screen.findByRole('option', { name: /code-review/ })
+    await screen.findByRole('row', { name: /code-review/ })
     expect(container.querySelector('[role="separator"]')).toBeNull()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeNull()
   })
@@ -1229,7 +1284,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
   it('选中之后落点跟着那一行走（其余全退回 -1，roving tabindex 只有一个）', async () => {
     const { container } = renderWide(depsOfThree())
     await screen.findByText('甲组第一条')
-    fireEvent.click(screen.getByRole('option', { name: /乙组第一条/ }))
+    fireEvent.click(screen.getByRole('row', { name: /乙组第一条/ }))
     const rows = [...container.querySelectorAll('[data-dsh-session-delete="trash-row"]')]
     const tabStops = rows.filter((row) => (row as HTMLElement).tabIndex === 0)
     expect(tabStops).toHaveLength(1)
@@ -1246,7 +1301,7 @@ describe('回收站面板 · 不再自动扫无主子会话（2026-10-27 搬家�
   it('挂载与写后重读都不发 /orphans，面板上也没有孤儿提示', async () => {
     const deps = makeDeps({ scanOrphans: vi.fn(async () => ORPHANS) })
     renderWide(deps)
-    await screen.findByRole('option', { name: /code-review/ })
+    await screen.findByRole('row', { name: /code-review/ })
     // 写后重读（失效通告）也不许顺手扫一次。
     act(() => { invalidateTrash() })
     await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(2))

@@ -15,6 +15,7 @@ import {
   TRASH_DIR_LABEL,
   TRASH_DIR_NAME,
   VERB_CODES,
+  isRemoteResult,
   type TrashRowWire,
 } from '../src/shared/wire.js'
 import type { PurgeResultLike, TrashDetailLike, TrashEntryLike } from '../src/client/remote.js'
@@ -151,6 +152,31 @@ describe('两半共用同一份形状（不是两份互相镜像）', () => {
       totalBytes: 4096,
       items: [{ attachmentId: `sha256:${'a'.repeat(64)}`, bytes: 4096 }],
     })
+  })
+})
+
+describe('响应信封的运行期判形（isRemoteResult）', () => {
+  // 中间层（反代 / SPA 兜底）会回非信封 JSON：判形不过就该走「回的不是信封」诊断，
+  // 而不是把垃圾喂给 unwrapRemoteResult 炸出 TypeError / "undefined"（issue #8 第 1 条）。
+  it('非信封一律判 false：空对象、ok 非布尔、两臂缺格、error 是字符串或 null、数组、null', () => {
+    expect(isRemoteResult({})).toBe(false)
+    expect(isRemoteResult({ ok: 'yes' })).toBe(false)
+    expect(isRemoteResult({ ok: true })).toBe(false)
+    expect(isRemoteResult({ ok: false })).toBe(false)
+    expect(isRemoteResult({ ok: false, error: null })).toBe(false)
+    expect(isRemoteResult({ ok: false, error: 'boom' })).toBe(false)
+    expect(isRemoteResult({ ok: false, error: { message: 'm' } })).toBe(false)
+    expect(isRemoteResult({ ok: false, error: { code: 1, message: 'm' } })).toBe(false)
+    expect(isRemoteResult([])).toBe(false)
+    expect(isRemoteResult(null)).toBe(false)
+    expect(isRemoteResult('ok')).toBe(false)
+  })
+
+  it('合法信封两臂都放行：value 任意（含 null），error 是带 string code/message 的对象', () => {
+    expect(isRemoteResult({ ok: true, value: null })).toBe(true)
+    expect(isRemoteResult({ ok: true, value: 1 })).toBe(true)
+    expect(isRemoteResult({ ok: true, value: [{ id: 'a' }] })).toBe(true)
+    expect(isRemoteResult({ ok: false, error: { code: 'sessiondelete/io', message: 'm' } })).toBe(true)
   })
 })
 
