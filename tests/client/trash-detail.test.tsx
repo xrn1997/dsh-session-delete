@@ -10,6 +10,7 @@ import type {
   TrashDetailInjectionBlockWire,
   TrashDetailTextBlockWire,
   TrashDetailToolBlockWire,
+  TrashEntryWire,
 } from '../../src/shared/wire.js'
 
 const DELETED_AT = Date.UTC(2026, 9, 14, 6, 56, 58)
@@ -643,5 +644,74 @@ describe('回收站详情块 · 附件', () => {
     const { container } = withBlocks([userBlock('u1', 1, '', [attachment])])
     expect(container.querySelectorAll('[data-sd-bubble]')).toHaveLength(0)
     expect(container.querySelector('[data-sd-msg="user"] img')).not.toBeNull()
+  })
+})
+
+const KID = {
+  id: 'kid', sessionId: 'session-kid', projectDir: '--p--', workspaceId: 'ws',
+  wasArchived: false, deletedAt: DELETED_AT, title: '孩子会话', sizeBytes: 2048, parentEntryId: entry.id,
+} as TrashEntryWire
+
+describe('回收站详情块 · 子会话', () => {
+  it('有 subagents 且给了 onOpenChild：段标题给条数与合计，逐条画出，点一条把它交出去', () => {
+    const onOpenChild = vi.fn()
+    const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2] } }, { onOpenChild })
+    // 段上的合计是这一批孩子的清册大小（与清单行同一口径）：永久删除按整组释放，删前要能核对「几个都在这儿」
+    expect(screen.getByText('子会话（2） · 3.0KB')).toBeInTheDocument()
+    const row = screen.getByText('孩子会话')
+    fireEvent.click(row)
+    expect(onOpenChild).toHaveBeenCalledWith(KID)
+    // 宿主类给折叠头钉死行高并裁溢出，导航行带内边距必须放开高度按内容撑开，否则裁字；
+    // 指针光标同理走内联，不借展开语义。jsdom 量不了布局，这里钉内联契约当回归哨。
+    const rowButton = document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagent-row"]')
+    expect(rowButton).not.toBeNull()
+    expect(rowButton!.style.height).toBe('auto')
+    expect(rowButton!.style.cursor).toBe('pointer')
+  })
+
+  it('subagents 缺席：没有子会话段', () => {
+    at({ kind: 'ready', entry, detail }, { onOpenChild: vi.fn() })
+    expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
+  })
+
+  it('subagentsTotal 出线：说清只列了前几条、总数是多少', () => {
+    const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { onOpenChild: vi.fn() })
+    expect(screen.getByText('仅列出前 2 条，共 5 条')).toBeInTheDocument()
+  })
+
+  it('没给 onOpenChild：即使有 subagents 也不画段（组件不自己造动作）', () => {
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } })
+    expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
+  })
+
+  it('孩子视图（parentContext 非 null）：宽档也画「返回父会话」，点它交回 onBack', () => {
+    const onBack = vi.fn()
+    at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { wide: true, parentContext: { title: '父会话', onBack } })
+    const btn = screen.getByRole('button', { name: '← 返回父会话' })
+    fireEvent.click(btn)
+    expect(onBack).toHaveBeenCalled()
+    // 孩子视图里不再同时画「返回清单」：一步只退一层
+    expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+  })
+
+  it('parentContext 缺席且宽档：两颗返回按钮都不画（现状不变）', () => {
+    at({ kind: 'ready', entry, detail }, { wide: true })
+    expect(screen.queryByRole('button', { name: '← 返回父会话' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+  })
+
+  // jsdom 量不了布局，钉的是 DOM 契约：两颗返回互斥、共用「返回清单」原来的左侧位置。
+  it('返回键沿用标题左端：两颗返回共用同一个位置', () => {
+    at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { wide: true, parentContext: { title: '父会话', onBack: vi.fn() } })
+    const parentHead = screen.getByRole('button', { name: '← 返回父会话' }).parentElement as HTMLElement
+    expect(parentHead.firstElementChild?.textContent).toBe('← 返回父会话')
+
+    at({ kind: 'ready', entry, detail }, { wide: false })
+    const listHead = screen.getByRole('button', { name: '← 返回清单' }).parentElement as HTMLElement
+    expect(listHead.firstElementChild?.textContent).toBe('← 返回清单')
   })
 })

@@ -200,6 +200,15 @@ export interface TrashDetailWire {
   blocks: TrashDetailBlockWire[]
   /** 更早一页的块序号；`null` = 已经到顶。把它原样回传给 `POST /detail` 的 `before`。 */
   olderCursor: number | null
+  /** 跟着这条父条目一起进回收站、并**折进这一行**的孩子（清册里 `parentEntryId` 指向它，
+   *  且组语义接得住——折的判据复用 `src/trash/groups.ts` 的 `visibleGroups`），按清册原序。
+   *  确有孩子时出线；**缺席 = 没有孩子**，不是空数组。孩子的详情仍按 `entryId` 走同一个 `/detail`。
+   *  最多过线 `src/trash/detail.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 条，超出时 `subagentsTotal` 给总数。
+   *  这是详情线上唯一带清册事实的一格：孩子不在客户端清单里，没有「按 entryId 与清单配对」
+   *  那条路可走（`src/client/remote.ts` 头注的例外说明）。 */
+  subagents?: TrashEntryWire[]
+  /** 子会话总数；**只在 `subagents` 被条数闸截断时出线**（缺席 = 上面就是全部）。 */
+  subagentsTotal?: number
 }
 
 /** 一次永久删除顺带、或一次孤儿附件清理的附件读数。`skipped` 有值 = 这一轮**部分或整体没清**：

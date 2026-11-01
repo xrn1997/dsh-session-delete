@@ -167,6 +167,11 @@ _Avoid_: 回执（写回执的原始 `Receipt` 仍住 `src/client/receipt.ts`，
 _唯一实现_: `src/client/use-trash-panel-controller.ts`。
 _Avoid_: 确认框状态（框只管呈现；开合与关框规则不在视图里）。
 
+**孩子视图（child view）**:
+回收站详情正在看某个子条目时的离清单导航态：详情主体切到孩子（同一套元信息、正文与分页），清单选中仍在父行，组动作仍按整组；单级，返回回到清单选中那条的详情。入口是父详情的「子会话」段（裁决见 ADR-0029）。
+_唯一实现_: `src/client/use-trash-panel-controller.ts` 的 `childView`。
+_Avoid_: 下钻（下钻专指窄档清单→详情那一层，孩子视图在详情内部）；子会话详情页（不是新页面或新段，只是详情主体换人）。
+
 **后发读赢（latest-wins）**:
 同一类异步读里只有最新发起的那次允许落地；晚到的旧响应直接丢弃。它只做 compare-and-set，不拥有防抖、轮询、定时器或焦点策略。
 _唯一实现_: `src/client/store.ts` 的 `createLatestWins`。

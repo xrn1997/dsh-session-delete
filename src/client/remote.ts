@@ -46,6 +46,8 @@ export type PurgeResultLike = PurgeStatsWire
  * **线上只有"日志里读出来的那几件"**：`deletedAt` / `sizeBytes` / `wasArchived` / 清册 `title` 这些
  * 清册已有的字段一律不过线——组件按 `entryId` 与自己手上那份清单配对，这样"清单里的大小"和
  * "详情里的大小"永远是同一个数，不会因为两次读数不同而各说各话。
+ * 例外只有一格：`subagents`（孩子摘要）。孩子不在客户端清单里、无从配对，
+ * 它们的清册事实只能随详情过线（issue #7，ADR-0029）。
  */
 export type TrashDetailLike = TrashDetailWire
 

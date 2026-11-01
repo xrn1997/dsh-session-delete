@@ -1310,3 +1310,86 @@ describe('回收站面板 · 不再自动扫无主子会话（2026-10-27 搬家�
     expect(document.querySelector('[data-dsh-session-delete="orphan-banner"]')).toBeNull()
   })
 })
+
+const KID_ROW = {
+  id: 'kid', sessionId: 'session-kid', projectDir: '--p--', workspaceId: 'ws',
+  wasArchived: false, deletedAt: 1, title: '孩子会话', sizeBytes: 1024, parentEntryId: 'a',
+}
+
+function kidDeps(): FakeRemote {
+  return makeDeps({
+    list: vi.fn(async () => [{ ...rows[0]!, subagentCount: 1, subagentBytes: 1024 }]),
+    detail: vi.fn(async (id: string) => id === 'kid'
+      ? { ...detailFixture, entryId: 'kid', blocks: [{ kind: 'user', id: '0', time: 1, text: '孩子的正文', truncated: false, attachments: [] }] }
+      : { ...detailFixture, subagents: [KID_ROW] }),
+  })
+}
+
+describe('回收站面板 · 子会话详情', () => {
+  it('宽档：父详情点子会话 → 孩子正文上屏，清单选中仍在父行；返回父会话可回', async () => {
+    renderWide(kidDeps())
+    await screen.findByText('先看改动')
+    fireEvent.click(screen.getByText('孩子会话'))
+    expect(await screen.findByText('孩子的正文')).toBeInTheDocument()
+    // 清单选中仍是父行（aria-selected 钉在父行的 id 上）
+    const parentRow = document.getElementById('sd-trash-a')
+    expect(parentRow?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '← 返回父会话' }))
+    expect(await screen.findByText('先看改动')).toBeInTheDocument()
+  })
+
+  it('窄档：下钻到父 → 孩子 → 返回父（仍下钻）→ 返回清单', async () => {
+    renderNarrow(kidDeps())
+    fireEvent.click(await screen.findByText('/code-review'))
+    await screen.findByText('先看改动')
+    fireEvent.click(screen.getByText('孩子会话'))
+    expect(await screen.findByText('孩子的正文')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '← 返回父会话' }))
+    await screen.findByText('先看改动')
+    // 仍在下钻：清单不在 DOM，「返回清单」还在
+    fireEvent.click(screen.getByRole('button', { name: '← 返回清单' }))
+    expect(await screen.findByText('/code-review')).toBeInTheDocument()
+  })
+
+  // 单级（ADR-0029）：下一层的入口只在主体是清单选中那条时交出。更深一代自己不折进父行、占清单行
+  // （判据住 `src/trash/groups.ts`），走清单可达——在孩子视图里再开一层会让那颗返回指着孙辈说话。
+  it('宽档：孩子视图里不再画「子会话」段，返回仍交还清单选中那条', async () => {
+    const deps = makeDeps({
+      list: vi.fn(async () => [{ ...rows[0]!, subagentCount: 1, subagentBytes: 1024 }]),
+      detail: vi.fn(async (id: string) => id === 'kid'
+        ? {
+          ...detailFixture,
+          entryId: 'kid',
+          subagents: [{ ...KID_ROW, id: 'grandkid', sessionId: 'session-grandkid', title: '孙辈会话', parentEntryId: 'kid' }],
+          blocks: [{ kind: 'user', id: '0', time: 1, text: '孩子的正文', truncated: false, attachments: [] }],
+        }
+        : { ...detailFixture, subagents: [KID_ROW] }),
+    })
+    renderWide(deps)
+    await screen.findByText('先看改动')
+    expect(screen.getByText(/^子会话（1）/)).toBeInTheDocument()
+    fireEvent.click(screen.getByText('孩子会话'))
+    await screen.findByText('孩子的正文')
+    expect(screen.queryByText('孙辈会话')).not.toBeInTheDocument()
+    expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '← 返回父会话' }))
+    expect(await screen.findByText('先看改动')).toBeInTheDocument()
+  })
+
+  // 孩子视图不是死路：孩子的详情读失败时宽档既没有段（失败态不画正文）也没有「返回清单」，
+  // 清单行就是那一扇出口——`select` 无条件收掉孩子视图（判据住 ADR-0029 与状态⑥）。
+  it('宽档：孩子详情读失败后点清单行仍能脱身', async () => {
+    const deps = kidDeps()
+    renderWide(deps)
+    await screen.findByText('先看改动')
+    deps.detail.mockRejectedValueOnce(new Error('回收站目录不在'))
+    fireEvent.click(screen.getByText('孩子会话'))
+    expect(await screen.findByText('回收站目录不在')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+
+    fireEvent.click(document.getElementById('sd-trash-a')!)
+    expect(await screen.findByText('先看改动')).toBeInTheDocument()
+    expect(screen.queryByText('回收站目录不在')).not.toBeInTheDocument()
+  })
+})

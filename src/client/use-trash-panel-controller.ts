@@ -1,5 +1,5 @@
 /**
- * 回收站面板状态机：选中、详情缓存、窄档下钻、清单换版清场、宽档自动选中、
+ * 回收站面板状态机：选中、孩子视图、详情缓存、窄档下钻、清单换版清场、宽档自动选中、
  * 失效重读，以及确认后的恢复/批量/清空与失败落点。
  *
  * 关键判据：
@@ -8,7 +8,7 @@
  * - 选中 id 不在新清单里 ⇒ 丢缓存、清选中、退出下钻；清单读不到（null）不算“没了”。
  * - 自动选中只在 selectedId 为 null 时接管。
  * - 失效通告只触发 refreshAfterWrite()；动作成功必须在同一趟里丢详情缓存。
- * - back() 只收下钻，不碰焦点；失败原文不翻译。
+ * - back() 先收孩子视图、再收下钻，不碰焦点；失败原文不翻译。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { BusyGate } from './busy-gate.js'
@@ -18,6 +18,7 @@ import {
   type TrashDetailLike,
   type TrashEntryLike,
 } from './remote.js'
+import type { TrashEntryWire } from '../shared/wire.js'
 import { useTrashRevision } from './trash-store.js'
 import { useLatest } from './store.js'
 import type { TrashDetailState } from './trash-detail.js'
@@ -55,11 +56,18 @@ export interface TrashPanelController {
   readonly busy: boolean
   readonly selected: TrashEntryLike | null
   readonly selectedId: string | null
+  /** 正在看哪个孩子（离清单的详情导航态；null = 看清单选中那条）。单级是设计（ADR-0029）：
+   *  只有一个槽，`openChild` 换槽不叠栈，返回交还清单选中那条。 */
+  readonly childView: TrashEntryWire | null
+  /** 打开一个孩子（父详情子会话段点进来）：读它的详情，但清单选中不动。 */
+  openChild(child: TrashEntryWire): Promise<void>
+  /** 回到父详情（宽档头部那颗「返回父会话」；窄档 back/Esc 的第一程也走它）。 */
+  closeChild(): void
   readonly drilled: boolean
   readonly detail: TrashDetailState
-  /** 更早一页正在读（只对当前选中那条有意义）。 */
+  /** 更早一页正在读（只对当前详情主体有意义：孩子视图开着就是孩子）。 */
   readonly loadingOlder: boolean
-  /** 更早一页读失败的原文（只对当前选中那条有意义；正文本身仍是 ready）。 */
+  /** 更早一页读失败的原文（只对当前详情主体有意义；正文本身仍是 ready）。 */
   readonly olderFailure: string | null
   /** 待确认的那一批（确认框的开合）；确认落地后由控制器收起。 */
   readonly pending: PendingAction | null
@@ -149,6 +157,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   const entries = listView(list).rows
 
   const [selectedId, setSelectedId, selectedIdRef] = useSyncedRef<string | null>(null)
+  /** 详情主体可以离清单：孩子视图开着时画的是孩子，`selectedId` 仍指着父行。 */
+  const [childView, setChildView, childViewRef] = useSyncedRef<TrashEntryWire | null>(null)
   const [drilled, setDrilled] = useState(false)
   const [detailShown, detailFlight] = useInFlight()
   const [detailFailure, setDetailFailure] = useState<DetailFailure | null>(null)
@@ -186,35 +196,57 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (pending !== null && !gate.busy && list.status === 'unknown') setPending(null)
   }, [gate.busy, list.status, pending])
 
+  /** 按 entryId 确保详情在缓存里：命中直接摆，没命中读一次（在飞闸挡重复）。
+   *  选中（select）与孩子视图（openChild）共用这一条读路——缓存/在飞/失败都按 entryId 键控，
+   *  谁在屏幕上是 subject 的事，不是读路的事。 */
+  const ensureDetail = useCallback(async (entryId: string): Promise<void> => {
+    if (detailCache.current.has(entryId)) {
+      detailFlight.show(null)
+      setDetailFailure(null)
+      return
+    }
+    // loading 先摆到这一条上，**再**判在飞：在飞时早退也得让 loading 跟着选中走。
+    // 反过来写（先判在飞、后摆 loading）会留下一条卡死的路：A 在飞 → 选 B → 再选 A，
+    // A 的回执落地时 loading 还指着 B，没有任何 state 变化，详情块永远停在 loading。
+    detailFlight.show(entryId)
+    setDetailFailure(null)
+    // 同一条在飞时不重复发 `/detail`（宽档双击同一行会打两条）。
+    if (!detailFlight.begin(entryId)) return
+    const outcome = await callRemote(() => deps.detail(entryId))
+    // 只收自己那一拍的 loading：期间已经切到别的条目时，别把新的那一拍按掉。
+    detailFlight.end(entryId)
+    if (outcome.ok) detailCache.current.set(entryId, outcome.value)
+    else setDetailFailure({ entryId, message: outcome.failure.message })
+  }, [deps, detailFlight])
+
   /**
    * 选一条：命中缓存就直接摆（不经过 loading），没命中才去读那条会话自己的日志。
    * `drill` 是窄档的第二步语义（点行 = 选中并下钻；方向键 = 只移动选中）。
+   * 选清单行就是回清单：孩子视图跟着收掉（详情主体交还给选中那条）。
    */
   const select = useCallback(
     async (entry: TrashEntryLike, options: { drill?: boolean } = {}): Promise<void> => {
+      setChildView(null)
       setSelectedId(entry.id)
       setOlderFailure(null)
       if (options.drill === true) setDrilled(true)
-      if (detailCache.current.has(entry.id)) {
-        detailFlight.show(null)
-        setDetailFailure(null)
-        return
-      }
-      // loading 先摆到这一条上，**再**判在飞：在飞时早退也得让 loading 跟着选中走。
-      // 反过来写（先判在飞、后摆 loading）会留下一条卡死的路：A 在飞 → 选 B → 再选 A，
-      // A 的回执落地时 loading 还指着 B，没有任何 state 变化，详情块永远停在 loading。
-      detailFlight.show(entry.id)
-      setDetailFailure(null)
-      // 同一条在飞时不重复发 `/detail`（宽档双击同一行会打两条）。
-      if (!detailFlight.begin(entry.id)) return
-      const outcome = await callRemote(() => deps.detail(entry.id))
-      // 只收自己那一拍的 loading：期间已经切到别的条目时，别把新的那一拍按掉。
-      detailFlight.end(entry.id)
-      if (outcome.ok) detailCache.current.set(entry.id, outcome.value)
-      else setDetailFailure({ entryId: entry.id, message: outcome.failure.message })
+      await ensureDetail(entry.id)
     },
-    [deps, detailFlight],
+    // 三个 setter（`setChildView` / `setSelectedId` / `setOlderFailure`）都是恒稳引用，不进依赖，
+    // 与 `openChild`、`closeChild` 同一条写法。
+    [ensureDetail],
   )
+
+  const openChild = useCallback(async (child: TrashEntryWire): Promise<void> => {
+    setChildView(child)
+    setOlderFailure(null)
+    await ensureDetail(child.id)
+  }, [ensureDetail])
+
+  const closeChild = useCallback((): void => {
+    setChildView(null)
+    setOlderFailure(null)
+  }, [])
 
   /**
    * 按当前详情的 `olderCursor` 取更早一页，拼到现有块前面。
@@ -224,11 +256,11 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 页**不落屏**（A 的更早页不许盖掉 B）；失败只走 `olderFailure`，已读到的正文照旧是 ready。
    */
   const loadOlder = useCallback(async (): Promise<void> => {
-    const entryId = selectedId
+    const entryId = childView?.id ?? selectedId
     if (entryId === null) return
     const cached = detailCache.current.get(entryId)
     if (cached === undefined || cached.olderCursor === null) return
-    // 渲染位先摆到这一条，**再**判在飞（与 `select` 同一条顺序）：另一条占过这个槽之后切回来点，
+    // 渲染位先摆到这一条，**再**判在飞（与 `ensureDetail` 同一条顺序）：另一条占过这个槽之后切回来点，
     // 这一条其实已经在读——不先摆，按钮看着可点却静默无动作。摆了也只是按一次 loading，
     // `begin` 回 false 就不发第二条。
     olderFlight.show(entryId)
@@ -238,8 +270,9 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     const cursor = cached.olderCursor
     const outcome = await callRemote(() => deps.detail(entryId, cursor))
     olderFlight.end(entryId)
-    // 晚到结果只在「用户还在这一条」时落屏：状态闭包读到的是发请求那一刻的选中，判最新值走镜像。
-    if (selectedIdRef.current !== entryId) return
+    // 晚到结果只在「用户还在这一条」时落屏：状态闭包读到的是发请求那一刻的主体，判最新值走镜像。
+    // 孩子那一面也要比：孩子的 id 从来不等于清单选中，只比选中会把孩子的每一页都丢掉。
+    if ((childViewRef.current?.id ?? selectedIdRef.current) !== entryId) return
     const current = detailCache.current.get(entryId)
     if (current !== cached) return
     if (outcome.ok) {
@@ -252,7 +285,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       return
     }
     setOlderFailure({ entryId, message: outcome.failure.message })
-  }, [deps, selectedId, olderFlight])
+  }, [deps, childView, selectedId, olderFlight])
 
   // 清单换了（别处删了一条、恢复成功、彻底删除成功）：选中那条已经不在了就让位，并把它的缓存丢掉。
   // 下面那条自动选中以「尚未选中」为门，所以这一拍（选中还在）它不抢；清场落地后的下一拍才接住。
@@ -261,6 +294,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (entries.some((entry) => entry.id === selectedId)) return
     detailCache.current.delete(selectedId)
     setSelectedId(null)
+    // 孩子是从这条父行点进来的：父让位了，孩子视图跟着清场（它自己不在清单里，没有第二道门）。
+    setChildView(null)
     olderFlight.clear()
     setDrilled(false)
     setOlderFailure(null)
@@ -287,6 +322,10 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     [entries, selectedId],
   )
 
+  /** 详情现在画谁：孩子视图开着就是孩子，否则是清单选中那条。孩子不在清单里，
+   *  所以它是离清单的导航态——selectedId 不动，清场/自动选中/组动作全部照旧。 */
+  const subject: TrashEntryWire | null = childView ?? selected
+
   /** 恢复确认框要摆的这一批：按勾选顺序，清单里已经找不到的 id 滤掉
    *  （别的窗口刚动过；重读会把勾选也剔掉）。单条与整站确认框不摆条目，各自念自己的那一句。 */
   const pendingEntries = useMemo(() => {
@@ -296,33 +335,38 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   }, [entries, pending])
 
   const detail = useMemo<TrashDetailState>(() => {
-    if (selected === null) return { kind: 'idle' }
-    if (detailShown === selected.id) return { kind: 'loading', entry: selected }
-    const cached = detailCache.current.get(selected.id)
-    if (cached !== undefined) return { kind: 'ready', entry: selected, detail: cached }
-    if (detailFailure?.entryId === selected.id) {
-      return { kind: 'failed', entry: selected, message: detailFailure.message }
+    if (subject === null) return { kind: 'idle' }
+    if (detailShown === subject.id) return { kind: 'loading', entry: subject }
+    const cached = detailCache.current.get(subject.id)
+    if (cached !== undefined) return { kind: 'ready', entry: subject, detail: cached }
+    if (detailFailure?.entryId === subject.id) {
+      return { kind: 'failed', entry: subject, message: detailFailure.message }
     }
     // 兜底：选中了、这一拍没有在飞的读、缓存刚被某个动作清掉（恢复 / 整批 / 清空）——先按
-    // 「读着」摆着，下一次 `select` 或清单换版会把状态推到 ready / failed / idle，不会永久停在这里。
-    return { kind: 'loading', entry: selected }
-  }, [selected, detailShown, detailFailure, detailVersion])
+    // 「读着」摆着，下一次 `select` / `openChild` / `retry` 或清单换版会把状态推到 ready / failed / idle，
+    // 不会永久停在这里。
+    return { kind: 'loading', entry: subject }
+  }, [subject, detailShown, detailFailure, detailVersion])
 
-  /** 分页/失败都只对当前选中那条上屏；切到别的条目时它们是别人家的旧账。 */
-  const loadingOlder = selectedId !== null && olderShown === selectedId
-  const olderFailure = olderFailureState !== null && olderFailureState.entryId === selectedId
+  /** 分页/失败都只对当前详情主体上屏（孩子视图开着就是孩子）；切到别的条目时它们是别人家的旧账。 */
+  const subjectId = subject?.id ?? null
+  const loadingOlder = subjectId !== null && olderShown === subjectId
+  const olderFailure = olderFailureState !== null && olderFailureState.entryId === subjectId
     ? olderFailureState.message
     : null
 
   /** 「重试」只重读当前这一条，不牵清单。 */
   const retry = useCallback((): void => {
+    if (childView !== null) { void ensureDetail(childView.id); return }
     if (selected !== null) void select(selected)
-  }, [selected, select])
+  }, [childView, ensureDetail, selected, select])
 
-  /** 退出下钻（「← 返回清单」）：选中留着，详情不清；焦点不动（Esc 那条归 `trash-nav.ts`）。 */
+  /** 窄档返回/Esc 的两程：孩子视图开着先回父详情（仍下钻），再按一次才退出下钻。
+   *  选中留着，详情不清；焦点不动（Esc 那条归 `trash-nav.ts`）。 */
   const back = useCallback((): void => {
+    if (childView !== null) { closeChild(); return }
     setDrilled(false)
-  }, [])
+  }, [childView, closeChild])
 
   const request = useCallback((action: PendingAction): void => {
     setPending(action)
@@ -441,6 +485,9 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     busy: gate.busy,
     selected,
     selectedId,
+    childView,
+    openChild,
+    closeChild,
     drilled,
     detail,
     loadingOlder,

@@ -22,7 +22,7 @@
  * 附件随块一起收（`attachmentsInContent`）：每块最多 20、每页最多 200；超出的**静默丢**，不另立计数——
  * "少了几张图"与"这块被截断"不是同一件事，拿一个数兼报会让两个数都对不上。
  */
-import { trashDirOf, type TrashEntry } from './entry.js'
+import { entryWire, trashDirOf, type TrashEntry } from './entry.js'
 import type { FsPort } from '../ports/fs-port.js'
 import type {
   TrashDetailAttachmentWire,
@@ -34,6 +34,7 @@ import type {
 } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 import { attachmentsInContent } from './attachments.js'
+import { visibleGroups } from './groups.js'
 import { trashEmpty, verbError } from '../verbs/errors.js'
 
 /** 每块文字的上限（字符）。正文、工具参数、工具结果各自吃这一刀。 */
@@ -46,6 +47,8 @@ export const PAGE_CHAR_LIMIT = 500_000
 const MAX_ATTACHMENTS_PER_BLOCK = 20
 /** 一页最多带多少张附件上线。 */
 const MAX_ATTACHMENTS_PER_PAGE = 200
+/** 子会话摘要最多列多少条；超出时只过线前 N 条，总数另走 `subagentsTotal`。 */
+export const SUBAGENT_SUMMARY_LIMIT = 200
 
 export type TrashDetail = TrashDetailWire
 
@@ -59,18 +62,21 @@ export type DetailDeps = {
   home: string
 }
 
-/** 三个分页/截断参数（可调是为把策略单独验穿；生产走的就是这三个默认值，用例里钉着）。 */
+/** 四个分页/截断参数（可调是为把策略单独验穿；生产走的就是这四个默认值，用例里钉着）。 */
 export interface DetailLimits {
   perBlockChars: number
   pageBlocks: number
   /** 一页正文的总字符闸；缺省 `PAGE_CHAR_LIMIT`。 */
   pageChars?: number
+  /** 子会话摘要的条数闸；缺省 `SUBAGENT_SUMMARY_LIMIT`。 */
+  subagents?: number
 }
 
 const DEFAULT_LIMITS: DetailLimits = {
   perBlockChars: PER_BLOCK_CHAR_CAP,
   pageBlocks: PAGE_BLOCK_LIMIT,
   pageChars: PAGE_CHAR_LIMIT,
+  subagents: SUBAGENT_SUMMARY_LIMIT,
 }
 
 interface ContentPart {
@@ -461,6 +467,16 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
     detail.blocks = finished.blocks
     detail.olderCursor = finished.olderCursor
     detail.models = [...models]
+    // 子会话摘要：只列**折进这一条**的孩子——折的判据复用 `visibleGroups`（ADR-0001/0029），
+    // 不在这里另写一份「parentEntryId 指向谁」。父行不在、或自己也是孩子时，下一代接不住、
+    // 自己占清单行；详情不重复给它们开入口。
+    const kids = visibleGroups(all).find((group) => group.root.id === record.id)?.kids ?? []
+    if (kids.length > 0) {
+      const limit = limits.subagents ?? SUBAGENT_SUMMARY_LIMIT
+      detail.subagents = kids.slice(0, limit).map(entryWire)
+      // 超闸只报「前 N 条 + 总数」，不静默截断：整组仍按整组释放，删前核对的合计由确认框念。
+      if (kids.length > limit) detail.subagentsTotal = kids.length
+    }
     return detail
   }
 }

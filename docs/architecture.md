@@ -102,9 +102,9 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 清册读的两个读面（`list()` = 对账 + 读，供 `/list`、`/empty` 与写动词；`raw()` = 不对账、不写行，供 pure 的 `/orphans` 与 `/detail`） | `src/trash/ledger.ts` | 存储域绑定、对账的具体目录判据；哪一段拿哪一面归 `src/api/route-table.ts` |
 | 清册与 `session-trash/` 目录的对账 | `src/trash/reconcile.ts` | 目录里读哪一代日志 |
 | 会话日志的选代与走帧（多帧 zstd） | `src/log/session-log.ts` + `src/log/zstd-frames.ts` | 正文该显示什么 |
-| 详情给谁看、给多少（块投影：user/assistant/reasoning/tool/injection/system/compaction；`source.kind` 分 user/injection；工具 call/result 按 `callId` 配对；单块字符闸、每页块数 + 页级字符闸 + `olderCursor` 游标；附件每块/每页两道闸；计数不过闸） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`）；折叠怎么画（`src/client/trash-detail.tsx`） |
+| 详情给谁看、给多少（块投影：user/assistant/reasoning/tool/injection/system/compaction；`source.kind` 分 user/injection；工具 call/result 按 `callId` 配对；单块字符闸、每页块数 + 页级字符闸 + `olderCursor` 游标；附件每块/每页两道闸；计数不过闸；子会话摘要=折进这一条的孩子按清册原序过线，超 `SUBAGENT_SUMMARY_LIMIT` 只列前 N 条并给总数） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`）；折叠怎么画（`src/client/trash-detail.tsx`）；「谁露面、折进谁」（`src/trash/groups.ts`，详情不折） |
 | 正文怎么排版成 DOM（裸 HTML、链接与图片的收口） | `src/client/markdown.tsx` + `src/client/ui/markdown.css` | 抄来的宿主消息行样式 |
-| 详情块的折叠呈现（默认折叠、摘要、工具状态、全部展开/折叠、加载更早、prepend 后滚动补偿） | `src/client/trash-detail.tsx` | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存（`src/client/use-trash-panel-controller.ts`） |
+| 详情块的折叠呈现（默认折叠、摘要、工具状态、全部展开/折叠、加载更早、prepend 后滚动补偿）与子会话段、那颗返回父会话的头部按钮 | `src/client/trash-detail.tsx` | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存、孩子视图的开合（`src/client/use-trash-panel-controller.ts`） |
 | 详情与维护卡预览的附件渲染 / 放大 / 失败占位 / 清理提示的呈现 | `src/client/attachment-view.tsx` | 什么时候出清理提示（面板归 `src/client/use-trash-query.ts`、维护卡归 `src/client/use-maintenance.ts`）；附件二进制怎么读（归 `src/api/attachment.ts`） |
 | 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
 | 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/reconcile.ts`） |
@@ -141,7 +141,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期；latest-wins 句柄 `createLatestWins` 的 compare-and-set；输入引用归一 `useLatest`） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
 | 宿主会话列表的批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
 | 宿主行快照订阅（DOM 观察 + 行登记；渲染侧只读快照）与整行点击守卫 | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
-| 回收站面板状态机（选中 / 详情缓存 / 详情分页（`olderCursor`、在飞、晚到不落屏）/ 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
+| 回收站面板状态机（选中 / 孩子视图（离清单单级导航）/ 详情缓存 / 详情分页（`olderCursor`、在飞、晚到不落屏）/ 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
 | 各张确认框的 busy 关框规则 | `src/client/confirm-close.ts` 的 `useIdleClose` | 各框的按钮文案与禁用呈现 |
 | 槽位贡献与注册（含设置页按 bundle 包名寻址的 keyed 槽位） | `src/client/index.tsx` | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |

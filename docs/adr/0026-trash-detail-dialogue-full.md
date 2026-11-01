@@ -23,7 +23,7 @@ Status: accepted
 ## 边界
 
 - **不做 Trajectory 全量表**：turn/step、job、request、permission、sandbox、approval、goal、workspace changes、重试与 compaction 的 start/end 都不铺进正文；要逐事件全量是另一个视图，另行设计。
-- **不做子会话详情**：回收站里子条目被折进父行、没有详情入口，单独跟 issue #7；这次只改单条详情。
+- **子会话详情另篇裁决**：这篇只定单条详情的正文形状；孩子的查看入口与导航见 ADR-0029（issue #7）。
 - **不做“查看完整单块”的第二条请求**：单块超过上限只标「已截断」；要一字不差就看恢复后的宿主。
 - **不重建工具富媒体卡片**：工具参数/结果走等宽纯文本，附件仍走现有图片/文件条；宿主工具视图的 terminal / diff / 搜索卡片不在这次范围。
 - **计数口径**：`assistantMessageCount` 数每一条 assistant/message（含只带 reasoning / tool-call 的）；`injectedCount` 数建了块的注入；`toolCallCount` 数每一条 tool/call；三者都不受分页与单块闸影响。

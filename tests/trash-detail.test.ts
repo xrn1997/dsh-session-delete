@@ -10,6 +10,7 @@ import {
   PAGE_BLOCK_LIMIT,
   PAGE_CHAR_LIMIT,
   PER_BLOCK_CHAR_CAP,
+  SUBAGENT_SUMMARY_LIMIT,
   readTrashDetail,
   type DetailDeps,
 } from '../src/trash/detail.js'
@@ -25,14 +26,14 @@ const frame = (...lines: string[]) =>
 const entry = (): TrashEntry =>
   trashEntry(id, { sessionId: 'session-x', workspaceId: 'ws', wasArchived: true, deletedAt: DELETED_AT, title: '清册标题', sizeBytes: 1234 })
 
-function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null } = {}) {
+function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null; rows?: TrashEntry[] } = {}) {
   const fs = {
     exists: vi.fn(async () => over.exists ?? true),
     listFiles: vi.fn(async () => over.files ?? ['session.v4.jsonl.zstd']),
     readFile: vi.fn(async () => log),
   }
-  // 详情认的是路由交来的 **raw 行**（`/detail` 是纯读，不对账）：假件照同一个 seam 造。
-  const rows = createMemoryManifest([entry()])
+  // 详情认的是路由交来的 **raw 行**（/detail 是纯读，不对账）：假件照同一个 seam 造。
+  const rows = createMemoryManifest(over.rows ?? [entry()])
   const deps: DetailDeps = { fs, rows: () => rows.list(), home: '/h' }
   return { deps, fs }
 }
@@ -585,8 +586,66 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
   expect(detail.lastActivity).toBe(16)
 })
 
-it('生产的三个闸就是那三位数字（改它必须是有意的，别让它悄悄漂）', () => {
+it('生产的四个闸就是这四位数字（改它必须是有意的，别让它悄悄漂）', () => {
   expect(PER_BLOCK_CHAR_CAP).toBe(16_000)
   expect(PAGE_BLOCK_LIMIT).toBe(30)
   expect(PAGE_CHAR_LIMIT).toBe(500_000)
+  expect(SUBAGENT_SUMMARY_LIMIT).toBe(200)
+})
+
+const kidId = makeEntryId(DELETED_AT, 'session-kid')
+const kid = (): TrashEntry =>
+  trashEntry(kidId, { sessionId: 'session-kid', parentEntryId: id, deletedAt: DELETED_AT, title: '孩子', sizeBytes: 55 })
+const kid2Id = makeEntryId(DELETED_AT, 'session-kid-2')
+const kid2 = (): TrashEntry =>
+  trashEntry(kid2Id, { sessionId: 'session-kid-2', parentEntryId: id, deletedAt: DELETED_AT, title: '孩子二', sizeBytes: 66 })
+const grandkidId = makeEntryId(DELETED_AT, 'session-grandkid')
+const grandkid = (): TrashEntry =>
+  trashEntry(grandkidId, { sessionId: 'session-grandkid', parentEntryId: kidId, deletedAt: DELETED_AT, title: '孙辈', sizeBytes: 7 })
+
+it('父条目详情带子会话摘要：清册原序、完整清册行形状、指向父的 parentEntryId', async () => {
+  // 清册里 kid2 在 kid 前面：摘要必须按这份原序过线，不许按 id 或标题重排
+  const { deps } = makeDeps(body(userLine(13, '父的话')), { rows: [entry(), kid2(), kid()] })
+  const detail = await readTrashDetail(deps)(id)
+  expect(detail.subagents?.map((child) => child.id)).toEqual([kid2Id, kidId])
+  expect(detail.subagents?.[1]).toMatchObject({ id: kidId, sessionId: 'session-kid', title: '孩子', sizeBytes: 55, parentEntryId: id })
+  expect(detail.subagentsTotal).toBeUndefined()
+})
+
+it('孩子自己的详情没有 subagents 这一格（它不是组根）', async () => {
+  const { deps } = makeDeps(body(userLine(13, '孩子的话')), { rows: [entry(), kid()] })
+  const detail = await readTrashDetail(deps)(kidId)
+  expect(detail.subagents).toBeUndefined()
+})
+
+it('折不进这一条的下一代不进展详情段（中间行自己占清单行）', async () => {
+  const { deps } = makeDeps(body(userLine(13, '父的话')), { rows: [entry(), kid(), grandkid()] })
+  const rootDetail = await readTrashDetail(deps)(id)
+  // 根只接住直接孩子；孙辈的父本身也是孩子，折不进根
+  expect(rootDetail.subagents?.map((child) => child.id)).toEqual([kidId])
+  // 中间行不是组根：孙辈自己占清单行，详情不再重复给入口（ADR-0029 否掉的双入口）
+  const childDetail = await readTrashDetail(deps)(kidId)
+  expect(childDetail.subagents).toBeUndefined()
+})
+
+it('没有孩子的条目缺席这一格（缺席不是空数组）', async () => {
+  const detail = await readTrashDetail(makeDeps(body(userLine(13, '独白'))).deps)(id)
+  expect(detail.subagents).toBeUndefined()
+})
+
+it('取更早一页（before 游标）时 subagents 仍在', async () => {
+  const { deps } = makeDeps(body(userLine(13, '父的话')), { rows: [entry(), kid()] })
+  const detail = await readTrashDetail(deps)(id, 0)
+  expect(detail.subagents).toHaveLength(1)
+})
+
+it('子会话摘要过条数闸：只过线前 N 条，总数另走 subagentsTotal', async () => {
+  const { deps } = makeDeps(body(userLine(13, '父的话')), { rows: [entry(), kid2(), kid(), grandkid()] })
+  const detail = await readTrashDetail(deps, {
+    perBlockChars: PER_BLOCK_CHAR_CAP,
+    pageBlocks: PAGE_BLOCK_LIMIT,
+    subagents: 1,
+  })(id)
+  expect(detail.subagents).toHaveLength(1)
+  expect(detail.subagentsTotal).toBe(2)
 })

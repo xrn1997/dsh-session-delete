@@ -18,7 +18,7 @@ import type {
   TrashDetailLike,
   TrashEntryLike,
 } from '../../src/client/remote.js'
-import type { TrashDetailBlockWire } from '../../src/shared/wire.js'
+import type { TrashDetailBlockWire, TrashEntryWire } from '../../src/shared/wire.js'
 import { afterDelete, afterRestore, bindMainView, resetMainView } from '../../src/client/main-view.js'
 import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
 import {
@@ -93,6 +93,16 @@ function detailOf(id: string): TrashDetailLike {
     blocks: [],
     olderCursor: null,
   }
+}
+
+/** A 的孩子（清册行形状，没有只读数——它不在清单里）。 */
+const KID: TrashEntryWire = {
+  id: 'kid', sessionId: 'session-kid', projectDir: '--p--', workspaceId: 'ws',
+  wasArchived: false, deletedAt: 4, title: 'Kid', sizeBytes: 5, parentEntryId: 'a',
+}
+
+function detailWithKids(id: string): TrashDetailLike {
+  return { ...detailOf(id), ...(id === 'a' ? { subagents: [KID] } : {}) }
 }
 
 /** 一段可以手动决定何时落地的 promise（测 loading 与到达顺序用）。 */
@@ -709,6 +719,147 @@ describe('面板控制器 · 下钻', () => {
     expect(m.result.current.drilled).toBe(false)
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.detail.kind).toBe('ready')
+  })
+})
+
+describe('面板控制器 · 孩子视图', () => {
+  it('openChild：详情切到孩子，selectedId 与清单选中不动', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.childView).toEqual(KID)
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.deps.detail).toHaveBeenCalledWith('kid')
+  })
+
+  it('openChild 命中缓存不重读；closeChild 回父详情（父缓存还在）', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    const calls = m.deps.detail.mock.calls.length
+    act(() => { m.result.current.closeChild() })
+    expect(m.result.current.childView).toBeNull()
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: A })
+    await act(async () => { await m.result.current.openChild(KID) })
+    expect(m.deps.detail.mock.calls.length).toBe(calls)
+  })
+
+  it('select 别的清单行会收掉孩子视图', async () => {
+    const m = mount({ entries: [A, B] })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.select(B) })
+    expect(m.result.current.childView).toBeNull()
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: B })
+  })
+
+  // 「看不见≠没有」落到孩子视图这一侧：清场只跟着**选中父行真的没了**这一条判据。
+  // 清单读不到那一拍控制器不动 childView 与选中（那一拍界面按「清单为空或失败时不分栏」整栏退场，
+  // 主体是谁这件事得留到重读回来），否则一次读失败就把用户正在核对的那个孩子冲掉。
+  it('清单读不到（unknown）不清孩子视图；重读回来主体仍是那个孩子', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+
+    m.update({ list: { status: 'unknown', failure: '清单读不出来' } })
+    expect(m.result.current.childView).toEqual(KID)
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.selected).toBeNull()
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+
+    m.update({ list: { status: 'ready', rows: [A] } })
+    expect(m.result.current.childView).toEqual(KID)
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+  })
+
+  it('父从清单消失（写后重读）：孩子视图与选中一并清场', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    m.update({ entries: [] })
+    await waitFor(() => { expect(m.result.current.childView).toBeNull() })
+    expect(m.result.current.detail).toEqual({ kind: 'idle' })
+  })
+
+  it('back() 先收孩子视图（仍下钻），再按一次才退出下钻', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { await m.result.current.select(A, { drill: true }) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    act(() => { m.result.current.back() })
+    expect(m.result.current.childView).toBeNull()
+    expect(m.result.current.drilled).toBe(true)
+    act(() => { m.result.current.back() })
+    expect(m.result.current.drilled).toBe(false)
+  })
+
+  it('孩子详情读失败：failed 落在孩子这一条，retry 重读的是孩子', async () => {
+    const m = mount({ entries: [A] })
+    m.deps.detail.mockImplementation(async (id: string) => {
+      if (id === 'kid') throw new Error('回收站目录不在')
+      return detailWithKids(id)
+    })
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    expect(m.result.current.detail).toMatchObject({ kind: 'failed', entry: KID })
+    m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
+    await act(async () => { m.result.current.retry() })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.selectedId).toBe('a')
+  })
+
+  it('孩子视图开着时 loadOlder 按孩子的游标读，拼进孩子的缓存', async () => {
+    const m = mount({ entries: [A] })
+    const kidPage1: TrashDetailLike = {
+      ...detailOf('kid'), blocks: [userBlock('晚', '9')], olderCursor: 9,
+    }
+    const kidPage2: TrashDetailLike = {
+      ...detailOf('kid'), blocks: [userBlock('早', '3')], olderCursor: null,
+    }
+    m.deps.detail.mockImplementation(async (id: string, before?: number) => {
+      if (id !== 'kid') return detailWithKids(id)
+      return before === undefined ? kidPage1 : kidPage2
+    })
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.loadOlder() })
+    expect(m.deps.detail).toHaveBeenCalledWith('kid', 9)
+    const state = m.result.current.detail
+    expect(state.kind).toBe('ready')
+    if (state.kind === 'ready') {
+      expect(state.detail.blocks.map((b) => (b as { id: string }).id)).toEqual(['3', '9'])
+      expect(state.detail.olderCursor).toBeNull()
+    }
+  })
+
+  // 分页读面跟着详情主体走：孩子的 id 不等于清单选中，只认选中的话孩子这一页永远"不在加载"、
+  // 失败原文也无处上屏（按钮看着可点，读失败却静默）。
+  it('孩子的更早页在飞与失败都对孩子上屏；回父详情时那笔旧账收掉', async () => {
+    const m = mount({ entries: [A] })
+    const kidTail: TrashDetailLike = { ...detailOf('kid'), blocks: [userBlock('晚', '9')], olderCursor: 9 }
+    m.deps.detail.mockImplementation(async (id: string) => (id === 'kid' ? kidTail : detailWithKids(id)))
+    await act(async () => { await m.result.current.select(A) })
+    await act(async () => { await m.result.current.openChild(KID) })
+
+    const slow = deferred<TrashDetailLike>()
+    m.deps.detail.mockImplementationOnce(() => slow.promise)
+    act(() => { void m.result.current.loadOlder() })
+    expect(m.result.current.loadingOlder).toBe(true)
+
+    await act(async () => { slow.reject(new Error('更早的页读不出来')) })
+    expect(m.result.current.loadingOlder).toBe(false)
+    expect(m.result.current.olderFailure).toBe('更早的页读不出来')
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+
+    act(() => { m.result.current.closeChild() })
+    expect(m.result.current.olderFailure).toBeNull()
+    expect(m.result.current.loadingOlder).toBe(false)
   })
 })
 

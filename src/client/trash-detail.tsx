@@ -21,8 +21,8 @@ import {
 } from 'react'
 import { AttachmentStrip } from './attachment-view.js'
 import { absoluteText, agoText, type CopyKey, type Translate } from './copy.js'
-import type { TrashDetailBlockWire, TrashDetailInjectionBlockWire, TrashDetailTextBlockWire } from '../shared/wire.js'
-import type { TrashDetailLike, TrashEntryLike } from './remote.js'
+import type { TrashDetailBlockWire, TrashDetailInjectionBlockWire, TrashDetailTextBlockWire, TrashEntryWire } from '../shared/wire.js'
+import type { TrashDetailLike } from './remote.js'
 import { MarkdownBody } from './markdown.js'
 import { Button } from './ui/Button.js'
 import { fileSizeText } from './ui/format.js'
@@ -33,11 +33,13 @@ import {
 } from './ui/icons.js'
 import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
 
+/** 详情主体只承诺清册那一行：孩子视图看的那条不在客户端清单里，没有只读数可配对
+ *  （孩子摘要随父详情过线，那一格的判据住 `src/client/remote.ts` 的 `TrashDetailLike`）。 */
 export type TrashDetailState =
   | { kind: 'idle' }
-  | { kind: 'loading'; entry: TrashEntryLike }
-  | { kind: 'failed'; entry: TrashEntryLike; message: string }
-  | { kind: 'ready'; entry: TrashEntryLike; detail: TrashDetailLike }
+  | { kind: 'loading'; entry: TrashEntryWire }
+  | { kind: 'failed'; entry: TrashEntryWire; message: string }
+  | { kind: 'ready'; entry: TrashEntryWire; detail: TrashDetailLike }
 
 /** 「加载更早」这一块（在飞/失败 + 滚动容器）整体过手：`TrashDetail` 只转交，谁画正文谁拆开用。
  *  四样东西是一个概念（分页读面）的四个格子，打包走一个名字，不再逐样穿透组件边界。 */
@@ -55,10 +57,14 @@ export interface TrashDetailProps {
   state: TrashDetailState
   /** 有写操作在飞（动作按钮住在清单行里，这里只用来把「重试」按住）。 */
   busy: boolean
-  /** 宽档不画返回——同屏就有清单，返回是多余的一步。 */
+  /** 宽档不画「返回清单」——同屏就有清单，那一步多余。孩子视图另有一颗返回，见 `parentContext`。 */
   wide: boolean
   onRetry: () => void
   onBack: () => void
+  /** 子会话段点一条时交出去（控制器 openChild）。缺席 = 不画段：组件只画状态，不自己造动作。 */
+  onOpenChild?: (child: TrashEntryWire) => void
+  /** 非 undefined = 正在看孩子：头部画「返回父会话」（宽档也画），title 是父标题（悬停可辨）。 */
+  parentContext?: { title: string; onBack: () => void }
   pager: DetailPager
   t: Translate
 }
@@ -220,6 +226,22 @@ const SECTION_LABEL: CSSProperties = {
   color: 'var(--dsw-alias-label-tertiary)',
 }
 
+/**
+ * 子会话行：折叠头同族的可点行，卡片底 + 小圆角；悬停走 sd-disclosure-row 的宿主配方。
+ * 两处内联覆盖各有理由：宿主类给折叠头钉死行高并随之裁溢出，导航行带内边距，须放开
+ * 高度按内容撑开，否则裁字；指针光标宿主只发给带展开语义的行，导航行不借那套语义，
+ * 光标就内联自给。
+ */
+const SUBAGENT_ROW: CSSProperties = {
+  ...BLOCK_ROW,
+  padding: '6px 10px',
+  height: 'auto',
+  cursor: 'pointer',
+  background: 'var(--dsw-alias-bg-layer-2)',
+  border: '0.5px solid var(--dsw-alias-border-l4)',
+  borderRadius: 'var(--dsw-radius-md)',
+}
+
 const TOOLBAR: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -257,7 +279,7 @@ function spanText(from: number, to: number, t: Translate): string | undefined {
 }
 
 /** 详情头部显示的那句标题：清册优先，空串才回落到日志里的 `session/title`。 */
-function titleOf(entry: TrashEntryLike, detail: TrashDetailLike | undefined, t: Translate): string {
+function titleOf(entry: TrashEntryWire, detail: TrashDetailLike | undefined, t: Translate): string {
   if (entry.title !== '') return entry.title
   if (detail !== undefined && detail.logTitle !== '') return detail.logTitle
   return t('common.untitled')
@@ -486,6 +508,8 @@ export function TrashDetail({
   wide,
   onRetry,
   onBack,
+  onOpenChild,
+  parentContext,
   pager,
   t,
 }: TrashDetailProps) {
@@ -515,8 +539,13 @@ export function TrashDetail({
 
   return (
     <div style={SHELL}>
+      {/* 两颗返回互斥（看父 vs 看清单），共用「返回清单」原来的左侧位置；宽档没有父可回时不画。 */}
       <div style={HEAD}>
-        {wide ? null : (
+        {parentContext !== undefined ? (
+          <Button variant="ghost" size="sm" style={{ flex: 'none' }} onClick={parentContext.onBack} title={parentContext.title}>
+            {t('detail.backToParent')}
+          </Button>
+        ) : wide ? null : (
           <Button variant="ghost" size="sm" style={{ flex: 'none' }} onClick={onBack}>
             {t('detail.back')}
           </Button>
@@ -555,6 +584,7 @@ export function TrashDetail({
           key={entry.id}
           entry={entry}
           detail={detail}
+          onOpenChild={onOpenChild}
           pager={pager}
           t={t}
         />
@@ -597,20 +627,21 @@ function Meta({ label, title, children }: { label: string; title?: string; child
 }
 
 interface ReadyBodyProps {
-  entry: TrashEntryLike
+  entry: TrashEntryWire
   detail: TrashDetailLike
+  onOpenChild?: (child: TrashEntryWire) => void
   pager: DetailPager
   t: Translate
 }
 
 /**
- * 有内容：元信息（时间 → 体量 → 位置三组的顺序）+ 折叠块。
+ * 有内容：元信息（时间 → 体量 → 位置三组的顺序）+ 子会话段 + 折叠块。
  *
  * 页面上**两本账分开读**：元信息里的计数是整条日志的（注入条数也在表里）；
  * 正文是分页取回来的块。`olderCursor` 非空时顶部出「加载更早」。
  * 折叠状态只活在这个组件里；切条目用 `key={entry.id}` 重挂载，不会把 A 的展开状态带到 B。
  */
-function ReadyBody({ entry, detail, pager, t }: ReadyBodyProps) {
+function ReadyBody({ entry, detail, onOpenChild, pager, t }: ReadyBodyProps) {
   const { loadingOlder, olderFailure, onLoadOlder, scrollRef } = pager
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   /** 更早一页要 prepend 时的块数；换页回来（组件重挂载）这份意图会丢，那是可接受的边界。 */
@@ -695,6 +726,46 @@ function ReadyBody({ entry, detail, pager, t }: ReadyBodyProps) {
           {entry.wasArchived ? t('detail.value.yes') : t('detail.value.no')}
         </Meta>
       </dl>
+
+      {/* 孩子不在客户端清单里，父详情是唯一能往下走一层的地方；这一段因此跟着详情走，不是清单的一列。
+          行的两样事实（清册 `title` / `sizeBytes` + `deletedAt`）与清单行同一口径；段标题多给一个条数，
+          「几个都在这儿」在点之前就能核对。 */}
+      {detail.subagents === undefined || detail.subagents.length === 0 || onOpenChild === undefined ? null : (
+        <div data-dsh-session-delete="trash-subagents" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={SECTION_LABEL}>
+            {/* 整句一个键：括号与分隔符是各语言自己的写法（zh「子会话（2） · 3.0KB」/ en「Subagent sessions (2) · 3.0KB」），
+                与 `detail.deletedAt.combined` 同一条判据——拼在 JSX 里就钉死了某一门语言的标点。 */}
+            {t('detail.subagents.header', {
+              n: detail.subagents.length,
+              size: fileSizeText(detail.subagents.reduce((sum, child) => sum + child.sizeBytes, 0)),
+            })}
+          </div>
+          {detail.subagents.map((child) => (
+            <button
+              key={child.id}
+              type="button"
+              className="sd-disclosure-row"
+              data-dsh-session-delete="trash-subagent-row"
+              data-entry-id={child.id}
+              style={SUBAGENT_ROW}
+              onClick={() => onOpenChild(child)}
+            >
+              <span style={{ ...ELLIPSIS, flex: '1 1 auto', minWidth: 0 }}>
+                {child.title === '' ? t('common.untitled') : child.title}
+              </span>
+              <span style={BLOCK_META}>{fileSizeText(child.sizeBytes)}</span>
+              <span style={BLOCK_META}>{agoText(child.deletedAt, Date.now(), t)}</span>
+            </button>
+          ))}
+          {/* 条数闸截断时把总数说出来：段标题只报已列出的条数与它们的合计，
+              剩下的孩子仍随整组释放，不能让人误以为整组就这么大。 */}
+          {detail.subagentsTotal === undefined ? null : (
+            <div style={SECTION_LABEL} data-dsh-session-delete="trash-subagents-truncated">
+              {t('detail.subagents.truncated', { shown: detail.subagents.length, total: detail.subagentsTotal })}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={TOOLBAR}>
         {detail.olderCursor === null ? null : (

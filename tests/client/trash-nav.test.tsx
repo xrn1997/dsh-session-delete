@@ -2,7 +2,7 @@
  * 清单导航（`trash-nav.ts` 的 `useTrashNav`）的 interface——此前劈在面板与控制器两处的那份键盘契约。
  *
  * 这一份直接测 hook，不经过面板：它只认"屏幕上从上到下的行"（`ordered`，只含展开的组）与调用方注入的
- * 四个动作（`select` / `toggleCheck` / `exitDrill` / `focusRow`），不查自己的行、不认行选择器
+ * 四个动作（`select` / `toggleCheck` / `back` / `focusRow`），不查自己的行、不认行选择器
  * （Esc 让路时会问 `ui/top-layer.ts` 有没有打开的浮层）。断言落在真实调用上（收到哪一条、带不带
  * `{drill:true}`、调了几次），不碰内部 state——它唯一的 state 是一笔"下钻退出后要交还焦点给哪一行"的账。
  *
@@ -27,7 +27,7 @@ const C = trashRow('c', 'session-c')
 function harness() {
   const select = vi.fn(async (_entry: TrashEntryLike, _options?: { drill?: boolean }): Promise<void> => {})
   const toggleCheck = vi.fn()
-  const exitDrill = vi.fn()
+  const back = vi.fn()
   const focusRow = vi.fn()
   const input = (over: Partial<TrashNavInput> = {}): TrashNavInput => ({
     ordered: [A, B, C],
@@ -37,13 +37,13 @@ function harness() {
     drilled: false,
     select,
     toggleCheck,
-    exitDrill,
+    back,
     focusRow,
     ...over,
   })
   const mount = (over: Partial<TrashNavInput> = {}) =>
     renderHook((props: TrashNavInput) => useTrashNav(props), { initialProps: input(over) })
-  return { select, toggleCheck, exitDrill, focusRow, input, mount }
+  return { select, toggleCheck, back, focusRow, input, mount }
 }
 
 /** 键盘事件只被读 `key` / `target` / `currentTarget` 与 `preventDefault`：直接给这一份窄面，
@@ -215,19 +215,19 @@ describe('清单导航 · tab 落点', () => {
 })
 
 describe('清单导航 · Esc 交还焦点', () => {
-  it('Esc 只在下钻期间生效：退出一次、焦点交还一次；再按不重复交还', () => {
+  it('Esc 只在下钻期间生效：调用一次回退、焦点交还一次；再按不重复交还', () => {
     const h = harness()
     const m = h.mount({ selectedId: 'b', drilled: false })
 
     // 没下钻：Esc 不是给清单的（退出下钻、动焦点都不该发生）
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
-    expect(h.exitDrill).not.toHaveBeenCalled()
+    expect(h.back).not.toHaveBeenCalled()
     expect(h.focusRow).not.toHaveBeenCalled()
 
     // 下钻期间：Esc 退出，选中那一行记在账上——等 `drilled` 落地再交还
     m.rerender(h.input({ selectedId: 'b', drilled: true }))
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
-    expect(h.exitDrill).toHaveBeenCalledTimes(1)
+    expect(h.back).toHaveBeenCalledTimes(1)
     expect(h.focusRow).not.toHaveBeenCalled()
 
     m.rerender(h.input({ selectedId: 'b', drilled: false }))
@@ -238,7 +238,7 @@ describe('清单导航 · Esc 交还焦点', () => {
     m.rerender(h.input({ selectedId: 'b', drilled: false }))
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
     expect(h.focusRow).toHaveBeenCalledTimes(1)
-    expect(h.exitDrill).toHaveBeenCalledTimes(1)
+    expect(h.back).toHaveBeenCalledTimes(1)
   })
 
   it('非 Esc 的键不进这条路径（下钻期间按别的键既不休假也不交还焦点）', () => {
@@ -246,7 +246,7 @@ describe('清单导航 · Esc 交还焦点', () => {
     h.mount({ selectedId: 'b', drilled: true })
 
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' })) })
-    expect(h.exitDrill).not.toHaveBeenCalled()
+    expect(h.back).not.toHaveBeenCalled()
     expect(h.focusRow).not.toHaveBeenCalled()
   })
 
@@ -255,7 +255,7 @@ describe('清单导航 · Esc 交还焦点', () => {
     h.mount({ selectedId: 'b', drilled: true, drillEnabled: false })
 
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
-    expect(h.exitDrill).not.toHaveBeenCalled()
+    expect(h.back).not.toHaveBeenCalled()
     expect(h.focusRow).not.toHaveBeenCalled()
   })
 
@@ -270,12 +270,12 @@ describe('清单导航 · Esc 交还焦点', () => {
     document.body.append(layer)
     try {
       act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
-      expect(h.exitDrill).not.toHaveBeenCalled()
+      expect(h.back).not.toHaveBeenCalled()
     } finally {
       layer.remove()
     }
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
-    expect(h.exitDrill).toHaveBeenCalledTimes(1)
+    expect(h.back).toHaveBeenCalledTimes(1)
   })
 
   it('已经被前面的处理器 preventDefault 的 Esc 不再退出下钻', () => {
@@ -284,6 +284,6 @@ describe('清单导航 · Esc 交还焦点', () => {
     const event = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true })
     event.preventDefault()
     act(() => { document.dispatchEvent(event) })
-    expect(h.exitDrill).not.toHaveBeenCalled()
+    expect(h.back).not.toHaveBeenCalled()
   })
 })

@@ -1,4 +1,4 @@
-import { TRASH_DIR_NAME } from '../shared/wire.js'
+import { TRASH_DIR_NAME, type TrashEntryWire } from '../shared/wire.js'
 
 /** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<原目录名>`）——**它不是随手起的键**：
  *  回收站目录名就是它，恢复也按它反推出原目录名放回（CONTEXT.md 的「条目」条），所以 id 的形状有契约意义。
@@ -41,6 +41,23 @@ export const REQUIRED_ENTRY_FIELDS = {
   id: 'string', sessionId: 'string', projectDir: 'string', workspaceId: 'string',
   wasArchived: 'boolean', deletedAt: 'number', title: 'string', sizeBytes: 'number',
 } as const
+
+/** 清册行 → 线上清册行形状。**显式字面量、不用 `...row`**：线上多一格必填时这里编译不过。
+ *  只搬清册里真有的事实、不带任何只读数；`/list` 的 `toWire` 与详情的子会话摘要共用这一份
+ *  （否则同一条清册行会有两份会漂移的投影）。 */
+export function entryWire(row: TrashEntry): TrashEntryWire {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    projectDir: row.projectDir,
+    workspaceId: row.workspaceId,
+    wasArchived: row.wasArchived,
+    deletedAt: row.deletedAt,
+    title: row.title,
+    sizeBytes: row.sizeBytes,
+    ...(row.parentEntryId === undefined ? {} : { parentEntryId: row.parentEntryId }),
+  }
+}
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0')
 

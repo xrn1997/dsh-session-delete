@@ -20,7 +20,7 @@ import {
   useMemo,
   useRef,
 } from 'react'
-import { TRASH_DIR_LABEL } from '../shared/wire.js'
+import { TRASH_DIR_LABEL, type TrashEntryWire } from '../shared/wire.js'
 import { useBusyGate } from './busy-gate.js'
 import { AttachmentNotice } from './attachment-view.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
@@ -274,7 +274,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     drilled: controller.drilled,
     select: controller.select,
     toggleCheck,
-    exitDrill: controller.back,
+    back: controller.back,
     focusRow,
   })
 
@@ -569,6 +569,23 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     </div>
   )
 
+  /**
+   * 下一层的入口只在主体是清单选中那条时交出（ADR-0029 的单级说的是孩子视图只有一个家）：
+   * 更深一代（孩子的孩子）自己不折进父行、占清单行（判据住 `src/trash/groups.ts`），走清单可达。
+   * 在这里再开一层会造出第二套导航路径，还会让那颗返回指着孙辈说话——它回的是清单选中那条。
+   */
+  const openChild = controller.childView === null
+    ? (child: TrashEntryWire): void => { void controller.openChild(child) }
+    : undefined
+  /**
+   * 孩子视图（`childView`）只画孩子那颗返回：宽档同屏有清单，「返回清单」在那一刻是多余的一步。
+   * `selected` 为空只剩一帧（清单换版把父行收走时控制器的清场 effect 会把孩子视图一起收掉）。
+   */
+  const parentContext = controller.childView !== null && controller.selected !== null ? {
+    title: controller.selected.title === '' ? t('common.untitled') : controller.selected.title,
+    onBack: controller.closeChild,
+  } : undefined
+
   const detailPane = (
     <div ref={detailScrollRef} data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
       <div style={DETAIL_INNER}>
@@ -578,6 +595,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           wide={split}
           onRetry={() => controller.retry()}
           onBack={() => controller.back()}
+          onOpenChild={openChild}
+          parentContext={parentContext}
           pager={{
             loadingOlder: controller.loadingOlder,
             olderFailure: controller.olderFailure,

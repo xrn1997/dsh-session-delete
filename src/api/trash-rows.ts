@@ -8,7 +8,7 @@
 import type { CoreDeps } from '../deps.js'
 import { isWorkspaceMissing } from '../verbs/restore-session.js'
 import { planVisibleTrash } from '../verbs/permanent-removal.js'
-import type { TrashEntry } from '../trash/entry.js'
+import { entryWire, type TrashEntry } from '../trash/entry.js'
 import { visibleGroups } from '../trash/groups.js'
 import type { TrashRowWire } from '../shared/wire.js'
 
@@ -18,23 +18,15 @@ type TrashRowReadouts = { readonly releaseBytes: number } & Partial<
   Pick<TrashRowWire, 'subagentCount' | 'subagentBytes' | 'strandedSubagents' | 'strandedBytes' | 'workspaceMissing'>
 >
 /**
- * 清册那一行 → 线上那一行。**显式字面量、不用 `...row`**：线上形状多一个必填字段时，这里编译不过，
- * 于是"线上多了一格却没人填"不可能悄悄发生（`...row` 会把它带过去，看上去一切正常）。
+ * 清册那一行 → 线上那一行。清册字段走 `entryWire` 那份显式字面量（线上形状多一个必填字段时编译不过，
+ * `...row` 会把它带过去），这里只补 `/list` 的只读数。
  */
 export function toWire(row: TrashEntry, readouts: TrashRowReadouts): TrashRowWire {
   return {
-    id: row.id,
-    sessionId: row.sessionId,
-    projectDir: row.projectDir,
-    workspaceId: row.workspaceId,
-    wasArchived: row.wasArchived,
-    deletedAt: row.deletedAt,
-    title: row.title,
-    sizeBytes: row.sizeBytes,
+    ...entryWire(row),
     // 「这一次会释放多少」由只读计划量好递进来（与 purge 的 `freedBytes` 同一口径）；
     // 投影只搬运，不在这里另算一遍。界面上头部合计与单条确认框都念这一个数。
     releaseBytes: readouts.releaseBytes,
-    ...(row.parentEntryId === undefined ? {} : { parentEntryId: row.parentEntryId }),
     // 只读数逐格显式列出（不 `...readouts`）：缺席 = 这次没算，不是 0，也不许被一个宽 spread 带进来。
     ...(readouts.subagentCount === undefined ? {} : { subagentCount: readouts.subagentCount }),
     ...(readouts.subagentBytes === undefined ? {} : { subagentBytes: readouts.subagentBytes }),

@@ -1,6 +1,6 @@
 /**
  * 清单的键盘导航面：方向键走环、Enter/Space 的双重语义、roving tabindex 的落点，
- * 以及窄档下钻里按 Esc 退回清单并把焦点交还给那一行。
+ * 以及窄档下钻里按 Esc 回退——孩子视图开着时先回父详情，再按一次才退出下钻并把焦点交还给那一行。
  *
  * 它不查自己的行、不认行选择器：焦点动作由调用方注入 focusRow，行的 DOM 查询留在面板；
  * 唯一的文档查询是 Esc 让路判据（问 ui/top-layer.ts 当前有没有打开的 dialog/menu）。
@@ -9,7 +9,8 @@
  * 判据（界面现状见 docs/ui-spec.md「键盘」）：
  * - 方向键走环：未选中时 ↓ 落第一条、↑ 落最后一条；到端回卷。
  * - aria-activedescendant 只指向在 DOM 里的行；tab 落点永远有一行拿着。
- * - Esc 只在下钻期间生效；退回后把焦点交还选中行一次；最上层是确认框/菜单时让路。
+ * - Esc 只在下钻期间生效，回退分两程（先收孩子视图、再退下钻）；退出下钻后把焦点交还选中行一次；
+ *   最上层是确认框/菜单时让路。
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
@@ -20,8 +21,8 @@ import { hasTopLayer } from './ui/top-layer.js'
  * 导航要的面。`ordered` 是**屏幕上的顺序**（只含展开的组），由面板/选择面算好传进来——
  * 布局常量与本 module 无关。`drillEnabled` 是这一档支不支持整行下钻（窄档为真；宽档 Enter/Space
  * 只移动选中，与整行点击的 `{ drill: !split }` 同一条判据）。四个动作都由调用方注入：
- * `select` 只移动选中（带 `drill` 才下钻），`exitDrill` 是控制器那条「← 返回清单」的同一动作，
- * `focusRow` 把焦点交给某一行。
+ * `select` 只移动选中（带 `drill` 才下钻），`back` 是控制器的回退动作（两程：先收孩子视图、
+ * 再退下钻），`focusRow` 把焦点交给某一行。
  */
 export interface TrashNavInput {
   ordered: readonly TrashEntryLike[]
@@ -31,7 +32,7 @@ export interface TrashNavInput {
   drilled: boolean
   select(entry: TrashEntryLike, options?: { drill?: boolean }): Promise<void>
   toggleCheck(entryId: string): void
-  exitDrill(): void
+  back(): void
   focusRow(entryId: string): void
 }
 
@@ -52,7 +53,7 @@ function isListOwnedEvent(event: ReactKeyboardEvent<HTMLElement>): boolean {
 }
 
 export function useTrashNav(input: TrashNavInput): TrashNav {
-  const { ordered, selectedId, selectMode, drillEnabled, drilled, select, toggleCheck, exitDrill, focusRow } = input
+  const { ordered, selectedId, selectMode, drillEnabled, drilled, select, toggleCheck, back, focusRow } = input
   /** Esc 退出下钻后要交还焦点的那一行；等 `drilled` 落地、清单回到 DOM 之后再用一次。 */
   const refocusRow = useRef<string | null>(null)
 
@@ -96,11 +97,11 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
       if (event.key !== 'Escape' || event.defaultPrevented) return
       if (hasTopLayer(document)) return
       refocusRow.current = selectedId
-      exitDrill()
+      back()
     }
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey) }
-  }, [drillEnabled, drilled, exitDrill, selectedId])
+  }, [drillEnabled, drilled, back, selectedId])
 
   // 只在下钻**刚刚退出**、且手里真的有 id 时交还一次焦点；交完就清账，后续重渲染不会重复抢焦点。
   useEffect(() => {
