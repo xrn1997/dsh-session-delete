@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { withoutComments } from './support/comments.js'
 import { collectFiles } from './support/corpus.js'
+import { pick } from './support/fixture.js'
 
 /**
  * `CONTEXT.md` 每条词条点名的记号必须在生产代码里现查得到。
@@ -40,7 +41,7 @@ function terms(): Term[] {
   let cur: Term | null = null
   lines.forEach((l, i) => {
     const m = TERM_LINE.exec(l)
-    if (m) { cur = { name: m[1]!, body: l, line: i + 1 }; out.push(cur); return }
+    if (m) { cur = { name: pick(m, 1), body: l, line: i + 1 }; out.push(cur); return }
     if (cur && l.trim() !== '') cur.body += `\n${l}`
     if (l.trim() === '') cur = null
   })
@@ -49,7 +50,7 @@ function terms(): Term[] {
 
 /** 反引号里的记号：路径 / 标识符（含限定名）两类才回查；带标点、斜杠、空格的（表达式、事件名、路径片段、短语）跳过 */
 function anchors(body: string): string[] {
-  return [...body.matchAll(/`([^`]+)`/g)].map((m) => m[1]!)
+  return [...body.matchAll(/`([^`]+)`/g)].map((m) => pick(m, 1))
 }
 const isPath = (t: string) => /\.[tj]sx?$/.test(t) && !t.includes(' ')
 // 标识符不以 `$` 开头：`$DSH_HOME` 这类是环境变量，不是可以现查的符号。

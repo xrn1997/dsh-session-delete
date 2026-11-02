@@ -6,6 +6,7 @@ import semver from 'semver'
 import { describe, expect, it } from 'vitest'
 import { PLATFORM_MODULES, gateClientImport, resolveBrowserBranchImport } from '../tsdown.config.js'
 import * as plugin from '../src/index.js'
+import { pick } from './support/fixture.js'
 
 const manifest = JSON.parse(
   readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
@@ -317,7 +318,7 @@ describe('vfile 浏览器分流（react-markdown 那条依赖链）', () => {
   it('真装的 vfile 旁边确实有那三个浏览器实现（不是我们编的）', () => {
     const store = readdirSync(join(process.cwd(), 'node_modules', '.pnpm')).filter((n) => n.startsWith('vfile@'))
     expect(store.length).toBeGreaterThan(0)
-    const lib = join(process.cwd(), 'node_modules', '.pnpm', store[0]!, 'node_modules', 'vfile', 'lib')
+    const lib = join(process.cwd(), 'node_modules', '.pnpm', pick(store, 0), 'node_modules', 'vfile', 'lib')
     for (const name of ['minpath', 'minproc', 'minurl']) {
       expect(resolveBrowserBranchImport(`#${name}`, join(lib, 'index.js'))).toBe(resolve(lib, `${name}.browser.js`))
     }

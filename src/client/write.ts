@@ -51,7 +51,7 @@ export interface WriteInput<A extends ApplyAction> {
   readonly action: A
   readonly ids: readonly string[]
   /** 单条写入面：把 N=1 模式交给 receipt 读法（null 折成协议错）。 */
-  readonly single?: boolean
+  readonly single?: boolean | undefined
   /** restore 的 already-gone 回执不带行，它的 sessionId 只能由调用方从当前清单里查。 */
   readonly sessionIdOfEntry?: (entryId: string) => string | undefined
   /** 信封成功时交给 settlement 的呈现材质（摘要里的成功名单可能为空）；按 action 的收尾顺序住 `write-settlement.ts`。 */

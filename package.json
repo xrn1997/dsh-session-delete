@@ -36,8 +36,12 @@
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "test": "vitest run",
-    "prepack": "npm run build"
+    "test:watch": "vitest",
+    "pack:dry": "npm pack --dry-run --ignore-scripts",
+    "prepack": "npm run build",
+    "gates": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm run pack:dry"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
@@ -45,6 +49,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
+    "@eslint/js": "^10.0.1",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^6.10.0",
     "@testing-library/react": "^16.3.3",
@@ -52,12 +57,16 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.5",
     "@types/semver": "^7.8.0",
+    "eslint": "^10.14.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
     "jsdom": "^26.1.0",
     "react": "^18.3.1",
     "react-dom": "18.3.1",
     "semver": "^7.8.5",
     "tsdown": "0.23.0",
     "typescript": "5.9.3",
+    "typescript-eslint": "^8.72.1",
     "vitest": "3.2.7"
   },
   "dsh": {

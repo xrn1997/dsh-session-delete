@@ -29,6 +29,9 @@ export function scanComments(text: string): CommentToken[] {
   let prev = ''
   while (i < text.length) {
     const two = text.slice(i, i + 2)
+    // 循环条件就是"这一格在界内"的证明，所以取读数换成 charAt：界内它与下标取值同值，
+    // 而它的类型里没有"缺席"这一档，下面给 prev 的赋值才不必去声称有值。
+    const ch = text.charAt(i)
     if (two === '//') {
       const stop = text.indexOf('\n', i)
       const at = stop === -1 ? text.length : stop
@@ -41,13 +44,13 @@ export function scanComments(text: string): CommentToken[] {
       out.push({ text: text.slice(i, at), start: i, end: at })
       i = at
       prev = '/'
-    } else if (text[i] === "'" || text[i] === '"' || text[i] === '`') {
-      const quote = text[i]
+    } else if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch
       i++
       while (i < text.length && text[i] !== quote) i += text[i] === '\\' ? 2 : 1
       i++
       prev = quote
-    } else if (text[i] === '/' && REGEX_START.has(prev)) {
+    } else if (ch === '/' && REGEX_START.has(prev)) {
       i++ // 进正则体
       let inClass = false
       while (i < text.length && text[i] !== '\n') {
@@ -57,11 +60,11 @@ export function scanComments(text: string): CommentToken[] {
         else if (text[i] === '/' && !inClass) { i++; break }
         i++
       }
-      while (i < text.length && /[a-z]/i.test(text[i])) i++ // 正则 flag
+      while (i < text.length && /[a-z]/i.test(text.charAt(i))) i++ // 正则 flag
       prev = '/'
     } else {
-      if (text[i] === '\n') prev = '\n'
-      else if (!/\s/.test(text[i])) prev = text[i]
+      if (ch === '\n') prev = '\n'
+      else if (!/\s/.test(ch)) prev = ch
       i++
     }
   }

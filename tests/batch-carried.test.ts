@@ -1,7 +1,7 @@
 /**
  * 同批已带走集（ADR-0002 的内部实现）：entry 域与 session 域各一个 adapter，两域都有
- * claim / take，但 claim 形状不同；当前只读视图 `rows` 只在 entry 域上。entry 适配的三态判据读
- * `trash/groups.ts` 的 `claimOf`；session 适配没有原始清册视图，只记 take 过的会话 id。
+ * claim / take，但 claim 形状不同；收缩中的当前视图不再外递（purge 那一半住 `trash-scope.ts`）。
+ * entry 适配的三态判据读 `trash/groups.ts` 的 `claimOf`；session 适配没有原始清册视图，只记 take 过的会话 id。
  */
 import { describe, expect, it } from 'vitest'
 import { createEntryCarried, createSessionCarried } from '../src/verbs/batch-carried.js'
@@ -26,20 +26,21 @@ describe('entry 适配', () => {
     carried.take(parent.id)
     expect(carried.claim(kid.id).verdict).toBe('carried')
     expect(carried.claim('ghost').verdict).toBe('absent')
-    expect(carried.rows()).toEqual([])
   })
 
   it('take 只摘这一组，不动同批别的行', () => {
+    // solo 是根行：清册那一行的「没有父」就是**不建这个键**（键的缺席承载语义，见 `src/trash/entry.ts`
+    // 的 parentEntryId 条），所以这里不写一个 undefined 进那一格。
     const solo: TrashEntry = {
-      ...parent, id: makeEntryId(NOW, 'solo'), sessionId: 'solo', parentEntryId: undefined,
+      ...parent, id: makeEntryId(NOW, 'solo'), sessionId: 'solo',
     }
     const carried = createEntryCarried([parent, kid, solo])
     carried.take(kid.id)
-    expect(carried.rows().map((row) => row.sessionId)).toEqual(['session-parent', 'solo'])
     const claim = carried.claim(parent.id)
     expect(claim.verdict).toBe('fresh')
     if (claim.verdict !== 'fresh') return
     expect(claim.group.map((row) => row.sessionId)).toEqual(['session-parent'])
+    expect(carried.claim(solo.id).verdict).toBe('fresh')
   })
 })
 

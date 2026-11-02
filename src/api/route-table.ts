@@ -1,21 +1,23 @@
 /**
- * 路由表（ADR-0004）：段名 → { 方法, 纯度, 读面, body, 处理 }。一条记录，两个消费者。
+ * 路由表（ADR-0004；deps 切片见 ADR-0032）：段名 → { 方法, 纯度, 读面, body, deps 切片, 处理 }。一条记录，两个消费者。
  *
  * 一致性要求：
  * - 该纯的判成写 ⇒ 探测/正文读/扫描被堵在串行链后；
  * - 该写的判成纯 ⇒ 写动作绕开到达序链，与对账交错；
- * - body 该读没读 ⇒ 下游拿到 null；读两遍 ⇒ 流已被消费。
+ * - body 该读没读 ⇒ 下游拿到 null；读两遍 ⇒ 流已被消费；
+ * - 切片声明宽了 ⇒ 危险能力（删目录 / 时钟）漏进读段的 run；窄了 ⇒ 写段的处理编译不过。
  *
  * 这张表不放 shared/wire.ts：处理函数会 import 动词与 node:fs，而浏览器半要 import wire.ts。
- * 段名与动作仍住 wire.ts；这张表只回答“怎么处理”。
+ * 段名、方法与动作仍住 wire.ts（`ROUTES` 每项 `{ path, method }`，本表的 method 只投影、不写第二份字面量）；
+ * 这张表只回答“怎么处理”。
  */
-import { PARAMS, ROUTES, type ApplyAction } from '../shared/wire.js'
-import type { DeleteDeps } from '../deps.js'
+import { PARAMS, ROUTES, type ApplyAction, type RouteName } from '../shared/wire.js'
+import type { CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
 import type { TrashEntry } from '../trash/entry.js'
 import { applyActions } from '../verbs/batch.js'
 import { routeError } from '../verbs/errors.js'
 import { reportOrphans, loadOrphanGroups } from '../verbs/orphan-subagents.js'
-import { purgeTrash } from '../verbs/purge-trash.js'
+import { createTrashScope } from '../verbs/trash-scope.js'
 import { readTrashDetail } from '../trash/detail.js'
 import { cleanOrphanImageAttachments } from '../trash/attachments.js'
 import { readAttachmentResponse } from './attachment.js'
@@ -44,15 +46,28 @@ export interface RouteRead {
   rows(): Promise<readonly TrashEntry[]>
 }
 
-export interface RouteSpec {
+/** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测六段拿基础面，两个删盘段多删除能力，
+ *  `/apply` 是唯一拿全量面的行——段的 run 里长出超面调用就是编译错，dispatch 也只按这一格注入
+ *  （运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
+export type RouteSlice = 'core' | 'removal' | 'full'
+/** 切片名 → 依赖面：{@link RouteSpec.run} 的 deps 参数类型与 `depsFor` 的返回类型都从这一格取。 */
+export type SliceDeps = { core: CoreDeps; removal: RemovalDeps; full: DeleteDeps }
+
+export interface RouteSpec<S extends RouteSlice = RouteSlice> {
+  /** 这一行吃哪一格 deps：dispatch 按它注入，`run` 的 deps 参数类型也跟着它走。 */
+  readonly slice: S
   readonly method: 'GET' | 'POST'
   readonly body: BodyKind
   readonly purity: Purity
   readonly read: ReadKind
   /** 响应形态：`json` 走信封（`{ok:true,value}`）；`binary` 直接把处理函数的 `BinaryResponse` 写出去。 */
   readonly response: 'json' | 'binary'
-  run(deps: DeleteDeps, body: JsonBody, read: RouteRead, query: URLSearchParams): Promise<unknown>
+  /** 声明成函数属性而不是方法：方法签名是双变的，显式标注更宽的 deps 能绕过切片闸；属性按逆变校验。 */
+  readonly run: (deps: SliceDeps[S], body: JsonBody, read: RouteRead, query: URLSearchParams) => Promise<unknown>
 }
+
+/** 九行的并集（表的值类型）：每行由自己的 `slice` 字面量定型，`run` 的 deps 面随之收窄。 */
+export type AnyRouteSpec = { [S in RouteSlice]: RouteSpec<S> }[RouteSlice]
 
 /** 必填的非空字符串字段（缺、空串、类型不对都是**同一句话**：说清是哪个字段）。 */
 function requireString(body: JsonBody, field: string): string {
@@ -74,8 +89,9 @@ function optionalCursor(body: JsonBody): number | undefined {
 }
 
 /**
- * `/apply` 的五个动作与各自的**静态纯度**。一张表两个用途：动作名单由键派生，纯度也从同一格读——
- * 新增动作必须同时给出纯度，漏了编译不过；新加一个纯读动作也不会再静默落进 `chained`。
+ * `/apply` 的五个动作与各自的**静态纯度**。一张表三个用途：动作名单由键派生，纯度从同一格读，
+ * 唯一识别器（`actionOf`）也只认这些键——新增动作必须同时给出纯度，漏了编译不过；
+ * 新加一个纯读动作也不会再静默落进 `chained`。
  */
 const APPLY_ACTION_TABLE = {
   delete: 'chained',
@@ -87,18 +103,24 @@ const APPLY_ACTION_TABLE = {
 
 export const APPLY_ACTIONS = Object.keys(APPLY_ACTION_TABLE) as readonly ApplyAction[]
 
-/** 认不认得这个动作：`/apply` 的纯度与拒否共用同一条判据，名单只有上面那一张。 */
-function isApplyAction(value: unknown): value is ApplyAction {
-  return typeof value === 'string' && Object.hasOwn(APPLY_ACTION_TABLE, value)
+/**
+ * `/apply` 的动作：**全仓唯一识别器**——纯度函数与动作拒否都从这里过，
+ * 不各解析一遍动作。不抛：缺动作 / 不是字符串 / 不在名单，一律回 `undefined`；
+ * 抛不抛、抛哪句话归 `requireAction`。
+ */
+function actionOf(body: JsonBody): ApplyAction | undefined {
+  const value = body?.[PARAMS.action]
+  if (typeof value !== 'string' || !Object.hasOwn(APPLY_ACTION_TABLE, value)) return undefined
+  return value as ApplyAction
 }
 
 /** `/apply` 的动作：认不得的一律点名拒掉，不折成"空批量"糊弄过去。 */
 function requireAction(body: JsonBody): ApplyAction {
-  const value = body?.[PARAMS.action]
-  if (!isApplyAction(value)) {
+  const action = actionOf(body)
+  if (action === undefined) {
     throw routeError('bad-request', 400, `批量动作不认识：需是 ${APPLY_ACTIONS.join(' / ')} 之一`)
   }
-  return value
+  return action
 }
 
 /** `/apply` 的 id 组：必须是非空字符串数组（空数组不是"什么都不做"，是调用方自己没组好）。 */
@@ -111,11 +133,13 @@ function requireIdArray(body: JsonBody): string[] {
 }
 
 /**
- * 九个段名各一行。`Record<段名, RouteSpec>` 是闸：`wire.ts` 加了段名而这里没加，编译不过。
+ * 九个段名各一行。`Record<段名, AnyRouteSpec>` 是闸：`wire.ts` 加了段名而这里没加，编译不过；
+ * 每行的 `slice` 又把该行的 `run` 钉在自己那一格 deps 上（ADR-0032）。
  */
-export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec> = {
-  [ROUTES.list]: {
-    method: 'GET',
+export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
+  [ROUTES.list.path]: {
+    slice: 'core',
+    method: ROUTES.list.method,
     body: 'none',
     purity: 'chained',
     read: 'list',
@@ -124,18 +148,21 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 读面由这一行选好，处理函数只消费 `read`，不再自己挑 `list()` / `raw()`。
     run: async (deps, _body, read) => assembleTrashRows(deps, await read.rows()),
   },
-  [ROUTES.ping]: {
-    method: 'GET',
+  [ROUTES.ping.path]: {
+    slice: 'core',
+    method: ROUTES.ping.method,
     body: 'none',
     purity: 'pure',
     read: 'none',
     response: 'json',
     // 客户端探测专用的最便宜一问：不碰清册、不碰盘、不进链。它的**信封**就是答案（"路由在、
     // 依赖接上了、映射生效了"），不是清单里此刻有几条——拿它当健康检查等于每次页面加载都跑一遍对账。
+    // eslint-disable-next-line @typescript-eslint/require-await -- `run` 的契约面是 Promise（路由处理器统一 await）；这一格没有可读的东西，同步字面量就是全部实现体——为一条写法规则把它改成同步值等于改契约。
     run: async () => 'pong',
   },
-  [ROUTES.attachment]: {
-    method: 'GET',
+  [ROUTES.attachment.path]: {
+    slice: 'core',
+    method: ROUTES.attachment.method,
     body: 'none',
     purity: 'pure',
     read: 'none',
@@ -144,8 +171,9 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 闸（id / kind / 20 MiB / 魔数）都住 `src/api/attachment.ts`；这里只声明"它怎么被处理"。
     run: async (deps, _body, _read, query) => readAttachmentResponse(deps, query),
   },
-  [ROUTES.attachmentOrphans]: {
-    method: 'GET',
+  [ROUTES.attachmentOrphans.path]: {
+    slice: 'core',
+    method: ROUTES.attachmentOrphans.method,
     body: 'none',
     purity: 'pure',
     read: 'none',
@@ -154,8 +182,9 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 回数量/字节 + 供预览的对象清单，不碰清册、不进链。引用源读不出 ⇒ 处理函数抛 io（不折成 0）。
     run: async (deps) => reportAttachmentOrphans(deps),
   },
-  [ROUTES.attachmentClean]: {
-    method: 'POST',
+  [ROUTES.attachmentClean.path]: {
+    slice: 'removal',
+    method: ROUTES.attachmentClean.method,
     body: 'none',
     purity: 'chained',
     read: 'none',
@@ -164,8 +193,9 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 不读清册（read: none）——孤儿附件与回收站行无关，`AttachmentCleanupWire` 原样回执。
     run: async (deps) => cleanOrphanImageAttachments(deps),
   },
-  [ROUTES.orphans]: {
-    method: 'GET',
+  [ROUTES.orphans.path]: {
+    slice: 'core',
+    method: ROUTES.orphans.method,
     body: 'none',
     purity: 'pure',
     read: 'raw',
@@ -175,12 +205,15 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 清理走 `/apply` 的 `orphan-clean`：那条先对账再扫（写动作必须排在到达序链上）。
     run: async (deps, _body, read) => reportOrphans(await loadOrphanGroups(deps, await read.rows())),
   },
-  [ROUTES.apply]: {
-    method: 'POST',
+  [ROUTES.apply.path]: {
+    slice: 'full',
+    method: ROUTES.apply.method,
     body: 'json',
     purity: (body) => {
-      const action = body?.[PARAMS.action]
-      return isApplyAction(action) ? APPLY_ACTION_TABLE[action] : 'chained'
+      // 与动作拒否（requireAction）同一个识别器：纯度认不得的动作判 chained（不插队先跑），
+      // 交给 run 那一步响亮拒掉——两侧不许各解析一遍。
+      const action = actionOf(body)
+      return action === undefined ? 'chained' : APPLY_ACTION_TABLE[action]
     },
     read: 'none',
     response: 'json',
@@ -190,8 +223,9 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // 写动词的读面归动词自己（谁写谁读），路由只在读动作上选面。
     run: async (deps, body) => applyActions(deps, requireAction(body), requireIdArray(body)),
   },
-  [ROUTES.empty]: {
-    method: 'POST',
+  [ROUTES.empty.path]: {
+    slice: 'removal',
+    method: ROUTES.empty.method,
     body: 'none',
     purity: 'chained',
     read: 'list',
@@ -200,20 +234,20 @@ export const ROUTE_TABLE: Record<(typeof ROUTES)[keyof typeof ROUTES], RouteSpec
     // **先对账再清**：手工搬进 `session-trash/` 的那一格在清册里还没有行，只按 raw 索引清就会
     // 在它走后仍留一个点不开的目录；`read` 交回的那一份就是"这里此刻真的有的一切"。
     run: async (deps, _body, read) => {
-      // 直接把这一份当快照递给 purge，不再读第二遍清册。
-      const rows = await read.rows()
-      return await purgeTrash(deps)(undefined, rows)
+      // 直接把这一份当快照交进清册作用域，一次 purgeAll() 清空，不再读第二遍清册。
+      return await createTrashScope(deps, await read.rows()).purgeAll()
     },
   },
-  [ROUTES.detail]: {
-    method: 'POST',
+  [ROUTES.detail.path]: {
+    slice: 'core',
+    method: ROUTES.detail.method,
     body: 'json',
     purity: 'pure',
     read: 'raw',
     response: 'json',
     // 读单条详情也走 POST：`requireString`、请求栅栏、错误映射这一整套都挂在同一张路由表上
     // （`body:'json'` 决定它在处理前预读一次请求体）；改成 GET query 只是把同一道栅栏再写一遍
-    // （栅栏只写一遍——段名的方法 / 纯度 / 读面 / body 就住这张表，ADR-0004）。
+    // （栅栏只写一遍——纯度 / 读面 / body 就住这张表，方法投影自 wire 的段名表，ADR-0004）。
     // 读的是清册 **raw 索引**（`read` 的 raw 面），**不对账**：本段声明为 pure、不进到达序链，而对账会写
     // 清册行（写动作必须排在链上）。行在 raw 里而目录不在时详情自己判 `io`，不靠对账把行摘掉。
     run: async (deps, body, read) =>

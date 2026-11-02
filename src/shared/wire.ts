@@ -15,37 +15,45 @@
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
-/** 九个段名（相对前缀）。写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
+/** 九个段名（相对前缀）。**每项 `{ path, method }` 两键**：某段用什么方法也是线上形状的一部分
+ *  （ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影（`ROUTES.x.method`），
+ *  浏览器半的 GET 段同样投影、写段把 `ROUTES.x.method` 交给 `src/client/remote.ts` 的 `post()`，
+ *  两半都不逐段手写一份。
+ *  写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
  *  单条就是长度为 1 的批量，仓里不留第二条执行路径。
- *  - `GET /list`：对账并读清单（`session-trash/` 里的目录是准）。
- *  - `GET /ping`：最便宜的在/不在（不碰清册、不碰盘、不进链），供客户端探测。
- *  - `POST /detail`：单条详情（用 POST 表达一个读，判据在 `src/api/route-table.ts`）。
- *  - `POST /apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean`），逐条回 `ApplyOutcome`。
- *  - `POST /empty`：清空回收站（聚合回执，不按条回）。
- *  - `GET /orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
+ *  - `list`：对账并读清单（`session-trash/` 里的目录是准）。
+ *  - `ping`：最便宜的在/不在（不碰清册、不碰盘、不进链），供客户端探测。
+ *  - `detail`：单条详情（用 POST 表达一个读，判据在 `src/api/route-table.ts` 的 detail 行）。
+ *  - `apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean`），逐条回 `ApplyOutcome`。
+ *  - `empty`：清空回收站（聚合回执，不按条回）。
+ *  - `orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
  *    这一段只负责"有多少、在哪、多大"。
- *  - `GET /attachment`：附件原始字节（全仓唯一的二进制响应段；失败仍回 JSON 信封）。
- *  - `GET /attachment-orphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。
- *  - `POST /attachment-clean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。 */
+ *  - `attachment`：附件原始字节（全仓唯一的二进制响应段；失败仍回 JSON 信封）。
+ *  - `attachmentOrphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。
+ *  - `attachmentClean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。 */
 export const ROUTES = {
-  list: '/list',
+  list: { path: '/list', method: 'GET' },
   /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
-  ping: '/ping',
+  ping: { path: '/ping', method: 'GET' },
   /** 单条详情（读回收站目录里那条会话自己的日志）。 */
-  detail: '/detail',
+  detail: { path: '/detail', method: 'POST' },
   /** 一组 id 上的同一个动作；删除确认框那句「含 N 个子会话」也走这里（`action: 'count'`，纯读语义）。 */
-  apply: '/apply',
+  apply: { path: '/apply', method: 'POST' },
   /** 清空回收站。 */
-  empty: '/empty',
+  empty: { path: '/empty', method: 'POST' },
   /** 纯读：扫描回收站之外的无主子会话（父已不在语料/清册）。 */
-  orphans: '/orphans',
+  orphans: { path: '/orphans', method: 'GET' },
   /** 附件字节（图片/普通文件）：全仓唯一的二进制响应段，读的是宿主附件库。 */
-  attachment: '/attachment',
+  attachment: { path: '/attachment', method: 'GET' },
   /** 纯读：扫全部引用源与附件库 `objects`，报无引用图片的数量、字节与预览清单。 */
-  attachmentOrphans: '/attachment-orphans',
+  attachmentOrphans: { path: '/attachment-orphans', method: 'GET' },
   /** 聚合清理：只删 `objects` 下无引用的图片，回 `AttachmentCleanupWire`。 */
-  attachmentClean: '/attachment-clean',
+  attachmentClean: { path: '/attachment-clean', method: 'POST' },
 } as const
+
+/** 段名 → 那一段的路径。从结构化段名表派生：加一段只在上面加一项，`Record<RouteName, …>` 类型闸
+ *  （`src/api/route-table.ts`）与运行期键集比对（`tests/route-table.test.ts`）都跟着这一格走。 */
+export type RouteName = (typeof ROUTES)[keyof typeof ROUTES]['path']
 
 /** `/apply` 的五个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean` 是**宿主会话 id**
  *  （前两个还没进回收站，第三个压根没有回收站行），`restore`/`purge` 是**回收站条目 id**。

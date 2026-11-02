@@ -1,6 +1,10 @@
 /**
  * 永久删除的测量、计划与执行：先记录目录/字节/账本归属，再按计划动盘。
  * 计划函数只读；活体准入在计划阶段、任何写之前完成，执行器动第一笔写前再查一次。
+ *
+ * 测量与补账本归属**分家**：`/list` 的只读计划只吃 {@link measureMembers}（零账本读，不再为每个
+ * 盘上后代问一次 `workspaceOf`，`/list` 的失败面不再含账本归属读）；`workspaceOf` 只有
+ * purge / orphan-clean 的删除计划（{@link planMemberRemovals}）才付——executor 摘账本要用它。
  */
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
@@ -10,7 +14,8 @@ import {
   planImageAttachmentRemoval,
   type ImageRemovalPlan,
 } from '../trash/attachments.js'
-import { bareSessionId, type HostCorpusPort, type SubagentMember } from '../ports/host-port.js'
+import type { HostCorpusPort, SubagentMember } from '../ports/host-port.js'
+import { bareSessionId, firstByBare } from '../domain/closure.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/wire.js'
 import { verbError } from './errors.js'
@@ -21,8 +26,8 @@ export interface MeasuredMemberDir {
   readonly bytes: number
 }
 
-/** 一条成员被删之前要记下的三件：目录、字节、账本归属（缺席 = 未分组）。`/list` 的只读计划与
- *  purge / orphan-clean 的删除计划共用这一份形状。 */
+/** 一条成员被删之前要记下的三件：目录、字节、账本归属（缺席 = 未分组）。purge / orphan-clean 的
+ *  删除计划共用这一份形状；`/list` 的只读计划不吃它——那一面零账本读，见 {@link measureMembers}。 */
 export interface PlannedMemberRemoval {
   readonly sessionId: string
   readonly dir: string
@@ -65,21 +70,44 @@ export async function measureMemberDir(
   return probe.present ? { dir, bytes: probe.bytes } : undefined
 }
 
-/** 把一组成员折成"删之前要记下的计划"；目录不在的成员跳过（记录与盘不一致是那条成员自己的事）。
- *  `purge` 的盘上后代、`orphan-clean` 的整组与 `/list` 的盘上残留都走这一处，别再各写一遍
- *  measure + workspaceOf。 */
+/** 一条成员的**测量**读数：身份两格 + 目录 + 实测字节。没有账本归属那一格——归属是删除动词才要
+ *  读的账本事实（见 {@link measureMembers} 与 {@link PlannedMemberRemoval} 的分工）。 */
+export interface MeasuredMember {
+  readonly sessionId: string
+  readonly projectDir: string
+  readonly dir: string
+  readonly bytes: number
+}
+
+/** 只测量（目录 + 实测字节）：`/list` 的只读计划只吃这一支，零账本读。目录不在的成员跳过
+ *  （记录与盘不一致是那条成员自己的事）。为什么不顺手把归属也问了：`/list` 投影只用字节与条数，
+ *  那一格立刻被丢弃——每开一次回收站为它付 N 次宿主调用，还把账本归属读拉进 `/list` 的失败面。 */
+export async function measureMembers(
+  deps: CoreDeps,
+  members: readonly { readonly sessionId: string; readonly projectDir: string }[],
+): Promise<MeasuredMember[]> {
+  const out: MeasuredMember[] = []
+  for (const member of members) {
+    const measured = await measureMemberDir(deps, member)
+    if (measured === undefined) continue
+    out.push({ sessionId: member.sessionId, projectDir: member.projectDir, ...measured })
+  }
+  return out
+}
+
+/** 把一组成员折成"删之前要记下的计划"：{@link measureMembers} 的测量之外**逐成员补账本归属**
+ *  （`workspaceOf`）——executor 摘账本要用。`/list` 不走这里（它只吃 measureMembers，零账本读）。 */
 async function planMemberRemovals(
   deps: CoreDeps,
   members: readonly { readonly sessionId: string; readonly projectDir: string }[],
 ): Promise<PlannedMemberRemoval[]> {
   const plans: PlannedMemberRemoval[] = []
-  for (const member of members) {
-    const measured = await measureMemberDir(deps, member)
-    if (measured === undefined) continue
-    const workspaceId = await deps.host.workspaceOf(member.sessionId)
+  for (const measured of await measureMembers(deps, members)) {
+    const workspaceId = await deps.host.workspaceOf(measured.sessionId)
     plans.push({
-      sessionId: member.sessionId,
-      ...measured,
+      sessionId: measured.sessionId,
+      dir: measured.dir,
+      bytes: measured.bytes,
       ...(workspaceId === undefined ? {} : { workspaceId }),
     })
   }
@@ -101,10 +129,19 @@ async function measureTrashRow(deps: CoreDeps, entry: TrashEntry): Promise<Plann
   return { entry, dir, present: probe.present, bytes: probe.bytes }
 }
 
+/** 扁平化候选与组号绑成一条记录：全局去重仍只走 `firstByBare`，不再维护两条等长数组与一张
+ *  按对象身份反查的表。 */
+interface GroupedMember {
+  readonly sessionId: string
+  readonly projectDir: string
+  readonly member: SubagentMember
+  readonly groupIndex: number
+}
+
 /**
  * 盘上后代的选择判据（`/list` 与 purge 的删除计划共用这一份）：`subagentMembersOf` 一次问全部父，
  * 再按 `bareSessionId` **排除全部清册 id**（跟着父进来的孩子不按盘上残留再算一遍），同一个 bare id 只认
- * **遍历顺序里第一次**出现的那条（同一个会话在两代宿主里的写法不同）。
+ * **遍历顺序里第一次**出现的那条（同一个会话在两代宿主里的写法不同；去重口径住 `src/domain/closure.ts` 的 `firstByBare`）。
  *
  * 语料看不见（`available: false`）⇒ 每个根都按空成员收：`/list` 与 purge 只许静默降级，
  * 盘上残留留给 `GET /orphans` 兜底。
@@ -123,24 +160,32 @@ async function selectStrandedMembers(
 ): Promise<SubagentMember[][]> {
   const manifestIds = new Set(manifest.map((row) => bareSessionId(row.sessionId)))
   const read = await host.subagentMembersOf(parentIds)
-  const seen = new Set<string>()
-  return parentIds.map((parentId) => {
-    const wanted: SubagentMember[] = []
-    if (!read.available) return wanted
+  if (!read.available) return parentIds.map(() => [])
+  // 每条候选与它第一次出现的组号绑成一条记录；全局去重的唯一口径仍是 `firstByBare`
+  //（同一条的两代写法只认首见），首见的那条发回它第一次出现的组——跨根共享的后代只算给
+  // 遍历顺序里先出现的组根。
+  const flat: GroupedMember[] = []
+  parentIds.forEach((parentId, groupIndex) => {
     for (const member of read.value[parentId] ?? []) {
-      const bare = bareSessionId(member.sessionId)
-      if (manifestIds.has(bare) || seen.has(bare)) continue
-      seen.add(bare)
-      wanted.push(member)
+      if (manifestIds.has(bareSessionId(member.sessionId))) continue
+      flat.push({ sessionId: member.sessionId, projectDir: member.projectDir, member, groupIndex })
     }
-    return wanted
   })
+  const out: SubagentMember[][] = parentIds.map(() => [])
+  for (const entry of firstByBare(flat)) {
+    const bucket = out[entry.groupIndex]
+    // 组号来自 `parentIds.forEach` 的下标，必在界内；这一句只满足 `noUncheckedIndexedAccess`。
+    if (bucket === undefined) throw verbError('io', `子会话分组越界：${entry.member.sessionId}`)
+    bucket.push(entry.member)
+  }
+  return out
 }
 
-/** `/list` 的一行（一组）所需的只读数：`releaseBytes` 是这一组**实测**会释放的字节。 */
+/** `/list` 的一行（一组）所需的只读数：`releaseBytes` 是这一组**实测**会释放的字节。
+ *  `members` 是 {@link MeasuredMember}（测量读数，无账本归属格）：清单只用它的字节与条数。 */
 export interface VisibleTrashGroup extends TrashGroupView {
   readonly trash: readonly PlannedTrashRow[]
-  readonly members: readonly PlannedMemberRemoval[]
+  readonly members: readonly MeasuredMember[]
   readonly releaseBytes: number
   readonly subagentBytes: number
   readonly strandedBytes: number
@@ -152,7 +197,8 @@ export interface VisibleTrashGroup extends TrashGroupView {
  * 不用清册里记的 `sizeBytes`（那是删除那一刻的事实，盘上早就变了）。
  *
  * 盘上后代经 `selectStrandedMembers` 选出（排除全部清册 id、bare id 全局只算一次）；目录不在的成员
- * 不进 `members`（与 `planMemberRemovals` 同口径）。
+ * 不进 `members`（与 purge 计划同口径）。成员只吃 {@link measureMembers}：**零账本读**——不再为每个
+ * 盘上后代问一次 `workspaceOf`，`/list` 的失败面不再含账本归属读（归属只有 purge 摘账本才付）。
  */
 export async function planVisibleTrash(
   deps: CoreDeps,
@@ -164,7 +210,7 @@ export async function planVisibleTrash(
   return await Promise.all(groups.map(async ({ root, kids }, index) => {
     const rootRow = await measureTrashRow(deps, root)
     const kidRows = await Promise.all(kids.map((kid) => measureTrashRow(deps, kid)))
-    const members = await planMemberRemovals(deps, candidates[index] ?? [])
+    const members = await measureMembers(deps, candidates[index] ?? [])
     const subagentBytes = kidRows.reduce((total, row) => total + row.bytes, 0)
     const strandedBytes = members.reduce((total, member) => total + member.bytes, 0)
     return {

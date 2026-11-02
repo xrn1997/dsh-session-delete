@@ -3,9 +3,10 @@ import type { TrashEntry } from './entry.js'
 /** 回收站清单的 **raw 索引端口**：只给 `src/trash/ledger.ts` 与对账实现；动词与路由只认 ledger，
  *  不认 storage domain 的形状。`list()` 不保证与 `session-trash/` 目录一致（对账在 ledger 的 `list()`）。 */
 export interface ManifestPort {
-  list(): Promise<TrashEntry[]>
-  add(e: TrashEntry): Promise<void>
-  remove(id: string): Promise<void>
+  /** 属性声明：`list` 会被摘下来转交给对账（`manifest: { list: manifest.list, … }`），实现不读 `this`。 */
+  list: () => Promise<TrashEntry[]>
+  add: (e: TrashEntry) => Promise<void>
+  remove: (id: string) => Promise<void>
 }
 
 /** 宿主 storage domain 的最小面。这是**接缝**，不是对宿主 API 的断言：

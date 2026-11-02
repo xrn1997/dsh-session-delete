@@ -7,7 +7,10 @@ import { useCallback } from 'react'
  *  返回的 `closeDisabled` 与 `close` 同源：取消键的置灰读数也从这里取，各组件不再各写一遍
  *  `disabled={busy}`——否则"拦住"这件事会有两个判据。 */
 export interface IdleClose {
-  close(): void
+  /** 属性声明而不是方法简写：实现体不读 `this`，调用方会把 `close` 摘下来直接交给 `Modal`/
+   *  `Button`（`onClose={close}`）；方法简写会给它隐式 `this: IdleClose`，`unbound-method`
+   *  就会把这种正常交接报成可疑。形状仍是同一个函数，零运行时改动。 */
+  close: () => void
   readonly closeDisabled: boolean
 }
 

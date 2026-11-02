@@ -20,9 +20,8 @@
  * 的 zstd 版本（明文一大、FCS 上到 4 字节的 `0xa0` 就会算错），帧就切歪，会话日志直接读不出来。
  *
  * **尾巴那 4 字节按实测判据收，不按 descriptor 的 bit2**：规则是「跳过去必须正好撞上下一帧的 magic
- * 或到 EOF」——猜错不会静默切歪：末尾的自证与块界护栏会抛（护栏是必需的：块头越界时 `|` 读回 0，
- * 而 0 的 `Last_Block` 位没置位，少了它块循环每圈只 +3 字节却永不 break，整个进程会卡死；
- * 用例覆盖这一条）。
+ * 或到 EOF」——猜错不会静默切歪：末尾的自证与块界护栏会抛（护栏是必需的：块头可能被文件截断，
+ * 不抛的话块循环每圈只 +3 字节却永不 break，整个进程会卡死；用例覆盖这一条）。
  */
 
 export interface FrameRange {
@@ -58,8 +57,13 @@ function isMagicAt(raw: Buffer, at: number): boolean {
   return MAGIC.every((byte, i) => raw[at + i] === byte)
 }
 
-function readUint24LE(raw: Buffer, at: number): number {
-  return raw[at] | (raw[at + 1] << 8) | (raw[at + 2] << 16)
+function readUint24LE(raw: Buffer, at: number): number | undefined {
+  const b0 = raw[at]
+  const b1 = raw[at + 1]
+  const b2 = raw[at + 2]
+  // 截断读回 miss，不折叠成 0：0 是合法读数（Reserved 块头就是它），冒充不得。
+  if (b0 === undefined || b1 === undefined || b2 === undefined) return undefined
+  return b0 | (b1 << 8) | (b2 << 16)
 }
 
 /** 块体之后有没有那 4 字节尾巴：只有"跳过它之后仍是帧头或到 EOF"才认。 */
@@ -95,10 +99,9 @@ export function frameRanges(raw: Buffer): FrameRange[] {
     for (;;) {
       const blockHeader = readUint24LE(raw, cursor)
       cursor += BLOCK_HEADER_BYTES
-      // 越界必须在这里响亮失败，不能继续走：`readUint24LE` 是 `|` 读，越界那三字节全是 `undefined`
-      // ⇒ 恒 0，而 0 的 `Last_Block` 位没置位 ⇒ 少了这道护栏，块循环每圈只 `cursor += 3` 却永远
-      // 不 break，整个进程会卡死。
-      if (cursor > raw.length) {
+      // 截断必须在这里响亮失败，不能继续走：读回 miss 与越界是同一判据的两副面孔（缺一字节 ⇔
+      // 头三个字节落不出文件），少了这道护栏块循环每圈只推进头长却永远不 break，整个进程会卡死。
+      if (blockHeader === undefined || cursor > raw.length) {
         throw new Error(`zstd 块头越界：帧起于 ${at}，读到偏移 ${cursor}（文件长 ${raw.length}）`)
       }
       const blockType = (blockHeader >> BLOCK_TYPE_SHIFT) & 0x3

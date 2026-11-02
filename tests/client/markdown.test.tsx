@@ -2,12 +2,14 @@
 // 这里只管"一段 markdown 源 → 什么 DOM"，把三条收口钉住：原始 HTML 不进 DOM、链接与图片不开新面。
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { zhTranslate, type Translate } from '../../src/client/copy.js'
+import { localeProbe, zhTranslate, type Translate } from '../../src/client/copy.js'
 import { MarkdownBody } from '../../src/client/markdown.js'
 import { englishTranslate } from './support/locale.js'
 
-const body = (text: string, t: Translate = zhTranslate, localeKey = t('common.close')) =>
-  render(<MarkdownBody text={text} t={t} localeKey={localeKey} />)
+// 探针一律走 `localeProbe(t)`：「借哪句当语言探针」的知识只住 copy.ts，测试不自己记得借哪句。
+// 判据不变——probe 值这一拍变了（换语言）⇒ memo 放行、重解析。
+const body = (text: string, t: Translate = zhTranslate, probe = localeProbe(t)) =>
+  render(<MarkdownBody text={text} t={t} probe={probe} />)
 
 describe('回收站详情 · markdown 正文', () => {
   it('块级结构真的被渲出来（标题/列表/粗体/表格），不是一整块纯文本', () => {
@@ -67,10 +69,10 @@ describe('回收站详情 · markdown 正文', () => {
     const zh = zhTranslate
     const en = englishTranslate()
     const t: Translate = (key, params) => (lang === 'zh' ? zh : en)(key, params)
-    const view = render(<MarkdownBody text="![回归截图](/tmp/shot.png)" t={t} localeKey={t('common.close')} />)
+    const view = render(<MarkdownBody text="![回归截图](/tmp/shot.png)" t={t} probe={localeProbe(t)} />)
     expect(screen.getByText('[图片 · 回归截图]')).toBeInTheDocument()
     lang = 'en'
-    view.rerender(<MarkdownBody text="![回归截图](/tmp/shot.png)" t={t} localeKey={t('common.close')} />)
+    view.rerender(<MarkdownBody text="![回归截图](/tmp/shot.png)" t={t} probe={localeProbe(t)} />)
     expect(screen.getByText('[Image · 回归截图]')).toBeInTheDocument()
     expect(screen.queryByText(/图片/)).toBeNull()
   })

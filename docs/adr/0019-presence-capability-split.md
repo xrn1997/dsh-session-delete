@@ -8,7 +8,7 @@ ADR-0007 把宿主能力按身份 / 在场 / 语料切成三片；它当时把�
 
 - 取代范围：ADR-0005 与 ADR-0007 整篇转为 `superseded by 0019`；0005 的「离场 / 归位通告只住 `member-presence` 一个家」、0007 的角色切分与语料面照旧，本篇反转的是 0007 的「不拆依赖字段」与 0005 的「批量通告不进来」。
 - 实现仍只有 `src/verbs/member-presence.ts` 一份，端口形状住 `src/ports/presence-port.ts`；`announceRestored(ids)` 仍是批量恢复的唯一通告口（ADR-0014）。
-- 三处类型名不是三份实现：`HostPresencePort` 是宿主角色面（ADR-0007），`PresenceCapability` 是动词面，`MemberPresenceHost` 只是宿主面的 `Pick` 窄化（端口将来长出新方法时不被动变宽）；方法体只有 `createMemberPresence` 一份，`tests/deps.test.ts` 钉住能力面恰三条与实现唯一。
+- 三处类型名不是三份实现：`HostPresencePort` 是宿主角色面（ADR-0007），`PresenceCapability` 是动词面，`MemberPresenceHost` 只是宿主面的 `Pick` 窄化（端口将来长出新方法时不被动变宽）；方法体只有 `createMemberPresence` 一份，`tests/deps.test.ts` 钉住能力面恰三条与实现唯一（「实现唯一」今天由 `src/ports/presence-port.ts` 那枚不导出的品牌键在类型面上挡：手拼的同形对象盖不了章；早先那条扫源码数实现的用例已退役）。
 - 不拆 adapter：`createHostPort` 仍是一颗对象；组合根只在装配时用整颗 host 造 presence。
 - 不拆身份与语料字段：`HostCorePort` 仍把这两片合在一颗 `host` 上；一条动词流程里它们本来就连着用。
 

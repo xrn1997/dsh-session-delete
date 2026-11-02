@@ -45,7 +45,8 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
   let installed = false
   const install = (candidate: unknown): void => {
     if (installed) return
-    const service = candidate as AgentServiceLike | undefined
+    const service = candidate as AgentServiceLike | null | undefined
+    // 宿主/假件可能回 null 或 undefined：空值判据按真实形状写（镜像钉死≠运行时必有）。
     if (service === undefined || service === null) return
     const existing = service[CAPTURED_AGENT_HANDLES]
     if (existing !== undefined) {
@@ -60,12 +61,14 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
         const original = service[name]
         if (typeof original !== 'function') continue
         const wrapped: AgentMethod = function (this: unknown, ...args: unknown[]) {
-          const result = Reflect.apply(original, this, args) as Promise<unknown>
+          // 显式写类型实参：`Reflect.apply` 的返回类型由它们决定，不再需要 `as Promise<unknown>` 断言。
+          const result = Reflect.apply<unknown, unknown[], Promise<unknown>>(original, this, args)
           void result.then((value) => {
             const handle = value as AgentHandleLike | null | undefined
             const id = handle?.agent?.id
-            if (typeof id !== 'string' || id.length === 0 || typeof handle?.dispose !== 'function') return
-            handles.set(id, async () => { await handle.dispose!() })
+            const dispose = handle?.dispose
+            if (typeof id !== 'string' || id.length === 0 || typeof dispose !== 'function') return
+            handles.set(id, async () => { await dispose() })
           }, () => undefined)
           return result
         }
@@ -87,7 +90,7 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
     try {
       // 只改类型；运行时仍是同一颗服务对象。标记写在 symbol 上，代理的 symbol 分支直通目标，
       // 第二次安装（get 与 inject 各一次）会看见它，不会把 resume/create 套第二层。
-      ;(service as AgentServiceLike)[CAPTURED_AGENT_HANDLES] = handles
+      service[CAPTURED_AGENT_HANDLES] = handles
     } catch {
       // 标记只是防重复安装；写不上不改变 wrapper 已经装上这一事实。
     }
@@ -95,6 +98,7 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
   }
   const service = ctx.get('agents')
   if (service !== undefined && service !== null) install(service)
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `installed` 由 `install` 的闭包写入（成功装上时置 true），TS 看不见闭包写入；删了会给已装上的服务再 inject 一次。
   if (!installed && typeof ctx.inject === 'function') {
     try {
       ctx.inject(['agents'], (child) => { install(child.get('agents')) })

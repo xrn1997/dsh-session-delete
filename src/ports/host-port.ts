@@ -1,4 +1,6 @@
 import { captureAgentHandles } from './agent-handles.js'
+// 闭包与 bare 归一的唯一实现在领域纯部件里（见其头注）：端口只保留「一层一次宿主调用」的 adapter 职责。
+import { bareSessionId, closureOf, sessionIdShapes } from '../domain/closure.js'
 
 /** 摘内存的三种落地（见 {@link HostPort.evictLive}）：`not-live` / `evicted` 都意味着**宿主列表已经不含它**；
  *  `unknown` 意味着读不到或摘不掉，**不能**据此通告客户端（发了就是假话，重连后那一行会自己长回来）。 */
@@ -22,9 +24,9 @@ export interface HostIdentityPort {
   unarchive(sessionId: string): Promise<void>
   detach(sessionId: string, workspaceId: string): Promise<void>
   attach(sessionId: string, workspaceId: string): Promise<void>
-  /** 归档是 registry **全局**的，与工作区账目无关 ⇒ `workspaceId` 只是调用点对称用的可选入参
-   *  （未分组的会话没有工作区可传）。 */
-  archive(sessionId: string, workspaceId?: string): Promise<void>
+  /** 归档是 registry **全局**的，与工作区账目无关 ⇒ 只收 `sessionId`，没有工作区入参
+   *  （实现从不读工作区；未分组的会话同样只有这一条归档路）。 */
+  archive(sessionId: string): Promise<void>
 }
 
 /**
@@ -113,12 +115,15 @@ interface WorkspaceRegistryLike {
  *  detach 是宿主 owner 自己的摘除路（单次、幂等、会发 `session/disposed`）；宿主换代先复核这两个方法。 */
 interface LiveSessionsLike {
   get(id: string): unknown
-  liveEntryFor(session: unknown): { detach(): void }
+  /** 返回形状按真实宿主放宽：找不到活体时可能回 null / undefined，`detach` 也未必在。
+   *  「镜像钉死≠运行时必有」——所以 `evictLive` 的判空与 typeof 检查不是多余。 */
+  liveEntryFor(session: unknown): { detach?: () => void } | null | undefined
 }
 
 /** live store 的最小方法面判据（同 `projectionCacheOf` 的手法：按方法面判，不按 constructor.name）。 */
 function liveSessionsOf(ctx: HostCtxLike): LiveSessionsLike | undefined {
-  const store = ctx.get('sessions') as LiveSessionsLike | undefined
+  const store = ctx.get('sessions') as LiveSessionsLike | null | undefined
+  // 宿主 `ctx.get` 可能回 null（镜像钉死≠运行时必有），空值判据连同 null 一起写。
   if (store === undefined || store === null) return undefined
   if (typeof store.get !== 'function' || typeof store.liveEntryFor !== 'function') return undefined
   return store
@@ -172,13 +177,6 @@ async function filterChildrenOf(
   return sessionQuery.filterSessions([{ kind: 'parent', values: [...values].sort() }])
 }
 
-/** 闭包里的一条后代：`id` 是宿主交回的原写法（身份只认它），`bare` 是它去前缀后的形状（归堆与去重用）。 */
-interface Descendant {
-  readonly id: string
-  readonly bare: string
-  readonly projectDir: string
-}
-
 export interface SessionIdentity {
   readonly sessionId: string
   readonly parentSessionId?: string
@@ -186,6 +184,7 @@ export interface SessionIdentity {
   readonly subagent: boolean
 }
 
+/** 闭包里的一条后代：`sessionId` 是宿主交回的原写法（身份只认它，归一比对交给闭包部件）。 */
 export interface SubagentMember {
   readonly sessionId: string
   readonly projectDir: string
@@ -201,8 +200,8 @@ export interface SubagentMember {
 async function descendantsByParent(
   sessionQuery: SessionQueryLike,
   roots: readonly string[],
-): Promise<Map<string, Descendant[]>> {
-  const children = new Map<string, Descendant[]>()
+): Promise<Map<string, SubagentMember[]>> {
+  const children = new Map<string, SubagentMember[]>()
   const seen = new Set(roots.map(bareSessionId))
   let frontier = [...seen]
   while (frontier.length > 0) {
@@ -220,8 +219,8 @@ async function descendantsByParent(
       if (seen.has(bare)) continue
       seen.add(bare)
       const cwd = record.header?.cwd
-      const descendant: Descendant = {
-        id, bare, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
+      const descendant: SubagentMember = {
+        sessionId: id, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
       }
       const parentBare = bareSessionId(parent)
       const siblings = children.get(parentBare)
@@ -234,42 +233,19 @@ async function descendantsByParent(
   return children
 }
 
-/** 某个根在 `descendantsByParent` 那棵树里的全部后代（深度不设上限，同一条只收一次）。 */
-function subtreeOf(children: ReadonlyMap<string, Descendant[]>, rootBare: string): Descendant[] {
-  const out: Descendant[] = []
-  const seen = new Set([rootBare])
-  let frontier = [rootBare]
-  while (frontier.length > 0) {
-    const next: string[] = []
-    for (const bare of frontier) {
-      for (const kid of children.get(bare) ?? []) {
-        if (seen.has(kid.bare)) continue
-        seen.add(kid.bare)
-        out.push(kid)
-        next.push(kid.bare)
-      }
-    }
-    frontier = next
-  }
-  return out
-}
-
-function toMember(d: Descendant): SubagentMember {
-  return { sessionId: d.id, projectDir: d.projectDir }
-}
-
-/** {@link HostCorpusPort.subagentMembersOf} 的那一次 BFS。
+/** {@link HostCorpusPort.subagentMembersOf} 的那一次 BFS：这里只负责问宿主，某个根的后代闭包
+ *  由纯部件的 `closureOf` 在交回的索引上收（深度不设上限、防环、首见去重都在那一处）。
  *  空清单在调用宿主之前就返回（不为一张空表扫全库）。 */
 async function membersFor(
   sessionQuery: SessionQueryLike,
   parentIds: readonly string[],
-): Promise<Record<string, readonly Descendant[]>> {
+): Promise<Record<string, readonly SubagentMember[]>> {
   const wanted: string[] = []
   for (const id of parentIds) if (id.length > 0 && !wanted.includes(id)) wanted.push(id)
   if (wanted.length === 0) return {}
   const children = await descendantsByParent(sessionQuery, wanted)
-  const out: Record<string, readonly Descendant[]> = {}
-  for (const id of wanted) out[id] = subtreeOf(children, bareSessionId(id))
+  const out: Record<string, readonly SubagentMember[]> = {}
+  for (const id of wanted) out[id] = closureOf(children, id)
   return out
 }
 
@@ -311,7 +287,8 @@ export function projectKey(cwd: string): string {
 
 /** 投影缓存服务的最小方法面判据（按方法面判，不按 `constructor.name` 判）。 */
 function projectionCacheOf(ctx: HostCtxLike): ProjectionCacheLike | undefined {
-  const cache = ctx.get('sessionProjectionCache') as ProjectionCacheLike | undefined
+  const cache = ctx.get('sessionProjectionCache') as ProjectionCacheLike | null | undefined
+  // 同 `liveSessionsOf`：镜像钉死≠运行时必有，null 也是缺席的一种。
   if (cache === undefined || cache === null) return undefined
   if (typeof cache.cachedSnapshot !== 'function' || typeof cache.cachedPredecessorTitle !== 'function') return undefined
   return cache
@@ -328,27 +305,18 @@ function isUnknownSession(error: unknown): boolean {
   return error instanceof Error && error.message.includes(NO_SUCH_SESSION)
 }
 
-/** 会话 id 去掉 `session-` 前缀后的形状（同一个父在两代里写法不同，见 {@link HostCorpusPort.subagentMembersOf}）。 */
-export function bareSessionId(id: string): string {
-  return id.startsWith('session-') ? id.slice('session-'.length) : id
-}
-
-/** 一个 id 的全部可能写法，原写法在前：`session-x` → `[session-x, x]`；`x` → `[x, session-x]`。 */
-function sessionIdShapes(id: string): string[] {
-  const bare = bareSessionId(id)
-  return [...new Set([id, bare, `session-${bare}`])]
-}
-
 /** 宿主会话表的一次取数（`ctx.sessionController.list()` 的两种返回形状都折成数组）。
  *  服务没挂 / 形状不对 / 抛错 ⇒ 空表——**这条不替宿主兜错误**：调用方拿空表的语义都是"少发一条通告"，
  *  不是"恢复失败"。 */
 async function controllerItems(host: HostCtxLike): Promise<readonly unknown[]> {
   try {
-    const controller = host.get('sessionController') as SessionListLike | undefined
+    const controller = host.get('sessionController') as SessionListLike | null | undefined
+    // 宿主读面可能回 null（镜像钉死≠运行时必有），空值判据必须认它。
     if (controller === undefined || controller === null || typeof controller.list !== 'function') return []
     const listed = await controller.list()
     const items: unknown = Array.isArray(listed) ? listed : (listed as { items?: unknown } | null)?.items
-    return Array.isArray(items) ? items : []
+    // `Array.isArray` 只证明"是数组"，元素仍是 any：逐个过一遍把它交成 unknown[]，不断言形状。
+    return Array.isArray(items) ? items.map((item: unknown) => item) : []
   } catch {
     return []
   }
@@ -373,12 +341,14 @@ export function createHostPort(ctx: unknown): HostPort {
 
   return {
     /** 账本里记着这个会话的工作区：`registry.list()` 的实体 `sessionIds`（该 getter 已按 canonical cwd 过滤过）。 */
+    // eslint-disable-next-line @typescript-eslint/require-await -- 账本读面按 Promise 声明（与在场其余成员同形），这一问是 `registry.list()` 的同步 getter。
     async workspaceOf(sessionId) {
       return registry.list().find(workspace => workspace.sessionIds.includes(sessionId))?.id
     },
 
     /** 账本里还有这个工作区吗：`registry.get(id)` 是 `this.entities.get(id)` 的直通（同步 Map 查找），
      *  未知 id 回 `undefined` ⇒ 这里只做一次判别，不抛。 */
+    // eslint-disable-next-line @typescript-eslint/require-await -- 上面那条说的就是它：同步直通，Promise 只来自成员面的统一形状。
     async workspaceExists(workspaceId) {
       return registry.get(workspaceId) !== undefined
     },
@@ -424,6 +394,7 @@ export function createHostPort(ctx: unknown): HostPort {
     },
 
     /** registry 全局归档集（数组，`state.archivedSessionIds`）。 */
+    // eslint-disable-next-line @typescript-eslint/require-await -- 归档集是同步数组读，Promise 只来自在场其余成员的统一形状。
     async isArchived(sessionId) {
       return registry.archivedSessionIds.includes(sessionId)
     },
@@ -464,6 +435,7 @@ export function createHostPort(ctx: unknown): HostPort {
      * 冷会话没有 `session/disposed`，不发这条就只能等重连。
      * 只在宿主列表确实已不含它时调用（调用方按 {@link EvictionOutcome} 判）；不发假通告。
      */
+    // eslint-disable-next-line @typescript-eslint/require-await -- `host.emit` 是同步派发，没有要等的一问；下面的 catch 只收成「监听者抛错不翻掉已完成的删除」。
     async announceRemoved(sessionId) {
       try {
         host.emit('api-session/removed', sessionId)
@@ -517,8 +489,8 @@ export function createHostPort(ctx: unknown): HostPort {
     },
 
     /** 确保归档：官方 `archiveSession(sessionId)`。归档是 registry **全局**的，与工作区账目无关
-     *  （JSDoc 原文 "its workspace accounting — or lack of one — is irrelevant"），所以 `workspaceId` 不用
-     *  ——未分组的会话没有工作区可传，签名里它是可选的。
+     *  （JSDoc 原文 "its workspace accounting — or lack of one — is irrelevant"）⇒ 没有工作区入参，
+     *  调用方也不许再传（传了就是暗示一个从不生效的作用域）。
      *  不带 `stopActivity` ⇒ 有活动即抛 `WorkspaceActiveSessionError`（→ `sessiondelete/live`，src/shared/wire.ts）。 */
     async archive(sessionId) {
       await registry.archiveSession(sessionId)
@@ -553,11 +525,7 @@ export function createHostPort(ctx: unknown): HostPort {
     async subagentMembersOf(parentIds) {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
       if (typeof sessionQuery?.filterSessions !== 'function') return { available: false }
-      const members = await membersFor(sessionQuery, parentIds)
-      return {
-        available: true,
-        value: Object.fromEntries(Object.entries(members).map(([id, list]) => [id, list.map(toMember)])),
-      }
+      return { available: true, value: await membersFor(sessionQuery, parentIds) }
     },
   }
 }

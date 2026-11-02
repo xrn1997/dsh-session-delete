@@ -61,7 +61,8 @@ function world(over: {
     workspaceOf: over.workspaceOf,
     evicted: over.evicted,
     logMethods: over.logMethods ?? [],
-    format: over.format,
+    // 这一格的类型面不许可写 undefined，而假件那边只按值判「有没有自定义写法」⇒ 缺省就不建键
+    ...(over.format === undefined ? {} : { format: over.format }),
     fs: { exists: (p) => !absent.has(p), size: 0 },
   })
   made.fs.sizeOfDir.mockImplementation(async (p: string) => sizes[p] ?? 0)
@@ -220,11 +221,13 @@ describe('planVisibleTrash：/list 的只读计划', () => {
 
     const [group] = await planVisibleTrash(deps, rows, groups)
 
+    // 成员是**测量读数**（含 projectDir）：账本归属格不随 /list 的计划走，
+    // 对照用例在 purge 那一组——那里 executor 摘账本还要 workspaceId。
     expect(group?.members).toEqual([{
       sessionId: 'session-x',
+      projectDir: '--p--',
       dir: sessionDirOf('--p--', 'session-x', HOME),
       bytes: 100,
-      workspaceId: 'ws-1',
     }])
     expect(group?.strandedCount).toBe(1)
     expect(group?.strandedBytes).toBe(100)
@@ -285,6 +288,31 @@ describe('planVisibleTrash：/list 的只读计划', () => {
     expect(planned[0]?.strandedBytes).toBe(50)
     expect(planned[1]?.strandedBytes).toBe(0)
     expect(deps.fs.sizeOfDir).toHaveBeenCalledTimes(3) // 两个根目录 + 这一个成员
+  })
+
+  it('只测量不问账本归属：跑完零 workspaceOf 调用（少 N 次宿主调用，N = 盘上后代数；/list 的失败面不再含账本归属读）', async () => {
+    const root = entry('session-p')
+    const strandedDir = sessionDirOf('--p--', 'session-x', HOME)
+    const { deps, groups } = world({
+      rows: [root],
+      sizes: { [trashDirOf(root.id, HOME)]: 4096, [strandedDir]: 200 },
+      members: { 'session-p': [member('session-x')] },
+    })
+
+    const [group] = await planVisibleTrash(deps, [root], groups)
+
+    // 字节与条数口径不变：清单照旧报实测读数（成员四格 = 身份两格 + 目录 + 实测字节）。
+    expect(group?.members).toEqual([{
+      sessionId: 'session-x',
+      projectDir: '--p--',
+      dir: strandedDir,
+      bytes: 200,
+    }])
+    expect(group?.strandedCount).toBe(1)
+    expect(group?.strandedBytes).toBe(200)
+    expect(group?.releaseBytes).toBe(4096 + 200)
+    // 账本归属是 purge 摘账本才要读的事实：/list 一行都不许问（对照用例在 purge 那一组）。
+    expect(deps.host.workspaceOf).not.toHaveBeenCalled()
   })
 })
 
@@ -482,6 +510,27 @@ describe('planTrashRemoval：purge 的删除计划', () => {
     expect(plan.unarchive).toEqual(['session-p'])
     expect(plan.bytes).toBe(8)
     expect(deps.host.subagentMembersOf).toHaveBeenCalledTimes(1)
+  })
+
+  it('purge 的计划仍逐成员问 workspaceOf 并把 workspaceId 补进 members（executor 摘账本要用；与 /list 的分家别做过头）', async () => {
+    const root = entry('session-p')
+    const strandedDir = sessionDirOf('--p--', 'session-x', HOME)
+    const { deps } = world({
+      rows: [root],
+      sizes: { [trashDirOf(root.id, HOME)]: 4096, [strandedDir]: 200 },
+      members: { 'session-p': [member('session-x')] },
+    })
+
+    const plan = await planTrashRemoval(deps, [root], [root])
+
+    // 计划里带着归属，执行器才摘得掉账本（`executeRemoval` 按 member.workspaceId 调 detach）。
+    expect(plan.members).toEqual([{
+      sessionId: 'session-x',
+      dir: strandedDir,
+      bytes: 200,
+      workspaceId: 'ws-1',
+    }])
+    expect(deps.host.workspaceOf).toHaveBeenCalledWith('session-x')
   })
 })
 

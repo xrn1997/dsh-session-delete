@@ -7,7 +7,7 @@
  * - 详情成功读数按条目 id 缓存；失败不缓存，重试会重新读。
  * - 选中 id 不在新清单里 ⇒ 丢缓存、清选中、退出下钻；清单读不到（null）不算“没了”。
  * - 自动选中只在 selectedId 为 null 时接管。
- * - 失效通告只触发 refreshAfterWrite()；动作成功必须在同一趟里丢详情缓存。
+ * - 失效通告与挂载都只触发 reload()；动作成功必须在同一趟里丢详情缓存。
  * - back() 先收孩子视图、再收下钻，不碰焦点；失败原文不翻译。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -21,7 +21,7 @@ import {
 import type { TrashEntryWire } from '../shared/wire.js'
 import { useTrashRevision } from './trash-store.js'
 import { useLatest } from './store.js'
-import type { TrashDetailState } from './trash-detail.js'
+import type { DetailNav, TrashDetailState } from './trash-detail.js'
 import { listView, type TrashQuery } from './use-trash-query.js'
 import type { WriteOutcome } from './write.js'
 import { purgeFromPanel, restoreFromPanel } from './write-seats.js'
@@ -35,19 +35,16 @@ export type PendingAction =
   | { kind: 'restore'; ids: readonly string[] }
 
 /**
- * 控制器要的面。`query` 取五样：清单（选中从它里面找）、`refreshAll`（挂载与显式重试）、
- * `refreshAfterWrite`（失效与写后）、清空（面板的写动作那一半）、`noteAttachmentCleanup`（purge 回执里
+ * 控制器要的面。`query` 取四样：清单（选中从它里面找）、`reload`（挂载、显式重试、失效与写后
+ * 都是同一条读）、清空（面板的写动作那一半）、`noteAttachmentCleanup`（purge 回执里
  * 附件那半句交给查询侧拼句子上屏）。`ordered` 是键盘/自动选中用的"屏幕上的顺序"（只含展开的组），
  * 由面板算好传进来——布局常量不搬进控制器。输入的引用**不需稳定**：失效 effect 的判据只有
- * `revision`，refresh 回调经 `useLatest` 读最新那一份（判据住 `store.ts`）。
+ * `revision`，reload 回调经 `useLatest` 读最新那一份（判据住 `store.ts`）。
  */
 export interface TrashPanelControllerInput {
   deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
   gate: BusyGate
-  query: Pick<
-    TrashQuery,
-    'list' | 'refreshAll' | 'refreshAfterWrite' | 'emptyTrash' | 'noteAttachmentCleanup'
-  >
+  query: Pick<TrashQuery, 'list' | 'reload' | 'emptyTrash' | 'noteAttachmentCleanup'>
   ordered: readonly TrashEntryLike[]
   canAutoSelect: boolean
 }
@@ -59,6 +56,9 @@ export interface TrashPanelController {
   /** 正在看哪个孩子（离清单的详情导航态；null = 看清单选中那条）。单级是设计（ADR-0029）：
    *  只有一个槽，`openChild` 换槽不叠栈，返回交还清单选中那条。 */
   readonly childView: TrashEntryWire | null
+  /** 详情的导航面（开孩子 / 回父）。ADR-0029 单级判据的**唯一实现**：面板只转交它，
+   *  不再自己拼 openChild / parentContext 两个派生块（判据有第二个家，视图与测试就得各自复述语义）。 */
+  readonly detailNav: DetailNav
   /** 打开一个孩子（父详情子会话段点进来）：读它的详情，但清单选中不动。 */
   openChild(child: TrashEntryWire): Promise<void>
   /** 回到父详情（宽档头部那颗「返回父会话」；窄档 back/Esc 的第一程也走它）。 */
@@ -75,20 +75,23 @@ export interface TrashPanelController {
   readonly pendingEntries: readonly TrashEntryLike[]
   /** 恢复/彻底删除/批量 的失败原文，按条目 id 存：切走再回来还在。 */
   readonly actionFailure: Readonly<Record<string, string>>
-  select(entry: TrashEntryLike, options?: { drill?: boolean }): Promise<void>
+  /** 下面是面板会**摘下来转交**的动作（导航的 `select`/`back`、确认框的 `cancelPending`）：
+   *  属性声明而不是方法简写，实现体都不读 `this`。方法简写的隐式 `this` 会让 `unbound-method`
+   *  把转交报成可疑；改形状是纯类型面，零运行时改动。 */
+  select: (entry: TrashEntryLike, options?: { drill?: boolean }) => Promise<void>
   /** 按当前详情的 `olderCursor` 读更早一页，拼到现有块前面。 */
-  loadOlder(): Promise<void>
-  retry(): void
-  back(): void
+  loadOlder: () => Promise<void>
+  retry: () => void
+  back: () => void
   /** 构造待确认动作（唯一入口：新增一种确认只改 `PendingAction` 与确认框，不再加一串转调）。 */
-  request(action: PendingAction): void
-  cancelPending(): void
+  request: (action: PendingAction) => void
+  cancelPending: () => void
   /** 单条恢复（`/apply` 的 N=1）：成功后丢缓存，写完无论成败都重读清单，失败原文落回这一行。 */
-  restore(entry: TrashEntryLike): Promise<void>
+  restore: (entry: TrashEntryLike) => Promise<void>
   /** 确认框上的「确认」：按 `pending.kind` 分派到空清或 `confirmApply`。 */
-  confirmPurge(): Promise<void>
+  confirmPurge: () => Promise<void>
   /** 一组 id 上的同一个动作：逐条成败落成行上原文/缓存失效，整批只重读一次清单。 */
-  confirmApply(action: 'purge' | 'restore', ids: readonly string[]): Promise<void>
+  confirmApply: (action: 'purge' | 'restore', ids: readonly string[]) => Promise<void>
 }
 
 /** 失败按**哪一条**记：只有失败那条与当前选中行同 id 时才会进详情块，别的条目失败不会串台。 */
@@ -153,7 +156,7 @@ function useInFlight(): readonly [string | null, InFlight] {
 
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
   const { deps, gate, query, ordered, canAutoSelect } = input
-  const { list, refreshAll, refreshAfterWrite, emptyTrash, noteAttachmentCleanup } = query
+  const { list, reload, emptyTrash, noteAttachmentCleanup } = query
   const entries = listView(list).rows
 
   const [selectedId, setSelectedId, selectedIdRef] = useSyncedRef<string | null>(null)
@@ -171,23 +174,16 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   const [actionFailure, setActionFailure] = useState<Readonly<Record<string, string>>>({})
   /** 面板存活期内每条只读一次（本机量级不值得预读，也不值得重复读）。 */
   const detailCache = useRef(new Map<string, TrashDetailLike>())
-  /** 挂载那一拍读一次清单，之后失效通告只走写后刷新（两条名字不同，读法是同一条）。 */
-  const firstRefresh = useRef(true)
+  /** 失效重读的载体：`reload` 回调经 `useLatest` 读最新那一份（判据住 `store.ts`），
+   *  失效 effect 的判据只有 `revision`——挂载首拍与后续通告现在是同一个动作，不再分两支。 */
+  const refreshers = useLatest({ reload })
 
-  /** 失效重读的载体：refresh 回调经 `useLatest` 读最新那一份（判据住 `store.ts`），
-   *  失效 effect 的判据只有 `revision`。 */
-  const refreshers = useLatest({ refreshAll, refreshAfterWrite })
-
-  // 别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍重读清单。
+  // 挂载读一次清单；别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍再重读。
   // 无主子会话不再顺带扫：那是设置页维护卡的手动动作（ADR-0021）。
   const revision = useTrashRevision()
   useEffect(() => {
-    if (firstRefresh.current) {
-      firstRefresh.current = false
-      void refreshers.current.refreshAll()
-      return
-    }
-    void refreshers.current.refreshAfterWrite()
+    void refreshers.current.reload()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `refreshers` 是 `useLatest` 的恒稳 ref（规则看不见自定义 hook）；失效判据只有 `revision`。
   }, [revision])
 
   // 清单未知时，确认框不许留着：看不见的行不许继续被确认；写入在飞时不收（那一趟还在跑）。
@@ -234,6 +230,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     },
     // 三个 setter（`setChildView` / `setSelectedId` / `setOlderFailure`）都是恒稳引用，不进依赖，
     // 与 `openChild`、`closeChild` 同一条写法。
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setChildView / setSelectedId 是 React 的恒稳 setter（规则看不见 setState 的恒等性）。
     [ensureDetail],
   )
 
@@ -241,11 +238,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     setChildView(child)
     setOlderFailure(null)
     await ensureDetail(child.id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- setChildView / setOlderFailure 是恒稳 setter，不进依赖是本文件既有写法。
   }, [ensureDetail])
 
   const closeChild = useCallback((): void => {
     setChildView(null)
     setOlderFailure(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只调恒稳 setter，无外部读数可依赖。
   }, [])
 
   /**
@@ -285,6 +284,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       return
     }
     setOlderFailure({ entryId, message: outcome.failure.message })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `childViewRef` / `selectedIdRef` 是 ref（恒稳），读的是 `.current`；规则把 ref 也当读数。
   }, [deps, childView, selectedId, olderFlight])
 
   // 清单换了（别处删了一条、恢复成功、彻底删除成功）：选中那条已经不在了就让位，并把它的缓存丢掉。
@@ -299,6 +299,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     olderFlight.clear()
     setDrilled(false)
     setOlderFailure(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `setChildView` 是 React 的恒稳 setter（规则看不见恒等性）；其余读数都已在数组里。
   }, [entries, selectedId, setSelectedId, olderFlight])
 
   // 宽档没有「下钻」这一层：从窄档拖宽后把残留的 `drilled` 收掉，缩回去时不至于直接停在详情页。
@@ -310,7 +311,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   // 宽档首读完成后自动选中第一条：右栏空着比多一次点击更怪（窄档不自动下钻）。
   // `canAutoSelect` 由面板算（盒子够宽且清单里有东西），控制器不认布局常量。
   useEffect(() => {
-    if (canAutoSelect && selectedId === null && ordered.length > 0) void select(ordered[0]!)
+    const first = ordered[0]
+    if (canAutoSelect && selectedId === null && first !== undefined) void select(first)
   }, [canAutoSelect, selectedId, ordered, select])
 
   /**
@@ -325,6 +327,24 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   /** 详情现在画谁：孩子视图开着就是孩子，否则是清单选中那条。孩子不在清单里，
    *  所以它是离清单的导航态——selectedId 不动，清场/自动选中/组动作全部照旧。 */
   const subject: TrashEntryWire | null = childView ?? selected
+
+  /**
+   * 详情的导航面（ADR-0029 单级判据的唯一实现，住控制器）：
+   * - 孩子视图没开（主体是清单选中那条）⇒ `onOpenChild` 在场、`parentContext` 缺席。
+   *   在孩子视图里再开一层会造出第二套导航路径，还会让那颗返回指着孙辈说话（更深一代走清单可达，
+   *   判据住 `src/trash/groups.ts`），所以入口只在这半边交出。
+   * - 孩子视图开着 ⇒ `onOpenChild` 缺席、`parentContext` 交回父：title 是**选中行的原文**
+   *   （未命名兜底由视图按 t 处理，控制器不碰翻译），onBack 收孩子视图。
+   * - `selected` 为 null（清单换版把父行收走的那一帧，清场 effect 随后也把孩子视图收掉）
+   *   ⇒ `parentContext` 缺席：返回键不能指着一个不存在的父。
+   */
+  const detailNav = useMemo<DetailNav>(() => {
+    if (childView === null) {
+      return { onOpenChild: (child: TrashEntryWire): void => { void openChild(child) } }
+    }
+    if (selected === null) return {}
+    return { parentContext: { title: selected.title, onBack: closeChild } }
+  }, [childView, selected, openChild, closeChild])
 
   /** 恢复确认框要摆的这一批：按勾选顺序，清单里已经找不到的 id 滤掉
    *  （别的窗口刚动过；重读会把勾选也剔掉）。单条与整站确认框不摆条目，各自念自己的那一句。 */
@@ -346,6 +366,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     // 「读着」摆着，下一次 `select` / `openChild` / `retry` 或清单换版会把状态推到 ready / failed / idle，
     // 不会永久停在这里。
     return { kind: 'loading', entry: subject }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `detailVersion` 不能删：详情缓存是 `useRef(new Map())`，只有这个必然变化的信号能让 memo 知道缓存被 prepend 过。删了 = 「加载更早」读回来了但不落屏。
   }, [subject, detailShown, detailFailure, detailVersion])
 
   /** 分页/失败都只对当前详情主体上屏（孩子视图开着就是孩子）；切到别的条目时它们是别人家的旧账。 */
@@ -392,6 +413,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       const next = { ...current }
       for (const id of ids) {
         if (Object.hasOwn(next, id)) {
+          // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `next` 是本函数刚浅拷出来的本地副本，删的是自己的键；不存在共享对象/原型链问题。
           delete next[id]
           changed = true
         }
@@ -408,7 +430,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
    * 被同步挡回、整趟不跑（座位交回 `undefined`），这一行保持原样，等在飞那一趟的结论。
    * 单条恢复走 `single` 读法，`already-gone` 不可能出现，座位里那条查找兜底在此不会命中。
    * 座位的 refresh 仍按 `WriteOutcome` 给（那只信封里没有附件读数要转交）：这里只把它换成"重读"这一个动作，
-   * outcome 不再流向 query——孤儿重扫判据已不在面板（ADR-0021）。
+   * outcome 不再流向 query——孤儿重扫判据已不在面板（ADR-0021）。座位字段仍叫 `refreshAfterWrite`
+   * （`write-seats.ts` 的信封接口，写座位自己的名字），与清单重读已合一的旧双名无关。
    */
   const restore = useCallback(async (entry: TrashEntryLike): Promise<void> => {
     clearRowFailures([entry.id])
@@ -418,7 +441,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       single: true,
       entries,
       gate,
-      refreshAfterWrite: () => refreshAfterWrite(),
+      refreshAfterWrite: () => reload(),
       clearDetailCache,
     })
     // 被闸挡回的那一趟什么都没跑：这一行的成败由在飞那一趟说，这里不再补失败原文
@@ -426,7 +449,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (outcome === undefined) return
     const failure = outcome.failures.get(entry.id)
     if (failure !== undefined) failRow(entry.id, failure)
-  }, [clearDetailCache, clearRowFailures, deps, entries, failRow, gate, refreshAfterWrite])
+  }, [clearDetailCache, clearRowFailures, deps, entries, failRow, gate, reload])
 
   /**
    * 批量彻底删除 / 批量恢复**共用这一条**：一次 `apply` 把整批交给 Node 半，逐条成败住在
@@ -443,7 +466,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     const settle = (outcome: WriteOutcome<'purge' | 'restore'>): Promise<void> => {
       setPending(null)
       if (action === 'purge') noteAttachmentCleanup(outcome.ok ? outcome.summary.attachmentCleanup : undefined)
-      return refreshAfterWrite()
+      return reload()
     }
     // 面板座位：purge 清成功条目的详情缓存并熄灭指向它们的撤销横幅；restore 另忘掉 main-view 的
     // closedByUs（只遗忘、不重开）。两样都由 settlement 按 anySuccess 上闸。
@@ -460,7 +483,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       for (const [id, message] of outcome.failures) next[id] = message
       return next
     })
-  }, [clearDetailCache, clearRowFailures, deps, entries, gate, refreshAfterWrite, noteAttachmentCleanup])
+  }, [clearDetailCache, clearRowFailures, deps, entries, gate, reload, noteAttachmentCleanup])
 
   /**
    * 确认框上的「确认」按 `pending` 的形状分派：三条按条目标都委托 `confirmApply`（一段 `/apply`）；
@@ -486,6 +509,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     selected,
     selectedId,
     childView,
+    detailNav,
     openChild,
     closeChild,
     drilled,

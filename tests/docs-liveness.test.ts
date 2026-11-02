@@ -19,6 +19,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { collectFiles } from './support/corpus.js'
+import { pick } from './support/fixture.js'
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
 
@@ -76,6 +77,7 @@ const BACKTICK_REL = /`([A-Za-z0-9_-]+\/[A-Za-z0-9_./-]*\.(?:ts|tsx|js|mjs|cjs|j
 const ALLOWED: Record<string, string> = {
   'src/verbs/apply.ts': 'ADR-0001 的「当时」表：那一格写的就是改名前的位置，同行已注明改名到 batch.ts',
   'tests/docs.test.ts': 'ADR-0010 / ADR-0011 的「当时」坐标：当时文档门叫 tests/docs.test.ts，已被 ADR-0024 拆成三件套；旧 ADR 正文保留，不改写历史',
+  'src/verbs/purge-trash.ts': 'ADR-0001 / ADR-0003 / ADR-0005 的历史面（「当时」表与背景问题表）：purge 的 glue 已被清册作用域（src/verbs/trash-scope.ts）吸收，旧 ADR 正文保留，不改写历史',
 }
 
 /** 已废的称呼：批次号、已改名的开发手册、以及它们的「复核候选」编号——都没有可查的坐标了。 */
@@ -101,7 +103,7 @@ function adrNumbering(nums: number[]): string[] {
   const sorted = [...nums].sort((a, b) => a - b)
   const dupes = sorted.filter((n, i) => i > 0 && sorted[i - 1] === n)
   const gaps: string[] = []
-  for (let n = sorted[0]!; n <= sorted[sorted.length - 1]!; n++) if (!sorted.includes(n)) gaps.push(String(n))
+  for (let n = pick(sorted, 0); n <= pick(sorted, sorted.length - 1); n++) if (!sorted.includes(n)) gaps.push(String(n))
   return [...(dupes.length > 0 ? [`重号：${[...new Set(dupes)].join(', ')}`] : []), ...gaps.map((n) => `断号：${n}`)]
 }
 
@@ -152,7 +154,7 @@ function headingSlugs(markdown: string): Set<string> {
   for (const line of stripFencedCode(markdown).split(/\r?\n/)) {
     const match = /^#{1,6}\s+(.+?)\s*#*\s*$/.exec(line)
     if (match === null) continue
-    const base = slugify(match[1]!)
+    const base = slugify(pick(match, 1))
     const count = seen.get(base) ?? 0
     slugs.add(count === 0 ? base : `${base}-${count}`)
     seen.set(base, count + 1)
@@ -162,7 +164,7 @@ function headingSlugs(markdown: string): Set<string> {
 
 function linkTargets(markdown: string): string[] {
   return [...stripFencedCode(markdown).matchAll(/\]\(([^)]+)\)/g)]
-    .map((match) => match[1]!.split(/\s+/)[0]!)
+    .map((match) => pick(pick(match, 1).split(/\s+/), 0))
     // `java["ajax"]("…")` 这类代码片段长得像链接；目标以引号开头的一律不算。
     .filter((target) => !/^["'“”‘’]/.test(target))
 }
@@ -183,7 +185,7 @@ function brokenLinks(file: string, markdown: string): string[] {
     if (target.startsWith('<')) continue
     const [rawPath = '', ...rawAnchor] = target.split('#')
     const anchor = rawAnchor.join('#')
-    const path = rawPath.split('?')[0]!
+    const path = pick(rawPath.split('?'), 0)
     if (path === '') {
       if (anchor !== '' && !ownSlugs.has(decodeAnchor(anchor))) broken.push(`${rel(file)} → #${anchor}`)
       continue
@@ -206,7 +208,7 @@ function numberedSections(relPath: string): Set<string> {
   const sections = new Set<string>()
   for (const line of read(relPath).split(/\r?\n/)) {
     const match = /^#{1,4}\s+(\d+(?:\.\d+)*)\.?\s/.exec(line)
-    if (match) sections.add(match[1]!)
+    if (match) sections.add(pick(match, 1))
   }
   return sections
 }
@@ -237,12 +239,12 @@ function sectionOwnership(line: string, relFile: string): Array<{ num: string; h
   const homes: Array<{ at: number; home: SectionHome }> = []
   for (const m of line.matchAll(/architecture\.md|ui-spec\.md|docs\/AGENTS\.md|本文/g)) {
     const home = m[0] === '本文' ? HOME_OF_SELF[relFile] : HOME_BY_TOKEN[m[0]]
-    if (home !== undefined) homes.push({ at: m.index ?? -1, home })
+    if (home !== undefined) homes.push({ at: m.index, home })
   }
   const out: Array<{ num: string; home: SectionHome }> = []
   for (const m of line.matchAll(/§\s*(\d+(?:\.\d+)*)/g)) {
-    const owner = homes.filter((h) => h.at < (m.index ?? -1)).at(-1)
-    if (owner) out.push({ num: m[1]!, home: owner.home })
+    const owner = homes.filter((h) => h.at < m.index).at(-1)
+    if (owner) out.push({ num: pick(m, 1), home: owner.home })
   }
   return out
 }
@@ -286,13 +288,13 @@ describe('文档门 · 指名的仓内路径必须存在', () => {
     for (const { file, lines } of docCorpus) {
       for (const [i, line] of lines.entries()) {
         for (const m of line.matchAll(BACKTICK_REL)) {
-          const p = m[1]!
+          const p = pick(m, 1)
           if (/^(?:\.{0,2}\/|https?:)/.test(p) || p.includes('*') || p.includes('<')) continue
           // 带前缀的路径已由上一枚判据管；这里只收裸相对路径。
           if (/^(?:src|tests|docs|locale|node_modules|compat)\//.test(p)) continue
           if (p in ALLOWED || `src/${p}` in ALLOWED) continue
           // 首段既不在仓根也不在 src/ 下 ⇒ 这是外部包的路径（如宿主包的 lib/client.js），不是本仓的。
-          const first = p.split('/')[0]!
+          const first = pick(p.split('/'), 0)
           if (!exists(first) && !exists(`src/${first}`) && !exists(`tests/${first}`)) continue
           if (exists(p) || exists(`src/${p}`) || exists(`tests/${p}`)) continue
           broken.push(`${rel(file)}:${i + 1} → ${p}`)
@@ -365,7 +367,7 @@ describe('文档门 · 引用形态纪律', () => {
     const bad: string[] = []
     eachLine((file, line, i) => {
       for (const m of line.matchAll(/ADR-(\d{4})/g)) {
-        if (!numbers.has(m[1]!)) bad.push(`${rel(file)}:${i + 1} → ${m[0]}（不在册）`)
+        if (!numbers.has(pick(m, 1))) bad.push(`${rel(file)}:${i + 1} → ${m[0]}（不在册）`)
       }
     })
     expect(bad, `悬空的 ADR 互引：\n${bad.join('\n')}`).toEqual([])
@@ -399,7 +401,7 @@ describe('文档门 · 职责边界', () => {
   })
 
   it('AGENTS.md 是入口，不是仓库手册', () => {
-    const chars = [...read('AGENTS.md')].length
+    const chars = Array.from(read('AGENTS.md')).length
     expect(chars, `AGENTS.md ${chars} 字符；超过 8,000 先搬迁或压缩，提额要写理由`).toBeLessThanOrEqual(8000)
   })
 
@@ -472,7 +474,7 @@ describe('文档门 · 文档分层与 ADR 形状', () => {
   it('每个 ADR 都进索引，索引里也没有不存在的篇，且每篇恰好一行', () => {
     const files = adrFiles().map((name) => name.slice(0, 4))
     // 只认索引表第一列（`| `0001` | …`）：正文里互引别的 ADR 不算重复行。
-    const listed = [...read('docs/adr/README.md').matchAll(/^\| `(\d{4})`/gm)].map((match) => match[1]!)
+    const listed = [...read('docs/adr/README.md').matchAll(/^\| `(\d{4})`/gm)].map((match) => pick(match, 1))
     expect(listed.length, 'ADR 索引没有解析出任何编号').toBeGreaterThan(0)
     expect(new Set(listed).size, 'ADR 索引里有重复行').toBe(listed.length)
     expect(files.filter((id) => !listed.includes(id)), '这些 ADR 没进 docs/adr/README.md').toEqual([])
@@ -506,7 +508,7 @@ describe('文档门 · 兼容性事实单源', () => {
   const window = manifest.engines.dsh
 
   /** 徽章只投影首末代次：全量枚举会随每次实测变长，完整名单由正文钉住。 */
-  const badgeVersions = releases.length > 1 ? [releases[0]!, releases[releases.length - 1]!] : releases
+  const badgeVersions = releases.length > 1 ? [pick(releases, 0), pick(releases, releases.length - 1)] : releases
   const badge = `DSH-${badgeVersions.map((version) => version.replaceAll('-', '--')).join('%20%E2%80%A6%20')}`
 
   const projectionDrift = (readme: string): string[] => {
@@ -526,7 +528,7 @@ describe('文档门 · 兼容性事实单源', () => {
   it('判据认得出窗口、名单与徽章各自漂移（正控）', () => {
     const readme = read('README.md')
     expect(projectionDrift(readme.replaceAll(window, '>=0.1.0 <0.3.0-0'))).toContain(`窗口是 **\`${window}\`**`)
-    expect(projectionDrift(readme.replaceAll(releases[0]!, '0.0.0-not-real'))).not.toEqual([])
+    expect(projectionDrift(readme.replaceAll(pick(releases, 0), '0.0.0-not-real'))).not.toEqual([])
     expect(projectionDrift(readme.replaceAll(`${badge}-brightgreen`, 'DSH-nope-brightgreen'))).toContain(`${badge}-brightgreen`)
   })
 
@@ -555,7 +557,7 @@ describe('文档门 · 相对链接与锚点', () => {
 describe('文档门 · 截图清单', () => {
   const manifest = JSON.parse(read('screenshots.json')) as string[]
   const images = [...read('README.md').matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)]
-    .map((match) => /(docs\/screenshots\/[^)\s]+)/.exec(match[1]!)?.[1])
+    .map((match) => /(docs\/screenshots\/[^)\s]+)/.exec(pick(match, 1))?.[1])
     .filter((path): path is string => path !== undefined)
 
   const drift = (found: string[], listed: string[]): string[] => {

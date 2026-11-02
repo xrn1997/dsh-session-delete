@@ -15,6 +15,13 @@ import {
   type DetailDeps,
 } from '../src/trash/detail.js'
 import { trashEntry } from './support/world.js'
+import { pick } from './support/fixture.js'
+
+/** 游标在上一行已被 expect 钉成"有值"：这一判只是让编译器跟上，真没值是夹具与断言脱节，响亮失败。 */
+function olderCursorOf(value: number | null): number {
+  if (value === null) throw new Error('夹具脱节：olderCursor 应有值')
+  return value
+}
 
 const DELETED_AT = Date.UTC(2026, 9, 14, 6, 56, 58)
 const id = makeEntryId(DELETED_AT, 'session-x')
@@ -226,7 +233,7 @@ it('附件的两道闸：每块 20、每页 200；文本与计数照旧', async 
   const log = body(msg(1, 25), ...Array.from({ length: 11 }, (_u, i) => msg(10 + i, 20)))
   const detail = await readTrashDetail(makeDeps(log).deps)(id)
 
-  expect(detail.blocks[0]!.attachments).toHaveLength(20)
+  expect(pick(detail.blocks, 0).attachments).toHaveLength(20)
   expect(detail.blocks.reduce((sum, block) => sum + block.attachments.length, 0)).toBe(200)
   expect(detail.blocks).toHaveLength(12)
   expect(detail.userMessageCount).toBe(12)
@@ -291,7 +298,7 @@ it('分页：尾部一页 + 更早一页，游标拼接后等于全量', async (
   expect(tail.olderCursor).toBe(10)
   expect(tail.userMessageCount).toBe(40)
 
-  const older = await readTrashDetail(deps, { perBlockChars: 16_000, pageBlocks: 30 })(id, tail.olderCursor!)
+  const older = await readTrashDetail(deps, { perBlockChars: 16_000, pageBlocks: 30 })(id, olderCursorOf(tail.olderCursor))
   expect(older.blocks).toHaveLength(10)
   expect(older.blocks[0]).toMatchObject({ kind: 'user', text: '第0条' })
   expect(older.blocks[9]).toMatchObject({ kind: 'user', text: '第9条' })
@@ -310,11 +317,11 @@ it('页级字符闸：尾页只装预算内的后几块，挤出的块在更早�
   expect(tail.blocks.map((block) => block.kind === 'user' ? block.text.slice(0, 3) : '')).toEqual(['004', '005'])
   expect(tail.olderCursor).toBe(4)
 
-  const older = await readTrashDetail(deps, limits)(id, tail.olderCursor!)
+  const older = await readTrashDetail(deps, limits)(id, olderCursorOf(tail.olderCursor))
   expect(older.blocks.map((block) => block.kind === 'user' ? block.text.slice(0, 3) : '')).toEqual(['002', '003'])
   expect(older.olderCursor).toBe(2)
 
-  const oldest = await readTrashDetail(deps, limits)(id, older.olderCursor!)
+  const oldest = await readTrashDetail(deps, limits)(id, olderCursorOf(older.olderCursor))
   expect(oldest.blocks.map((block) => block.kind === 'user' ? block.text.slice(0, 3) : '')).toEqual(['000', '001'])
   expect(oldest.olderCursor).toBeNull()
 })
@@ -348,7 +355,7 @@ it('游标之后回填的工具结果计入页级闸：挤掉页首调用块，�
   ])
   expect(tail.olderCursor).toBe(1)
 
-  const older = await readTrashDetail(deps, limits)(id, tail.olderCursor!)
+  const older = await readTrashDetail(deps, limits)(id, olderCursorOf(tail.olderCursor))
   expect(older.blocks.map((block) => block.kind === 'tool' ? [block.callId, block.status, block.result] : [])).toEqual([
     ['c1', 'ok', `一${'x'.repeat(59)}`],
   ])
@@ -371,7 +378,7 @@ it('四个计数都是整条日志的账：更早一页拿到的数与尾页那�
   expect(tail.blocks).toHaveLength(30)
   expect(tail.olderCursor).not.toBeNull()
 
-  const older = await readTrashDetail(deps, limits)(id, tail.olderCursor!)
+  const older = await readTrashDetail(deps, limits)(id, olderCursorOf(tail.olderCursor))
   const wholeLogCounts = { userMessageCount: 20, assistantMessageCount: 20, toolCallCount: 20, injectedCount: 20 }
   expect(tail).toMatchObject(wholeLogCounts)
   expect(older).toMatchObject(wholeLogCounts)
@@ -392,7 +399,7 @@ it('分页边界上的工具结果仍回填到更早页：调用在页内、结�
   expect(tail.olderCursor).toBe(11)
   expect(tail.blocks.some((block) => block.kind === 'tool')).toBe(false)
 
-  const older = await readTrashDetail(deps, { perBlockChars: 16_000, pageBlocks: 30 })(id, tail.olderCursor!)
+  const older = await readTrashDetail(deps, { perBlockChars: 16_000, pageBlocks: 30 })(id, olderCursorOf(tail.olderCursor))
   const tool = older.blocks.find((block) => block.kind === 'tool')
   expect(tool).toMatchObject({ kind: 'tool', callId: 'c1', status: 'ok', result: '完成' })
 })

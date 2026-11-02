@@ -48,11 +48,12 @@ export function ok<A extends ApplyAction>(action: A, id: string, value: ApplyVal
   return { id, action, ok: true, value } as ApplyOutcome
 }
 
-/** 一条失败的逐条回执（`error` 支）；`code` 缺省是兜底码 `sessiondelete/io`。 */
-export function failed<A extends ApplyAction>(
-  action: A, id: string, message: string, code: string = SESSION_DELETE_CODES.io,
+/** 一条失败的逐条回执（`error` 支）；`code` 缺省是兜底码 `sessiondelete/io`。
+ *  不收类型参数：返回值固定是 `ApplyOutcome` 的失败支，动作只作运行时取值。 */
+export function failed(
+  action: ApplyAction, id: string, message: string, code: string = SESSION_DELETE_CODES.io,
 ): ApplyOutcome {
-  return { id, action, ok: false, error: { code, message } } as ApplyOutcome
+  return { id, action, ok: false, error: { code, message } }
 }
 
 /** 一组 id 上的逐条回执：`overrides` 按 id 换成成功值或失败原文，缺席走该动作的中性值。 */
@@ -117,7 +118,7 @@ export function purgeOutcomes(
 /** `runWrite` 的**信封成功**那一支：回执照 `readReceipt` 的读法起（空 outcomes ⇒ 逐条 missing），
  *  失败表就是那一份 missing 原文、成功名单为空；查询编排只认动作与 id，逐条判读另有用例。
  *  `over` 覆盖这一层的判据。返回值收在成功支（`WriteSuccess` 可当 `WriteOutcome` 用，失败支由 `writeFailed` 造）。 */
-function summarizeOutcomes<A extends ApplyAction>(action: A, ids: readonly string[]): ReceiptRead {
+function summarizeOutcomes(action: ApplyAction, ids: readonly string[]): ReceiptRead {
   return summarizeReceipt(readReceipt(action, ids, []))
 }
 

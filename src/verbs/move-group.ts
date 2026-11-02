@@ -13,7 +13,8 @@ export interface GroupMove<M, R> {
   readonly root: M
   /** 跟随者：按序跑，每个都拿到根结果（彼此看不到对方的结果）。 */
   readonly followers: readonly M[]
-  move(member: M, rootResult: R | undefined): Promise<{ journal: Journal; result: R }>
+  /** 属性声明：`move` 会被解构出来按序调用（实现不读 `this`），方法简写会带隐式 `this: GroupMove`。 */
+  move: (member: M, rootResult: R | undefined) => Promise<{ journal: Journal; result: R }>
 }
 
 export async function moveGroup<M, R>({

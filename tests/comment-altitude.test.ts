@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { commentBodies, withoutComments } from './support/comments.js'
 import { collectFiles } from './support/corpus.js'
+import { must } from './support/fixture.js'
 
 /**
  * 注释高度守卫（可检测形）：**注释不抄代码表达式**。带运算符的表达式若在注释与同文件
@@ -31,7 +32,9 @@ function copiedExpressions(fileText: string): string[] {
   const out: string[] = []
   for (const c of commentBodies(fileText)) {
     for (const m of c.matchAll(/`([^`]+)`/g)) {
-      const span = m[1].trim()
+      // 这条正则只有一个必需捕获组，取不到就是判据本身被改坏了：响亮失败，不许跳过那一处
+      // （跳过等于闸门悄悄少查一遍，抄写形从此漏网）。
+      const span = must(m[1], '反引号判据的捕获组').trim()
       if (span.length >= 8 && OP.test(span) && code.includes(span)) out.push(span)
     }
     for (const m of c.replace(/`[^`]*`/g, '').matchAll(BARE_EXPR)) {

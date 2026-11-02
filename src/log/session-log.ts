@@ -77,6 +77,7 @@ export function pickSessionLog(names: readonly string[]): string | undefined {
  * 回调返回 `false` = **提前停机**（后面的帧不再解——`readSessionHeader` 只要第一行）。
  * 停机后 `stats` 只是停机前那部分，别拿来做全量对账。
  */
+// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- 回调契约是「不关心返回值 / 返回 false 停机」：`void | false` 是它的准确形状，改成 boolean 会逼所有回调显式 return。
 export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) => void | false): SessionLogStats {
   const stats: SessionLogStats = { frames: 0, records: 0, unparsedLines: 0, truncatedTailBytes: 0 }
   let stopped = false
@@ -90,7 +91,7 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
       return
     }
     stats.records += 1
-    if (onRecord(parsed !== null && typeof parsed === 'object' ? (parsed as SessionRecord) : {}) === false) {
+    if (onRecord(parsed !== null && typeof parsed === 'object' ? parsed : {}) === false) {
       stopped = true
     }
   }
@@ -98,13 +99,14 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
   /** 上一帧没闭合的那一行。**存字节不存字符**：切在多字节字符中间的帧要拼回完整才解得对。 */
   let carry: Buffer = Buffer.alloc(0)
   for (const { start, end } of frameRanges(raw)) {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stopped` 由 `feed` 的闭包写入，TS 看不见闭包写入；删掉会让停机后的帧继续解。
     if (stopped) break
     stats.frames += 1
     let plain: Buffer
     try {
       plain = zlib.zstdDecompressSync(raw.subarray(start, end))
     } catch (error) {
-      throw new Error(`回收站日志第 ${stats.frames} 帧解压失败：${String(error)}`)
+      throw new Error(`回收站日志第 ${stats.frames} 帧解压失败：${String(error)}`, { cause: error })
     }
     const merged = carry.length === 0 ? plain : Buffer.concat([carry, plain])
     const cut = merged.lastIndexOf(NEWLINE)
@@ -115,11 +117,13 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
     carry = merged.subarray(cut + 1)
     for (const line of merged.subarray(0, cut).toString('utf8').split('\n')) {
       feed(line)
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stopped` 由闭包 `feed` 写入，TS 看不见；删了会把停机后的尾巴当整行继续喂。
       if (stopped) break
     }
   }
 
   stats.truncatedTailBytes = carry.length
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- 同上：`stopped` 是闭包写入的停机信号，不能让未换行的尾巴在停机后再进回调。
   if (carry.length > 0 && !stopped) feed(carry.toString('utf8'))
   return stats
 }

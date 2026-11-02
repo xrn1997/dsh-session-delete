@@ -4,7 +4,7 @@
  * 接得住孩子的只有组根——自己不记 `parentEntryId` 的那一行。父行不在、或父行自己也是孩子时，
  * 孩子必须自己占一行，否则它的字节会被头部合计数两遍，而它自己既看不见也清不掉。
  *
- * 三个函数都是纯函数、都吃一份快照；收缩时机归调用方，本模块不持有可变状态。
+ * 这些函数都是纯函数、都吃一份快照；什么时候收缩、把收缩后的视图存在哪里归调用方，本模块不持有可变状态。
  */
 import type { TrashEntry } from './entry.js'
 
@@ -59,6 +59,15 @@ export function groupOf(rows: readonly TrashEntry[], id: string): TrashEntry[] {
     return root.parentEntryId === undefined ? [root, ...kidsOf(rows, id)] : [root]
   }
   return kidsOf(rows, id)
+}
+
+/**
+ * 把一条 id 所属的**整组**从快照里摘掉，回一份新快照（组语义仍只读 `groupOf`，这一条判据不另写一遍）。
+ * 「同批前一条已把这一组带走」的收缩就是它：调用方各自持有那份可变视图，本函数不记账。
+ */
+export function withoutGroup(rows: readonly TrashEntry[], id: string): TrashEntry[] {
+  const gone = new Set(groupOf(rows, id).map((row) => row.id))
+  return rows.filter((row) => !gone.has(row.id))
 }
 
 /** 一条 id 在「原始快照 vs 当前视图」里的三态。判别联合：**只有 `fresh` 带当前这一组**——

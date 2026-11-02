@@ -47,7 +47,7 @@ export interface ToastProps {
   /** 全不透明停留时长；缺省 3000。 */
   holdMs?: number
   /** 句尾的行内动作（照着句子的顺序排）。 */
-  actions?: readonly ToastAction[]
+  actions?: readonly ToastAction[] | undefined
   /** 淡出完成时调用一次：在这里卸载。 */
   onDone: () => void
 }

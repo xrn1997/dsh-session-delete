@@ -7,6 +7,8 @@
  * ② 只要剩余引用源读不出来，就整体跳过（fail closed）——宁可留孤儿，不许删共享。
  *    引用源"读不出来"包括：目录/文件读失败、目录非空却没有规范 zstd 日志（明文/陌生布局）、
  *    JSON 超出扫描上限、日志有坏行或尾巴被截断。
+ *    宿主的内核写锁 `session.lock` 例外：它不是会话内容，恒为 0 字节时既不算读不懂、也不算
+ *    "目录里有东西"；非空才回落到上面的 fail closed（判据见 `imageIdsOfDir`）。
  */
 import path from 'node:path'
 import type { FsPort } from '../ports/fs-port.js'
@@ -34,7 +36,11 @@ export type AttachmentRef = ImageRef | FileRef
 
 const ATTACHMENT_ID = /^sha256:[0-9a-f]{64}$/u
 
-export function isAttachmentId(value: unknown): value is string {
+/** 合法附件 ID：形状是 `sha256:` + 64 位小写十六进制。
+ *  谓词必须收成**模板字面量形状**而不是 `string`：`attachmentPathOf` 里 `!isAttachmentId(id)` 的
+ *  假支若按「是 string」取反会被 TS 收成 `never`（参数本来就是 string），插值就成了 never 读数。
+ *  这里判的仍是同一条正则，谓词只是把「形状」写进类型面。 */
+export function isAttachmentId(value: unknown): value is `sha256:${string}` {
   return typeof value === 'string' && ATTACHMENT_ID.test(value)
 }
 
@@ -145,8 +151,16 @@ export interface AttachmentRemovalDeps extends AttachmentReadDeps {
 /** 宿主写日志时的临时名：`session.vN.jsonl.zstd.<hash>.tmp`（内容写完后才 rename 成规范名）。 */
 const TEMP_LOG_NAME = /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]+\.tmp$/u
 
+/**
+ * 宿主的内核写锁：宿主以写方式打开它即截断、**从不写入内容**、释放也从不删除（POSIX 上是
+ * `flock(2)` 的目标，Windows 上没有这个文件）——所以每个已实体化的会话目录、以及跟着搬进
+ * 回收站的条目里，它都与日志常态并存。锁只表达"谁在写"，不承载会话记录。
+ */
+const LOCK_NAME = 'session.lock'
+
 /** 规范日志之外允许并存的两类文件：更老一代的规范日志（新代包含旧代）与 0 字节临时日志（没有消息）。
- *  其余任何文件都可能是规范日志没覆盖到的引用（例如写入中的非空临时日志），一律按不可读处理。 */
+ *  其余任何文件都可能是规范日志没覆盖到的引用（例如写入中的非空临时日志），一律按不可读处理。
+ *  宿主的 `session.lock` 到不了这里——它在 `imageIdsOfDir` 挑名单时就按"不是会话内容"剥掉了。 */
 async function unreadableExtraFile(
   deps: AttachmentReadDeps,
   dir: string,
@@ -168,6 +182,9 @@ async function unreadableExtraFile(
  *  同样按不可读处理（宁可留下对象等维护卡兜底，不冒"没引用"）。
  *  **规范日志旁的文件也要过关**：老一代规范日志可以并存（新代包含旧代）；0 字节临时日志是
  *  写盘未完成的空产物，也没有引用。非空临时日志、明文日志或其他任何文件仍按不可读处理（fail closed）。
+ *  **宿主的内核写锁不是会话内容**：0 字节的锁在判目录形状之前先剥掉——不然每个已实体化的会话目录
+ *  （含搬进回收站的条目）都会被读成"读不懂"，整份引用扫描在真机上恒跳过；没有日志的锁目录因此与
+ *  空目录同判。非空的锁说明我们对这个文件的理解失效（宿主不会往里写字节），仍按不可读处理。
  */
 export async function imageIdsOfDir(
   deps: AttachmentReadDeps,
@@ -177,6 +194,14 @@ export async function imageIdsOfDir(
   let names: string[]
   try {
     names = await deps.fs.listFiles(dir)
+    const withoutLock: string[] = []
+    for (const name of names) {
+      if (name !== LOCK_NAME) { withoutLock.push(name); continue }
+      if ((await deps.fs.statFile(`${dir}/${name}`)).size > 0) {
+        return { ids: new Set(), unreadable: `${dir}: 锁文件 ${name} 非空，无法确认里面没有引用` }
+      }
+    }
+    names = withoutLock
   } catch (error) {
     return { ids: new Set(), unreadable: String(error) }
   }

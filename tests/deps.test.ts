@@ -1,10 +1,9 @@
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, relative } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
+import { slicesOf } from '../src/api/dispatch.js'
 import type { CoreDeps, DeleteDeps, DeleteSessionDeps, RemovalDeps } from '../src/deps.js'
 import type { HostPresencePort } from '../src/ports/host-port.js'
 import type { PresenceCapability } from '../src/ports/presence-port.js'
+import { createMemberPresence, type MemberPresenceHost } from '../src/verbs/member-presence.js'
 import { createFakeDeps } from './support/fake-deps.js'
 
 /** 少一个键就编译失败：`Record<keyof CoreDeps, true>` 的初值不允许缺格。 */
@@ -44,8 +43,9 @@ const deleteFsRemoveFile: DeleteFsRemoveFile = true
 type CoreHostPresence = Extract<keyof CoreDeps['host'], keyof HostPresencePort>
 const coreHostHasNoPresence: CoreHostPresence extends never ? true : false = true
 
-/** 能力面恰好三条：少一条或多一条都编译失败。 */
-type PresenceKeys = keyof PresenceCapability
+/** 能力面恰好三条字符串方法：少一条或多一条都编译失败。品牌键是 symbol（只用于盖章、不承载语义），
+ *  不算一条能力、也不进 `Object.keys`——这条闸按字符串键数。 */
+type PresenceKeys = Extract<keyof PresenceCapability, string>
 type PresenceKeysExact = Exclude<PresenceKeys, 'memberGone' | 'memberBack' | 'announceRestored'> extends never
   ? Exclude<'memberGone' | 'memberBack' | 'announceRestored', PresenceKeys> extends never
     ? true
@@ -53,15 +53,11 @@ type PresenceKeysExact = Exclude<PresenceKeys, 'memberGone' | 'memberBack' | 'an
   : false
 const presenceKeysExact: PresenceKeysExact = true
 
-const SRC = fileURLToPath(new URL('../src', import.meta.url))
-
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((item) => {
-    const path = join(dir, item.name)
-    if (item.isDirectory()) return sourceFiles(path)
-    return /\.(ts|tsx)$/.test(item.name) ? [path] : []
-  })
-}
+/** 这条类型级常量是同义反复（`createMemberPresence` 的声明返回面本就是 `PresenceCapability`），
+ *  只把「仓内唯一盖章处」摆成一行可读证据；**承重的闸是下面用例里的 `@ts-expect-error` 伪造断言**——
+ *  手拼的三件套形状再像也过不了品牌键，那行删掉 `pnpm typecheck` 就红。 */
+type OnlyMemberPresence = ReturnType<typeof createMemberPresence> extends PresenceCapability ? true : false
+const onlyMemberPresence: OnlyMemberPresence = true
 
 /** 上面这些常量由 `tsc` 在编译期求值：真正的闸是 `pnpm typecheck`。下面的 expect 把当前形状钉成
  *  可读的运行期证据；常量本身受 `noUnusedLocals` 约束，删 expect 时要连常量一起删。 */
@@ -85,15 +81,40 @@ it('CoreDeps 是五项基础；会话删除加时钟，组合根再加永久删�
   expect(coreHostHasNoPresence).toBe(true)
 })
 
+it('deps 切片的收窄是运行期事实：core 没有删除能力与时钟', () => {
+  const { deps } = createFakeDeps()
+  const slices = slicesOf(deps)
+  expect(slices.core).not.toHaveProperty('now')
+  expect(slices.core.fs).not.toHaveProperty('removeDir')
+  expect(slices.core.fs).not.toHaveProperty('removeFile')
+  expect(slices.removal).not.toHaveProperty('now')
+  expect(slices.removal.fs).toHaveProperty('removeDir')
+  expect(slices.removal.fs).toHaveProperty('removeFile')
+  expect(slices.full).toBe(deps)
+})
+
 it('装配出的 deps 带在场能力', () => {
   const { deps } = createFakeDeps()
   expect(Object.keys(deps.presence).sort()).toEqual(['announceRestored', 'memberBack', 'memberGone'])
   expect(presenceKeysExact).toBe(true)
 })
 
-it('在场能力只有一个实现：createMemberPresence 只定义在 member-presence.ts', () => {
-  const owners = sourceFiles(SRC)
-    .filter((file) => readFileSync(file, 'utf8').includes('export function createMemberPresence'))
-    .map((file) => relative(SRC, file).replaceAll('\\', '/'))
-  expect(owners).toEqual(['verbs/member-presence.ts'])
+it('在场能力只认 createMemberPresence 盖过章的实现（品牌门，不再扫源码数实现）', () => {
+  const host: MemberPresenceHost = {
+    async evictLive() { return 'unknown' },
+    async announceRemoved() {},
+    async announceRestored() {},
+  }
+  const presence = createMemberPresence(host) satisfies PresenceCapability
+  expect(onlyMemberPresence).toBe(true)
+  expect(Object.keys(presence).sort()).toEqual(['announceRestored', 'memberBack', 'memberGone'])
+  // 手拼的三件套形状再像也没有品牌键：这条赋值必须编译不过——`@ts-expect-error` 是闸，
+  // 删了它 `pnpm typecheck` 就红。
+  // @ts-expect-error 手拼的三件套没有品牌键：这条赋值必须编译不过
+  const forged: PresenceCapability = {
+    async memberGone() {},
+    async memberBack() {},
+    async announceRestored() {},
+  }
+  expect(Object.keys(forged).sort()).toEqual(['announceRestored', 'memberBack', 'memberGone'])
 })

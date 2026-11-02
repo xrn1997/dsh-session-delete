@@ -15,7 +15,7 @@ function Probe() {
   )
 }
 
-let observer: WidthObserver
+let observer: WidthObserver | undefined
 
 afterEach(() => {
   observer?.restore()
@@ -29,21 +29,23 @@ describe('usePanelWidth', () => {
   })
 
   it('RO 交回多少就是多少，宽度变了跟着变（宿主折叠侧栏那一类）', () => {
-    observer = installWidthObserver()
+    const installed = installWidthObserver()
+    observer = installed
     render(<Probe />)
-    act(() => { observer.pump(1100) })
+    act(() => { installed.pump(1100) })
     expect(screen.getByTestId('w').textContent).toBe('1100')
-    act(() => { observer.pump(400) })
+    act(() => { installed.pump(400) })
     expect(screen.getByTestId('w').textContent).toBe('400')
   })
 
   it('卸载即断开：不留一个还在收派发的观测者', () => {
-    observer = installWidthObserver()
+    const installed = installWidthObserver()
+    observer = installed
     const view = render(<Probe />)
-    act(() => { observer.pump(900) })
-    expect(observer.active()).toBe(1)
+    act(() => { installed.pump(900) })
+    expect(installed.active()).toBe(1)
     view.unmount()
-    expect(observer.active()).toBe(0)
-    expect(() => { observer.pump(700) }).not.toThrow()
+    expect(installed.active()).toBe(0)
+    expect(() => { installed.pump(700) }).not.toThrow()
   })
 })

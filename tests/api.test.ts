@@ -24,6 +24,7 @@ import { attachmentPathOf } from '../src/trash/attachments.js'
 import type { DeleteDeps } from '../src/deps.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createFakeDeps } from './support/fake-deps.js'
+import { pick } from './support/fixture.js'
 import { trashEntry } from './support/world.js'
 
 const HOME = '/h'
@@ -40,9 +41,10 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
  * （`tests/support/fake-deps.ts` 里那第二个 adapter）。
  * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
- * `listDirs` 不在这里声明：假件的缺省让回收站目录跟着 raw 清册的 id 走（`rowIds` 随 add/remove 增删），
- * 于是"删一行就多一个目录"这个世界默认自洽；而对账住在 `ledger.list()` 里——"清单有行而回收站根下空空"
- * 会被它当场摘空（真实里行与目录成对出现，那是不一致的世界）。要测漂移的用例自己翻 `listDirs` / `readFile`。
+ * `listDirs` 不在这里声明：假件的缺省让回收站目录从**初值**清册行集派生（不再是实时 `rowIds`），
+ * 于是删除那次 `rename` 真把目录搬进回收站、恢复那次 `rename` 真把它搬走——"写后世界自洽"由**写操作**
+ * 保证，而不是"写了行目录自动出现"；对账住在 `ledger.list()` 里——"清单有行而回收站根下空空"会被它当场摘空
+ * （真实里行与目录成对出现，那是不一致的世界）。要测漂移的用例自己翻 `listDirs` / `readFile`。
  */
 function makeDeps(over: {
   seed?: TrashEntry[]
@@ -68,8 +70,8 @@ function makeDeps(over: {
       size: 224 * 1024,
       // 回收站详情要在条目目录里挑日志；`*.jsonl.zstd` 是 `pickSessionLog` 认得出的一代。
       files: ['session.v4.jsonl.zstd'],
-      // `listDirs` 不在这里声明：假件默认让回收站目录跟着 raw 清册的 id 走（真实里行与目录成对出现）。
-      // 要测漂移的用例自己翻 `listDirs` / `readFile`。
+      // `listDirs` 不在这里声明：假件默认让回收站目录从初值行集派生，此后被 `rename`/`removeDir` 改变
+      // （真实里行与目录成对出现）。要测漂移的用例自己翻 `listDirs` / `readFile`。
       readFile: () =>
         zlib.zstdCompressSync(Buffer.from(
           `${JSON.stringify({ type: 'session', version: 4, id: 'session-a', createdAt: 1, cwd: 'C:/p' })}\n`,
@@ -112,10 +114,14 @@ interface CallInit { method?: string; body?: unknown; headers?: Record<string, s
 
 /** 一次调用 → 解析出的信封（HTTP 状态一并带出，因为路由层自检要看它）。 */
 async function call(base: string, path: string, init: CallInit = {}): Promise<{ status: number; body: Record<string, unknown> }> {
+  const payload = init.body === undefined ? undefined : JSON.stringify(init.body)
+  // 发出去的请求里 `body` 与 `headers` 都是载荷：**「键缺席」与「键是 undefined」不是一件事**
+  // （前者才是 GET 的常态），所以不往这两格写 undefined，缺省就不建键。
+  const headers = payload === undefined ? init.headers : { 'content-type': 'application/json', ...init.headers }
   const res = await fetch(`${base}${path}`, {
     method: init.method ?? 'GET',
-    headers: init.body === undefined ? init.headers : { 'content-type': 'application/json', ...init.headers },
-    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+    ...(headers === undefined ? {} : { headers }),
+    ...(payload === undefined ? {} : { body: payload }),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
 }
@@ -145,8 +151,8 @@ async function failureOfOutcome(
   expect(body.ok).toBe(true)
   const outcomes = body.value as Array<{ ok: boolean; error?: { code: string; message: string } }>
   expect(outcomes).toHaveLength(1)
-  expect(outcomes[0]!.ok).toBe(false)
-  const error = outcomes[0]!.error as { code: string; message: string }
+  expect(pick(outcomes, 0).ok).toBe(false)
+  const error = pick(outcomes, 0).error as { code: string; message: string }
   expect(error.code.startsWith('sessiondelete/')).toBe(true)
   return { code: error.code, message: error.message }
 }
@@ -184,7 +190,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   it('GET /list 回信封 {ok:true,value}，值就是清单（最近删除在前）', async () => {
     const { deps } = makeDeps({ seed: [entry('a', { deletedAt: 100 }), entry('b', { deletedAt: 200 })] })
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.list)
+    const { status, body } = await call(base, ROUTES.list.path)
     expect(status).toBe(200)
     expect(body.ok).toBe(true)
     expect((body.value as TrashEntry[]).map((e) => e.id)).toEqual([entryIdOf('b'), entryIdOf('a')])
@@ -206,8 +212,8 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       // 孩子清册里记的是 700 / 300，盘上实测是 500 / 300：读数必须念实测的那一组。
       sizes: {
         [trashDirOf(parent.id, HOME)]: 4096,
-        [trashDirOf(kids[0]!.id, HOME)]: 500,
-        [trashDirOf(kids[1]!.id, HOME)]: 300,
+        [trashDirOf(pick(kids, 0).id, HOME)]: 500,
+        [trashDirOf(pick(kids, 1).id, HOME)]: 300,
         [sessionDirOf('--p--', 'session-grandkidA', HOME)]: 200,
         [sessionDirOf('--p--', 'session-grandkidB', HOME)]: 100,
       },
@@ -223,7 +229,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       },
     })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number; strandedSubagents?: number; strandedBytes?: number; releaseBytes?: number }>
     expect(rows.map(r => r.sessionId)).toEqual(['session-parent'])
     expect(rows[0]).toMatchObject({
@@ -248,7 +254,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       },
     })
     const base = await start(deps)
-    const rows = (await call(base, ROUTES.list)).body.value as Array<TrashEntry & { subagentBytes?: number; releaseBytes: number }>
+    const rows = (await call(base, ROUTES.list.path)).body.value as Array<TrashEntry & { subagentBytes?: number; releaseBytes: number }>
     expect(rows[0]).toMatchObject({
       sizeBytes: 111, // 清册那一格原样发（它记的是删除那一刻）
       subagentBytes: 512,
@@ -270,16 +276,16 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       members: { 'session-parent': [{ sessionId: 'session-x', projectDir: '--p--' }] },
     })
     const base = await start(deps)
-    const rows = (await call(base, ROUTES.list)).body.value as Array<{ releaseBytes: number }>
+    const rows = (await call(base, ROUTES.list.path)).body.value as Array<{ releaseBytes: number }>
     expect(rows).toHaveLength(1)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [parent.id] },
     })
-    const outcome = (body.value as Array<{ ok: true; value: { removed: number; freedBytes: number } }>)[0]!
+    const outcome = pick(body.value as Array<{ ok: true; value: { removed: number; freedBytes: number } }>, 0)
     // 删掉的三份目录：父 + 孩子 + 盘上后代；释放量与清单那一行同一个数。附件读数单独一格（这个世界没有图片）。
     expect(outcome.value).toEqual({
       removed: 3,
-      freedBytes: rows[0]!.releaseBytes,
+      freedBytes: pick(rows, 0).releaseBytes,
       attachments: { removed: 0, freedBytes: 0, failed: 0 },
     })
   })
@@ -304,9 +310,9 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       },
     })
     const base = await start(deps)
-    const rows = (await call(base, ROUTES.list)).body.value as Array<{ releaseBytes: number }>
+    const rows = (await call(base, ROUTES.list.path)).body.value as Array<{ releaseBytes: number }>
     const listedTotal = rows.reduce((total, row) => total + row.releaseBytes, 0)
-    const { body } = await call(base, ROUTES.empty, { method: 'POST', body: {} })
+    const { body } = await call(base, ROUTES.empty.path, { method: 'POST', body: {} })
     // 三份回收站目录 + 两个盘上后代；合计字节与可见行之和同一个数。
     expect(body).toMatchObject({ ok: true, value: { removed: 5, freedBytes: listedTotal } })
   })
@@ -319,7 +325,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       members: { 'session-parent': [{ sessionId: 'session-x', projectDir: '--p--' }] },
     })
     const base = await start(deps)
-    await call(base, ROUTES.list)
+    await call(base, ROUTES.list.path)
     expect(host.isLive).not.toHaveBeenCalled()
   })
 
@@ -328,10 +334,10 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const kid = entry('session-kidA', { parentEntryId: parent.id, sizeBytes: 700 })
     const { deps } = makeDeps({ seed: [parent, kid], subagents: {} })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     const rows = body.value as Array<TrashEntry & { subagentCount?: number; strandedSubagents?: number }>
     expect(rows[0]).toMatchObject({ subagentCount: 1 })
-    expect(rows[0]!.strandedSubagents).toBeUndefined()
+    expect(pick(rows, 0).strandedSubagents).toBeUndefined()
   })
 
   it('宿主记录还在、目录已经不在 ⇒ 不算盘上残留（count 与 bytes 同一条存在性判据）', async () => {
@@ -342,11 +348,11 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     })
     fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith('session-kid'))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     const rows = body.value as Array<TrashEntry & { strandedSubagents?: number; strandedBytes?: number }>
     expect(host.subagentMembersOf).toHaveBeenCalled()
-    expect(rows[0]!.strandedSubagents).toBeUndefined()
-    expect(rows[0]!.strandedBytes).toBeUndefined()
+    expect(pick(rows, 0).strandedSubagents).toBeUndefined()
+    expect(pick(rows, 0).strandedBytes).toBeUndefined()
   })
 
   // ADR-0027 决定 2 / 后果（原 ADR-0006 第六处行为差异）：`releaseBytes` 改念盘上实测之后，
@@ -361,7 +367,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       return 0
     })
     const base = await start(deps)
-    const failure = await failureOf(base, ROUTES.list)
+    const failure = await failureOf(base, ROUTES.list.path)
     expect(failure.status).toBe(200)
     expect(failure.code).toBe('sessiondelete/io')
     expect(failure.message).toContain('EACCES')
@@ -373,7 +379,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       sizes: { [trashDirOf(entryIdOf('a'), HOME)]: 4096 },
     })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     const rows = body.value as TrashEntry[]
     // `releaseBytes` 是存储侧必填的那一格：没孩子没后代 ⇒ 就是这条回收站目录的实测字节（清册的 sizeBytes 是 0）。
     expect(JSON.parse(JSON.stringify(rows[0]))).toEqual({ ...JSON.parse(JSON.stringify(entry('a'))), releaseBytes: 4096 })
@@ -385,22 +391,22 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   it('原工作区已不在账本 ⇒ 行上带 workspaceMissing；工作区还在时这个字段不出现', async () => {
     const gone = makeDeps({ seed: [entry('a')], workspaceExists: false })
     const goneBase = await start(gone.deps)
-    const goneRows = (await call(goneBase, ROUTES.list)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
+    const goneRows = (await call(goneBase, ROUTES.list.path)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
     expect(goneRows[0]).toMatchObject({ workspaceMissing: true })
     expect(gone.host.workspaceExists).toHaveBeenCalledWith('ws-1')
 
     const alive = makeDeps({ seed: [entry('a')] })
     const aliveBase = await start(alive.deps)
-    const aliveRows = (await call(aliveBase, ROUTES.list)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
-    expect(aliveRows[0]!.workspaceMissing).toBeUndefined()
+    const aliveRows = (await call(aliveBase, ROUTES.list.path)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
+    expect(pick(aliveRows, 0).workspaceMissing).toBeUndefined()
   })
 
   it('未分组条目（workspaceId 空串）不去问账本，也不带 workspaceMissing', async () => {
     const { deps, host } = makeDeps({ seed: [entry('a', { workspaceId: '' })] })
     const base = await start(deps)
-    const rows = (await call(base, ROUTES.list)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
+    const rows = (await call(base, ROUTES.list.path)).body.value as Array<TrashEntry & { workspaceMissing?: boolean }>
     expect(host.workspaceExists).not.toHaveBeenCalled()
-    expect(rows[0]!.workspaceMissing).toBeUndefined()
+    expect(pick(rows, 0).workspaceMissing).toBeUndefined()
   })
 
   // 孩子折进父行是"父行在"的前提下才成立。父行不见了（手工摘的、清册半损的、对账把它当外人摘掉的），
@@ -409,7 +415,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const orphan = entry('session-kidA', { parentEntryId: '20260930T130500Z-session-nope' })
     const { deps } = makeDeps({ seed: [orphan] })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     const rows = body.value as TrashEntry[]
     expect(rows.map(r => r.sessionId)).toEqual(['session-kidA'])
   })
@@ -421,7 +427,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const leaf = entry('session-leaf', { parentEntryId: mid.id, sizeBytes: 200, deletedAt: 100 })
     const { deps } = makeDeps({ seed: [mid, leaf] })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     const rows = body.value as Array<TrashEntry & { subagentCount?: number; subagentBytes?: number }>
     // 两条都得看得见（谁都不许隐形），且谁都没把对方折进自己那一格
     expect(rows.map(r => r.sessionId)).toEqual(['session-mid', 'session-leaf'])
@@ -434,7 +440,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const seed = [parent, kid]
     const { deps, manifest } = makeDeps({ seed, subagents: { 'session-parent': 5 } })
     const base = await start(deps)
-    await call(base, ROUTES.list)
+    await call(base, ROUTES.list.path)
     const stored = await manifest.list()
     expect(stored).toEqual(seed)
     expect(JSON.stringify(stored)).not.toContain('subagentCount')
@@ -445,7 +451,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   it('apply count 交回这条会话在盘上的后代数（确认框删除前取一次数）', async () => {
     const { deps, host } = makeDeps({ subagents: { 'session-parent': 3 } })
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.apply, {
+    const { status, body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent'] },
     })
     expect(status).toBe(200)
@@ -458,7 +464,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   it('apply count 拿不到数 ⇒ 0（界面上那一栏在 n===0 时整句不出现，所以 0 不会被读成"有一个数说没孩子"）', async () => {
     const { deps } = makeDeps({ subagents: {} })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-none'] },
     })
     expect(body).toEqual({ ok: true, value: [{ id: 'session-none', action: 'count', ok: true, value: 0 }] })
@@ -467,7 +473,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   it('apply delete 拿一组 sessionId 走删除动词，回移入回收站的那一条', async () => {
     const { deps, manifest, host } = makeDeps()
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.apply, {
+    const { status, body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] },
     })
     expect(status).toBe(200)
@@ -482,7 +488,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   it('apply restore 拿一组 entryId 走恢复动词，成功即从清单消失', async () => {
     const { deps, manifest } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.apply, {
+    const { status, body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [entryIdOf('a')] },
     })
     expect(status).toBe(200)
@@ -495,7 +501,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     const two = () => [entry('a'), entry('b')]
     const one = makeDeps({ seed: two() })
     const oneBase = await start(one.deps)
-    const single = await call(oneBase, ROUTES.apply, {
+    const single = await call(oneBase, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [entryIdOf('a')] },
     })
     expect((single.body.value as Array<Record<string, unknown>>)[0]).toMatchObject({ ok: true, value: { removed: 1, freedBytes: 224 * 1024 } })
@@ -503,33 +509,42 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
 
     const all = makeDeps({ seed: two() })
     const allBase = await start(all.deps)
-    const cleared = await call(allBase, ROUTES.empty, { method: 'POST', body: {} })
+    const cleared = await call(allBase, ROUTES.empty.path, { method: 'POST', body: {} })
     expect(cleared.body).toMatchObject({ ok: true, value: { removed: 2, freedBytes: 448 * 1024 } })
     expect(await all.manifest.list()).toEqual([])
   })
+
+  it('/empty 对空回收站是幂等的：回 {removed:0,freedBytes:0}', async () => {
+    const empty = makeDeps()
+    const base = await start(empty.deps)
+    const cleared = await call(base, ROUTES.empty.path, { method: 'POST', body: {} })
+    expect(cleared.status).toBe(200)
+    expect(cleared.body).toMatchObject({ ok: true, value: { removed: 0, freedBytes: 0 } })
+  })
 })
 
-// `tests/support/fake-deps.ts` 的 raw 清册与 `fs.listDirs` 是同一个世界（`rowIds` 随 add/remove 增删）：
-// 删除新增一行、下一次 `/list` 的对账必须看得见它的目录（否则刚删的会话会被自己的对账当幽灵行摘掉）；
-// 恢复摘掉行，目录跟着消失。假件那处耦合一旦拆开，别的用例会拿到一个"写完之后世界不自洽"的假世界。
-describe('路由层 · 写后世界仍自洽（假件的 raw 清册与回收站目录同步）', () => {
+// `tests/support/fake-deps.ts` 的 raw 清册与 `fs` 的路径树世界由**写操作**缝在一起：
+// 删除的 `rename` 真把目录搬进回收站、下一次 `/list` 的对账看得见它（否则刚删的会话会被自己的对账
+// 当幽灵行摘掉）；恢复的 `rename` 真把目录搬走、清册行跟着摘。假件那处缝一旦拆开，别的用例会拿到
+// 一个"写完之后世界不自洽"的假世界。
+describe('路由层 · 写后世界仍自洽（假件的 raw 清册与回收站目录由写操作缝合）', () => {
   it('delete 之后 /list 仍含新行；restore 之后 /list 不再含它', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
 
-    const deleted = await call(base, ROUTES.apply, {
+    const deleted = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-live'] },
     })
-    const outcome = (deleted.body.value as Array<{ ok: boolean; value: { id: string } }>)[0]!
+    const outcome = pick(deleted.body.value as Array<{ ok: boolean; value: { id: string } }>, 0)
     expect(outcome.ok).toBe(true)
 
-    const listed = (await call(base, ROUTES.list)).body.value as TrashEntry[]
+    const listed = (await call(base, ROUTES.list.path)).body.value as TrashEntry[]
     expect(listed.map((row) => row.sessionId)).toEqual(['session-live'])
 
-    await call(base, ROUTES.apply, {
+    await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [outcome.value.id] },
     })
-    expect((await call(base, ROUTES.list)).body.value).toEqual([])
+    expect((await call(base, ROUTES.list.path)).body.value).toEqual([])
   })
 })
 
@@ -538,10 +553,10 @@ describe('路由层 · list 是对账 + 读（2026-10-16）', () => {
     const ghost = entryIdOf('session-ghost')
     const { deps, fs } = makeDeps({ seed: [entry('a')] })
     fs.listDirs.mockResolvedValue([entryIdOf('a'), ghost])
-    fs.readFile.mockImplementation(async (_path: string) =>
+    fs.readFile.mockImplementation(async () =>
       zlib.zstdCompressSync(Buffer.from(`${JSON.stringify({ type: 'session', version: 4, id: 'session-ghost', createdAt: 1, cwd: 'C:/develop/p' })}\n`, 'utf8')))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     expect(body.ok).toBe(true)
     const rows = body.value as TrashEntry[]
     expect(rows.map((e) => e.id)).toContain(ghost)
@@ -554,7 +569,7 @@ describe('路由层 · list 是对账 + 读（2026-10-16）', () => {
     const { deps, manifest, fs } = makeDeps({ seed: [entry('a')] })
     fs.listDirs.mockResolvedValue([])
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     expect(body).toMatchObject({ ok: true, value: [] })
     expect(await manifest.list()).toEqual([])
   })
@@ -562,7 +577,7 @@ describe('路由层 · list 是对账 + 读（2026-10-16）', () => {
   it('零漂移时不读日志（对账的读放大只发生在真漂移上）', async () => {
     const { deps, fs } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.list)
+    const { body } = await call(base, ROUTES.list.path)
     expect((body.value as TrashEntry[]).map((e) => e.id)).toEqual([entryIdOf('a')])
     expect(fs.readFile).not.toHaveBeenCalled()
   })
@@ -576,13 +591,13 @@ describe('路由层 · apply restore 走真相读（ADR-0012）', () => {
     const { deps, fs, manifest } = makeDeps()
     expect(await manifest.list()).toEqual([]) // raw 里没有它：raw 读必然 trash-empty
     fs.listDirs.mockResolvedValue([ghost])
-    fs.readFile.mockImplementation(async (_path: string) =>
+    fs.readFile.mockImplementation(async () =>
       zlib.zstdCompressSync(Buffer.from(
         `${JSON.stringify({ type: 'session', version: 4, id: 'session-ghost', createdAt: 1, cwd: 'C:/develop/p' })}\n`,
         'utf8',
       )))
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.apply, {
+    const { status, body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [ghost] },
     })
     expect(status).toBe(200)
@@ -606,13 +621,13 @@ describe('路由层 · apply purge 走真相读（ADR-0012）', () => {
     const { deps, fs, manifest } = makeDeps()
     expect(await manifest.list()).toEqual([]) // raw 里没有它
     fs.listDirs.mockResolvedValue([ghost])
-    fs.readFile.mockImplementation(async (_path: string) =>
+    fs.readFile.mockImplementation(async () =>
       zlib.zstdCompressSync(Buffer.from(
         `${JSON.stringify({ type: 'session', version: 4, id: 'session-ghost', createdAt: 1, cwd: 'C:/develop/p' })}\n`,
         'utf8',
       )))
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.apply, {
+    const { status, body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [ghost] },
     })
     expect(status).toBe(200)
@@ -638,9 +653,9 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
       return []
     })
     const base = await start(deps)
-    const listPromise = call(base, ROUTES.list)
+    const listPromise = call(base, ROUTES.list.path)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const deletePromise = call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] } })
+    const deletePromise = call(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] } })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(host.isLive).not.toHaveBeenCalled() // 删除的第一个副作用都还没发生：它被链挡在门外
     release()
@@ -664,9 +679,9 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
       return []
     })
     const base = await start(deps)
-    const listPromise = call(base, ROUTES.list)
+    const listPromise = call(base, ROUTES.list.path)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const count = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent'] } })
+    const count = await call(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent'] } })
     expect(count.body).toEqual({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 2 }] }) // 没有等在对账后面
     release()
     await listPromise
@@ -677,7 +692,7 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
   it('删一个正在跑的会话 ⇒ sessiondelete/live，且一个字节都没动', async () => {
     const { deps, manifest, fs } = makeDeps({ live: true })
     const base = await start(deps)
-    const { code, message } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] } })
+    const { code, message } = await failureOfOutcome(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] } })
     expect(code).toBe('sessiondelete/live')
     expect(message).toContain('session-abc')
     expect(fs.rename).not.toHaveBeenCalled()
@@ -696,7 +711,7 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
     // 清单在、回收站目录也在，唯独 sessions 根不在
     fs.exists.mockImplementation(async (path: string) => path !== `${HOME}/sessions`)
     const base = await start(deps)
-    const { code } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [entryIdOf('a')] } })
+    const { code } = await failureOfOutcome(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [entryIdOf('a')] } })
     expect(code).toBe('sessiondelete/project-missing')
     expect(fs.rename).not.toHaveBeenCalled()
   })
@@ -705,14 +720,14 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
     const { deps, host } = makeDeps()
     host.projectDirOf.mockResolvedValue(undefined)
     const base = await start(deps)
-    const { code } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['ghost'] } })
+    const { code } = await failureOfOutcome(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['ghost'] } })
     expect(code).toBe('sessiondelete/not-found')
   })
 
   it('彻底删除一条不存在的 entryId ⇒ sessiondelete/trash-empty（幂等只留给"被同批前一条带走"，不粉饰幽灵 id）', async () => {
     const { deps, fs } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
-    const { code } = await failureOfOutcome(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: ['ghost'] } })
+    const { code } = await failureOfOutcome(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: ['ghost'] } })
     expect(code).toBe('sessiondelete/trash-empty')
     expect(fs.removeDir).not.toHaveBeenCalled()
   })
@@ -721,7 +736,7 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
     const { deps, manifest } = makeDeps()
     manifest.list = async () => { throw new Error('domain xrn1997_session_delete_trash is already open') }
     const base = await start(deps)
-    const { code, message } = await failureOf(base, ROUTES.list)
+    const { code, message } = await failureOf(base, ROUTES.list.path)
     expect(code).toBe('sessiondelete/io')
     expect(message).toContain('already open')
   })
@@ -731,7 +746,7 @@ describe('路由层 · 自检（不静默吞）', () => {
   it('路由自检有自己的 HTTP 状态：方法不对 405、未知路径 404，信封照带原文（2026-10-17 错误面对齐）', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const wrongMethod = await call(base, ROUTES.apply)
+    const wrongMethod = await call(base, ROUTES.apply.path)
     expect(wrongMethod.status).toBe(405)
     expect(wrongMethod.body.ok).toBe(false)
     const unknown = await call(base, '/nope')
@@ -742,7 +757,7 @@ describe('路由层 · 自检（不静默吞）', () => {
   it('方法不对：GET /apply 不在 list 那条道上', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const { message } = await failureOf(base, ROUTES.apply)
+    const { message } = await failureOf(base, ROUTES.apply.path)
     expect(message).toMatch(/方法不允许/)
   })
 
@@ -767,14 +782,14 @@ describe('路由层 · 自检（不静默吞）', () => {
       { [PARAMS.action]: 'nuke', [PARAMS.ids]: ['x'] },
     ]
     for (const body of badBodies) {
-      const { status, message } = await failureOf(base, ROUTES.apply, { method: 'POST', body })
+      const { status, message } = await failureOf(base, ROUTES.apply.path, { method: 'POST', body })
       expect(message, JSON.stringify(body)).toMatch(/动作|ids/)
       // 请求本身不对 ⇒ 自己的 4xx。**操作**失败才是 200 + 信封（那条口径见下面 `/detail` 读不到那条）。
       expect(status, JSON.stringify(body)).toBe(400)
     }
-    expect((await failureOf(base, ROUTES.detail, { method: 'POST', body: {} })).status).toBe(400)
+    expect((await failureOf(base, ROUTES.detail.path, { method: 'POST', body: {} })).status).toBe(400)
 
-    const res = await fetch(`${base}${ROUTES.apply}`, {
+    const res = await fetch(`${base}${ROUTES.apply.path}`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
     })
     expect(res.status).toBe(400)
@@ -790,7 +805,7 @@ describe('路由层 · 请求栅栏', () => {
   it('跨源的 Origin（无 Referer 也会带）被挡在门外：403，且一个副作用都不发生', async () => {
     const { deps, manifest, fs } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, origin: 'https://evil.example' }, body)
+    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, origin: 'https://evil.example' }, body)
     expect(res.status).toBe(403)
     expect(fs.rename).not.toHaveBeenCalled()
     expect(await manifest.list()).toEqual([])
@@ -799,7 +814,7 @@ describe('路由层 · 请求栅栏', () => {
   it('跨源的 Referer 同样被挡', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'https://evil.example/x' }, body)
+    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, referer: 'https://evil.example/x' }, body)
     expect(res.status).toBe(403)
   })
 
@@ -807,12 +822,12 @@ describe('路由层 · 请求栅栏', () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
     const host = new URL(base).host
-    const sameOrigin = await rawCall(base, ROUTES.apply, 'POST', { ...json, origin: `http://${host}`, referer: `http://${host}/` }, body)
+    const sameOrigin = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, origin: `http://${host}`, referer: `http://${host}/` }, body)
     expect(sameOrigin.status).toBe(200)
     expect(JSON.parse(sameOrigin.text)).toMatchObject({ ok: true })
     expect((await manifest.list()).length).toBe(1)
 
-    const bare = await rawCall(base, ROUTES.apply, 'POST', json, applyBody('delete', ['session-xyz']))
+    const bare = await rawCall(base, ROUTES.apply.path, 'POST', json, applyBody('delete', ['session-xyz']))
     expect(bare.status).toBe(200)
     expect((await manifest.list()).length).toBe(2)
   })
@@ -824,7 +839,7 @@ describe('路由层 · 请求栅栏', () => {
   it('桌面壳转发的形态（Origin 被摘掉、Referer 是 dsh-app://app/）放行', async () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'dsh-app://app/' }, body)
+    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, referer: 'dsh-app://app/' }, body)
     expect(res.status).toBe(200)
     expect(JSON.parse(res.text)).toMatchObject({ ok: true })
     expect((await manifest.list()).length).toBe(1)
@@ -833,7 +848,7 @@ describe('路由层 · 请求栅栏', () => {
   it('挂着 dsh-app 前缀但不是桌面壳那个 origin 的 Referer 照样挡（别把它写成前缀匹配）', async () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
+    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
     expect(res.status).toBe(403)
     expect(await manifest.list()).toEqual([])
   })
@@ -843,7 +858,7 @@ describe('路由层 · 请求栅栏', () => {
   it('重绑形态（Host 与 Origin 同写外来域名、源地址回环）被挡：403，且一个副作用都不发生', async () => {
     const { deps, manifest, fs } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply, 'POST',
+    const res = await rawCall(base, ROUTES.apply.path, 'POST',
       { ...json, host: 'evil.example:3080', origin: 'http://evil.example:3080' },
       body)
     expect(res.status).toBe(403)
@@ -854,7 +869,7 @@ describe('路由层 · 请求栅栏', () => {
   it('`sec-fetch-site: cross-site` 一律挡（按名字伪造不了，浏览器自己带）', async () => {
     const { deps, manifest } = makeDeps()
     const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, 'sec-fetch-site': 'cross-site' }, body)
+    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, 'sec-fetch-site': 'cross-site' }, body)
     expect(res.status).toBe(403)
     expect(await manifest.list()).toEqual([])
   })
@@ -867,7 +882,7 @@ describe('路由层 · 请求栅栏', () => {
     it('宿主认可（requestRejection 回 undefined）⇒ 放行', async () => {
       const { deps, manifest } = makeDeps()
       const base = await start(deps, true, { connection: ALLOWED_CONNECTION })
-      const res = await rawCall(base, ROUTES.apply, 'POST', remoteHeaders, body)
+      const res = await rawCall(base, ROUTES.apply.path, 'POST', remoteHeaders, body)
       expect(res.status).toBe(200)
       expect(JSON.parse(res.text)).toMatchObject({ ok: true })
       expect((await manifest.list()).length).toBe(1)
@@ -876,7 +891,7 @@ describe('路由层 · 请求栅栏', () => {
     it('宿主拒（缺身份）⇒ 403，原文说清需要宿主 Web 身份', async () => {
       const { deps, manifest } = makeDeps()
       const base = await start(deps, true, { connection: UNAUTHENTICATED_CONNECTION })
-      const res = await rawCall(base, ROUTES.apply, 'POST', remoteHeaders, body)
+      const res = await rawCall(base, ROUTES.apply.path, 'POST', remoteHeaders, body)
       expect(res.status).toBe(403)
       expect(JSON.parse(res.text)).toMatchObject({ ok: false })
       expect((JSON.parse(res.text) as { error: { message: string } }).error.message).toMatch(/宿主的 Web 身份/)
@@ -886,7 +901,7 @@ describe('路由层 · 请求栅栏', () => {
     it('connection 服务缺席 ⇒ 远程一律拒，且原文按非受信来源（不提示去换不存在的身份）', async () => {
       const { deps, manifest } = makeDeps()
       const base = await start(deps)
-      const res = await rawCall(base, ROUTES.apply, 'POST', remoteHeaders, body)
+      const res = await rawCall(base, ROUTES.apply.path, 'POST', remoteHeaders, body)
       expect(res.status).toBe(403)
       expect((JSON.parse(res.text) as { error: { message: string } }).error.message).toBe('非受信来源')
       expect(await manifest.list()).toEqual([])
@@ -895,7 +910,7 @@ describe('路由层 · 请求栅栏', () => {
     it('本机用 LAN IP 自访（Host 是 bind 字面量、源地址回环）走本机支放行，不需要 connection', async () => {
       const { deps, manifest } = makeDeps()
       const base = await start(deps, true, { bindHost: '192.168.50.199' })
-      const res = await rawCall(base, ROUTES.apply, 'POST', { ...json, host: '192.168.50.199:3080' }, body)
+      const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, host: '192.168.50.199:3080' }, body)
       expect(res.status).toBe(200)
       expect((await manifest.list()).length).toBe(1)
     })
@@ -909,7 +924,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
   it('清册里有这一条 ⇒ 成功信封，值就是 detail 的形状（不回灌清册字段）', async () => {
     const { deps } = makeDeps({ seed })
     const base = await start(deps)
-    const { status, body: envelope } = await call(base, ROUTES.detail, {
+    const { status, body: envelope } = await call(base, ROUTES.detail.path, {
       method: 'POST',
       body: { [PARAMS.entryId]: entryIdOf('session-a') },
     })
@@ -935,7 +950,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     fs.readFile.mockImplementation(async () => zlib.zstdCompressSync(Buffer.from(lines.join('\n') + '\n', 'utf8')))
     const base = await start(deps)
 
-    const tail = await call(base, ROUTES.detail, {
+    const tail = await call(base, ROUTES.detail.path, {
       method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') },
     })
     const tailValue = tail.body.value as {
@@ -949,7 +964,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     expect(tailValue.olderCursor).toBe(5)
     expect(tailValue.userMessageCount).toBe(35)
 
-    const older = await call(base, ROUTES.detail, {
+    const older = await call(base, ROUTES.detail.path, {
       method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a'), [PARAMS.before]: 5 },
     })
     const olderValue = older.body.value as { blocks: Array<{ text: string }>; olderCursor: number | null }
@@ -962,7 +977,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     const { deps } = makeDeps({ seed })
     const base = await start(deps)
     for (const before of [-1, 1.5, '5']) {
-      const failure = await failureOf(base, ROUTES.detail, {
+      const failure = await failureOf(base, ROUTES.detail.path, {
         method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a'), [PARAMS.before]: before },
       })
       expect(failure.status, String(before)).toBe(400)
@@ -973,7 +988,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
   it('entryId 不在清册 ⇒ trash-empty，且一次文件读都不做', async () => {
     const { deps, fs } = makeDeps({ seed })
     const base = await start(deps)
-    const { status, code } = await failureOf(base, ROUTES.detail, { method: 'POST', body: { [PARAMS.entryId]: 'nope' } })
+    const { status, code } = await failureOf(base, ROUTES.detail.path, { method: 'POST', body: { [PARAMS.entryId]: 'nope' } })
     expect(status).toBe(200) // 操作失败 ⇒ 200 + 信封；4xx 只留给请求本身不对
     expect(code).toBe('sessiondelete/trash-empty')
     expect(fs.readFile).not.toHaveBeenCalled()
@@ -987,7 +1002,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     fs.listDirs.mockResolvedValue([]) // 若走 `list()`，这一行会被当场摘掉 ⇒ trash-empty
     fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith(entryIdOf('session-a')))
     const base = await start(deps)
-    const { status, code, message } = await failureOf(base, ROUTES.detail, {
+    const { status, code, message } = await failureOf(base, ROUTES.detail.path, {
       method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') },
     })
     expect(status).toBe(200)
@@ -1002,7 +1017,7 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     const { deps } = makeDeps({ seed })
     ;deps.fs.listFiles = vi.fn(async () => ['notes.txt'])
     const base = await start(deps)
-    const { code, message } = await failureOf(base, ROUTES.detail, { method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') } })
+    const { code, message } = await failureOf(base, ROUTES.detail.path, { method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a') } })
     expect(code).toBe('sessiondelete/io')
     expect(message).toMatch(/没有会话日志/)
   })
@@ -1010,10 +1025,10 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
   it('路由层自检同表：GET 被拒说的是"需 POST"，body 缺/空/非串都落 io 并点名字段', async () => {
     const { deps } = makeDeps({ seed })
     const base = await start(deps)
-    const wrongMethod = await failureOf(base, ROUTES.detail, { method: 'GET' })
+    const wrongMethod = await failureOf(base, ROUTES.detail.path, { method: 'GET' })
     expect(wrongMethod.message).toMatch(/需 POST/)
     for (const bad of [{}, { [PARAMS.entryId]: '' }, { [PARAMS.entryId]: 42 }]) {
-      const failure = await failureOf(base, ROUTES.detail, { method: 'POST', body: bad })
+      const failure = await failureOf(base, ROUTES.detail.path, { method: 'POST', body: bad })
       expect(failure.code).toBe('sessiondelete/io')
       expect(failure.message).toMatch(PARAMS.entryId)
     }
@@ -1023,10 +1038,10 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     const { deps, fs } = makeDeps({ seed })
     const base = await start(deps)
     const payload = JSON.stringify({ [PARAMS.entryId]: entryIdOf('session-a') })
-    const evil = await rawCall(base, ROUTES.detail, 'POST', { ...json, origin: 'https://evil.example' }, payload)
+    const evil = await rawCall(base, ROUTES.detail.path, 'POST', { ...json, origin: 'https://evil.example' }, payload)
     expect(evil.status).toBe(403)
     expect(fs.readFile).not.toHaveBeenCalled()
-    const shell = await rawCall(base, ROUTES.detail, 'POST', { ...json, referer: 'dsh-app://app/' }, payload)
+    const shell = await rawCall(base, ROUTES.detail.path, 'POST', { ...json, referer: 'dsh-app://app/' }, payload)
     expect(shell.status).toBe(200)
     expect(JSON.parse(shell.text)).toMatchObject({ ok: true })
   })
@@ -1040,10 +1055,10 @@ describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作�
   it('GET 被拒说的是"需 POST"，body 缺动作 / ids 不成形都落 io 并点名字段', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const wrongMethod = await failureOf(base, ROUTES.apply, { method: 'GET' })
+    const wrongMethod = await failureOf(base, ROUTES.apply.path, { method: 'GET' })
     expect(wrongMethod.message).toMatch(/需 POST/)
     for (const bad of [{}, { [PARAMS.action]: 'count' }, { [PARAMS.action]: 'count', [PARAMS.ids]: '' }]) {
-      const failure = await failureOf(base, ROUTES.apply, { method: 'POST', body: bad })
+      const failure = await failureOf(base, ROUTES.apply.path, { method: 'POST', body: bad })
       expect(failure.code).toBe('sessiondelete/io')
       expect(failure.message).toMatch(/动作|ids/)
     }
@@ -1053,10 +1068,10 @@ describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作�
     const { deps, host } = makeDeps({ subagents: { 'session-parent': 1 } })
     const base = await start(deps)
     const hostHeader = { ...json, host: new URL(base).host }
-    const evil = await rawCall(base, ROUTES.apply, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
+    const evil = await rawCall(base, ROUTES.apply.path, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
     expect(evil.status).toBe(403)
     expect(host.subagentMembersOf).not.toHaveBeenCalled()
-    const shell = await rawCall(base, ROUTES.apply, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
+    const shell = await rawCall(base, ROUTES.apply.path, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
     expect(shell.status).toBe(200)
     expect(JSON.parse(shell.text)).toMatchObject({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 1 }] })
   })
@@ -1078,7 +1093,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     fs.exists.mockImplementation(async (path: string) => !path.includes('--p-gone--'))
     const listSpy = vi.spyOn(manifest, 'list')
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.apply, {
+    const { status, body } = await call(base, ROUTES.apply.path, {
       method: 'POST',
       body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), 'ghost', restoreId('b')] },
     })
@@ -1088,10 +1103,10 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     expect(outcomes.map((o) => o.id)).toEqual([restoreId('a'), 'ghost', restoreId('b')])
     expect(outcomes[0]).toMatchObject({ ok: true, action: 'restore', value: { id: restoreId('a') } })
     expect(outcomes[1]).toMatchObject({ ok: false })
-    expect((outcomes[1]!.error as { code: string }).code).toBe('sessiondelete/trash-empty')
-    expect((outcomes[1]!.error as { message: string }).message).toContain('ghost')
+    expect((pick(outcomes, 1).error as { code: string }).code).toBe('sessiondelete/trash-empty')
+    expect((pick(outcomes, 1).error as { message: string }).message).toContain('ghost')
     expect(outcomes[2]).toMatchObject({ ok: false, action: 'restore' })
-    expect((outcomes[2]!.error as { code: string }).code).toBe('sessiondelete/project-missing')
+    expect((pick(outcomes, 2).error as { code: string }).code).toBe('sessiondelete/project-missing')
     // 整批一次清单读（不是每条一次）
     expect(listSpy).toHaveBeenCalledTimes(1)
     // ghost 不在清单也不在任何组里 ⇒ 它**不是**幂等 no-op（没有前一条带走它），照报 trash-empty
@@ -1104,12 +1119,12 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     // 只让 a 的回收站目录缺席：a 失败、b 照常成功
     fs.exists.mockImplementation(async (path: string) => !path.endsWith(restoreId('a')))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
     })
     const outcomes = body.value as Array<Record<string, unknown>>
     expect(outcomes[0]).toMatchObject({ ok: false })
-    expect((outcomes[0]!.error as { code: string }).code).toBe('sessiondelete/trash-empty')
+    expect((pick(outcomes, 0).error as { code: string }).code).toBe('sessiondelete/trash-empty')
     expect(outcomes[1]).toMatchObject({ ok: true, value: { id: restoreId('b') } })
   })
 
@@ -1118,7 +1133,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const child = entry('session-c', { sessionId: 'session-c', parentEntryId: parent.id, deletedAt: 2 })
     const { deps } = makeDeps({ seed: [child, parent] })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [parent.id, child.id] },
     })
     const outcomes = body.value as Array<Record<string, unknown>>
@@ -1131,7 +1146,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const child = entry('session-c', { sessionId: 'session-c', parentEntryId: parent.id, deletedAt: 2 })
     const { deps, manifest } = makeDeps({ seed: [child, parent] })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [parent.id, parent.id, child.id] },
     })
     const outcomes = body.value as Array<Record<string, unknown>>
@@ -1153,7 +1168,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
       },
     })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-parent', 'session-none'] },
     })
     const outcomes = body.value as Array<Record<string, unknown>>
@@ -1165,13 +1180,13 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const { deps, manifest, host } = makeDeps()
     host.projectDirOf.mockImplementation(async (sessionId: string) => (sessionId === 'session-bad' ? undefined : '--p--'))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-a', 'session-bad', 'session-b'] },
     })
     const outcomes = body.value as Array<Record<string, unknown>>
     expect(outcomes[0]).toMatchObject({ ok: true, value: { sessionId: 'session-a' } })
     expect(outcomes[1]).toMatchObject({ ok: false })
-    expect((outcomes[1]!.error as { code: string }).code).toBe('sessiondelete/not-found')
+    expect((pick(outcomes, 1).error as { code: string }).code).toBe('sessiondelete/not-found')
     expect(outcomes[2]).toMatchObject({ ok: true, value: { sessionId: 'session-b' } })
     expect((await manifest.list()).length).toBe(2)
   })
@@ -1186,7 +1201,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     host.projectDirOf.mockImplementation(async (sessionId: string) =>
       (sessionId === 'session-child' ? undefined : '--p--'))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-parent', 'session-child'] },
     })
     const outcomes = body.value as Array<Record<string, unknown>>
@@ -1199,7 +1214,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const seed = [entry('session-a', { sessionId: 'session-a' }), entry('session-b', { sessionId: 'session-b' })]
     const { deps, host } = makeDeps({ seed })
     const base = await start(deps)
-    await call(base, ROUTES.apply, {
+    await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
     })
     expect(host.announceRestored).toHaveBeenCalledTimes(1)
@@ -1216,13 +1231,13 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const { deps, host } = makeDeps({ seed })
     host.isArchived.mockResolvedValue(true)
     const base = await start(deps)
-    await call(base, ROUTES.apply, {
+    await call(base, ROUTES.apply.path, {
       method: 'POST',
       body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a'), restoreId('b')] },
     })
     expect(host.unarchive).toHaveBeenCalledTimes(2)
     expect(host.archive).not.toHaveBeenCalled()
-    const announced = host.announceRestored.mock.invocationCallOrder[0]!
+    const announced = pick(host.announceRestored.mock.invocationCallOrder, 0)
     expect(announced).toBeGreaterThan(Math.max(...host.unarchive.mock.invocationCallOrder))
   })
 
@@ -1234,11 +1249,13 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
     const kid = entry('session-kid', { sessionId: 'session-kid', parentEntryId: parent.id })
     const { deps, host } = makeDeps({ seed: [parent, kid] })
     const base = await start(deps)
-    await call(base, ROUTES.apply, {
+    await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'restore', [PARAMS.ids]: [restoreId('a')] },
     })
     expect(host.announceRestored).toHaveBeenCalledTimes(1)
-    const announced = host.announceRestored.mock.calls[0]?.[0]
+    // 上面那条已经证明这一趟通告发生了一次，取位只是把它交给编译器看：拿不到就是夹具脱节，
+    // 不许让下一行断言对着 undefined 蒙一次绿。
+    const announced = pick(pick(host.announceRestored.mock.calls, 0), 0)
     expect([...announced].sort()).toEqual(['session-a', 'session-kid'])
   })
 })
@@ -1256,7 +1273,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     const { deps, fs, host, manifest } = makeDeps()
     host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.orphans)
+    const { status, body } = await call(base, ROUTES.orphans.path)
     expect(status).toBe(200)
     expect(body).toMatchObject({
       ok: true,
@@ -1278,7 +1295,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     fs.listDirs.mockResolvedValue([]) // 目录不在：若走 `list()` 这一行会被当场摘掉
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.orphans)
+    const { status, body } = await call(base, ROUTES.orphans.path)
     expect(status).toBe(200)
     expect(body).toMatchObject({ ok: true, value: { roots: ['session-root'] } })
     expect(fs.listDirs).not.toHaveBeenCalled()
@@ -1290,7 +1307,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   it('GET /orphans 的 sessionQuery 缺席 ⇒ io 信封，不冒充空报告', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const failure = await failureOf(base, ROUTES.orphans)
+    const failure = await failureOf(base, ROUTES.orphans.path)
     // **操作**读不到 ⇒ 200 + 信封（404 是"这条路由不存在"，那是另一件事，见上面 POST 那条）
     expect(failure.status).toBe(200)
     expect(failure.code).toBe('sessiondelete/io')
@@ -1300,7 +1317,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   it('POST /orphans 不是写动作 ⇒ 405', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const { status } = await call(base, ROUTES.orphans, { method: 'POST', body: {} })
+    const { status } = await call(base, ROUTES.orphans.path, { method: 'POST', body: {} })
     expect(status).toBe(405)
   })
 
@@ -1308,7 +1325,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     const { deps, host, fs } = makeDeps()
     host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] } })
+    const { body } = await call(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] } })
     expect(body.ok).toBe(true)
     expect((body.value as ApplyOutcome[])[0]).toMatchObject({
       action: 'orphan-clean', ok: true, value: { removed: 2, freedBytes: 448 * 1024 },
@@ -1320,7 +1337,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     const { deps, host } = makeDeps()
     host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['root'] } })
+    const { body } = await call(base, ROUTES.apply.path, { method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['root'] } })
     expect((body.value as ApplyOutcome[])[0]).toMatchObject({
       id: 'root', action: 'orphan-clean', ok: true, value: { removed: 2, freedBytes: 448 * 1024 },
     })
@@ -1329,7 +1346,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
   it('POST /apply orphan-clean：会话语料缺席 ⇒ 顶层 io 信封，不回零条假回执', async () => {
     const { deps, fs } = makeDeps()
     const base = await start(deps)
-    const failure = await failureOf(base, ROUTES.apply, {
+    const failure = await failureOf(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
     })
     expect(failure.code).toBe('sessiondelete/io')
@@ -1343,10 +1360,10 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
       if (String(args[0]).endsWith('session-kid')) throw new Error('boom')
     })
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.apply, {
+    const { body } = await call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
     })
-    const outcome = (body.value as ApplyOutcome[])[0]!
+    const outcome = pick(body.value as ApplyOutcome[], 0)
     expect(outcome.ok).toBe(false)
     expect(outcome.ok ? {} : outcome.error).toMatchObject({
       code: 'sessiondelete/io',
@@ -1359,7 +1376,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     host.listSessions = vi.fn(async () => ({ available: true as const, value: corpus() }))
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')
     const base = await start(deps)
-    const failure = await failureOfOutcome(base, ROUTES.apply, {
+    const failure = await failureOfOutcome(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
     })
     expect(failure.code).toBe('sessiondelete/live')
@@ -1377,7 +1394,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     fs.readFile = vi.fn(async () => zlib.zstdCompressSync(Buffer.from(
       `${JSON.stringify({ type: 'session', version: 4, id: 'session-gone', createdAt: 1, cwd: 'C:/p' })}\n`, 'utf8')))
     const base = await start(deps)
-    const failure = await failureOfOutcome(base, ROUTES.apply, {
+    const failure = await failureOfOutcome(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
     })
     expect(failure.code).toBe('sessiondelete/not-found')
@@ -1402,9 +1419,9 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
       return []
     })
     const base = await start(deps)
-    const listPromise = call(base, ROUTES.list)
+    const listPromise = call(base, ROUTES.list.path)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const scanned = await call(base, ROUTES.orphans)
+    const scanned = await call(base, ROUTES.orphans.path)
     expect(scanned.body).toMatchObject({ ok: true, value: { totalSessions: 2, roots: ['session-root'] } })
     release()
     await listPromise
@@ -1425,9 +1442,9 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
       return []
     })
     const base = await start(deps)
-    const listPromise = call(base, ROUTES.list)
+    const listPromise = call(base, ROUTES.list.path)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const cleanPromise = call(base, ROUTES.apply, {
+    const cleanPromise = call(base, ROUTES.apply.path, {
       method: 'POST', body: { [PARAMS.action]: 'orphan-clean', [PARAMS.ids]: ['session-root'] },
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -1445,7 +1462,7 @@ describe('路由层 · GET /ping（探测专用：零副作用的最便宜一问
     const { deps, manifest, fs } = makeDeps({ seed: [entry('a')] })
     const listSpy = vi.spyOn(manifest, 'list')
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.ping)
+    const { status, body } = await call(base, ROUTES.ping.path)
     expect(status).toBe(200)
     expect(body).toEqual({ ok: true, value: 'pong' })
     expect(listSpy).not.toHaveBeenCalled()
@@ -1467,9 +1484,9 @@ describe('路由层 · GET /ping（探测专用：零副作用的最便宜一问
       return []
     })
     const base = await start(deps)
-    const listPromise = call(base, ROUTES.list)
+    const listPromise = call(base, ROUTES.list.path)
     await vi.waitFor(() => { expect(fs.listDirs).toHaveBeenCalled() })
-    const ping = await call(base, ROUTES.ping)
+    const ping = await call(base, ROUTES.ping.path)
     expect(ping.body).toEqual({ ok: true, value: 'pong' })
     release()
     await listPromise
@@ -1481,7 +1498,7 @@ describe('路由层 · POST /empty（清空 = 聚合回执，不按条回）', (
     // 夹具第一参是**原目录名**：`entry('a')` / `entry('b')` 才是两个不同的 id
     const { deps, manifest } = makeDeps({ seed: [entry('a'), entry('b')] })
     const base = await start(deps)
-    const { status, body } = await call(base, ROUTES.empty, { method: 'POST', body: {} })
+    const { status, body } = await call(base, ROUTES.empty.path, { method: 'POST', body: {} })
     expect(status).toBe(200)
     expect(body.ok).toBe(true)
     expect(body.value).toMatchObject({ removed: 2 })
@@ -1495,7 +1512,7 @@ describe('路由层 · POST /empty（清空 = 聚合回执，不按条回）', (
     const id = entryIdOf('session-ghost')
     fs.listDirs = vi.fn(async () => [id])
     const base = await start(deps)
-    const { body } = await call(base, ROUTES.empty, { method: 'POST', body: {} })
+    const { body } = await call(base, ROUTES.empty.path, { method: 'POST', body: {} })
     expect(body.ok).toBe(true)
     expect(fs.removeDir).toHaveBeenCalledWith(`/h/session-trash/${id}`)
     expect(await manifest.list()).toEqual([])
@@ -1512,7 +1529,7 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
   const fileId = `sha256:${'b'.repeat(64)}`
   /** 附件段的 query（`id` / `kind` / `name` 与 Node 半同源）。 */
   const query = (id: string, kind: string, name?: string): string =>
-    `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent(id)}&${PARAMS.attachmentKind}=${kind}`
+    `${ROUTES.attachment.path}?${PARAMS.attachmentId}=${encodeURIComponent(id)}&${PARAMS.attachmentKind}=${kind}`
     + (name === undefined ? '' : `&${PARAMS.attachmentName}=${encodeURIComponent(name)}`)
 
   it('GET /attachment 回原始图片字节与安全头', async () => {
@@ -1537,10 +1554,10 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
     const made = makeDeps()
     const base = await start(made.deps)
     const badPaths = [
-      `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent('../../x')}&${PARAMS.attachmentKind}=image`,
-      `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent(`sha256:${'A'.repeat(64)}`)}&${PARAMS.attachmentKind}=image`,
-      `${ROUTES.attachment}?${PARAMS.attachmentId}=${encodeURIComponent(imageId)}&${PARAMS.attachmentKind}=v2`,
-      `${ROUTES.attachment}?${PARAMS.attachmentKind}=image`,
+      `${ROUTES.attachment.path}?${PARAMS.attachmentId}=${encodeURIComponent('../../x')}&${PARAMS.attachmentKind}=image`,
+      `${ROUTES.attachment.path}?${PARAMS.attachmentId}=${encodeURIComponent(`sha256:${'A'.repeat(64)}`)}&${PARAMS.attachmentKind}=image`,
+      `${ROUTES.attachment.path}?${PARAMS.attachmentId}=${encodeURIComponent(imageId)}&${PARAMS.attachmentKind}=v2`,
+      `${ROUTES.attachment.path}?${PARAMS.attachmentKind}=image`,
     ]
     for (const path of badPaths) {
       const { status, body } = await call(base, path)
@@ -1676,7 +1693,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
     const made = makeDeps()
     const listSpy = vi.spyOn(made.manifest, 'list')
     const base = await start(made.deps)
-    const { status, body } = await call(base, ROUTES.attachmentOrphans)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans.path)
     expect(status).toBe(200)
     expect(body).toEqual({ ok: true, value: { count: 0, totalBytes: 0, items: [] } })
     expect(listSpy).not.toHaveBeenCalled()
@@ -1685,7 +1702,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
   it('GET /attachment-orphans：只报无引用对象（活动会话与回收站目录的引用保留）', async () => {
     const made = orphanDeps()
     const base = await start(made.deps)
-    const { status, body } = await call(base, ROUTES.attachmentOrphans)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans.path)
     expect(status).toBe(200)
     expect(body).toEqual({
       ok: true,
@@ -1705,7 +1722,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
       p === `${OBJECTS}/00` ? names : [])
     made.fs.statFile.mockResolvedValue({ size: 1 })
     const base = await start(made.deps)
-    const { status, body } = await call(base, ROUTES.attachmentOrphans)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans.path)
     expect(status).toBe(200)
     const value = body.value as { count: number; totalBytes: number; items: unknown[] }
     expect(value.count).toBe(205)
@@ -1716,7 +1733,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
   it('GET /attachment-orphans：引用源读不出 ⇒ 200 + sessiondelete/io（不冒充空报告）', async () => {
     const made = orphanDeps({ unreadable: true })
     const base = await start(made.deps)
-    const failure = await failureOf(base, ROUTES.attachmentOrphans)
+    const failure = await failureOf(base, ROUTES.attachmentOrphans.path)
     expect(failure.status).toBe(200)
     expect(failure.code).toBe('sessiondelete/io')
     expect(failure.message).toMatch(/无法判定孤儿/)
@@ -1742,9 +1759,9 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
       return []
     })
     const base = await start(made.deps)
-    const listPromise = call(base, ROUTES.list)
+    const listPromise = call(base, ROUTES.list.path)
     await vi.waitFor(() => { expect(made.fs.listDirs).toHaveBeenCalledWith('/h/session-trash') })
-    const report = await call(base, ROUTES.attachmentOrphans)
+    const report = await call(base, ROUTES.attachmentOrphans.path)
     expect(report.body).toEqual({
       ok: true,
       value: { count: 1, totalBytes: 30, items: [{ attachmentId: ID3, bytes: 30 }] },
@@ -1756,7 +1773,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
   it('POST /attachment-clean：只删无引用图片，回 {removed,freedBytes,failed}', async () => {
     const made = orphanDeps()
     const base = await start(made.deps)
-    const { status, body } = await call(base, ROUTES.attachmentClean, { method: 'POST' })
+    const { status, body } = await call(base, ROUTES.attachmentClean.path, { method: 'POST' })
     expect(status).toBe(200)
     expect(body).toEqual({ ok: true, value: { removed: 1, freedBytes: 30, failed: 0 } })
     expect(made.fs.removeFile).toHaveBeenCalledTimes(1)
@@ -1768,7 +1785,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
   it('POST /attachment-clean：引用源读不出 ⇒ 零删 + skipped（不是零条假回执）', async () => {
     const made = orphanDeps({ unreadable: true })
     const base = await start(made.deps)
-    const { status, body } = await call(base, ROUTES.attachmentClean, { method: 'POST' })
+    const { status, body } = await call(base, ROUTES.attachmentClean.path, { method: 'POST' })
     expect(status).toBe(200)
     expect(body).toMatchObject({ ok: true, value: { removed: 0, freedBytes: 0, failed: 0 } })
     expect((body.value as { skipped?: string }).skipped).toMatch(/无法判定孤儿/)

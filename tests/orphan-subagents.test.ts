@@ -11,6 +11,7 @@ import {
   type OrphanGroup,
 } from '../src/verbs/orphan-subagents.js'
 import type { SessionIdentity } from '../src/ports/host-port.js'
+import { pick } from './support/fixture.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { createLogWorld, trashEntry } from './support/world.js'
@@ -64,9 +65,9 @@ describe('孤儿分组（纯函数）', () => {
     ]
     const groups = orphanGroupsOf(corpus, ['session-trashed'])
     expect(groups).toHaveLength(1)
-    expect(groups[0]!.root.sessionId).toBe('session-root')
-    expect(groups[0]!.members.map((m) => m.sessionId)).toEqual(['session-root', 'session-kid', 'session-g1'])
-    expect(groups[0]!.parentSessionId).toBe('session-gone')
+    expect(pick(groups, 0).root.sessionId).toBe('session-root')
+    expect(pick(groups, 0).members.map((m) => m.sessionId)).toEqual(['session-root', 'session-kid', 'session-g1'])
+    expect(pick(groups, 0).parentSessionId).toBe('session-gone')
   })
 
   it('同样父带前缀/不带前缀算同一件事', () => {
@@ -84,7 +85,7 @@ describe('扫描报告与清理', () => {
     ])
     const groups = await loadOrphanGroups(d, [])
     expect(groups).toHaveLength(1)
-    expect(groups[0]!.members.reduce((n, m) => n + m.bytes, 0)).toBe(200)
+    expect(pick(groups, 0).members.reduce((n, m) => n + m.bytes, 0)).toBe(200)
     expect(reportOrphans(groups)).toMatchObject({
       roots: ['session-root'], totalSessions: 2, totalBytes: 200, missingParents: 1,
       groups: [{ projectDir: '--p--', sessions: 1, bytes: 100 }, { projectDir: '--q--', sessions: 1, bytes: 100 }],
@@ -111,10 +112,13 @@ describe('扫描报告与清理', () => {
 
   it('清册行是必填：不交行在类型面就过不去（读面由调用方选好）', () => {
     const { d } = deps([])
-    if (false) {
+    // 编译期闸：这具函数**不调用**，只让 tsc 检查下面那行的实参形状（`if (false)` 那种写法会
+    // 触发 no-constant-condition，判据本身不动）。
+    const typeGate = (): void => {
       // @ts-expect-error `trash` 不是可选的：扫描不许自己回落到 `ledger.raw()`
       void loadOrphanGroups(d)
     }
+    expect(typeGate).toBeTypeOf('function')
   })
 
   it('sessionQuery 没挂 ⇒ { available:false } ⇒ io，不拿空语料冒充没有孤儿', async () => {

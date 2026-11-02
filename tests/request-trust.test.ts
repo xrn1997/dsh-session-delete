@@ -147,11 +147,11 @@ describe('connection 端口：每次请求惰性解析、缺席 / 抛错都 fail
   })
 
   it('服务晚到也认：第一次 absent，注册后同一条端口即放行', () => {
-    let service: unknown
-    const ctx = { get: () => service } as unknown as Context
+    const holder: { service: unknown } = { service: undefined }
+    const ctx = { get: () => holder.service } as unknown as Context
     const port = createConnectionPort(ctx)
     expect(port.verdictFor(request({}))).toEqual({ kind: 'absent' })
-    service = { requestRejection: () => undefined }
+    holder.service = { requestRejection: () => undefined }
     expect(port.verdictFor(request({}))).toEqual({ kind: 'allowed' })
   })
 })

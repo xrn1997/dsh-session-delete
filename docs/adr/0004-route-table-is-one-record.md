@@ -23,22 +23,28 @@ Status: accepted
 ## 决定
 
 1. 新增 `src/api/route-table.ts`（Node 半私有——浏览器半要 import `wire.ts`，值 import 会把 Node 半拖进 bundle）：
-   每个段名一行，声明 `{ method, body, purity, read, run }`。
-2. `dispatch()` 读这一条记录：方法、纯度、读面、body 预读四件事**只有一处定义**（原先分居 `dispatch()` 与
-   `purityOf()` 两处的判断已并进这张表）。
+   每个段名一行，字段以 `RouteSpec` 为准。其中 `method` 的字面量家在 `wire.ts` 的
+   结构化段名表（`ROUTES` 每项恰有 `{ path, method }` 两键），路由记录只投影（`method: ROUTES.x.method`）——
+   一条 wire 事实（某段用什么方法）只住一处，两半各从同一格取。
+2. `dispatch()` 读这一条记录：方法、纯度、读面、body 预读、响应形态**只有一处定义**
+   （原先分居 `dispatch()` 与 `purityOf()` 两处的判断已并进这张表）；deps 切片见 ADR-0032。
 3. `APPLY_ACTIONS` 由 `ApplyAction` **派生**（`Record<ApplyAction, …>` + `satisfies`）：
    少一个动作就编译不过，多一个动作也是。
-4. `/apply` 内部的纯度（`count` 是纯读）写成该路由 `purity` 的函数形式、按请求体里的 action 判；
-   不另立一张"动作 → 纯度"的表，也不写在 `dispatch` 里。
+4. `/apply` 的「动作 → 纯度」（`count` 是纯读、其余进链）是 `route-table.ts` 里**唯一一张表**
+   （`APPLY_ACTION_TABLE`：键由 `ApplyAction` 派生、`satisfies` 钉住——漏一个动作编译不过，多一个也是）。
+   该路由 `purity` 的函数形式与动作拒否（`requireAction`）共用同一个识别器（`actionOf`：不抛，
+   认不得就回 `undefined`），不各解析一遍动作；也不写在 `dispatch` 里。
 
 ## 边界
 
 - **不给段名做动态发现**：九个段名是硬契约，`wire.ts` 仍是它们的家；`route-table.ts` 只负责「怎么处理」。
+  线上方法是线上形状的一部分，按 ADR-0003 归 wire（`ROUTES` 每项 `{ path, method }`），路由记录与浏览器半都只投影。
 - **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这几处：请求栅栏在 `src/api/request-trust.ts`，状态在 `src/api/dispatch.ts`，失败信封在 `src/remote/map-error.ts`。
 
 ## 后果
 
-- 加一段 = `wire.ts` 加一个键 + `route-table.ts` 加一行；漏了任何一个都是编译错误或测试红。
+- 加一段 = `wire.ts` 加一个键 + `route-table.ts` 加一行；漏了任何一个都是编译错误或测试红
+  （行的 deps 切片见 ADR-0032）。
 - 「纯度」从注释承诺变成可枚举的数据：一条测试可以遍历整张表断言「写动作全部进链、纯读全部不进」。
 - 到达序链那段代码本身（`throughChain`）不动——它今天是**没有测试覆盖**的，这一轮顺手补一条
   并发两条写请求的串行断言。
@@ -49,4 +55,4 @@ Status: accepted
   bundle，正好撞上 `tsdown` 的纯度门。
 - **只把 `APPLY_ACTIONS` 从类型派生**：三处判断仍分居两处，最危险的那条（纯度）继续靠注释。
 
-锚点：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`
+锚点：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`；`src/api/dispatch.ts`（`createApiHandler`）；`tests/route-table.test.ts`；ADR-0032。

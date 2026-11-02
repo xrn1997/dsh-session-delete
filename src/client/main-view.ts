@@ -21,7 +21,9 @@ import type { ClientContextLike } from './context.js'
 import { createLatestWins } from './store.js'
 
 interface SnapshotStoreLike<T> {
-  getSnapshot(): T
+  /** 返回值允许空：宿主 `getSnapshot()` 在"还没装好"那一拍可能回 null / undefined；
+   *  镜像按真实形状声明，`?.` 才是必要的（「缺席不等于没有」）。 */
+  getSnapshot(): T | null | undefined
 }
 
 /** `uiWorkspace` 服务里用到的字段（构造函数原文：`selection = createSnapshotStore({}, …)`、
@@ -33,6 +35,11 @@ interface UiWorkspaceLike {
   clearMain?(): void
   openSession?(target: string): void
 }
+
+/** 过了就绪判据之后的形状：方法不再可选，`afterRestore` 的 `openSession(...)` 与
+ *  `afterDelete` 的 `clearMain()` 不必再用非空断言逼编译器相信判据。这是纯类型面收窄，
+ *  判据本身仍在 `uiWorkspaceOf` 里（同一处，只有一份）。 */
+type ReadyUiWorkspace = UiWorkspaceLike & Required<Pick<UiWorkspaceLike, 'clearMain' | 'openSession'>>
 
 let client: ClientContextLike | undefined
 /** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开；面板恢复用 `forgetMainView` 清掉。 */
@@ -52,13 +59,19 @@ export function resetMainView(): void {
   reopen.invalidate()
 }
 
-function uiWorkspaceOf(): UiWorkspaceLike | undefined {
+/** 宿主服务是否可用：把检查写成类型谓词，调用点拿到的就是 `ReadyUiWorkspace`。
+ *  `ctx.get` 的窄镜像声明成可能回 null（宿主可回 null），所以空值判据必须同时认 undefined / null。 */
+function isReadyUiWorkspace(candidate: UiWorkspaceLike | null | undefined): candidate is ReadyUiWorkspace {
+  if (candidate === undefined || candidate === null) return false
+  if (typeof candidate.clearMain !== 'function' || typeof candidate.openSession !== 'function') return false
+  if (candidate.selection === undefined || typeof candidate.selection.getSnapshot !== 'function') return false
+  return true
+}
+
+function uiWorkspaceOf(): ReadyUiWorkspace | undefined {
   try {
-    const candidate = client?.get?.('uiWorkspace') as UiWorkspaceLike | undefined
-    if (candidate === undefined || candidate === null) return undefined
-    if (typeof candidate.clearMain !== 'function' || typeof candidate.openSession !== 'function') return undefined
-    if (candidate.selection === undefined || typeof candidate.selection.getSnapshot !== 'function') return undefined
-    return candidate
+    const candidate = client?.get?.('uiWorkspace') as UiWorkspaceLike | null | undefined
+    return isReadyUiWorkspace(candidate) ? candidate : undefined
   } catch {
     return undefined
   }
@@ -85,7 +98,7 @@ export function afterDelete(sessionIds: readonly string[]): void {
   const current = currentSessionOf(ui)
   if (current === undefined || !sessionIds.includes(current)) return
   try {
-    ui.clearMain!()
+    ui.clearMain()
     closedByUs.add(current)
   } catch {
     // Main-view cleanup must never turn a delete result red.
@@ -106,7 +119,9 @@ export function afterRestore(sessionIds: readonly string[]): void {
   const targets = sessionIds.filter((id) => closedByUs.has(id))
   if (targets.length === 0) return
   for (const id of targets) closedByUs.delete(id)
-  openWhenListed(targets[targets.length - 1]!)
+  const last = targets[targets.length - 1]
+  if (last === undefined) return
+  openWhenListed(last)
 }
 
 /**
@@ -144,7 +159,7 @@ function openWhenListed(sessionId: string): void {
     if (!ticket.current) return
     if (!canTakeFocus()) return
     try {
-      ui.openSession?.(sessionId)
+      ui.openSession(sessionId)
     } catch {
       // 主视图服务换代：放弃重开，行仍在清单里。
     }

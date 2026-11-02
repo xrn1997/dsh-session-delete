@@ -4,15 +4,26 @@
  * 收尾顺序住 `write-settlement.ts`（ADR-0013），面板的重读策略住 `use-trash-query.ts`；
  * 座位只拥有「这次是谁在写、交哪些材质、闸在哪」。
  *
- * 边界：不判回执、不决定收尾顺序、不拥有各面的本地状态；面板座位的闸由面板传入，不另造第二枚；
- * 闸挡回来的那一趟**什么都不落地**——座位交回 `undefined`，不伪造 outcome，收尾留给在飞的那一趟。
+ * 边界：不自己判读回执（verdict 判读住 `receipt.ts`，失败表怎么上屏归各写入面——撤销那一趟的
+ * 横幅改写住 `restoreFromUndo`）、不决定收尾顺序、不拥有各面的本地状态；面板座位的闸由面板传入，
+ * 不另造第二枚；闸挡回来的那一趟**什么都不落地**——座位交回 `undefined`，不伪造 outcome，
+ * 收尾留给在飞的那一趟。
  * 无主子会话清理**不是**座位：它只在插件设置页的维护卡里手动触发（ADR-0021），
  * 读数、闸与重查都归 `use-maintenance.ts`。
  */
+import type { Translate } from './copy.js'
 import type { BusyGate } from './busy-gate.js'
 import type { OneShotDeps, TrashEntryLike } from './remote.js'
 import { invalidateTrash } from './trash-store.js'
-import { dismissUndoNotice, publishUndoBatchNotice, publishUndoNotice } from './undo-notices.js'
+import {
+  clearUndoNotice,
+  dismissUndoNotice,
+  failNotice,
+  ownsNotice,
+  publishUndoBatchNotice,
+  publishUndoNotice,
+  type UndoNotice,
+} from './undo-notices.js'
 import { runWrite, type WriteOutcome } from './write.js'
 
 /** 会话行菜单的单删座位：一条会话、`single` 读法、成功发单条撤销横幅。交回这条会话的失败原文。
@@ -62,19 +73,43 @@ export async function deleteSessionsFromBatch(
   return outcome?.failures
 }
 
-/** 外部恢复座位（撤销横幅）：闸在横幅组件那一层包整趟（每条通知一枚 `useBusyGate`，随 seq 重挂载），
- *  座位不传闸——`runWrite` 见闸会再包一次，双套会让外层 busy 提前落下。主视图重开归 settlement，这里只让清单失效。 */
-export function restoreFromUndo(
-  deps: OneShotDeps,
-  input: { ids: readonly string[]; single: boolean },
-): Promise<WriteOutcome<'restore'>> {
-  return runWrite({
+/** 外部恢复座位：拥有整趟——ids 组装、runWrite、三种回执形状各改写一次横幅、成功收自己。
+ *  闸在调用方（横幅组件每条通知一枚）；座位不传闸（双套会让外层 busy 提前落）。
+ *  单条与批量都走**一次** `applyOutcomes('restore', ids)`（`runWrite` 判读；单条带 `single: true`，
+ *  null 是协议错）；失败就把原因换到同一条横幅上，不静默。多条逐条失败时横幅要说清**条数与各条
+ *  原因**（原因去重）——只显第一条会把条数与其余原因折没（issue #8 第 5 条）；单条失败仍原文上屏。
+ *  settlement 负责重开删除时被关掉的会话（只认 main-view 自己记过的）并让清单重读；
+ *  座位**不传 `dismissUndo`**——部分失败的回滚会让 settlement 先熄灭横幅，随后 `failNotice` 因
+ *  `ownsNotice` 落空而吞掉失败原文。 */
+export async function restoreFromUndo(deps: OneShotDeps, notice: UndoNotice, t: Translate): Promise<void> {
+  // 没有落点的撤销是假按钮：单条形拿不到条目 id 时早退（批量形空名单由组件不出动作挡住）。
+  const ids = notice.kind === 'one' ? [notice.entryId] : notice.entryIds
+  if (notice.kind === 'one' && notice.entryId === '') return
+  const outcome = await runWrite({
     deps,
     action: 'restore',
-    ids: input.ids,
-    single: input.single,
+    ids,
+    single: notice.kind === 'one',
+    // 主视图重开归 settlement（外部恢复座位不带 panelSeat），这里只让清单失效。
     presentation: { invalidate: invalidateTrash },
   })
+  if (!outcome.ok) {
+    failNotice(notice, outcome.failure.message)
+    return
+  }
+  const failure = outcome.failures.values().next().value
+  if (failure !== undefined) {
+    // 信封成功 ≠ 每一条都撤销成功：逐条失败时横幅要换成失败原文，不能假装撤销成功。
+    failNotice(notice, outcome.failures.size > 1
+      ? t('undo.failedBatch', {
+        n: outcome.failures.size,
+        reasons: [...new Set(outcome.failures.values())].join(' · '),
+      })
+      : failure)
+    return
+  }
+  // 成功只收掉自己那条：期间若已发布新删除的横幅，不能被这次收尾顺手清掉。
+  if (ownsNotice(notice)) clearUndoNotice()
 }
 
 /** 面板两个 `/apply` 座位共用的那一半：依赖、条目 id、闸、重读与缓存失效。 */
@@ -82,8 +117,9 @@ interface PanelWriteInput<A extends 'restore' | 'purge'> {
   deps: OneShotDeps
   ids: readonly string[]
   gate: BusyGate
-  refreshAfterWrite(outcome: WriteOutcome<A>): Promise<void>
-  clearDetailCache(ids: readonly string[]): void
+  /** 属性声明：这两枚回调被摘下来交给 `runWrite`（转交而不是当方法调），实现不读 `this`。 */
+  refreshAfterWrite: (outcome: WriteOutcome<A>) => Promise<void>
+  clearDetailCache: (ids: readonly string[]) => void
 }
 
 /** 面板恢复另要两样：单条读法，以及 already-gone 回执缺行时反查 sessionId 的当前清单。 */

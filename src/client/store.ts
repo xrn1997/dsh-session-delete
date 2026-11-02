@@ -94,10 +94,12 @@ export function createStore<T>(initial: T): ClientStore<T> {
 
 /** 懒读快照：`get()` 只在脏了时调用 `read()`，干净时回同一个引用（React snapshot 契约）。 */
 export interface LazyStore<T> {
-  get(): T
+  /** 属性声明：`get` / `subscribe` 会被摘下来直接交给 `useSyncExternalStore`（宿主行快照），
+   *  实现不读 `this`。方法简写会给它隐式 `this: LazyStore<T>`，触发 `unbound-method` 误报。 */
+  get: () => T
   /** 标脏并通告；下一次 `get()` 重读。 */
-  invalidate(): void
-  subscribe(listener: () => void): () => void
+  invalidate: () => void
+  subscribe: (listener: () => void) => () => void
 }
 
 export interface LazyStoreLifecycle {

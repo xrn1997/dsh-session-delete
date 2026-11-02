@@ -34,7 +34,7 @@ export function attachmentUrl(a: TrashDetailAttachmentWire): string {
   if (a.kind === 'file' && a.name !== undefined && a.name !== '') {
     query.set(PARAMS.attachmentName, a.name)
   }
-  return `${SESSION_DELETE_API_PREFIX}${ROUTES.attachment}?${query.toString()}`
+  return `${SESSION_DELETE_API_PREFIX}${ROUTES.attachment.path}?${query.toString()}`
 }
 
 /** 空串与缺席同义：宿主侧的 `name` 是可选建议名，空串不是名字（兜底文案与"不带 name 查询"都看它）。 */
@@ -140,7 +140,10 @@ export function AttachmentStrip({
     setSaveError(null)
     try {
       const response = await fetch(attachmentUrl(attachment))
-      const contentType = (response.headers.get('content-type') ?? '').split(';')[0]!.trim()
+      // 只取媒体类型（分号前那一段）。`noUncheckedIndexedAccess` 下 `[0]` 是 `string | undefined`：
+      // 这里显式收窄，缺头时退回空串，与原来 `?? ''` 的读数一致。
+      const mediaType = response.headers.get('content-type')?.split(';')[0]
+      const contentType = mediaType === undefined ? '' : mediaType.trim()
       if (!response.ok || !contentType.startsWith('image/')) {
         // 操作失败是 200 + JSON 信封：这里是 fetch，能把服务端原文拿出来，不把「HTTP 200」当原因。
         let message = `HTTP ${String(response.status)}`
@@ -165,6 +168,7 @@ export function AttachmentStrip({
       link.click()
       link.remove()
       // 捕获函数引用再延迟释放：测试/宿主可能在本拍之后换掉全局 URL，闭包里别再查一次。
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- lib.dom 把 revokeObjectURL 声明成 URL 静态方法（隐式 this），它不读 this；下一行已用 .call(URL, …) 绑回正确接收者。
       const revoke = URL.revokeObjectURL
       if (typeof revoke === 'function') setTimeout(() => revoke.call(URL, objectUrl), 0)
     } catch (error) {

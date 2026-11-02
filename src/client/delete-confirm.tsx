@@ -104,6 +104,7 @@ function ConfirmDialog({
       const outcome = await callRemote(() => applyOne(deps, 'count', current.sessionId).then((item) => item.value))
       // 读不到就**不说那半句**（0 也是"没说"）：它是加法，一次取数失败不许锁死删除按钮，
       // 也不许把"读不出"写成"它没有子会话"那种假话。
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `alive` 由 effect 的清理闭包写成 false，TS 看不见闭包写入；删了会让卸载后的取数写回已销毁的框。
       if (alive) setSubagents(outcome.ok ? outcome.value : 0)
     })()
     return () => { alive = false }

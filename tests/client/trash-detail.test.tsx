@@ -12,6 +12,7 @@ import type {
   TrashDetailToolBlockWire,
   TrashEntryWire,
 } from '../../src/shared/wire.js'
+import { pick, must } from '../support/fixture.js'
 
 const DELETED_AT = Date.UTC(2026, 9, 14, 6, 56, 58)
 
@@ -79,6 +80,8 @@ function detailElement(state: TrashDetailState, over: Partial<TrashDetailProps> 
     wide: true,
     onRetry: vi.fn(),
     onBack: vi.fn(),
+    // 导航面（开孩子 / 回父）整体是一个 `detailNav`：判据住控制器，这里只画。
+    detailNav: {},
     pager: {
       loadingOlder: loadingOlder ?? false,
       olderFailure: olderFailure ?? null,
@@ -157,11 +160,11 @@ describe('回收站详情块 · 有内容', () => {
     const { container } = at({ kind: 'ready', entry, detail })
     const bubbles = [...container.querySelectorAll('[data-sd-msg]')]
     expect(bubbles.map((el) => el.getAttribute('data-sd-msg'))).toEqual(['user', 'assistant'])
-    expect(bubbles[0]!.textContent).toContain('先看改动')
-    expect(bubbles[0]!.textContent).toContain('你')
-    expect(bubbles[1]!.textContent).toContain('改动分四层')
-    expect(bubbles[1]!.textContent).toContain('已截断')
-    expect(bubbles[1]!.textContent).toContain('助手')
+    expect(pick(bubbles, 0).textContent).toContain('先看改动')
+    expect(pick(bubbles, 0).textContent).toContain('你')
+    expect(pick(bubbles, 1).textContent).toContain('改动分四层')
+    expect(pick(bubbles, 1).textContent).toContain('已截断')
+    expect(pick(bubbles, 1).textContent).toContain('助手')
   })
 
   it('用户提问走原话、助手正文走 markdown：同一段源在两侧长出不同 DOM', () => {
@@ -331,7 +334,8 @@ describe('回收站详情块 · 折叠', () => {
     ])
     expect(screen.getAllByText('已截断')).toHaveLength(2)
     const rows = [...container.querySelectorAll('[data-sd-msg]')]
-    expect(rows.every((row) => !row.textContent?.includes('…'))).toBe(true)
+    // Element.textContent 在 lib.dom 里就是 string（不会是 null）；断言"没有省略号"不变。
+    expect(rows.every((row) => !row.textContent.includes('…'))).toBe(true)
   })
 
   it('折叠头摘要只给 Markdown 块去粗体星号；工具与注入照原样', () => {
@@ -467,7 +471,7 @@ describe('回收站详情块 · 两档形态的差别', () => {
 describe('回收站详情块 · 「删除于」两样都给（docs/ui-spec.md 状态⑥）', () => {
   it('相对那句好读、绝对那句好核对，同一格里两个都在', () => {
     at({ kind: 'ready', entry, detail })
-    const value = screen.getByText(/前（/).textContent ?? ''
+    const value = screen.getByText(/前（/).textContent
     expect(value).toMatch(/^(刚刚|\d+(分钟|小时|天|个月|年)前)（.+）$/)
     expect(value).toContain(new Date(DELETED_AT).toLocaleString())
   })
@@ -487,7 +491,7 @@ describe('回收站详情块 · 附件', () => {
 
   it('用户消息里的图片渲染为可点开的缩略图；点开出现放大框', () => {
     withBlocks([userBlock('u1', 1, '看图', [attachment])])
-    const img = screen.getByAltText('shot.png') as HTMLImageElement
+    const img = screen.getByAltText<HTMLImageElement>('shot.png')
     expect(img.getAttribute('src')).toContain('/dsh-session-delete-api/attachment?')
     expect(img.getAttribute('src')).toContain(encodeURIComponent(attachment.attachmentId))
     fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
@@ -496,7 +500,7 @@ describe('回收站详情块 · 附件', () => {
 
   it('缩略图懒加载并按 contain 收进框里；放大框那张不带 lazy（点开就要图）', () => {
     withBlocks([userBlock('u1', 1, '看图', [attachment])])
-    const thumb = screen.getByAltText('shot.png') as HTMLImageElement
+    const thumb = screen.getByAltText<HTMLImageElement>('shot.png')
     // 一段会话可能带几十张图：屏外的先不取，省的是附件段的二进制流量。
     expect(thumb.getAttribute('loading')).toBe('lazy')
     expect(thumb.style.objectFit).toBe('contain')
@@ -519,12 +523,17 @@ describe('回收站详情块 · 附件', () => {
   })
 
   it('放大框可另存为：先取字节、按 Content-Type 补扩展名，再触发下载', async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL) =>
+    // 替身签名收窄到 string：本仓只以字符串 URL 调 fetch（attachmentUrl 回 string），
+    // 写成 RequestInfo | URL 是给 String() 留把对象折成 '[object Object]' 的空间。
+    const fetchMock = vi.fn<(url: string) => Promise<Response>>(async () =>
       new Response(new Blob(['x'], { type: 'image/png' }), { headers: { 'content-type': 'image/png' } }))
     const createObjectURL = vi.fn(() => 'blob:test')
     const revokeObjectURL = vi.fn()
-    const originalCreate = URL.createObjectURL
-    const originalRevoke = URL.revokeObjectURL
+    // 捕获原始静态方法用于收场恢复（放进可变对象里：可选属性不会被 const 初始化式窄成"必有"，
+    // 空值还原判据才是真判据）。lib.dom 的隐式 this 不会被读，恢复的是同一个函数引用。
+    const originals: { create?: typeof URL.createObjectURL; revoke?: typeof URL.revokeObjectURL } = {}
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- 只是保存引用、不调用也不脱离 URL，随后原样还原
+    Object.assign(originals, { create: URL.createObjectURL, revoke: URL.revokeObjectURL })
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: revokeObjectURL })
     const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
@@ -534,16 +543,16 @@ describe('回收站详情块 · 附件', () => {
       fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
       fireEvent.click(screen.getByRole('button', { name: '另存为' }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-      expect(String(fetchMock.mock.calls[0]![0])).toContain('/dsh-session-delete-api/attachment?')
+      expect(pick(fetchMock.mock.calls, 0)[0]).toContain('/dsh-session-delete-api/attachment?')
       expect(createObjectURL).toHaveBeenCalledTimes(1)
       expect(click).toHaveBeenCalled()
     } finally {
       vi.unstubAllGlobals()
       vi.restoreAllMocks()
-      if (originalCreate === undefined) delete (URL as { createObjectURL?: unknown }).createObjectURL
-      else Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreate })
-      if (originalRevoke === undefined) delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL
-      else Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originalRevoke })
+      if (originals.create === undefined) delete (URL as { createObjectURL?: unknown }).createObjectURL
+      else Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originals.create })
+      if (originals.revoke === undefined) delete (URL as { revokeObjectURL?: unknown }).revokeObjectURL
+      else Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: originals.revoke })
     }
   })
 
@@ -577,7 +586,7 @@ describe('回收站详情块 · 附件', () => {
   it('文件附件渲染为下载 chip', () => {
     const fileId = `sha256:${'b'.repeat(64)}`
     withBlocks([userBlock('u1', 1, '', [{ attachmentId: fileId, kind: 'file', name: 'a.pdf', bytes: 12 }])])
-    const link = screen.getByRole('link', { name: /a.pdf/ }) as HTMLAnchorElement
+    const link = screen.getByRole<HTMLAnchorElement>('link', { name: /a.pdf/ })
     expect(link.getAttribute('href')).toContain(encodeURIComponent(fileId))
     expect(link.getAttribute('href')).toContain('/dsh-session-delete-api/attachment?')
     expect(link.getAttribute('download')).toBe('a.pdf')
@@ -591,7 +600,7 @@ describe('回收站详情块 · 附件', () => {
     const fileId = `sha256:${'d'.repeat(64)}`
     const hostile = '../x?a=b&c'
     withBlocks([userBlock('u1', 1, '', [{ attachmentId: fileId, kind: 'file', name: hostile, bytes: 5 }])])
-    const link = screen.getByRole('link', { name: /\.\.\/x/ }) as HTMLAnchorElement
+    const link = screen.getByRole<HTMLAnchorElement>('link', { name: /\.\.\/x/ })
     const href = link.getAttribute('href') ?? ''
     const [path, query = ''] = href.split('?')
     // 路径段是端点常量，name 不参与拼路径：`../` 换不掉它。
@@ -610,7 +619,7 @@ describe('回收站详情块 · 附件', () => {
   it('文件名是空串 ⇒ 用「文件」兜底，且不把 name 塞进查询串', () => {
     const fileId = `sha256:${'c'.repeat(64)}`
     withBlocks([userBlock('u1', 1, '', [{ attachmentId: fileId, kind: 'file', name: '', bytes: 12 }])])
-    const link = screen.getByRole('link', { name: /^文件/ }) as HTMLAnchorElement
+    const link = screen.getByRole<HTMLAnchorElement>('link', { name: /^文件/ })
     expect(link.getAttribute('href')).toContain(encodeURIComponent(fileId))
     expect(link.getAttribute('href')).not.toContain('name=')
   })
@@ -634,10 +643,10 @@ describe('回收站详情块 · 附件', () => {
     ])
     const strips = [...container.querySelectorAll<HTMLElement>('[data-sd-attachment-strip]')]
     expect(strips).toHaveLength(2)
-    expect(strips[0]!.closest('[data-sd-msg]')?.getAttribute('data-sd-msg')).toBe('user')
-    expect(strips[0]!.style.justifyContent).toBe('flex-end')
-    expect(strips[1]!.closest('[data-sd-msg]')?.getAttribute('data-sd-msg')).toBe('assistant')
-    expect(strips[1]!.style.justifyContent).toBe('flex-start')
+    expect(pick(strips, 0).closest('[data-sd-msg]')?.getAttribute('data-sd-msg')).toBe('user')
+    expect(pick(strips, 0).style.justifyContent).toBe('flex-end')
+    expect(pick(strips, 1).closest('[data-sd-msg]')?.getAttribute('data-sd-msg')).toBe('assistant')
+    expect(pick(strips, 1).style.justifyContent).toBe('flex-start')
   })
 
   it('纯图片消息不画空气泡：缩略图就是这一条的内容', () => {
@@ -653,10 +662,10 @@ const KID = {
 } as TrashEntryWire
 
 describe('回收站详情块 · 子会话', () => {
-  it('有 subagents 且给了 onOpenChild：段标题给条数与合计，逐条画出，点一条把它交出去', () => {
+  it('有 subagents 且 detailNav.onOpenChild 在场：段标题给条数与合计，逐条画出，点一条把它交出去', () => {
     const onOpenChild = vi.fn()
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2] } }, { onOpenChild })
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2] } }, { detailNav: { onOpenChild } })
     // 段上的合计是这一批孩子的清册大小（与清单行同一口径）：永久删除按整组释放，删前要能核对「几个都在这儿」
     expect(screen.getByText('子会话（2） · 3.0KB')).toBeInTheDocument()
     const row = screen.getByText('孩子会话')
@@ -666,35 +675,42 @@ describe('回收站详情块 · 子会话', () => {
     // 指针光标同理走内联，不借展开语义。jsdom 量不了布局，这里钉内联契约当回归哨。
     const rowButton = document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagent-row"]')
     expect(rowButton).not.toBeNull()
-    expect(rowButton!.style.height).toBe('auto')
-    expect(rowButton!.style.cursor).toBe('pointer')
+    expect(must(rowButton, '子会话导航行').style.height).toBe('auto')
+    expect(must(rowButton, '子会话导航行').style.cursor).toBe('pointer')
   })
 
   it('subagents 缺席：没有子会话段', () => {
-    at({ kind: 'ready', entry, detail }, { onOpenChild: vi.fn() })
+    at({ kind: 'ready', entry, detail }, { detailNav: { onOpenChild: vi.fn() } })
     expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
   })
 
   it('subagentsTotal 出线：说清只列了前几条、总数是多少', () => {
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { onOpenChild: vi.fn() })
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { detailNav: { onOpenChild: vi.fn() } })
     expect(screen.getByText('仅列出前 2 条，共 5 条')).toBeInTheDocument()
   })
 
-  it('没给 onOpenChild：即使有 subagents 也不画段（组件不自己造动作）', () => {
+  it('detailNav 不带 onOpenChild：即使有 subagents 也不画段（组件不自己造动作）', () => {
     at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } })
     expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
   })
 
-  it('孩子视图（parentContext 非 null）：宽档也画「返回父会话」，点它交回 onBack', () => {
+  it('孩子视图（parentContext 在场）：宽档也画「返回父会话」，点它交回 onBack', () => {
     const onBack = vi.fn()
     at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
-      { wide: true, parentContext: { title: '父会话', onBack } })
+      { wide: true, detailNav: { parentContext: { title: '父会话', onBack } } })
     const btn = screen.getByRole('button', { name: '← 返回父会话' })
     fireEvent.click(btn)
     expect(onBack).toHaveBeenCalled()
     // 孩子视图里不再同时画「返回清单」：一步只退一层
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+  })
+
+  // title 的兜底住视图：控制器（`detailNav`）交的是清册原文，翻译只在这一侧发生。
+  it('parentContext.title 为空串：返回键的悬停兜底成未命名', () => {
+    at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { wide: true, detailNav: { parentContext: { title: '', onBack: vi.fn() } } })
+    expect(screen.getByRole('button', { name: '← 返回父会话' })).toHaveAttribute('title', '(无标题会话)')
   })
 
   it('parentContext 缺席且宽档：两颗返回按钮都不画（现状不变）', () => {
@@ -706,7 +722,7 @@ describe('回收站详情块 · 子会话', () => {
   // jsdom 量不了布局，钉的是 DOM 契约：两颗返回互斥、共用「返回清单」原来的左侧位置。
   it('返回键沿用标题左端：两颗返回共用同一个位置', () => {
     at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
-      { wide: true, parentContext: { title: '父会话', onBack: vi.fn() } })
+      { wide: true, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } })
     const parentHead = screen.getByRole('button', { name: '← 返回父会话' }).parentElement as HTMLElement
     expect(parentHead.firstElementChild?.textContent).toBe('← 返回父会话')
 

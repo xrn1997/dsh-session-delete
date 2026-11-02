@@ -13,7 +13,8 @@ import type { ReactElement, ReactNode } from 'react'
 
 /** 宿主图标组件的实际使用面：一个方形边长，色走 `currentColor`。 */
 export interface IconProps {
-  size?: number
+  // JSX 侧 `size={可能为 undefined 的表达式}` 是既定写法：可选即接受显式 undefined。
+  size?: number | undefined
 }
 
 /** 各图标共用的外框（官方每个 artwork 函数里逐字重复的那一段）。 */

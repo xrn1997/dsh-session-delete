@@ -16,16 +16,17 @@
 import { act, renderHook } from '@testing-library/react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { TrashEntryLike } from '../../src/client/remote.js'
 import { useTrashNav, type TrashNavInput } from '../../src/client/trash-nav.js'
 import { trashRow } from './support/outcomes.js'
+import { pick } from '../support/fixture.js'
 
 const A = trashRow('a', 'session-a')
 const B = trashRow('b', 'session-b')
 const C = trashRow('c', 'session-c')
 
 function harness() {
-  const select = vi.fn(async (_entry: TrashEntryLike, _options?: { drill?: boolean }): Promise<void> => {})
+  // 签名挂到泛型上（不是体内占位参数）：mock.calls 仍带真实两参形状，下面的 `{drill}` 断言要读第二格。
+  const select = vi.fn<TrashNavInput['select']>(async () => {})
   const toggleCheck = vi.fn()
   const back = vi.fn()
   const focusRow = vi.fn()
@@ -74,7 +75,7 @@ describe('清单导航 · 方向键走环', () => {
     expect(h.select).toHaveBeenCalledTimes(1)
     expect(h.select).toHaveBeenCalledWith(B)
     // 方向键只移动选中，不下钻（`{drill:true}` 归 Enter / 点行）
-    expect(h.select.mock.calls[0]![1]).toBeUndefined()
+    expect(pick(h.select.mock.calls, 0)[1]).toBeUndefined()
     expect(h.focusRow).toHaveBeenCalledWith('b')
     expect(second.prevented()).toBe(true)
 

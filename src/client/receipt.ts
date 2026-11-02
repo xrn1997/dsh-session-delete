@@ -252,6 +252,7 @@ export function summarizeReceipt<A extends ApplyAction>(
     : receipt.action === 'restore'
       ? restoredSessionIds(receipt, sessionIdOfEntry)
       : []
+  const attachmentCleanup = summarizeAttachmentCleanup(receipt)
   return {
     summary: {
       successIds,
@@ -260,7 +261,8 @@ export function summarizeReceipt<A extends ApplyAction>(
       partial,
       landedIds,
       anySuccess: successIds.length > 0,
-      attachmentCleanup: summarizeAttachmentCleanup(receipt),
+      // 摘要随回执上屏/落账：附件读数没有时不建键——「没有读数」是键的缺席，不是显式 undefined。
+      ...(attachmentCleanup !== undefined ? { attachmentCleanup } : {}),
     },
     failures,
   }

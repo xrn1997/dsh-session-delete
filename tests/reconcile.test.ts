@@ -8,6 +8,7 @@ import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from './support/memory-manifest.js'
 import { reconcileTrash } from '../src/trash/reconcile.js'
 import { trashEntry } from './support/world.js'
+import { must } from './support/fixture.js'
 
 const HOME = '/h'
 const ROOT = `${HOME}/session-trash`
@@ -47,8 +48,10 @@ function world(opts: {
     }),
     readFile: vi.fn(async (p: string) => {
       const [name, fileName] = p.slice(ROOT.length + 1).split('/') as [string, string | undefined]
-      if (fileName !== undefined && fileName in (opts.logsByFile?.[name] ?? {})) {
-        return opts.logsByFile![name]![fileName]!
+      const byName = opts.logsByFile?.[name]
+      if (fileName !== undefined && byName !== undefined && fileName in byName) {
+        // 上一行的 `in` 已证明这一格在：must 只是让编译器跟上这个证明，真缺了是夹具脱节，响亮失败。
+        return must(byName[fileName], `日志 ${name}/${fileName} 的内容`)
       }
       const log = opts.logs?.[name]
       if (log === 'unreadable') throw new Error('boom')

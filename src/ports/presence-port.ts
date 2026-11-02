@@ -3,13 +3,22 @@
  *
  * 生产实现住 `src/verbs/member-presence.ts`；组合根装配一次，挂在 `CoreDeps.presence`。这样
  * “谁可以摘活体、谁可以发通告”由依赖面回答，而不是靠源码扫描维持。
+ *
+ * 能力面另带一枚**不导出的品牌字段**：形状对了但没盖章的对象满足不了 `PresenceCapability`
+ * （`tests/deps.test.ts` 钉住）。品牌是类型层的（`declare` 出来的 unique symbol 没有运行时值），
+ * 所以仓内不存在任何能"顺手带上这格"的出口——唯一的盖章处是 `createMemberPresence` 里那一处显式断言。
  */
+declare const PRESENCE_BRAND: unique symbol
+
 export interface MemberBackFacts {
   readonly diskBack: boolean
   readonly workspaceBack: boolean
 }
 
 export interface PresenceCapability {
+  /** 品牌字段：值不承载语义，只为让结构相似的手拼对象满足不了这一面——键名是不导出的 unique symbol，
+   *  别的模块连键都写不出来，唯一的盖章处住 `src/verbs/member-presence.ts`。 */
+  readonly [PRESENCE_BRAND]: true
   /** 成员已经不在宿主可见列表：摘活体；三态不是 unknown 时发 removed。
    *  `backInTrash: false` 表示目录没退回回收站（恢复回滚失败），此时什么都不做；`facts` 缺席按
    *  「正常退回」处理（`createMemberPresence` 的缺省），不再留第三种含义。 */

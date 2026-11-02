@@ -74,7 +74,9 @@ const PANEL_ID = `${PLUGIN_ID}.trash`
  *  hook（asar @22967283 原文）——宿主自己的框架组件就是这样消费它的
  *  （`useSessions((state) => … state.byId[sessionId] …)`，asar @21178811）。 */
 type SessionRowState = { byId?: Record<string, { running?: boolean; title?: string } | undefined> }
-type UseSessions = <T>(select: (state: SessionRowState) => T) => T
+/** 窄镜像把宿主 hook 的入参写成可能缺席：`state?.byId?.[id]` 这种判法是本仓「缺席不等于没有」
+ *  的既有写法，规则若把 `state` 钉成必有，会把防御读报成多余。 */
+type UseSessions = <T>(select: (state: SessionRowState | undefined) => T) => T
 
 /** 菜单槽注入的 `useMenuOpenState`：官方 `menuOpenStateFactory` 交回的是一对开合状态
  *  （asar @46195835 `const menuOpenStateFactory = (_standard, state) => () => state`），

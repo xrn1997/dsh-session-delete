@@ -88,9 +88,11 @@ interface ContentPart {
 /** 一条记录里那些 `content[]` 段的文字拼起来（`\n` 分隔；非 text 段一律不参与）。 */
 function textOf(content: unknown): string {
   if (!Array.isArray(content)) return ''
-  return content
-    .filter((part: ContentPart) => part?.type === 'text' && typeof part.text === 'string')
-    .map((part: ContentPart) => part.text as string)
+  // 过线 JSON 的数组元素可能是 null（镜像说 `ContentPart`，运行时未必）：按真实形状声明后，
+  // 下面的 `part?.` 才是必要的，也才有资格把"是 text 且有字符串 text"收成谓词。
+  return (content as Array<ContentPart | null>)
+    .filter((part): part is ContentPart & { text: string } => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
     .join('\n')
     .trim()
 }
@@ -196,12 +198,17 @@ class PageBuilder {
   private chars = 0
 
   /** `end` 是本页的右边界（不含）：块序号大于等于它的不入页；`Infinity` = 从尾部取。 */
-  constructor(
-    private readonly end: number,
-    private readonly limit: number,
-    private readonly cap: number,
-    private readonly pageChars: number,
-  ) {}
+  private readonly end: number
+  private readonly limit: number
+  private readonly cap: number
+  private readonly pageChars: number
+
+  constructor(end: number, limit: number, cap: number, pageChars: number) {
+    this.end = end
+    this.limit = limit
+    this.cap = cap
+    this.pageChars = pageChars
+  }
 
   /** 追加一块：id 用整条日志的块序号盖，页内只留最后 `limit` 块 / `pageChars` 字符。 */
   add(block: TrashDetailBlockWire): void {
@@ -393,7 +400,7 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
             const message = (data.message ?? {}) as Record<string, unknown>
             const source = (message.source ?? {}) as Record<string, unknown>
             if (typeof source.model === 'string') models.add(source.model)
-            const parts = Array.isArray(message.content) ? (message.content as ContentPart[]) : []
+            const parts = Array.isArray(message.content) ? (message.content as Array<ContentPart | null>) : []
             let pendingText: string[] = []
             let pendingAttachments: TrashDetailAttachmentWire[] = []
             const flush = (): void => {

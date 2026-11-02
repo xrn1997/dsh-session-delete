@@ -110,6 +110,18 @@ describe('删除动词', () => {
     expect(await manifest.list()).toHaveLength(1)
   })
 
+  // 假 fs 是路径树状态机：动词的 `rename` 真的搬目录——删除后源目录从世界里消失、目标出现。
+  // 过去 `rename` 只记账不搬（"旁观"），"目标路径算错 / rename 后源目录仍在"这类世界观 bug 对经世界跑的
+  // 动词用例不可见；现在它们当场可见（这条断言在旧假件下会红：源目录仍在）。
+  it('删除真的把目录搬进回收站：源目录从世界消失、目标出现（漂移可观察）', async () => {
+    const { deps: d, fs } = deps()
+    const sessionDir = sessionDirOf('--C-develop-GitHub-dsh-ebook--', 'session-abc', HOME)
+    await deleteSession(d)('session-abc')
+    expect(await fs.exists(sessionDir)).toBe(false)
+    // 目标出现的判据只能钉在 `listDirs` 上：`exists` 缺省恒真，单靠它这半边是空转。
+    expect(await fs.listDirs(`${HOME}/session-trash`)).toContain('20260930T130500Z-session-abc')
+  })
+
   // 未分组的会话（宿主自己的"删除工作区"就会造出这种：目录与日志都留着，只是没有账目）
   // 照样可删：账本那一步没有可摘的东西，清单里把工作区记成空串，恢复时也不再挂账本。
   it('未分组的会话照样能删：不摘账本，清单里工作区记空串', async () => {
@@ -188,7 +200,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     expect(d.fs.rename).toHaveBeenCalledTimes(3)
     // 每个孩子落在**自己**的回收站目录里（不是塞进父那一格）；同一刻删除 ⇒ id 只差在目录名那一段
     const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
-    const movedTo = d.fs.rename.mock.calls.map(c => String(c[1])).sort()
+    const movedTo = d.fs.rename.mock.calls.map(c => c[1]).sort()
     expect(movedTo).toEqual([
       trashDirOf(makeEntryId(NOW, 'session-kidA'), HOME),
       trashDirOf(makeEntryId(NOW, 'session-kidB'), HOME),
@@ -240,7 +252,7 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     })
     await expect(deleteSession(d.deps)('session-parent')).rejects.toMatchObject({ code: 'sessiondelete/io' })
     // 反向 rename：搬进去的两个都搬回去（父与 kidA），且失败的那个不留下半行清册
-    const rolled = d.fs.rename.mock.calls.filter((c) => String(c[0]).includes('session-trash') && String(c[1]).includes('/sessions/'))
+    const rolled = d.fs.rename.mock.calls.filter((c) => c[0].includes('session-trash') && c[1].includes('/sessions/'))
     expect(rolled.length).toBe(2)
     expect(await d.manifest.list()).toEqual([])
     // 这两条已经收过"已移除"通告；回滚成功必须补"已恢复"，否则客户端那一行要等到重连才回来。
@@ -258,9 +270,9 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     )
     const err = await failureOf(deleteSession(d)('session-parent'))
     expect(err.code).toBe('sessiondelete/io')
-    expect(err.details).toMatchObject({
-      rollbackFailures: expect.arrayContaining([expect.stringContaining('EACCES')]),
-    })
+    // 非对称匹配器返回 any：先落到 unknown 再交给 toMatchObject，断言本身不放宽。
+    const rollbackFailures: unknown = expect.arrayContaining([expect.stringContaining('EACCES')])
+    expect(err.details).toMatchObject({ rollbackFailures })
     expect(host.announceRestored).not.toHaveBeenCalled()
   })
 
@@ -273,9 +285,8 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     manifest.remove = vi.fn(async () => { throw new Error('storage boom') })
     const err = await failureOf(deleteSession(d)('session-parent'))
     expect(err.code).toBe('sessiondelete/io')
-    expect(err.details).toMatchObject({
-      rollbackFailures: expect.arrayContaining([expect.stringContaining('清册行摘除失败')]),
-    })
+    const rollbackFailures: unknown = expect.arrayContaining([expect.stringContaining('清册行摘除失败')])
+    expect(err.details).toMatchObject({ rollbackFailures })
     expect(host.announceRestored).toHaveBeenCalledWith(['session-parent'])
     expect(host.announceRestored).toHaveBeenCalledWith(['session-kidA'])
   })

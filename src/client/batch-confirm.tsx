@@ -139,6 +139,7 @@ function BatchConfirmDialog({
       alive = false
     }
     // 计数只在**开框那一次**问；重试轮现场收缩成新对象，也不再问第二遍（`seq` 不变 ⇒ 不重挂载）
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 「开框一次问一遍计数」是刻意的：`current.items` 跟着 `seq`，把它放进依赖会在重试收缩名单时再问一遍。
   }, [deps, current.seq])
 
   const run = async (): Promise<void> => {

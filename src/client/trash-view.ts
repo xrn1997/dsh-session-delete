@@ -69,12 +69,17 @@ export function groupByProject(entries: readonly TrashEntryLike[], t: Translate)
     else list.push(entry)
   }
   return [...byProject]
-    // 进这条循环前整体按 `deletedAt` 倒序排过 ⇒ 每组的第一条就是该组最新的一条，组必非空。
-    .map(([projectDir, list]) => ({
-      projectDir,
-      label: projectLabel(projectDir, t),
-      latest: list[0]!.deletedAt,
-      entries: list,
-    }))
+    // 进这条循环前整体按 `deletedAt` 倒序排过、且每组只由 push 建出来 ⇒ 每组第一条必在。
+    // 显式判空（`noUncheckedIndexedAccess`）而不是非空断言：真缺了就不产生这一组，不伪造读数。
+    .flatMap(([projectDir, list]) => {
+      const first = list[0]
+      if (first === undefined) return []
+      return [{
+        projectDir,
+        label: projectLabel(projectDir, t),
+        latest: first.deletedAt,
+        entries: list,
+      }]
+    })
     .sort((a, b) => b.latest - a.latest)
 }

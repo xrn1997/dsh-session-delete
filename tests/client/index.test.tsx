@@ -151,21 +151,21 @@ interface FetchCall { path: string; method: string; body: unknown }
 function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { calls: FetchCall[] } {
   const calls: FetchCall[] = []
   const handler: Record<string, (body: Record<string, unknown>) => Promise<unknown>> = {
-    [SESSION_DELETE_API_PREFIX + ROUTES.list]: async () => raw.list(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.list.path]: async () => raw.list(),
     // 探测走这一问（不再每次页面加载都跑一遍全表对账）
-    [SESSION_DELETE_API_PREFIX + ROUTES.ping]: async () => raw.ping(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.ping.path]: async () => raw.ping(),
     // 两条纯读要有座位：面板挂载读详情、确认框打开那一刻问一次计数
-    [SESSION_DELETE_API_PREFIX + ROUTES.detail]: async (body) =>
+    [SESSION_DELETE_API_PREFIX + ROUTES.detail.path]: async (body) =>
       raw.detail(body['entryId'] as string, body['before'] as number | undefined),
     // 写动词一段收口：`/apply` 按 body 里的动作与 ids 分派（与 Node 半那张路由表同形）
-    [SESSION_DELETE_API_PREFIX + ROUTES.apply]: async (body) =>
+    [SESSION_DELETE_API_PREFIX + ROUTES.apply.path]: async (body) =>
       raw.apply(body['action'] as never, body['ids'] as string[]),
-    [SESSION_DELETE_API_PREFIX + ROUTES.empty]: async () => raw.empty(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.empty.path]: async () => raw.empty(),
     // 残留条那一份纯读报告（清理不在这里，仍是 `/apply` 的第五个动作）
-    [SESSION_DELETE_API_PREFIX + ROUTES.orphans]: async () => raw.orphans(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.orphans.path]: async () => raw.orphans(),
     // 维护卡的孤儿附件：报告纯读、清理聚合写
-    [SESSION_DELETE_API_PREFIX + ROUTES.attachmentOrphans]: async () => raw.attachmentOrphans(),
-    [SESSION_DELETE_API_PREFIX + ROUTES.attachmentClean]: async () => raw.attachmentClean(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.attachmentOrphans.path]: async () => raw.attachmentOrphans(),
+    [SESSION_DELETE_API_PREFIX + ROUTES.attachmentClean.path]: async () => raw.attachmentClean(),
   }
   globalThis.fetch = (async (input: unknown, init?: { method?: string; body?: string }) => {
     const path = String(input)
@@ -214,7 +214,7 @@ async function bootstrap(
       get: (name: string) => (name === 'uiWorkspace' ? uiWorkspace : undefined),
     }),
   }
-  apply(ctx as never)
+  apply(ctx)
   await settle()
   const slot = (name: string): Registration => {
     const found = registered.find((row) => row.name === name)
@@ -226,7 +226,7 @@ async function bootstrap(
     registered,
     fetchCalls,
     /** 取某个槽位贡献的组件与它的注入面 props。 */
-    seat(name: string): { Component: SlotComponent; props: Props } {
+    seat: (name: string): { Component: SlotComponent; props: Props } => {
       const found = slot(name)
       return {
         Component: found.component as unknown as SlotComponent,
@@ -389,7 +389,7 @@ describe('apply 的装配面', () => {
     const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
     const { registered, fetchCalls } = await bootstrap(rawRemote({ apply }))
     // 探测那一次：最便宜的在/不在
-    expect(fetchCalls[0]).toEqual({ path: `${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`, method: 'GET', body: {} })
+    expect(fetchCalls[0]).toEqual({ path: `${SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`, method: 'GET', body: {} })
 
     render(<Scene registered={registered} />)
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
@@ -402,9 +402,9 @@ describe('apply 的装配面', () => {
     // 一段管所有动作：三次请求都打同一条路径，**动作住在 body 里**；
     // 计数排在删除**之前**：那半句「含 N 个子会话」要在点下去之前就摆出来（那一刻这条会话还不在回收站里）
     expect(posted).toEqual([
-      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'count', ids: ['session-a'] } },
-      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'delete', ids: ['session-a'] } },
-      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`, method: 'POST', body: { action: 'restore', ids: ['a'] } },
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`, method: 'POST', body: { action: 'count', ids: ['session-a'] } },
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`, method: 'POST', body: { action: 'delete', ids: ['session-a'] } },
+      { path: `${SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`, method: 'POST', body: { action: 'restore', ids: ['a'] } },
     ])
   })
 
@@ -732,7 +732,7 @@ describe('插件设置页（`plugins.bundle.config` 的占用者）', () => {
     expect(screen.getAllByText('尚未检查')).toHaveLength(2)
     // 探测那一问是注册的前提；之后没有任何自动扫描（手动触发）。
     expect(fetchCalls.map((call) => call.path)).toEqual([
-      `${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`,
+      `${SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`,
     ])
   })
 })

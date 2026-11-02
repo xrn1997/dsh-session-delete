@@ -76,6 +76,11 @@ export function parseEntryId(id: string): { deletedAt: number; sessionDirName: s
   const m = ENTRY_ID_RE.exec(id)
   if (!m) throw new Error(`bad entry id: ${id}`)
   const [, y, mo, d, h, mi, s, sessionDirName] = m
+  // 捕获组整组判齐全：不齐与没匹配上是同一个裁决（坏 id），绝不逐位折成空串冒充合法日期。
+  if (y === undefined || mo === undefined || d === undefined || h === undefined ||
+    mi === undefined || s === undefined || sessionDirName === undefined) {
+    throw new Error(`bad entry id: ${id}`)
+  }
   return { deletedAt: Date.UTC(+y, +mo - 1, +d, +h, +mi, +s), sessionDirName }
 }
 

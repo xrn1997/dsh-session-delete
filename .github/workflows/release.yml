@@ -44,15 +44,10 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # 与 ci.yml 跑同一组门；tag 不保证落在 main 上，产物必须自证。
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Test
-        run: pnpm test
-
-      - name: Build
-        run: pnpm build
+      # 与 ci.yml 跑同一组门：调同一个 `gates`，不在这里另抄步骤清单（tag 不保证落在 main 上，
+      # 产物必须自证；两套清单必然漂移，而漂移的结果是发版门比检查门更宽）。
+      - name: Gates
+        run: pnpm gates
 
       - name: Pack tarball
         run: |

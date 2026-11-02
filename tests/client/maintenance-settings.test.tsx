@@ -132,8 +132,7 @@ describe('维护卡 · 孤儿会话', () => {
       .mockResolvedValueOnce(REPORT)
       .mockResolvedValueOnce(EMPTY)
     const applyOutcomes = vi.fn(
-      (_action: ApplyAction, _ids: readonly string[]) =>
-        new Promise<ApplyOutcome[]>((resolve) => { resolveApply = resolve }),
+      () => new Promise<ApplyOutcome[]>((resolve) => { resolveApply = resolve }),
     )
     const { section } = renderCard({ scanOrphans, applyOutcomes })
     const orphans = section('maintenance-orphans')
@@ -146,6 +145,9 @@ describe('维护卡 · 孤儿会话', () => {
     // 清理与检查是两档：这里不许说「检查中…」。
     expect(within(orphans).getByText('清理中…')).toBeInTheDocument()
     expect(within(orphans).queryByText('检查中…')).not.toBeInTheDocument()
+    // 段的忙碌自己按住头行的「检查」（busy 从段对象取，不再当 prop 传进来）；另一段不受影响。
+    expect(within(orphans).getByRole('button', { name: '检查' })).toBeDisabled()
+    expect(within(section('maintenance-attachments')).getByRole('button', { name: '检查' })).not.toBeDisabled()
 
     await act(async () => {
       resolveApply(['session-root'].map((id) => ok('orphan-clean', id, {

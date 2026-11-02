@@ -8,6 +8,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { applyActions } from '../src/verbs/batch.js'
 import type { DeleteDeps } from '../src/deps.js'
+import type { SessionIdentity } from '../src/ports/host-port.js'
 import type { TrashLedger } from '../src/trash/ledger.js'
 import type { ManifestPort } from '../src/trash/manifest.js'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
@@ -35,8 +36,8 @@ function counting(manifest: ManifestPort): TrashLedger & { reads(): number } {
   }
 }
 
-function world(seed: TrashEntry[]) {
-  const made = createFakeDeps({ seed, now: NOW, fs: { size: 0 } })
+function world(seed: TrashEntry[], over: { corpus?: readonly SessionIdentity[] } = {}) {
+  const made = createFakeDeps({ seed, now: NOW, fs: { size: 0 }, corpus: over.corpus })
   const ledger = counting(made.manifest)
   const deps: DeleteDeps = { ...made.deps, ledger }
   return { deps, host: made.host, fs: made.fs, manifest: ledger }
@@ -142,10 +143,33 @@ describe('批量层 · 已被同批前一条带走 = 幂等成功', () => {
 
 describe('批量层 · 清册只读一次', () => {
   it('restore 一批 N 条：批量层读一次，动词用的是那份**只读**快照', async () => {
-    const { deps, manifest } = world([parent, kid, { ...parent, id: makeEntryId(NOW, 'solo'), sessionId: 'solo', parentEntryId: undefined }])
+    // solo 是根行：清册那一行的「没有父」就是**不建这个键**（键的缺席承载语义，见 `src/trash/entry.ts`
+    // 的 parentEntryId 条），所以这里不往那一格写 undefined。
+    const solo: TrashEntry = { ...parent, id: makeEntryId(NOW, 'solo'), sessionId: 'solo' }
+    const { deps, manifest } = world([parent, kid, solo])
     const spy = vi.spyOn(manifest, 'list')
     await applyActions(deps, 'restore', [parent.id, makeEntryId(NOW, 'solo')])
     // 一次来自批量层（原始快照），动词不再自己各读一遍
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(manifest.reads()).toBe(1)
+  })
+
+  it('purge 一批 N 条：批量层读一次，清册作用域用的是那份**只读**快照', async () => {
+    const { deps, manifest } = world([parent, kid])
+    const spy = vi.spyOn(manifest, 'list')
+    await applyActions(deps, 'purge', [parent.id, kid.id])
+    // 一次来自批量层（原始快照），scope 的选组与收缩都在这份快照上，不再读第二遍
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(manifest.reads()).toBe(1)
+  })
+
+  it('orphan-clean 一批：对账行读一次，作用域把它原样交给扫描、不读第二遍 raw 索引', async () => {
+    const { deps, manifest } = world([], {
+      corpus: [{ sessionId: 'session-root', projectDir: '--p--', subagent: true, parentSessionId: 'gone' }],
+    })
+    const spy = vi.spyOn(manifest, 'list')
+    const outcomes = await applyActions(deps, 'orphan-clean', ['session-root'])
+    expect(outcomes.map((item) => item.ok)).toEqual([true])
     expect(spy).toHaveBeenCalledTimes(1)
     expect(manifest.reads()).toBe(1)
   })

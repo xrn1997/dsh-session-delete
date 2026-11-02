@@ -30,10 +30,13 @@ export interface TrashNavInput {
   selectMode: boolean
   drillEnabled: boolean
   drilled: boolean
-  select(entry: TrashEntryLike, options?: { drill?: boolean }): Promise<void>
-  toggleCheck(entryId: string): void
-  back(): void
-  focusRow(entryId: string): void
+  /** 四个动作都是**属性声明**：它们被摘下来放进 `useTrashNav` 的输入或直接挂成事件处理器，
+   *  实现体一个都不读 `this`。方法简写会带上隐式 `this: TrashNavInput`，`unbound-method`
+   *  会把这种交接报成可疑；改属性只是让类型面说真话。 */
+  select: (entry: TrashEntryLike, options?: { drill?: boolean }) => Promise<void>
+  toggleCheck: (entryId: string) => void
+  back: () => void
+  focusRow: (entryId: string) => void
 }
 
 export interface TrashNav {
@@ -41,7 +44,8 @@ export interface TrashNav {
   readonly activeDescendantId: string | null
   /** 清单里唯一拿着 `tabIndex=0` 的那一行；清单空时是 `null`。 */
   readonly tabStopId: string | null
-  onListKeyDown(event: ReactKeyboardEvent<HTMLElement>): void
+  /** 直接挂到清单容器的 `onKeyDown`：属性声明（见上）让「摘下来挂事件」不被误报。 */
+  onListKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void
 }
 
 /** 事件是不是清单自己的：从行（`role="row"`）或容器起来才算；行内按钮 / 勾选框的 Enter / Space
@@ -68,7 +72,10 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
       event.preventDefault()
       const step = event.key === 'ArrowDown' ? 1 : -1
       const next = index < 0 ? (step > 0 ? 0 : ordered.length - 1) : (index + step + ordered.length) % ordered.length
-      const target = ordered[next]!
+      const target = ordered[next]
+      // 循环不变式已证界内（`next` 是取模结果、且上面刚判过非空）；显式收窄而不是非空断言，
+      // 万一将来前置条件被改坏也只是不动作，不会把 undefined 当条目交出去。
+      if (target === undefined) return
       void select(target)
       focusRow(target.id)
       return

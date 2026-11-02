@@ -28,9 +28,18 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 
 ## 门（自动）
 
-三道门即开头命令块里的 `pnpm test` / `pnpm typecheck` / `pnpm build`；`pnpm typecheck` 与 `pnpm test` 必须同批跑，发版前逐个确认退出码。
+门的唯一入口是 `pnpm gates`（typecheck / lint / test / build / pack dry-run，任一红即红；pack 不重复跑 build）；`pnpm typecheck` 与 `pnpm test` 仍必须同批跑，发版前确认退出码。
 
-GitHub Actions 在 push 到 `main` 与每个 PR 上跑同一组门：`pnpm typecheck`、`pnpm test`、`pnpm build`，最后 `npm pack --dry-run` 验证发布清单。工作流住 `.github/workflows/ci.yml`，pnpm 版本由 `package.json` 的 `packageManager` 指定。发版工作流 `.github/workflows/release.yml` 在 `V*` tag 上跑同样这三道门再打包挂 Release 资产——tag 不保证落在 `main` 上，产物必须自证；跑法见下面「发版流程」。**真机验证不在 CI 内**，仍按下面「真机验证」走。
+### 编译器档位与 lint 归属
+
+`tsconfig.json` 在 `strict` 之上开着 `noUncheckedIndexedAccess`、`exactOptionalPropertyTypes`、`erasableSyntaxOnly`、`noFallthroughCasesInSwitch`、`noImplicitOverride`；取舍与弃选项住 `ADR-0030`。纪律：
+
+- `engines.node >= 24` 是不可擦除语法判据的前提，不是装饰。
+- 测试夹具取位走 `tests/support/fixture.ts` 的 `must` / `pick`，越界即抛；不许改成 `?.`。
+- `no-unnecessary-condition` 的「保留」命中（闭包写入、宿主窄镜像、`lib.dom` 撒谎）逐条带注释；确证误报的 `eslint-disable` 逐条带理由，其中一类属 `react-hooks/exhaustive-deps` 看不见自定义 hook 的可见性盲区（自定义 hook 回的恒稳 ref/setter）。
+- lint 与 tsc 的分工：`tsc` 管类型形状，**`any` 归 ESLint**——`tsc` 从不拒绝显式 `any`。
+
+GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流住 `.github/workflows/ci.yml`，pnpm 版本由 `package.json` 的 `packageManager` 指定。发版工作流 `.github/workflows/release.yml` 在 `V*` tag 上调同一个 `gates`，不再另抄步骤清单——tag 不保证落在 `main` 上，产物必须自证。**真机验证不在 CI 内**，仍按下面「真机验证」走。
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
 
@@ -59,13 +68,13 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑同一组门：`pnpm typec
 
 ## 发版流程
 
-1. **三道门**：`pnpm typecheck`、`pnpm test`、`pnpm build`，退出码逐个看过（0/0/0）。
+1. **门**：`pnpm gates`，退出码看过；它覆盖 typecheck / lint / test / build / pack（dry-run）。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写，逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
 4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。**先发 npm 再推 tag**：npm 失败时不会留下一个只有 GitHub 侧到位的版本。
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。
    - 根目录 `screenshots.json` 列的是 README 那些真机图的清单；文档门会钉住 README、清单与本地文件三方一致，换图时同批更新。
-5. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm typecheck` / `pnpm test` / `pnpm build` → `pnpm pack` → 按 `package.json` 断言包内的树（构建产物与随包资源整树进包、挂载面点名的路径都在包里、契约没点名的文件进不去；清单的家仍是 `files`，workflow 不抄第二份）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-session-delete-<版本>.tgz` 与稳定别名 `dsh-session-delete.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。
+5. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 按 `package.json` 断言包内的树（构建产物与随包资源整树进包、挂载面点名的路径都在包里、契约没点名的文件进不去；清单的家仍是 `files`，workflow 不抄第二份）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-session-delete-<版本>.tgz` 与稳定别名 `dsh-session-delete.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。
 6. **README 徽章**与「真跑过」名单按当次实测代次更新（徽章读 npm `latest` 清单，工作树改了不会变）。
 
    商店牌子读 npm `latest` 清单（`engines.dsh`；超过 256 字符的范围串会被整条丢弃）；`dsh.compatibility.dshReleases` 只是真机账本，宿主与市场都不读它。发版后现查 npm `latest`，别把某次读数写死。

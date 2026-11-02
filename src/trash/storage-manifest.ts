@@ -39,7 +39,7 @@ interface DomainSpecLike {
   version: number
   layout?: 'single' | 'per-record'
   invalidRecords?: 'backup-and-skip'
-  tables: Record<string, { valueSchema: { parse(value: unknown): unknown } }>
+  tables: Record<string, { valueSchema: { parse: (value: unknown) => unknown } }>
 }
 
 function defineDomain<T extends DomainSpecLike>(spec: T): T {
@@ -47,10 +47,14 @@ function defineDomain<T extends DomainSpecLike>(spec: T): T {
   if (!Number.isInteger(spec.version) || spec.version < 0) {
     throw new Error(`domain '${spec.name}' version must be a non-negative integer, got ${spec.version}`)
   }
-  if (spec.layout !== undefined && spec.layout !== 'single' && spec.layout !== 'per-record') {
-    throw new Error(`domain '${spec.name}' layout must be 'single' or 'per-record', got ${spec.layout}`)
+  // spec 来自宿主/持久化面（过线值）：类型镜像写的是合法联合，运行时却可能带来别的名字。
+  // 局部放宽成 string 再校验——只改类型面，判据与文案一字不变。
+  const layout: string | undefined = spec.layout
+  if (layout !== undefined && layout !== 'single' && layout !== 'per-record') {
+    throw new Error(`domain '${spec.name}' layout must be 'single' or 'per-record', got ${layout}`)
   }
-  if (spec.invalidRecords !== undefined && spec.invalidRecords !== 'backup-and-skip') {
+  const invalidRecords: string | undefined = spec.invalidRecords
+  if (invalidRecords !== undefined && invalidRecords !== 'backup-and-skip') {
     throw new Error(`domain '${spec.name}' invalidRecords must be 'backup-and-skip' when present`)
   }
   for (const table of Object.keys(spec.tables)) {

@@ -20,7 +20,7 @@ import {
   useState,
 } from 'react'
 import { AttachmentStrip } from './attachment-view.js'
-import { absoluteText, agoText, type CopyKey, type Translate } from './copy.js'
+import { absoluteText, agoText, localeProbe, type CopyKey, type Translate } from './copy.js'
 import type { TrashDetailBlockWire, TrashDetailInjectionBlockWire, TrashDetailTextBlockWire, TrashEntryWire } from '../shared/wire.js'
 import type { TrashDetailLike } from './remote.js'
 import { MarkdownBody } from './markdown.js'
@@ -53,18 +53,25 @@ export interface DetailPager {
   scrollRef?: RefObject<HTMLDivElement | null>
 }
 
+/** 详情的导航面（孩子视图的开与回）：类型定义住在这里（视图定 prop 形状），
+ *  控制器 `import type` 它避免环。判据（谁在场、title 给什么）住控制器的 `detailNav` 派生。 */
+export interface DetailNav {
+  /** 只在主体是清单选中那条时交出（ADR-0029 单级判据的唯一实现）。 */
+  readonly onOpenChild?: (child: TrashEntryWire) => void
+  /** 孩子视图的返回目标；title 是原文（未命名兜底由视图按 t 处理）。 */
+  readonly parentContext?: { readonly title: string; readonly onBack: () => void }
+}
+
 export interface TrashDetailProps {
   state: TrashDetailState
   /** 有写操作在飞（动作按钮住在清单行里，这里只用来把「重试」按住）。 */
   busy: boolean
-  /** 宽档不画「返回清单」——同屏就有清单，那一步多余。孩子视图另有一颗返回，见 `parentContext`。 */
+  /** 宽档不画「返回清单」——同屏就有清单，那一步多余。孩子视图另有一颗返回，见 `detailNav.parentContext`。 */
   wide: boolean
   onRetry: () => void
   onBack: () => void
-  /** 子会话段点一条时交出去（控制器 openChild）。缺席 = 不画段：组件只画状态，不自己造动作。 */
-  onOpenChild?: (child: TrashEntryWire) => void
-  /** 非 undefined = 正在看孩子：头部画「返回父会话」（宽档也画），title 是父标题（悬停可辨）。 */
-  parentContext?: { title: string; onBack: () => void }
+  /** 孩子视图的开与回（控制器派生，判据见 `DetailNav`）：缺席 = 不画入口/返回，组件只画状态，不自己造动作。 */
+  detailNav: DetailNav
   pager: DetailPager
   t: Translate
 }
@@ -337,7 +344,7 @@ interface DisclosureProps {
   block: DisclosureBlockWire
   label: string
   /** 悬停原文（标签是映射后的人话时用）；缺省与 `label` 相同。 */
-  title?: string
+  title?: string | undefined
   summary: string
   status?: { text: string; error: boolean }
   time: string
@@ -376,7 +383,7 @@ function Disclosure({ block, label, title, summary, status, time, open, onToggle
 interface BlockRenderContext {
   open: ReadonlySet<string>
   toggle: (id: string) => void
-  localeKey: string
+  probe: string
   t: Translate
 }
 
@@ -387,7 +394,7 @@ function TruncatedNote({ t }: { t: Translate }) {
 
 /** 展开体走 Markdown 的折叠块（思考、压缩摘要）。 */
 function markdownFold(block: TrashDetailTextBlockWire, label: string, context: BlockRenderContext): ReactNode {
-  const { open, toggle, localeKey, t } = context
+  const { open, toggle, probe, t } = context
   return (
     <Disclosure
       key={block.id}
@@ -398,7 +405,7 @@ function markdownFold(block: TrashDetailTextBlockWire, label: string, context: B
       open={open.has(block.id)}
       onToggle={toggle}
     >
-      <MarkdownBody text={block.text} t={t} localeKey={localeKey} />
+      <MarkdownBody text={block.text} t={t} probe={probe} />
       {block.truncated ? <TruncatedNote t={t} /> : null}
     </Disclosure>
   )
@@ -437,7 +444,7 @@ function unhandledBlock(block: never): null {
 }
 
 function renderBlock(block: TrashDetailBlockWire, context: BlockRenderContext): ReactNode {
-  const { open, toggle, localeKey, t } = context
+  const { open, toggle, probe, t } = context
   switch (block.kind) {
     case 'user':
       return (
@@ -455,7 +462,7 @@ function renderBlock(block: TrashDetailBlockWire, context: BlockRenderContext): 
       return (
         <div key={block.id} data-sd-msg="assistant" style={ASSISTANT_ROW}>
           <div style={META_LINE}>{`${t('detail.role.assistant')} · ${timeText(block.time)}`}</div>
-          <MarkdownBody text={block.text} t={t} localeKey={localeKey} />
+          <MarkdownBody text={block.text} t={t} probe={probe} />
           {block.truncated ? <TruncatedNote t={t} /> : null}
           <AttachmentStrip attachments={block.attachments} t={t} align="start" />
         </div>
@@ -508,8 +515,7 @@ export function TrashDetail({
   wide,
   onRetry,
   onBack,
-  onOpenChild,
-  parentContext,
+  detailNav,
   pager,
   t,
 }: TrashDetailProps) {
@@ -539,10 +545,17 @@ export function TrashDetail({
 
   return (
     <div style={SHELL}>
-      {/* 两颗返回互斥（看父 vs 看清单），共用「返回清单」原来的左侧位置；宽档没有父可回时不画。 */}
+      {/* 两颗返回互斥（看父 vs 看清单），共用「返回清单」原来的左侧位置；宽档没有父可回时不画。
+          parentContext 的 title 是清册原文，未命名兜底在这里按 t 做（判据与翻译分居两半）。 */}
       <div style={HEAD}>
-        {parentContext !== undefined ? (
-          <Button variant="ghost" size="sm" style={{ flex: 'none' }} onClick={parentContext.onBack} title={parentContext.title}>
+        {detailNav.parentContext !== undefined ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            style={{ flex: 'none' }}
+            onClick={detailNav.parentContext.onBack}
+            title={detailNav.parentContext.title === '' ? t('common.untitled') : detailNav.parentContext.title}
+          >
             {t('detail.backToParent')}
           </Button>
         ) : wide ? null : (
@@ -584,7 +597,7 @@ export function TrashDetail({
           key={entry.id}
           entry={entry}
           detail={detail}
-          onOpenChild={onOpenChild}
+          detailNav={detailNav}
           pager={pager}
           t={t}
         />
@@ -629,7 +642,8 @@ function Meta({ label, title, children }: { label: string; title?: string; child
 interface ReadyBodyProps {
   entry: TrashEntryWire
   detail: TrashDetailLike
-  onOpenChild?: (child: TrashEntryWire) => void
+  /** 入口判据只有一条：`detailNav.onOpenChild` 在场（ADR-0029 单级判据，派生住控制器）。 */
+  detailNav: DetailNav
   pager: DetailPager
   t: Translate
 }
@@ -641,7 +655,7 @@ interface ReadyBodyProps {
  * 正文是分页取回来的块。`olderCursor` 非空时顶部出「加载更早」。
  * 折叠状态只活在这个组件里；切条目用 `key={entry.id}` 重挂载，不会把 A 的展开状态带到 B。
  */
-function ReadyBody({ entry, detail, onOpenChild, pager, t }: ReadyBodyProps) {
+function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
   const { loadingOlder, olderFailure, onLoadOlder, scrollRef } = pager
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   /** 更早一页要 prepend 时的块数；换页回来（组件重挂载）这份意图会丢，那是可接受的边界。 */
@@ -650,11 +664,13 @@ function ReadyBody({ entry, detail, onOpenChild, pager, t }: ReadyBodyProps) {
    *  滚动或折叠变化也算进去。 */
   const lastHeight = useRef<number | null>(null)
 
-  // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（markdown.tsx 头注）。
-  const localeKey = t('common.close')
+  // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（借哪句住 copy.ts 的 localeProbe）。
+  const probe = localeProbe(t)
   const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
   const disclosureBlocks = detail.blocks.filter(isDisclosureBlock)
   const allOpen = disclosureBlocks.length > 0 && disclosureBlocks.every((block) => open.has(block.id))
+  // 入口回调取一次本地名：`detailNav.onOpenChild` 的窄化穿不进 onClick 闭包。
+  const openChild = detailNav.onOpenChild
 
   const toggle = (id: string): void => {
     setOpen((current) => {
@@ -729,8 +745,9 @@ function ReadyBody({ entry, detail, onOpenChild, pager, t }: ReadyBodyProps) {
 
       {/* 孩子不在客户端清单里，父详情是唯一能往下走一层的地方；这一段因此跟着详情走，不是清单的一列。
           行的两样事实（清册 `title` / `sizeBytes` + `deletedAt`）与清单行同一口径；段标题多给一个条数，
-          「几个都在这儿」在点之前就能核对。 */}
-      {detail.subagents === undefined || detail.subagents.length === 0 || onOpenChild === undefined ? null : (
+          「几个都在这儿」在点之前就能核对。入口判据只认 `detailNav.onOpenChild`（ADR-0029 单级判据，
+          派生住控制器）：孩子视图开着时控制器交不出它，这一段就整段不画。 */}
+      {detail.subagents === undefined || detail.subagents.length === 0 || openChild === undefined ? null : (
         <div data-dsh-session-delete="trash-subagents" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div style={SECTION_LABEL}>
             {/* 整句一个键：括号与分隔符是各语言自己的写法（zh「子会话（2） · 3.0KB」/ en「Subagent sessions (2) · 3.0KB」），
@@ -748,7 +765,7 @@ function ReadyBody({ entry, detail, onOpenChild, pager, t }: ReadyBodyProps) {
               data-dsh-session-delete="trash-subagent-row"
               data-entry-id={child.id}
               style={SUBAGENT_ROW}
-              onClick={() => onOpenChild(child)}
+              onClick={() => openChild(child)}
             >
               <span style={{ ...ELLIPSIS, flex: '1 1 auto', minWidth: 0 }}>
                 {child.title === '' ? t('common.untitled') : child.title}
@@ -789,7 +806,7 @@ function ReadyBody({ entry, detail, onOpenChild, pager, t }: ReadyBodyProps) {
         <div style={META_LINE}>{t('detail.noBody')}</div>
       ) : (
         <div style={THREAD}>
-          {detail.blocks.map((block) => renderBlock(block, { open, toggle, localeKey, t }))}
+          {detail.blocks.map((block) => renderBlock(block, { open, toggle, probe, t }))}
         </div>
       )}
     </>

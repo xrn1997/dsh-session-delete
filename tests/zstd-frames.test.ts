@@ -5,6 +5,7 @@
 import zlib from 'node:zlib'
 import { describe, expect, it } from 'vitest'
 import { frameRanges } from '../src/log/zstd-frames.js'
+import { must, pick } from './support/fixture.js'
 
 const texts = ['header line\n', 'a'.repeat(4000) + '\n', 'tail\n']
 const frames = texts.map((t) => zlib.zstdCompressSync(Buffer.from(t, 'utf8')))
@@ -27,9 +28,9 @@ describe('frameRanges · 无尾（帧帧相接）', () => {
     const raw = glue(false)
     const ranges = rangesOf(raw)
     expect(ranges).toHaveLength(frames.length)
-    expect(ranges[0][0]).toBe(0)
-    expect(ranges.at(-1)![1]).toBe(raw.length)
-    expect(ranges.every(([start], i) => i === 0 || start === ranges[i - 1]![1])).toBe(true)
+    expect(pick(ranges, 0)[0]).toBe(0)
+    expect(must(ranges.at(-1), 'ranges 的末片')[1]).toBe(raw.length)
+    expect(ranges.every(([start], i) => i === 0 || start === pick(ranges, i - 1)[1])).toBe(true)
   })
 
   it('每一片单独解压正好回到那一段明文', () => {
@@ -57,8 +58,8 @@ describe('frameRanges · 有尾（DSH 实测形状：每帧后多 4 字节）', 
     const raw = glue(true)
     const ranges = rangesOf(raw)
     expect(ranges).toHaveLength(frames.length)
-    expect(ranges.at(-1)![1]).toBe(raw.length)
-    expect(ranges.every(([start], i) => i === 0 || start === ranges[i - 1]![1])).toBe(true)
+    expect(must(ranges.at(-1), 'ranges 的末片')[1]).toBe(raw.length)
+    expect(ranges.every(([start], i) => i === 0 || start === pick(ranges, i - 1)[1])).toBe(true)
     const decoded = ranges.map(([start, end]) =>
       zlib.zstdDecompressSync(raw.subarray(start, end)).toString('utf8'),
     )
@@ -87,7 +88,8 @@ describe('frameRanges · 描述符不止生产那一种', () => {
   const packed = sizes.map((n) => zlib.zstdCompressSync(Buffer.alloc(n, 65)))
 
   it.each(sizes)('%i 字节明文那一帧整帧收住，且解得回同样长度', (n) => {
-    const raw = packed[sizes.indexOf(n)]
+    // 这一档的明文就是喂它的那一格：`n` 由 sizes 铺开而来，取位只是把这件事交给编译器
+    const raw = pick(packed, sizes.indexOf(n))
     expect(raw[4]).toBeLessThan(0xc0)
     expect(rangesOf(raw)).toEqual([[0, raw.length]])
     expect(zlib.zstdDecompressSync(raw.subarray(0, raw.length)).length).toBe(n)

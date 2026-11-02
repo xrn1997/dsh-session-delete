@@ -29,6 +29,7 @@ export interface ClientContextLike {
   slots: SlotsLike
   /** 可选服务的读面（宿主自己的写法：`ctx.get('…')?.…`）。**缺省调用**：老宿主上没有这个方法。 */
   get?(name: string): unknown
-  /** 挂一个随本插件卸载而撤销的副作用（返回的清理函数由框架接管）。 */
-  effect(execute: () => unknown, label?: string): unknown
+  /** 挂一个随本插件卸载而撤销的副作用（返回的清理函数由框架接管）。
+   *  属性声明：测试会把它当成员读（`expect(ctx.effect).not.toHaveBeenCalled()`），实现不读 `this`。 */
+  effect: (execute: () => unknown, label?: string) => unknown
 }

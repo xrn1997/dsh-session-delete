@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest'
 import { createJournal, type JournalStep, type JournalStepKey } from '../src/verbs/member-journal.js'
 
 function step(key: JournalStepKey, undo?: JournalStep['undo']): JournalStep {
-  return { key, label: key, run: async () => {}, undo }
+  // 反向动作「不建这一格」就是「没有反向动作」：journal 按值判这一步退不退得动，
+  // 而 JournalStep 不许可往那一格写 undefined，所以缺省时干脆不建键。
+  return { key, label: key, run: async () => {}, ...(undo === undefined ? {} : { undo }) }
 }
 
 describe('journal 逐步 undo', () => {

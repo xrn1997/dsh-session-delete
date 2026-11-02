@@ -3,27 +3,30 @@ import { mkdir, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/pr
 import { join } from 'node:path'
 
 export interface FsPort {
-  exists(p: string): Promise<boolean>
+  /** 全部成员写成属性声明：端口方法会被**解构出来单独调**（`const { sizeOfDir } = port`，见下方
+   *  模块级递归的注释），实现体一律不读 `this`。方法简写的隐式 `this: FsPort` 会让
+   *  `unbound-method` 把这种正常用法报成可疑；契约（返回的 Promise 形状）一字未动。 */
+  exists: (p: string) => Promise<boolean>
   /** 建目录（含中间层）。首删时 `~/.dsh/session-trash/` 还不存在，而 `rename` 不建父目录。 */
-  ensureDir(p: string): Promise<void>
+  ensureDir: (p: string) => Promise<void>
   /** 搬目录：**目标已存在一律失败**，跨卷（EXDEV）也失败并说清楚——不替换、也不偷偷改成复制。
    *  Linux 的 `rename` 会静默替代空目录而 Windows 不会，这个差别不能交给操作系统决定。 */
-  rename(from: string, to: string): Promise<void>
-  removeDir(p: string): Promise<void>
-  sizeOfDir(p: string): Promise<number>
+  rename: (from: string, to: string) => Promise<void>
+  removeDir: (p: string) => Promise<void>
+  sizeOfDir: (p: string) => Promise<number>
   /** 目录下的条目名（**不递归**）。回收站详情要用它在那条目录里挑 `*.jsonl.zstd`。 */
-  listFiles(p: string): Promise<string[]>
+  listFiles: (p: string) => Promise<string[]>
   /** 目录下的**子目录**名（不递归；**跟随软链**）。回收站对账用它找出"清单里还没有行"的条目目录——
    *  与 `listFiles` 分开是为了让"拒收文件"发生在挑选阶段（回收站根里落进来的杂散文件当外人）。 */
-  listDirs(p: string): Promise<string[]>
+  listDirs: (p: string) => Promise<string[]>
   /** 解析符号链接后的真实路径。递归走目录时防环用：跟随软链之后，目录图不再是树。 */
-  realpath(p: string): Promise<string>
+  realpath: (p: string) => Promise<string>
   /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），不在这里。 */
-  readFile(p: string): Promise<Buffer>
+  readFile: (p: string) => Promise<Buffer>
   /** 只读的单文件读数：附件渲染与独占计划都用它（不递归、不跟随目录）。 */
-  statFile(p: string): Promise<{ size: number }>
+  statFile: (p: string) => Promise<{ size: number }>
   /** 删单个文件（不是目录）。危险能力，只挂到 `RemovalDeps` 上。 */
-  removeFile(p: string): Promise<void>
+  removeFile: (p: string) => Promise<void>
 }
 
 /** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0027）。 */
@@ -42,6 +45,7 @@ async function sizeOfDir(p: string): Promise<number> {
 
 export function createFsPort(): FsPort {
   return {
+    // eslint-disable-next-line @typescript-eslint/require-await -- `FsPort` 其余成员都要 await，调用方按同一形状用；`existsSync` 是这里唯一不需要绕事件循环的一问，同步实现不必伪装成异步。
     async exists(p) { return existsSync(p) },
     async ensureDir(p) { await mkdir(p, { recursive: true }) },
     async rename(from, to) {

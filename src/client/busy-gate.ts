@@ -17,7 +17,7 @@ export interface BusyGate {
    *  不是将就，是判据：挡回的那一趟什么都没跑，把它伪装成一枚 `T` 就是把「没跑」当成「跑完且结果是
    *  那个值」——消费返回值的调用方（写入座位、清空）会照着编出失败原文或宣布成功。怎么收尾由调用方
    *  定：这一趟的界面后果归在飞的那一趟，挡回来的那一份什么都不该改。 */
-  around<T>(task: () => Promise<T>): Promise<T | undefined>
+  around: <T>(task: () => Promise<T>) => Promise<T | undefined>
 }
 
 export function useBusyGate(): BusyGate {

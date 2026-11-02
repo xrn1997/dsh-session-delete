@@ -20,6 +20,11 @@ class ResizeObserverStub implements ResizeObserver {
   disconnect(): void {}
 }
 
-if (globalThis.ResizeObserver === undefined) {
+// lib.dom 把 ResizeObserver 钉成必有，但 jsdom 运行时没有：用一具声明了可缺席返回的函数读出来
+// （直接给 const 标注联合会被初始化式的窄化吃掉），这样空值判据才是必要判据。
+function currentResizeObserver(): typeof globalThis.ResizeObserver | undefined {
+  return globalThis.ResizeObserver
+}
+if (currentResizeObserver() === undefined) {
   globalThis.ResizeObserver = ResizeObserverStub
 }

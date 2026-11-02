@@ -20,7 +20,7 @@ import {
   useMemo,
   useRef,
 } from 'react'
-import { TRASH_DIR_LABEL, type TrashEntryWire } from '../shared/wire.js'
+import { TRASH_DIR_LABEL } from '../shared/wire.js'
 import { useBusyGate } from './busy-gate.js'
 import { AttachmentNotice } from './attachment-view.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
@@ -198,7 +198,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
 
   // 取数编排（清单状态 + 附件回执）整块住在 `use-trash-query.ts`。
   const query = useTrashQuery({ deps, t, gate })
-  const { list: listState, refreshAll } = query
+  const { list: listState, reload } = query
   // 清单状态的解读只住 `use-trash-query.ts`：面板不再自己从 status 反推失败/加载/空态。
   const view = listView(listState)
   const entries = view.rows
@@ -331,7 +331,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
               {view.failure}
             </div>
           </div>
-          <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void refreshAll()}>
+          <Button variant="outline" size="sm" style={{ flex: 'none' }} onClick={() => void reload()}>
             {t('common.retry')}
           </Button>
         </div>
@@ -570,22 +570,9 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   )
 
   /**
-   * 下一层的入口只在主体是清单选中那条时交出（ADR-0029 的单级说的是孩子视图只有一个家）：
-   * 更深一代（孩子的孩子）自己不折进父行、占清单行（判据住 `src/trash/groups.ts`），走清单可达。
-   * 在这里再开一层会造出第二套导航路径，还会让那颗返回指着孙辈说话——它回的是清单选中那条。
+   * 孩子视图的开与回（ADR-0029 单级判据）住控制器的 `detailNav`：这里只转交，不再自己拼
+   * openChild / parentContext 两个派生块——判据的第二个家会让视图与测试各自复述一遍语义。
    */
-  const openChild = controller.childView === null
-    ? (child: TrashEntryWire): void => { void controller.openChild(child) }
-    : undefined
-  /**
-   * 孩子视图（`childView`）只画孩子那颗返回：宽档同屏有清单，「返回清单」在那一刻是多余的一步。
-   * `selected` 为空只剩一帧（清单换版把父行收走时控制器的清场 effect 会把孩子视图一起收掉）。
-   */
-  const parentContext = controller.childView !== null && controller.selected !== null ? {
-    title: controller.selected.title === '' ? t('common.untitled') : controller.selected.title,
-    onBack: controller.closeChild,
-  } : undefined
-
   const detailPane = (
     <div ref={detailScrollRef} data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
       <div style={DETAIL_INNER}>
@@ -595,8 +582,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           wide={split}
           onRetry={() => controller.retry()}
           onBack={() => controller.back()}
-          onOpenChild={openChild}
-          parentContext={parentContext}
+          detailNav={controller.detailNav}
           pager={{
             loadingOlder: controller.loadingOlder,
             olderFailure: controller.olderFailure,

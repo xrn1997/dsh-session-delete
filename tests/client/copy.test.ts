@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createTranslate, splitOn, zhTranslate, type Translate } from '../../src/client/copy.js'
 import type { ClientContextLike } from '../../src/client/context.js'
+import { must } from '../support/fixture.js'
 
 /** 假 locale 服务：`bind` 直接去 `register` 收到的那份字典里查，于是"两套语言都齐、查得出话"可测。 */
 function fakeLocale() {
@@ -62,7 +63,7 @@ describe('文案接线', () => {
       { zh: Record<string, string>; en: Record<string, string> },
     ]
     const en: Translate = (key, params) => {
-      const template = dicts.en[key]
+      const template = must(dicts.en[key], `en 字典里的键 ${key}`)
       return template.replace(/\{(\w+)\}/g, (match, name: string) =>
         params !== undefined && name in params ? String(params[name]) : match,
       )
@@ -165,7 +166,7 @@ describe('附件相关文案', () => {
       { zh: Record<string, string>; en: Record<string, string> },
     ]
     const en: Translate = (key, params) => {
-      const template = dicts.en[key]
+      const template = must(dicts.en[key], `en 字典里的键 ${key}`)
       return template.replace(/\{(\w+)\}/g, (match, name: string) =>
         params !== undefined && name in params ? String(params[name]) : match,
       )
@@ -265,7 +266,7 @@ describe('维护卡文案', () => {
       { zh: Record<string, string>; en: Record<string, string> },
     ]
     const en: Translate = (key, params) => {
-      const template = dicts.en[key]
+      const template = must(dicts.en[key], `en 字典里的键 ${key}`)
       return template.replace(/\{(\w+)\}/g, (match, name: string) =>
         params !== undefined && name in params ? String(params[name]) : match,
       )

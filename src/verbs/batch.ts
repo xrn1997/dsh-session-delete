@@ -7,18 +7,19 @@
  * - 恢复通告攒到批尾，一次 announceRestored(ids)。
  *
  * 「已被同批前一条带走」是幂等成功（delete/restore 回 null，purge 回 0），不是失败；
- * 判据在 trash/groups.ts，同批已带走集在 batch-carried.ts。
+ * 判据在 trash/groups.ts，同批已带走集：delete / restore 在 batch-carried.ts，purge 的那份连同
+ * 收缩视图住 trash-scope.ts（清册作用域）。
  */
 import { toRemoteFailure } from '../remote/map-error.js'
-import { bareSessionId } from '../ports/host-port.js'
+import { bareSessionId } from '../domain/closure.js'
 import type { ApplyAction, ApplyOutcome, ApplyValueByAction } from '../shared/wire.js'
 import type { CoreDeps, DeleteDeps, DeleteSessionDeps, RemovalDeps } from '../deps.js'
 import { createEntryCarried, createSessionCarried } from './batch-carried.js'
 import { deleteSession } from './delete-session.js'
 import { verbError } from './errors.js'
-import { cleanOrphanGroup, loadOrphanGroups } from './orphan-subagents.js'
-import { purgeTrash } from './purge-trash.js'
+import { cleanOrphanGroup } from './orphan-subagents.js'
 import { restoreSession } from './restore-session.js'
+import { createTrashScope } from './trash-scope.js'
 
 function failure(id: string, action: ApplyAction, error: unknown): ApplyOutcome {
   return { id, action, ok: false, error: toRemoteFailure(error) }
@@ -74,8 +75,8 @@ async function applyDelete(deps: DeleteSessionDeps, ids: readonly string[]): Pro
   })
 }
 
-/** 「这条是不是被同批前一条带走了」与视图收缩都归 `batch-carried.ts`；`apply` 整批只读一次清册，
- *  动词只拿它交回的只读组与当前清册。 */
+/** restore 的「这条是不是被同批前一条带走了」与视图收缩都归 `batch-carried.ts`（purge 那一半归
+ *  `trash-scope.ts`）；`apply` 整批只读一次清册，动词只拿它交回的只读组与当前清册。 */
 async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   // 整批一次清册读（"最初的样子"）+ 一份会收缩的同批已带走集；通告攒到批尾，一次发整组 id。
   const carried = createEntryCarried(await deps.ledger.list())
@@ -98,19 +99,12 @@ async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<App
   return outcomes
 }
 
+/** purge 的整批语义收进清册作用域：选组、收缩视图、同批带走的幂等（回 0）与 absent 的
+ *  trash-empty（原文点名）都在 `scope.purge(id)` 里——这里整批只读一次清册、逐 id 只交一个 id，
+ *  两份数组（算好的组 + 收缩中的视图）不再从批量层递两遍。 */
 async function applyPurge(deps: RemovalDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  const carried = createEntryCarried(await deps.ledger.list())
-  const run = purgeTrash(deps)
-  return forEachId('purge', ids, async (entryId) => {
-    const claim = carried.claim(entryId)
-    if (claim.verdict === 'carried') return { removed: 0, freedBytes: 0 } // 已被同批前一条带走
-    // 与 restore 同理：动词读**当前视图**，前一条已经清掉的行不再出现在这一组的预检/删除目标里；
-    // `absent` 没有组，递空表让动词抛 trash-empty。
-    const group = claim.verdict === 'fresh' ? claim.group : []
-    const stats = await run(group, carried.rows(), entryId)
-    carried.take(entryId)
-    return stats
-  })
+  const scope = createTrashScope(deps, await deps.ledger.list())
+  return forEachId('purge', ids, (entryId) => scope.purge(entryId))
 }
 
 /** 删除确认框那句「含 N 个子会话」：一次问完整批（`subagentMembersOf` 本来就是批量口）。
@@ -134,11 +128,11 @@ async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<Apply
  * 点过的决定（那种组该跟着父恢复或彻底删除）。
  */
 async function applyOrphanClean(deps: RemovalDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
-  // 对账交回的行直接给扫描，不再读第二遍 raw 索引。
-  const trash = await deps.ledger.list()
+  // 对账交回的行经清册作用域直接给扫描，不再读第二遍 raw 索引。
+  const scope = createTrashScope(deps, await deps.ledger.list())
   // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。
   // 只量请求点名的根：报告可能列着几十组，这里不该为没被点的那几组递归量树。
-  const groups = await loadOrphanGroups(deps, trash, ids)
+  const groups = await scope.orphanGroups(ids)
   const byRoot = new Map(groups.map(group => [bareSessionId(group.root.sessionId), group]))
   // 组内没有回收站这一层可退：`cleanOrphanGroup` 的 live 准入在任何写之前（整组拒绝、零副作用）；
   // 删到一半失败时已删目录不回滚，失败错误的 `details` 带 `{ removed, freedBytes }` 作为部分回执，

@@ -1,8 +1,9 @@
 /**
  * /dsh-session-delete-api 的前缀路由分发：只负责传输。
  *
- * 三件事：请求栅栏 → 查路由表 → 回信封。方法、纯度、body 预读与读面的判据都在
- * src/api/route-table.ts（这里只按判据执行）；行投影在 src/api/trash-rows.ts。
+ * 四件事：请求栅栏 → 查路由表 → 按段注入窄面 → 回信封。纯度、body 预读与读面的判据都在
+ * src/api/route-table.ts（方法也从那张表读，字面量家在 `shared/wire.ts` 的段名表；这里只按判据执行）；
+ * 行投影在 src/api/trash-rows.ts。
  *
  * - 请求本身不对用 4xx（400 请求体 / 405 方法 / 404 未知路由 / 403 栅栏拒绝）；
  *   操作失败回 200 + {ok:false,error}。浏览器半先解信封，再看状态。
@@ -13,9 +14,18 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { toRemoteFailure } from '../remote/map-error.js'
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { routeError } from '../verbs/errors.js'
-import type { DeleteDeps } from '../deps.js'
+import type { CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
 import { judgeRequest, type RequestTrustFacts } from './request-trust.js'
-import { routeOf, type BinaryResponse, type BodyKind, type JsonBody, type Purity, type RouteRead } from './route-table.js'
+import {
+  routeOf,
+  type BinaryResponse,
+  type BodyKind,
+  type JsonBody,
+  type Purity,
+  type RouteRead,
+  type RouteSlice,
+  type SliceDeps,
+} from './route-table.js'
 
 /** 请求体字节上限：这条通道只收几个 id，1MiB 是"够用且不给自己开一条内存放大器"的量级。 */
 const JSON_BODY_MAX_BYTES = 1024 * 1024
@@ -62,7 +72,9 @@ function writeBinary(res: ServerResponse, body: BinaryResponse): void {
  *  `code` 一律折成 `sessiondelete/io`，那三个路由标签（`bad-request` / `bad-method` / `not-found-route`）
  *  是**抛出处给读代码的人看的站点名**，不许冒充 `src/shared/wire.ts` 的五个动词码上客户端。 */
 function writeFailure(res: ServerResponse, error: unknown, status?: number): void {
-  const carried = (error as { httpStatus?: unknown })?.httpStatus
+  // 类型面说真话：`error` 是 `unknown`，强转出来的镜像只声明了可选字段，但运行时**可能**是
+  // null / undefined（非 Error 抛出物），所以这里把镜像连同空值一起声明，`?.` 才是必要的。
+  const carried = (error as { httpStatus?: unknown } | null | undefined)?.httpStatus
   writeJson(res, status ?? (typeof carried === 'number' ? carried : 200), { ok: false, error: toRemoteFailure(error) })
 }
 
@@ -111,10 +123,59 @@ function readBodyFor(kind: BodyKind, req: IncomingMessage): Promise<JsonBody> | 
   return kind === 'json' ? readJsonBody(req) : null
 }
 
+/**
+ * 全量面按行收窄（ADR-0032）：组合根装出的 {@link DeleteDeps} 只交给 `/apply`；每一段只拿到
+ * 自己声明的那一格（路由表的 `slice`）。收窄是**运行期事实**，不是类型投影：`core` 拿到的是
+ * 新建的 `CoreFsPort` 面，`removeDir` / `removeFile` 根本不在对象上；`now` 也不在 `core` / `removal`
+ * 上。三格逐行 `satisfies` 是闸：全量面必须结构满足每一格；`coreOf` 的 fs 字面量又逼着
+ * `CoreFsPort` 新增方法时同步补进来——漏了编译不过，而不是等某个段的 `run` 静默拿到超面。
+ */
+function coreOf(full: DeleteDeps): CoreDeps {
+  return {
+    fs: {
+      exists: (p) => full.fs.exists(p),
+      ensureDir: (p) => full.fs.ensureDir(p),
+      rename: (from, to) => full.fs.rename(from, to),
+      sizeOfDir: (p) => full.fs.sizeOfDir(p),
+      listFiles: (p) => full.fs.listFiles(p),
+      listDirs: (p) => full.fs.listDirs(p),
+      realpath: (p) => full.fs.realpath(p),
+      readFile: (p) => full.fs.readFile(p),
+      statFile: (p) => full.fs.statFile(p),
+    },
+    host: full.host,
+    ledger: full.ledger,
+    home: full.home,
+    presence: full.presence,
+  }
+}
+
+/** `removal` 保留删除能力，但不带会话删除的时钟；`full` 只给 `/apply`。 */
+function removalOf(full: DeleteDeps): RemovalDeps {
+  return {
+    fs: full.fs,
+    host: full.host,
+    ledger: full.ledger,
+    home: full.home,
+    presence: full.presence,
+  }
+}
+
+/** 三格只建一次：收窄对象在 handler 构造期固定，请求路径只做引用选择。 */
+export function slicesOf(full: DeleteDeps): SliceDeps {
+  return { core: coreOf(full), removal: removalOf(full), full }
+}
+
+/** 按行选格：`spec.slice` 与三格的键同域，查表结果的类型由 `S` 直接给出。 */
+function depsFor<S extends RouteSlice>(spec: { readonly slice: S }, slices: SliceDeps): SliceDeps[S] {
+  return slices[spec.slice]
+}
+
 export function createApiHandler(
   deps: DeleteDeps,
   trust: RequestTrustFacts,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
+  const slices = slicesOf(deps)
   /**
    * 到达序串行链（见文件头）：路由表里 `purity === 'chained'` 的请求一个跑完再放下一个。
    * `tail` 由构造保证**永不 reject**（每个任务自己的失败留在交回给那次请求的那个 promise 上），
@@ -154,7 +215,7 @@ export function createApiHandler(
           return rowsPromise
         },
       }
-      const task = (): Promise<unknown> => spec.run(deps, body, read, url.searchParams)
+      const task = (): Promise<unknown> => spec.run(depsFor(spec, slices), body, read, url.searchParams)
       const result = await (isPure(spec.purity, body) ? task() : throughChain(task))
       // 只有处理函数成功返回才走二进制；抛错一律落上面那个 catch 的 JSON 信封。
       if (spec.response === 'binary') writeBinary(res, result as BinaryResponse)

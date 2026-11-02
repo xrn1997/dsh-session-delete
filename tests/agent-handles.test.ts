@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { captureAgentHandles } from '../src/ports/agent-handles.js'
+import { must } from './support/fixture.js'
 
 describe('captureAgentHandles', () => {
   it('captures resume/create handles by session id and disposes once', async () => {
@@ -19,9 +20,13 @@ describe('captureAgentHandles', () => {
     const writes: string[] = []
     const raw = { resume: async () => ({ agent: { id: 's1' }, dispose: async () => {} }), create: async () => ({ agent: { id: 's2' }, dispose: async () => {} }) }
     const traced = new Proxy(raw, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver)
-        return typeof value === 'function' ? new Proxy(value, { apply: (fn, thisArg, args) => Reflect.apply(fn, thisArg, args) }) : value
+      // get 的返回值是 any：先收成 unknown 再按 typeof 分支；apply 处理器显式标参，
+      // 不让 `any` 从 `Reflect.get/apply` 渗到 Proxy handler 以外。
+      get(target, prop, receiver): unknown {
+        const value: unknown = Reflect.get(target, prop, receiver)
+        return typeof value === 'function'
+          ? new Proxy(value, { apply: (fn, thisArg: unknown, args: unknown[]): unknown => Reflect.apply(fn, thisArg, args) })
+          : value
       },
       set(target, prop, value, receiver) {
         writes.push(String(prop))
@@ -48,7 +53,7 @@ describe('captureAgentHandles', () => {
       inject: (_names, callback) => { install = callback },
     })
     expect(install).toBeDefined()
-    install!({ get: (name) => name === 'agents' ? agents : undefined })
+    must(install, 'inject 送来的 install 回调')({ get: (name) => name === 'agents' ? agents : undefined })
     await agents.resume()
     await store.dispose('s1')
     expect(disposed).toEqual(['s1'])

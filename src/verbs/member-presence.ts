@@ -17,10 +17,12 @@ import type { Journal, JournalUndo } from './member-journal.js'
  *  将来端口多出第四条时，这里不会被动跟着变宽——能力面只暴露这三条，批量通告的编排归 `verbs/batch.ts`。 */
 export type MemberPresenceHost = Pick<HostPresencePort, 'evictLive' | 'announceRemoved' | 'announceRestored'>
 
-/** 本仓的在场能力实现：端口形状住 `src/ports/presence-port.ts`，这里只做三态与真值表。
+/** 本仓的在场能力实现，也是**全仓唯一的盖章处**：端口形状住 `src/ports/presence-port.ts`，这里只做
+ *  三态与真值表。品牌字段是类型层的（unique symbol 不导出、没有运行时值），所以只有这一处显式断言
+ *  能把三件方法盖成 `PresenceCapability`——手拼同样的三件满足不了那个面（`tests/deps.test.ts` 钉住）。
  *  `announceRestored` 直接交宿主那一手：能力面与宿主面同名同签名，再包一层只会多一个转调。 */
 export function createMemberPresence(host: MemberPresenceHost): PresenceCapability {
-  return {
+  const impl: Pick<PresenceCapability, 'memberGone' | 'memberBack' | 'announceRestored'> = {
     async memberGone(sessionId, facts = { backInTrash: true }) {
       if (!facts.backInTrash) return
       const eviction: EvictionOutcome = await host.evictLive(sessionId)
@@ -32,6 +34,8 @@ export function createMemberPresence(host: MemberPresenceHost): PresenceCapabili
     },
     announceRestored: host.announceRestored,
   }
+  // 盖章：三条方法先按结构类型（`Pick<PresenceCapability, …>`）逐字校验，`as` 只补品牌这一格。
+  return impl as PresenceCapability
 }
 
 /** 一次 undo 之后要发哪一条通告：`leave` = 成员已不在可见面，`return` = 已回到原可见状态。 */

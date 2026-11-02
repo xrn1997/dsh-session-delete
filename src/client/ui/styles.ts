@@ -28,6 +28,7 @@ const STYLE_MARKER = 'dsh-session-delete'
 function install(): void {
   if (typeof document === 'undefined') return
   const head = document.head
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- lib.dom 把 document.head 钉成非空，但运行时（早期文档/异常环境）可能为 null；这是「镜像钉死≠运行时必有」。
   if (head === null) return
   if (head.querySelector(`style[data-dsh-session-delete="${STYLE_MARKER}"]`) !== null) return
   const element = document.createElement('style')

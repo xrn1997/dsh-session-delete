@@ -10,6 +10,7 @@ import { SESSION_DELETE_API_PREFIX, unescapeProjectKey } from '../src/shared/wir
 import { deleteSession } from '../src/verbs/delete-session.js'
 import type { DeleteDeps } from '../src/deps.js'
 import type { TrashEntry } from '../src/trash/entry.js'
+import { must, pick } from './support/fixture.js'
 import { trashEntry } from './support/world.js'
 
 /**
@@ -104,7 +105,7 @@ describe('宿主服务层端口的接线', () => {
     const results = [
       host.workspaceOf('s1'), host.projectDirOf('s1'), host.titleOf('s1'),
       host.isLive('s1'), host.isArchived('s1'), host.unarchive('s1'),
-      host.detach('s1', 'ws-1'), host.attach('s1', 'ws-1'), host.archive('s1', 'ws-1'),
+      host.detach('s1', 'ws-1'), host.attach('s1', 'ws-1'), host.archive('s1'),
       host.workspaceExists('ws-1'),
       // 后面这几个是收尾用的（摘活体 + 两条如实通告 + 清单的两个只读/取数面），契约都是"不抛"。
       // 一组会话的通告只走一条路：单条就是长度为 1 的批。
@@ -569,11 +570,12 @@ describe('宿主服务层端口的接线', () => {
       create: async () => createHandle,
     }
     const traced = new Proxy(raw, {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver)
+      // 同 `agent-handles.test.ts`：把 `Reflect.get/apply` 的 any 收在 handler 边界内。
+      get(target, prop, receiver): unknown {
+        const value: unknown = Reflect.get(target, prop, receiver)
         // 只模拟 cordis 对函数的那一层：读回永远是一个新代理，但调用仍落到原函数/后装 wrapper。
         return typeof value === 'function'
-          ? new Proxy(value, { apply: (fn, thisArg, args) => Reflect.apply(fn, thisArg, args) })
+          ? new Proxy(value, { apply: (fn, thisArg: unknown, args: unknown[]): unknown => Reflect.apply(fn, thisArg, args) })
           : value
       },
       set(target, prop, value, receiver) {
@@ -623,7 +625,7 @@ describe('宿主服务层端口的接线', () => {
     const { ctx } = makeEnv({ agents: undefined, sessions, inject: (_names, callback) => { late = callback } })
     const port = createHostPort(ctx)
     expect(late).toBeDefined()
-    late!({ get: (name) => (name === 'agents' ? service : undefined) })
+    must(late, 'inject 送来的补装回调')({ get: (name) => (name === 'agents' ? service : undefined) })
     await service.resume()
     expect(await port.evictLive('s1')).toBe('evicted')
     expect(detached).toEqual(['s1'])
@@ -711,7 +713,7 @@ describe('宿主服务层端口的接线', () => {
   it('archive / unarchive 走 registry 的全局归档面（archive 不传 stopActivity）', async () => {
     const { ctx, calls } = makeEnv()
     const host = createHostPort(ctx)
-    await host.archive('s1', 'ws-1')
+    await host.archive('s1')
     await host.unarchive('s1')
     expect(calls).toEqual(['get(agents)', 'registry.archiveSession(s1)', 'registry.unarchiveSession(s1)'])
   })
@@ -787,7 +789,7 @@ function makeStorageEnv(seed: TrashEntry[] = []) {
     /** 真 cordis 的语义：`effect(fn)` 当场跑 `fn()` 拿到 disposer，**卸载时**才跑 disposer 并等它的落地。
      *  这里把 disposer 的 promise **原样交回**（不 await），调用方才量得到"它到底等的是谁的落地"。 */
     dispose: () => (setup?.() as (() => Promise<unknown>) | undefined)?.(),
-    get spec() { return spec as { name: string; version: number; layout?: string; invalidRecords?: string; tables: Record<string, { valueSchema: { parse(v: unknown): unknown } }> } },
+    get spec() { return spec as { name: string; version: number; layout?: string; invalidRecords?: string; tables: Record<string, { valueSchema: { parse: (v: unknown) => unknown } }> } },
     get closedCount() { return closed },
   }
 }
@@ -803,13 +805,13 @@ describe('清单的 storage domain 绑定', () => {
     expect(env.spec.layout).toBe('per-record')
     expect(env.spec.invalidRecords).toBe('backup-and-skip')
     expect(Object.keys(env.spec.tables)).toEqual(['entries'])
-    expect(typeof env.spec.tables.entries.valueSchema.parse).toBe('function')
+    expect(typeof must(env.spec.tables.entries, 'spec.tables 里的 entries 域').valueSchema.parse).toBe('function')
   })
 
   it('记录校验器认合法条目、拒残缺条目（域 open 时逐条 parse）', async () => {
     const env = makeStorageEnv()
     await createHostStorageManifest(env.ctx as never).list()
-    const { parse } = env.spec.tables.entries.valueSchema
+    const { parse } = must(env.spec.tables.entries, 'spec.tables 里的 entries 域').valueSchema
     expect(parse(trashEntry('a'))).toMatchObject({ id: 'a' })
     expect(() => parse({ id: 'a' })).toThrow(/sessionId/)
     expect(() => parse(null)).toThrow(/plain object/)
@@ -971,39 +973,42 @@ describe('Node 半组合根的接线', () => {
 
   it('前缀路由按官方那三格挂上，两条 effect 各有自己的标签', () => {
     const env = applyWith()
-    expect(env.routes[0].kind).toBe('prefix')
-    expect(env.routes[0].path).toBe(SESSION_DELETE_API_PREFIX)
+    // `applyWith` 已经把「只注册了一条」断言在前面了，取位只是把这件事交给编译器
+    const route = pick(env.routes, 0)
+    expect(route.kind).toBe('prefix')
+    expect(route.path).toBe(SESSION_DELETE_API_PREFIX)
     expect(env.effects).toEqual(['session-delete.manifest', 'session-delete: /dsh-session-delete-api routes'])
   })
 
   it('栅栏的 bindHost 取自 webServer.host：本机用 LAN IP 自访放行；getter 缺席则 fail-closed', async () => {
     const headers = { host: '192.168.50.199:3080' }
     const wired = applyWith({ bindHost: '192.168.50.199' })
-    expect(await ping(wired.routes[0], headers, '127.0.0.1'))
+    expect(await ping(pick(wired.routes, 0), headers, '127.0.0.1'))
       .toMatchObject({ status: 200, body: { ok: true, value: 'pong' } })
     // 老代次没有 `host` getter：bind 字面量判不出归属，身份层又缺席 ⇒ 拒（退化，不是放行）。
     const legacy = applyWith()
-    expect((await ping(legacy.routes[0], headers, '127.0.0.1')).status).toBe(403)
+    expect((await ping(pick(legacy.routes, 0), headers, '127.0.0.1')).status).toBe(403)
   })
 
   // `connection` 若被组合根在激活时取一次，服务晚到就永远缺席（LAN 全 403 且难排查）——
   // 判据住 `src/ports/connection-port.ts`，这里钉的是组合根确实走的是那条惰性端口。
   it('栅栏的身份面每次请求走 ctx.get("connection")：缺席拒、宿主认可放行、服务晚到也认', async () => {
     const env = applyWith()
+    const route = pick(env.routes, 0)
     const remote = { host: 'dsh.internal:3080' }
     const from = '192.168.50.77'
 
-    expect(await ping(env.routes[0], remote, from))
+    expect(await ping(route, remote, from))
       .toMatchObject({ status: 403, body: { ok: false, error: { message: '非受信来源' } } })
     expect(env.gets).toContain('connection')
 
     env.setConnection({ requestRejection: () => undefined })
-    expect(await ping(env.routes[0], remote, from))
+    expect(await ping(route, remote, from))
       .toMatchObject({ status: 200, body: { ok: true, value: 'pong' } })
 
     // 宿主回 401 = 归属对、缺身份 ⇒ 原文指路（不是「非受信来源」）。
     env.setConnection({ requestRejection: () => 401 })
-    const denied = await ping(env.routes[0], remote, from)
+    const denied = await ping(route, remote, from)
     expect(denied.status).toBe(403)
     expect(denied.body.error?.message).toMatch(/宿主的 Web 身份/)
   })

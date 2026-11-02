@@ -73,12 +73,12 @@ const logTruncatedTail = (...content: unknown[]) =>
 
 function makeWorld(over: {
   logs: Record<string, Buffer>
-  dirs?: (p: string) => string[]
-  files?: (p: string) => string[]
-  sizes?: Record<string, number>
-  statFile?: (p: string) => { size: number }
-  removeFile?: (p: string) => void
-  realpath?: (p: string) => string
+  dirs?: ((p: string) => string[]) | undefined
+  files?: ((p: string) => string[]) | undefined
+  sizes?: Record<string, number> | undefined
+  statFile?: ((p: string) => { size: number }) | undefined
+  removeFile?: ((p: string) => void) | undefined
+  realpath?: ((p: string) => string) | undefined
 }) {
   const made = createFakeDeps({
     home: HOME,
@@ -226,6 +226,43 @@ describe('单目录引用扫描', () => {
     expect(plainRead.ids.size).toBe(0)
     expect(plainRead.unreadable).toMatch(/无法确认/)
   })
+
+  // 宿主的内核写锁与日志常态并存（以写方式打开即截断、从不写入内容、释放也不删除）：它不是会话内容。
+  it('规范日志旁的 0 字节 session.lock 不算读不懂的文件', async () => {
+    const dir = '/h/sessions/--p--/session-locked'
+    const made = makeWorld({
+      logs: { [`${dir}/session.v4.jsonl.zstd`]: log(ID) },
+      files: (p) => p === dir ? ['session.v4.jsonl.zstd', 'session.lock'] : [],
+      statFile: (p) => ({ size: p.endsWith('/session.lock') ? 0 : 100 }),
+    })
+    const read = await imageIdsOfDir(made.deps, dir)
+    expect(read.unreadable).toBeUndefined()
+    expect([...read.ids]).toEqual([ID])
+  })
+
+  // 非空的锁 = 我们对这个文件的理解失效（宿主不会往里写字节）：仍然 fail closed。
+  it('session.lock 非空：按读不出处理，不折成"没有引用"', async () => {
+    const dir = '/h/sessions/--p--/session-locked'
+    const made = makeWorld({
+      logs: { [`${dir}/session.v4.jsonl.zstd`]: log(ID) },
+      files: (p) => p === dir ? ['session.v4.jsonl.zstd', 'session.lock'] : [],
+      statFile: (p) => ({ size: p.endsWith('/session.lock') ? 12 : 100 }),
+    })
+    const read = await imageIdsOfDir(made.deps, dir)
+    expect(read.ids.size).toBe(0)
+    expect(read.unreadable).toMatch(/锁文件 session.lock 非空/)
+  })
+
+  // 锁到手、日志还没落盘的目录（首次实体化写入前的现场）：没有记录就没有引用，与空目录同判。
+  it('只有 0 字节 session.lock、没有日志的目录 = 没有引用', async () => {
+    const dir = '/h/sessions/--p--/session-lockonly'
+    const made = makeWorld({
+      logs: {},
+      files: (p) => p === dir ? ['session.lock'] : [],
+      statFile: () => ({ size: 0 }),
+    })
+    expect(await imageIdsOfDir(made.deps, dir)).toEqual({ ids: new Set() })
+  })
 })
 
 describe('独占计划与执行', () => {
@@ -259,6 +296,22 @@ describe('独占计划与执行', () => {
     const plan = await planImageAttachmentRemoval(made.deps, [bad, good])
     expect(plan.entries.map((e) => e.id)).toEqual([ID])
     expect(plan.skipped).toMatch(/日志读不出/)
+  })
+
+  // 永久删除的两侧都会撞上宿主的 0 字节内核锁 `session.lock`：被删候选与剩余会话/回收站目录里它都与规范日志并存。
+  it('候选与剩余目录里都有宿主的 session.lock：独占照常判定，不整份跳过', async () => {
+    const removed = '/h/session-trash/20260101T000000Z-session-a'
+    const remaining = '/h/sessions/--p--/session-b'
+    const made = makeWorld({
+      logs: { [`${removed}/session.v4.jsonl.zstd`]: log(ID), [`${remaining}/session.v4.jsonl.zstd`]: log(ID) },
+      dirs: (p) => p === '/h/sessions' ? ['--p--'] : p === '/h/sessions/--p--' ? ['session-b'] : [],
+      files: (p) => (p === removed || p === remaining ? ['session.v4.jsonl.zstd', 'session.lock'] : []),
+      statFile: (p) => ({ size: p.endsWith('/session.lock') ? 0 : p === imagePath(ID) ? 7 : 100 }),
+    })
+    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    expect(plan.skipped).toBeUndefined()
+    expect(plan.entries).toEqual([])
+    expect(plan.bytes).toBe(0)
   })
 
   it('剩余会话日志读不出：整体跳过（fail closed）', async () => {
@@ -629,6 +682,19 @@ describe('孤儿附件扫描与清理', () => {
     expect(plan.entries.map((entry) => entry.id)).toEqual([ID3])
   })
 
+  // 宿主在每个已实体化的会话目录里留一个 0 字节内核锁 `session.lock`（flock 的目标：以 "w" 打开即截断、
+  // 从不写入内容、释放也不删除）——回收站条目搬走整个目录，锁也跟着过去。它是常态并存物，不是引用源。
+  it('规范日志旁有宿主的 0 字节 session.lock：检查照常出结果，不整份跳过', async () => {
+    const made = orphanWorld({
+      files: (p) => (p === ACTIVE || p === TRASHED ? [LOG, 'session.lock'] : worldFiles(p)),
+      statFile: (p) => ({ size: p.endsWith('/session.lock') ? 0 : (worldSizes()[p] ?? 100) }),
+    })
+    const plan = await scanOrphanImageAttachments(made.deps)
+    expect(plan.skipped).toBeUndefined()
+    expect(plan.entries.map((entry) => entry.id)).toEqual([ID3])
+    expect(plan.bytes).toBe(30)
+  })
+
   it('引用源读不出 ⇒ 整份报告跳过（entries 为空，不拿 0 冒充"没有孤儿"）', async () => {
     const made = orphanWorld({
       files: (p) => (p === ACTIVE ? ['session.v4.jsonl'] : worldFiles(p)),
@@ -669,7 +735,7 @@ describe('孤儿附件扫描与清理', () => {
     const stats = await cleanOrphanImageAttachments(made.deps)
     expect(stats).toEqual({ removed: 1, freedBytes: 30, failed: 0 })
     expect(removed).toEqual([imagePath(ID3)])
-    const listed = made.fs.listFiles.mock.calls.map(([p]) => String(p))
+    const listed = made.fs.listFiles.mock.calls.map(([p]) => p)
     for (const ignored of ['tmp', 'file-objects', 'v2', 'cache']) {
       expect(listed).not.toContain(`${OBJECTS}/${ignored}`)
       expect(listed).not.toContain(`${HOME}/attachments/v1/${ignored}`)

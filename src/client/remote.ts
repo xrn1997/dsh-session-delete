@@ -3,7 +3,9 @@
  *
  * - 路由是宿主 web server 上的插件前缀；官方 remote.<namespace> 需要生成的 Typert 描述符，
  *   第三方无法动态挂载，因此走这条薄线（ADR-0009）。
- * - 九段：list / ping / orphans / detail / apply / empty / attachment / attachment-orphans / attachment-clean；
+ * - 九段的**段名与方法**住 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`），
+ *   本文件只投影路径（`prefix + ROUTES.x.path`）与方法（GET 段直接取 `ROUTES.x.method`，写段把它
+ *   交给 `post()`）——方法字面量不在本文件出现第二份；
  *   写动作统一走 apply；`attachment` 是唯一二进制段，由 `src/client/attachment-view.tsx` 直接拼地址，
  *   不经过本文件的信封通道；`attachment-orphans`（纯读）与 `attachment-clean`（聚合写）是孤儿附件的两段。
  * - 信封与官方 unary 面同形：{ok:true,value} / {ok:false,error}。HTTP 往返本身失败才 reject；
@@ -60,6 +62,7 @@ export function failureOf(reason: unknown): RemoteFailure {
   if (isDSHRemoteError(reason)) {
     return {
       code: reason.code,
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- 镜像是谎：带标记的失败可能是过线 JSON，message 未必真是 string；String() 是运行时归一，不是类型噪音。
       message: String(reason.message),
       ...(reason.details === undefined ? {} : { details: reason.details }),
     }
@@ -82,8 +85,10 @@ function throwRemoteFailure(error: RemoteFailure): never {
   const candidate: unknown = error
   if (isDSHRemoteError(candidate)) {
     // 带标记位的失败**原样抛**——`details` 那件也跟着走（官方 `rebuiltFailure` 同样三件不丢）
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- 故意的非 Error 抛出物：原样抛才不丢 code/details；包成 Error 就是第二套失败面。
     throw candidate
   }
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- 同 `failureOf`：过线 JSON 的 message 未必是 string，运行时归一不能省。
   throw Object.assign(new Error(String(error.message)), {
     code: error.code,
     ...(error.details === undefined ? {} : { details: error.details }),
@@ -151,7 +156,8 @@ async function requestEnvelope<T>(path: string, init: RequestInit): Promise<Remo
   try {
     response = await fetch(path, init)
   } catch (reason) {
-    throw new Error(`取数通道打不通：${reason instanceof Error ? reason.message : String(reason)}`)
+    // 消息一字不变；只补 `cause`，与 `src/ports/fs-port.ts` 的 EXDEV 那支同一处方。
+    throw new Error(`取数通道打不通：${reason instanceof Error ? reason.message : String(reason)}`, { cause: reason })
   }
   let body: unknown
   try {
@@ -174,27 +180,28 @@ async function requestEnvelope<T>(path: string, init: RequestInit): Promise<Remo
  * `dsh web` 打印的 URL 打开过的页面成立（凭据是那行 URL 换来的 cookie，不是插件自己的秘密）。
  */
 export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): RawSessionDeleteRemote {
-  const post = (body: Record<string, unknown>): RequestInit => ({
-    method: 'POST',
+  const post = (route: { readonly method: 'GET' | 'POST' }, body: Record<string, unknown>): RequestInit => ({
+    method: route.method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   })
   return {
-    list: () => requestEnvelope<TrashEntryLike[]>(prefix + ROUTES.list, { method: 'GET' }),
-    ping: () => requestEnvelope<string>(prefix + ROUTES.ping, { method: 'GET' }),
-    orphans: () => requestEnvelope<OrphanReportWire>(prefix + ROUTES.orphans, { method: 'GET' }),
+    // 每段的方法都从段名表投影：GET 段直接取，写段交给 `post()` 带上同一格。
+    list: () => requestEnvelope<TrashEntryLike[]>(prefix + ROUTES.list.path, { method: ROUTES.list.method }),
+    ping: () => requestEnvelope<string>(prefix + ROUTES.ping.path, { method: ROUTES.ping.method }),
+    orphans: () => requestEnvelope<OrphanReportWire>(prefix + ROUTES.orphans.path, { method: ROUTES.orphans.method }),
     attachmentOrphans: () =>
-      requestEnvelope<AttachmentOrphanReportWire>(prefix + ROUTES.attachmentOrphans, { method: 'GET' }),
+      requestEnvelope<AttachmentOrphanReportWire>(prefix + ROUTES.attachmentOrphans.path, { method: ROUTES.attachmentOrphans.method }),
     // 这一段没有入参；空 JSON 体只是让 POST 与其余写段同一形状（路由表声明 body: none，不读它）。
-    attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(prefix + ROUTES.attachmentClean, post({})),
+    attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(prefix + ROUTES.attachmentClean.path, post(ROUTES.attachmentClean, {})),
     detail: (entryId, before) =>
-      requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail, post({
+      requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail.path, post(ROUTES.detail, {
         [PARAMS.entryId]: entryId,
         ...(before === undefined ? {} : { [PARAMS.before]: before }),
       })),
     apply: (action, ids) =>
-      requestEnvelope<ApplyOutcome[]>(prefix + ROUTES.apply, post({ [PARAMS.action]: action, [PARAMS.ids]: [...ids] })),
-    empty: () => requestEnvelope<PurgeResultLike>(prefix + ROUTES.empty, post({})),
+      requestEnvelope<ApplyOutcome[]>(prefix + ROUTES.apply.path, post(ROUTES.apply, { [PARAMS.action]: action, [PARAMS.ids]: [...ids] })),
+    empty: () => requestEnvelope<PurgeResultLike>(prefix + ROUTES.empty.path, post(ROUTES.empty, {})),
   }
 }
 
@@ -279,7 +286,7 @@ export async function applyOne<A extends ApplyAction>(deps: OneShotDeps, action:
   if (verdict === undefined) throw new Error(missingOutcomeMessage(action, id))
   if (verdict.kind === 'failed' || verdict.kind === 'neutral') throwRemoteFailure(verdict.error)
   if (verdict.kind === 'missing') throw new Error(verdict.message)
-  return { id, action, ok: true, value: verdict.value } as OneShotSuccess<A>
+  return { id, action, ok: true, value: verdict.value }
 }
 
 /**

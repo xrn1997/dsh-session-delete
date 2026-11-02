@@ -479,6 +479,28 @@ export function createTranslate(ctx: ClientContextLike): Translate {
 }
 
 /**
+ * `MarkdownBody`（`markdown.tsx`）memo comparator 的**语言探针**：借一句固定键的译文，当
+ * 「当前是哪种语言」的读数。为什么借译文而不问 locale 服务：宿主 locale 服务的窄镜像不暴露
+ * 当前语言（受窄镜像形状约束，不做 `locale()` 探针），当前语言只能从 `t` 的输出里读出来。
+ *
+ * 为什么必须在**渲染时**现算、由调用方存进 props：宿主 `t` 读的是**当前** locale，若在
+ * comparator 里现调，prev/next 那一拍都取到新值、恒等，换语言就漏了——只有渲染那一刻算好的
+ * 那份才是换语言那一拍的读数。
+ *
+ * 为什么拿 `t` 的输出当读数、而不是拿 `t` 的身份：宿主 `t` 是 `bind` 出来的**稳定身份**
+ * （`createTranslate` 一次客户端激活只造一个），换语言后同一个 `t` 吐另一套词——身份不变、
+ * 词变了，所以判据必须是这个词（探针值）而不是身份本身。
+ *
+ * 「借哪句」的知识只住这里：调用方与测试一律传 `probe={localeProbe(t)}`，不各自记得借哪句。
+ *
+ * **失效模式**：借的那句若在两种语言下译成同一个字面，探针就分不出换语言——memo 恒等、旧语言滞留。
+ * 这条由 `tests/client/markdown.test.tsx` 的换语言用例兜住；换借句或改那句译文时先看它红不红。
+ */
+export function localeProbe(t: Translate): string {
+  return t('common.close')
+}
+
+/**
  * 把一句话里内嵌的那一段拆出来：`'…文件，之后没有任何副本可以恢复。'` 交给调用面用 `<b>` 包中间那段。
  *
  * 为什么不留成"前段 / 内嵌段 / 后段"三个键：那等于把英文和中文的语序各钉一次，两段翻译各自

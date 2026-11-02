@@ -32,16 +32,17 @@ const AnchorAsText = ({ href, children }: { href?: string; children?: ReactNode 
 )
 
 /** 图片在回收站里读不到（路径属于会话当时的 cwd），只把 alt 说清楚。 */
-const ImageAsText = ({ alt, src, t }: { alt?: string; src?: string; t: Translate }) => (
+const ImageAsText = ({ alt, src, t }: { alt?: string | undefined; src?: string | undefined; t: Translate }) => (
   <span className="sd-md-image" title={src ?? ''}>
     {alt && alt !== '' ? t('detail.image.alt', { alt }) : t('detail.image')}
   </span>
 )
 
 function componentsFor(t: Translate): Components {
+  // `Components` 的可选键在 EOPT 下不含显式 undefined；这里挂进去的永远是组件本体，取值面按非 undefined 收窄。
   return {
-    a: AnchorAsText as Components['a'],
-    img: ((props) => <ImageAsText {...props} t={t} />) as Components['img'],
+    a: AnchorAsText as NonNullable<Components['a']>,
+    img: ((props) => <ImageAsText {...props} t={t} />) as NonNullable<Components['img']>,
   }
 }
 
@@ -50,14 +51,13 @@ function componentsFor(t: Translate): Components {
  * `node_modules/react-markdown/lib/index.js`——`Markdown()` 每次调用都 `createProcessor(options)`
  * 再 `runSync(parse(file))`，`MarkdownHooks` 那一支也一样），而面板任何一次重渲（悬停、↑↓、
  * 「刚刚删除」那句要读 `Date.now()`）都会走到这里 ⇒ 不按住就是每条助手回复每拍重解析一遍。
- * 按住的条件是 `text` 与**探针 `localeKey`**（调用方在渲染时算好的一句固定键译文 `t('common.close')`）。
- * `t` 本身是宿主 `bind` 出来的**稳定身份**（`copy.ts` 头注），一次客户端激活只造一个——拿身份当判据，
- * 换语言就漏了：同一个 `t` 换 locale 后吐另一套词，烘进正文树的那句图片占位会滞留旧语言，而周围的
- * 标签那一拍已经改口。探针也不能在 comparator 里现调 `t` 取——宿主 `t` 读的是**当前** locale，
- * prev/next 那一拍都取到新值、恒等；只有渲染时算好存进 props 的那份才是换语言那一刻的读数。
+ * 按住的条件是 `text` 与**探针 `probe`**：一句按当前 locale 现算的译文，专给 comparator 当
+ * 「换语言了没」的读数。为什么必须渲染时现算存进 props、为什么宿主 `t` 只能当稳定身份而不是
+ * 语言读数、「借哪句」，这些都住 `copy.ts` 的 `localeProbe`——调用方与测试一律
+ * `probe={localeProbe(t)}`，「借哪句」的知识不散到各调用方。
  * 探针没变 = 同语言同 `t` ⇒ 跳过重解析；变了（换语言或换 `t`）⇒ 重解析。
  */
-export const MarkdownBody = memo(function MarkdownBody({ text, t }: { text: string; t: Translate; localeKey: string }): ReactNode {
+export const MarkdownBody = memo(function MarkdownBody({ text, t }: { text: string; t: Translate; probe: string }): ReactNode {
   return (
     <div className="sd-md" data-dsh-session-delete="md">
       <Markdown remarkPlugins={[remarkGfm]} components={componentsFor(t)}>
@@ -65,4 +65,4 @@ export const MarkdownBody = memo(function MarkdownBody({ text, t }: { text: stri
       </Markdown>
     </div>
   )
-}, (prev, next) => prev.text === next.text && prev.localeKey === next.localeKey)
+}, (prev, next) => prev.text === next.text && prev.probe === next.probe)

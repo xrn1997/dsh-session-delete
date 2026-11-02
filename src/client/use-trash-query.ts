@@ -7,7 +7,7 @@
  * - 附件读数只住在写动作的回执里：清单重读读不出来，所以它单独一条提示、**最新的写赢**。
  *
  * 输入的引用**不需稳定**：`deps` / `t` / `gate` 经 `useLatest` 归一（判据住 `store.ts`），
- * 返回的四个回调身份恒稳，可安全进调用方 effect 的依赖。
+ * 返回的三个回调身份恒稳，可安全进调用方 effect 的依赖。
  *
  * 无主子会话的检查/清理**不在这一面**：那是插件设置页维护卡的手动动作（`use-maintenance.ts`）。
  * 面板挂载、写后重读与清空都只碰清单，一次都不自动扫（ADR-0021）。
@@ -56,16 +56,16 @@ export interface TrashQuery {
    *  读数冒充这一趟；删除与恢复不碰它。它是**过去那一趟的回执**、不是清单状态：清单重读读不出来。 */
   readonly attachmentNotice: string | null
   /** 把一份附件读数摆上屏（`undefined` = 这一趟没有读数，旧提示收掉）；句子怎么拼归这里，调用方只管转交。 */
-  noteAttachmentCleanup(a: AttachmentCleanupWire | undefined): void
-  /** 重读清单；挂载与显式「重试」用它。面板没有第二条扫描：孤儿检查是设置页维护卡的手动动作。 */
-  refreshAll(): Promise<void>
-  /** 写后/失效通告：与 `refreshAll` 同一条读。两个名字留着是因为调用点问的是两件事
-   *  （"用户要看现在的"与"别处动过了，跟上"），不是两条路径。清单读失败时旧行进 `unknown`。 */
-  refreshAfterWrite(): Promise<void>
+  noteAttachmentCleanup: (a: AttachmentCleanupWire | undefined) => void
+  /** 重读清单：挂载、显式「重试」、写后与失效通告都走这一条读——问的是同一件事（"清单现在长什么样"）。
+   *  曾经分作 `refreshAll` / `refreshAfterWrite` 两个名字，那是调用点问的两件事（"用户要看现在的"与
+   *  "别处动过了，跟上"），不是两条路径，合一为 `reload`。面板没有第二条扫描：孤儿检查是设置页
+   *  维护卡的手动动作（ADR-0021）。清单读失败时旧行进 `unknown`。 */
+  reload: () => Promise<void>
   /** 清空回收站（聚合回执）：成功就熄掉撤销横幅并重读，失败就把清单置为未知并摆上原文。
    *  三种形状各有意思：`true` = 清空落地了；`false` = 这一趟跑了但没清成（原文已在清单那块上屏）；
    *  `undefined` = 闸把这一趟挡回来了、什么都没跑（调用方不收框，等在飞那一趟的结论）。 */
-  emptyTrash(): Promise<boolean | undefined>
+  emptyTrash: () => Promise<boolean | undefined>
 }
 
 export function useTrashQuery({
@@ -95,6 +95,7 @@ export function useTrashQuery({
       return
     }
     setList({ status: 'ready', rows: outcome.value })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 回的恒稳 ref（自定义 hook，规则看不见），读的是 `.current`。
   }, [reloadLatest])
 
   /**
@@ -116,6 +117,7 @@ export function useTrashQuery({
       return
     }
     setAttachmentNotice(a.failed > 0 ? latest.current.t('trash.attachments.failed', { count: a.failed }) : null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 的恒稳 ref（规则看不见自定义 hook），不是每拍新值。
   }, [])
 
   // 清空是**聚合回执**、不是 `/apply` 座位：`emptyTrash` 自己包闸（别在外面再套一层，双套会让外层 busy 提前落下）。
@@ -141,14 +143,14 @@ export function useTrashQuery({
     // 已经发生的事情与"此刻清单长什么样"无关）。
     noteAttachmentCleanup(outcome.value.attachments)
     return true
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 的恒稳 ref（规则看不见自定义 hook）。
   }), [reload, reloadLatest, noteAttachmentCleanup])
 
   return {
     list,
     attachmentNotice,
     noteAttachmentCleanup,
-    refreshAll: reload,
-    refreshAfterWrite: reload,
+    reload,
     emptyTrash,
   }
 }

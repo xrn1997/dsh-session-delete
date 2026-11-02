@@ -25,16 +25,19 @@ export interface TrashSelection {
   /** 键盘 ↑↓ 与下钻走这个顺序：**只含展开的组**（折叠的行不在 DOM 里，方向键别停过去）。 */
   readonly ordered: readonly TrashEntryLike[]
   readonly allCollapsed: boolean
-  isCollapsed(projectDir: string): boolean
-  enterSelect(): void
-  exitSelect(): void
-  toggleGroup(projectDir: string): void
-  toggleAllGroups(): void
-  toggleCheck(entryId: string): void
+  /** 方法一律写成**属性声明**：面板会把它们摘下来传给导航/行组件，实现体也都不读 `this`。
+   *  方法简写带来的隐式 `this: TrashSelection` 会让 `unbound-method` 误报，且会诱导调用点
+   *  为了消警报去包箭头函数——那会让 `TrashSelection` 每次渲染换新身份（见 ADR 外的回归教训）。 */
+  isCollapsed: (projectDir: string) => boolean
+  enterSelect: () => void
+  exitSelect: () => void
+  toggleGroup: (projectDir: string) => void
+  toggleAllGroups: () => void
+  toggleCheck: (entryId: string) => void
   /** 组头那颗：说的是"这个项目的全部会话"，折叠起来的条目也算。勾满再点 = 整组取消。 */
-  toggleGroupCheck(group: { entries: readonly TrashEntryLike[] }): void
-  groupFullyChecked(group: { entries: readonly TrashEntryLike[] }): boolean
-  groupPartiallyChecked(group: { entries: readonly TrashEntryLike[] }): boolean
+  toggleGroupCheck: (group: { entries: readonly TrashEntryLike[] }) => void
+  groupFullyChecked: (group: { entries: readonly TrashEntryLike[] }) => boolean
+  groupPartiallyChecked: (group: { entries: readonly TrashEntryLike[] }) => boolean
 }
 
 export function useTrashSelection({
@@ -75,8 +78,9 @@ export function useTrashSelection({
   const allCollapsed = groups.length > 0 && groups.every((group) => isCollapsed(group.projectDir))
 
   const ordered = useMemo(
-    () => groups.filter((group) => !isCollapsed(group.projectDir)).flatMap((group) => group.entries as readonly TrashEntryLike[]),
+    () => groups.filter((group) => !isCollapsed(group.projectDir)).flatMap((group) => group.entries),
     // `collapsedGroups` 是 `isCollapsed` 的闭包来源，必须进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 漏的 `isCollapsed` 读数就是数组里已有的 `collapsedGroups`（它是闭包来源），再加一层反而制造第二判据。
     [groups, collapsedGroups],
   )
 

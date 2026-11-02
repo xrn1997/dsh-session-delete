@@ -30,7 +30,6 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
-      - run: pnpm build
-      - run: npm pack --dry-run
+      # 门禁总入口是 package.json 的 `gates`：本地与 CI 跑同一条，不在工作流里另写步骤清单。
+      # 需要真浏览器/真宿主的门刻意不进 CI，见 docs/development.md。
+      - run: pnpm gates

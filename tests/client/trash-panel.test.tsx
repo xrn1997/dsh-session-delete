@@ -14,6 +14,7 @@ import { installWidthObserver, type WidthObserver } from './support/observe-widt
 import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
 import { failed, outcomes, restoreOutcomes } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
+import { must, pick } from '../support/fixture.js'
 
 // 修订号是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
 beforeEach(() => {
@@ -125,7 +126,7 @@ describe('回收站面板', () => {
   // 这句话必须在**点之前**就看得见：它不是某次动作的失败，是这一条要去哪。
   it('原工作区已不存在：行上先说恢复后归入未分组；工作区还在时没有这句', async () => {
     const gone = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0]!, workspaceMissing: true }]) })} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), workspaceMissing: true }]) })} />,
     )
     const row = await screen.findByRole('row', { name: /code-review/ })
     expect(within(row).getByText('原工作区已不存在，恢复后归入未分组')).toBeInTheDocument()
@@ -179,12 +180,12 @@ describe('回收站面板 · 两栏与下钻', () => {
     const { container } = renderWide(makeDeps())
     const row = await screen.findByRole('row', { name: /code-review/ })
     // 两颗动作住在行里，且点击它们不许把"选中"改掉（选中是点行，不是点按钮）
-    expect(within(row).getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['恢复', '彻底删除…'])
+    expect(within(row).getAllByRole('button').map((b) => b.textContent.trim())).toEqual(['恢复', '彻底删除…'])
     expect(row).toHaveAttribute('aria-selected', 'true') // 宽档自动选中就是这一条
     expect(container.querySelector('[data-dsh-session-delete="trash-list"]')).toBeInTheDocument()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeInTheDocument()
     // 左栏的定宽 = 面板常量（box-sizing:border-box，含给滚动条的 10px 内边距）
-    expect((container.querySelector('[data-dsh-session-delete="trash-list"]')!.parentElement as HTMLElement).style.width).toBe('420px')
+    expect((must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素').parentElement as HTMLElement).style.width).toBe('420px')
   })
 
   it('窄档：先只有清单（动作照样在行右侧），点行才下钻出详情；「← 返回清单」回得去且选中还在', async () => {
@@ -269,15 +270,15 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     expect(deps.detail).toHaveBeenLastCalledWith('a', 10)
 
     const messages = [...container.querySelectorAll('[data-dsh-session-delete="trash-detail"] [data-sd-msg]')]
-      .map((node) => node.textContent ?? '')
+      .map((node) => node.textContent)
     expect(messages[0]).toContain('更早正文')
     expect(messages[1]).toContain('尾页正文')
   })
 
   it('切换条目重置折叠：A 展开的块不带去 B，切回 A 也回到默认折叠', async () => {
     const two = [
-      { ...rows[0]!, id: 'a', title: '第一条' },
-      { ...rows[0]!, id: 'b', title: '第二条' },
+      { ...pick(rows, 0), id: 'a', title: '第一条' },
+      { ...pick(rows, 0), id: 'b', title: '第二条' },
     ]
     const deps = makeDeps({
       list: vi.fn(async () => two),
@@ -362,7 +363,7 @@ describe('回收站面板 · 键盘', () => {
   it('条目 id 含空白：DOM id 合法且与 aria-activedescendant 同源，data-entry-id 仍是原始 id', async () => {
     // 目录名只挡路径分隔符，空白是合法字符：HTML id 归 DOM 侧编码，entry id 本身不许改形
     // （它是回收站目录名，恢复要按它反推原目录名）。issue #8 第 7 条。
-    const awkward = [{ ...rows[0]!, id: '20261019T120000Z-my session', title: '带空白的那条' }]
+    const awkward = [{ ...pick(rows, 0), id: '20261019T120000Z-my session', title: '带空白的那条' }]
     const { container } = renderWide(makeDeps({ list: vi.fn(async () => awkward) }))
     const row = await screen.findByRole('row', { name: /带空白的那条/ })
     expect(row.id).not.toMatch(/\s/)
@@ -370,7 +371,7 @@ describe('回收站面板 · 键盘', () => {
     expect(row.getAttribute('data-entry-id')).toBe('20261019T120000Z-my session')
     // 宽档自动选中第一条 ⇒ activedescendant 必须指向同一枚 DOM id
     await waitFor(() =>
-      expect(container.querySelector('[data-dsh-session-delete="trash-list"]')!.getAttribute('aria-activedescendant')).toBe(row.id))
+      expect(must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素').getAttribute('aria-activedescendant')).toBe(row.id))
   })
 
   it('下钻里打开确认框：Esc 只关框，下钻不退；再按才回清单', async () => {
@@ -401,7 +402,7 @@ describe('回收站面板 · 键盘', () => {
     fireEvent.click(screen.getByRole('button', { name: '清空回收站…' }))
     const dialog = within(await screen.findByRole('dialog'))
     fireEvent.click(dialog.getByRole('button', { name: '彻底删除' }))
-    const cancel = dialog.getByRole('button', { name: '取消' }) as HTMLButtonElement
+    const cancel = dialog.getByRole<HTMLButtonElement>('button', { name: '取消' })
     await waitFor(() => expect(cancel.disabled).toBe(true))
     const close = dialog.getByRole('button', { name: '关闭' })
     close.focus()
@@ -445,7 +446,7 @@ describe('回收站面板 · 键盘', () => {
     expect(list).toHaveAttribute('aria-colcount', '2')
     // 组头行也是 row：唯一一格横跨整行，列数才与条目行对得上。
     const headRow = within(list).getAllByRole('row').find((row) => !row.hasAttribute('aria-selected'))
-    const headCells = within(headRow!).getAllByRole('gridcell')
+    const headCells = within(must(headRow, '组头行')).getAllByRole('gridcell')
     expect(headCells).toHaveLength(1)
     expect(headCells[0]).toHaveAttribute('aria-colspan', '2')
     const entryRows = within(list).getAllByRole('row').filter((row) => row.hasAttribute('aria-selected'))
@@ -469,7 +470,7 @@ describe('回收站面板 · 其余行为', () => {
     const { container } = render(<TrashPanel deps={makeDeps()} />)
     await screen.findByText('/code-review')
     const toolbar = container.querySelector('[data-dsh-session-delete="trash-toolbar"]') as HTMLElement
-    expect(within(toolbar).getAllByRole('button').map((b) => b.textContent?.trim())).toEqual(['全部折叠', '多选'])
+    expect(within(toolbar).getAllByRole('button').map((b) => b.textContent.trim())).toEqual(['全部折叠', '多选'])
     expect(screen.queryByRole('button', { name: '重新读一遍回收站' })).toBeNull()
   })
 
@@ -530,7 +531,7 @@ describe('回收站面板 · 其余行为', () => {
   // 彻底删除按组走（组语义见 src/trash/groups.ts）⇒ 点下去页脚合计掉的是「父 + 全部孩子」。确认框那一格说的是
   // "我即将失去多少"，所以它必须是同一个口径，不能只报父自己那一格（issue #2）。
   it('单条彻底删除的确认卡片报的是整组要释放的字节（父 + 孩子）', async () => {
-    const group = [{ ...rows[0]!, sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]
+    const group = [{ ...pick(rows, 0), sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]
     const deps = makeDeps({ list: vi.fn(async () => group) })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
@@ -601,7 +602,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   ]
 
   const groupsOf = (container: HTMLElement) =>
-    Array.from(container.querySelectorAll('[data-dsh-session-delete="trash-group"]')) as HTMLElement[]
+    Array.from(container.querySelectorAll<HTMLElement>('[data-dsh-session-delete="trash-group"]'))
 
   it('按项目分组：组头只出现一次，名字是摘掉 `--…--` 裹边的目录名', async () => {
     const { container } = render(
@@ -610,12 +611,12 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     await screen.findByText('书源解析回归')
     const groups = groupsOf(container)
     expect(groups).toHaveLength(2)
-    expect(within(groups[0]!).getByText('D-develop-GitHub-dsh-novel')).toBeInTheDocument()
-    expect(within(groups[0]!).getByText('2 个会话')).toBeInTheDocument()
-    expect(within(groups[1]!).getByText('C-Users-xrn')).toBeInTheDocument()
-    expect(within(groups[1]!).getByText('1 个会话')).toBeInTheDocument()
-    expect(within(groups[0]!).getByText('书源解析回归')).toBeInTheDocument()
-    expect(within(groups[0]!).getByText('合并冲突')).toBeInTheDocument()
+    expect(within(pick(groups, 0)).getByText('D-develop-GitHub-dsh-novel')).toBeInTheDocument()
+    expect(within(pick(groups, 0)).getByText('2 个会话')).toBeInTheDocument()
+    expect(within(pick(groups, 1)).getByText('C-Users-xrn')).toBeInTheDocument()
+    expect(within(pick(groups, 1)).getByText('1 个会话')).toBeInTheDocument()
+    expect(within(pick(groups, 0)).getByText('书源解析回归')).toBeInTheDocument()
+    expect(within(pick(groups, 0)).getByText('合并冲突')).toBeInTheDocument()
   })
 
   it('组按最新一条倒序，组内也按删除时间倒序', async () => {
@@ -624,15 +625,15 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     )
     await screen.findByText('书源解析回归')
     const groups = groupsOf(container)
-    expect(groups[0]!.textContent).toMatch(/合并冲突[\s\S]*书源解析回归/)
-    expect(groups[1]!.textContent).toContain('兼容排查')
+    expect(pick(groups, 0).textContent).toMatch(/合并冲突[\s\S]*书源解析回归/)
+    expect(pick(groups, 1).textContent).toContain('兼容排查')
   })
 
   it('时间走官方 relativeTime 的分桶，绝对时间留在 title 里', async () => {
     const at = Date.now() - (3 * 3600 + 60) * 1000
     render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: at }]) })} />)
     const meta = await screen.findByTitle(new Date(at).toLocaleString())
-    expect(meta.textContent).toBe(`删除于 3小时前 · ${fileSizeText(rows[0]!.sizeBytes)}`)
+    expect(meta.textContent).toBe(`删除于 3小时前 · ${fileSizeText(pick(rows, 0).sizeBytes)}`)
   })
 
   it('now 桶说「刚刚删除」，不写出「删除于 刚刚前」', async () => {
@@ -645,7 +646,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // 还剩多少孩子，用户从界面上**一个字都看不见**。这一栏就是把那个数说出来；没有计数时（宿主服务没挂、
   // 或这一条确实没孩子）半句都不许出现——不许拿「含 0 个」冒充「不知道」。
   it('行上如实显示「含 N 个子会话」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 3 }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 3 }]) })} />)
     expect(await screen.findByText(/含 3 个子会话/)).toBeInTheDocument()
   })
 
@@ -661,13 +662,13 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // `strandedSubagents` 是**还留在盘上没被带走**的（级联落地之前删掉的那些存量）。
   // 后者说"含"就成了假话——用户会以为回收站里有它们、恢复能捞回来。
   it('盘上还剩的孩子说「还剩」，不许说成「含」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], strandedSubagents: 4 }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), strandedSubagents: 4 }]) })} />)
     expect(await screen.findByText(/盘上还剩 4 个子会话/)).toBeInTheDocument()
     expect(screen.queryByText(/含 4 个子会话/)).not.toBeInTheDocument()
   })
 
   it('两组都有 ⇒ 先说带进来的，再说还剩的（两个数各自站开）', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], subagentCount: 2, strandedSubagents: 4 }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 2, strandedSubagents: 4 }]) })} />)
     const line = await screen.findByText(/含 2 个子会话/)
     expect(line.textContent).toContain('含 2 个子会话')
     expect(line.textContent).toContain('还剩 4 个')
@@ -675,16 +676,16 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('头部合计要把组里孩子的字节算上（孩子不单独列行，只加父那一格就会少报）', async () => {
     render(<TrashPanel deps={makeDeps({
-      list: vi.fn(async () => [{ ...rows[0], sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]),
+      list: vi.fn(async () => [{ ...pick(rows, 0), sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]),
     })} />)
     expect(await screen.findByText(/1.5KB/)).toBeInTheDocument()
   })
 
-  // 盘上还剩的孩子也会被彻底删除/清空连带带走（`purgeTrash`），所以"共多少"与确认框那句
+  // 盘上还剩的孩子也会被彻底删除/清空连带带走（清册作用域的 `purge`），所以"共多少"与确认框那句
   // 「我即将失去多少」都读 Node 半算好的 `releaseBytes`（唯一算式在 `api/trash-rows.ts` 的 `toWire`），
   // 同一屏不许两套口径。
   it('头部合计与单条彻底删除确认都算上 strandedBytes', async () => {
-    const row = { ...rows[0]!, strandedSubagents: 2, strandedBytes: 2 * 1024, releaseBytes: 224 * 1024 + 2 * 1024 }
+    const row = { ...pick(rows, 0), strandedSubagents: 2, strandedBytes: 2 * 1024, releaseBytes: 224 * 1024 + 2 * 1024 }
     const deps = makeDeps({ list: vi.fn(async () => [row]) })
     renderWide(deps)
     expect(await screen.findByText(/可释放 226KB/)).toBeInTheDocument()
@@ -722,8 +723,8 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('选中的行换成宿主"选中"那一档的两枚 token，未选中的还是卡片配方', async () => {
     const twoRows = [
-      rows[0]!,
-      { ...rows[0]!, id: 'b', sessionId: 'session-b', title: '另一条会话' },
+      pick(rows, 0),
+      { ...pick(rows, 0), id: 'b', sessionId: 'session-b', title: '另一条会话' },
     ]
     const { container } = renderWide(makeDeps({ list: vi.fn(async () => twoRows) }))
     const row = await screen.findByRole('row', { name: /code-review/ })
@@ -754,12 +755,12 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
     const { container } = renderNarrow(depsOf())
     await screen.findByText('甲组第一条')
     expect(heads(container)).toHaveLength(2)
-    expect(heads(container)[0]!.getAttribute('aria-expanded')).toBe('true')
-    fireEvent.click(heads(container)[0]!)
+    expect(pick(heads(container), 0).getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(pick(heads(container), 0))
     expect(screen.queryByText('甲组第一条')).not.toBeInTheDocument()
     expect(screen.queryByText('甲组第二条')).not.toBeInTheDocument()
     expect(screen.getByText('乙组第一条')).toBeInTheDocument()
-    expect(heads(container)[0]!.getAttribute('aria-expanded')).toBe('false')
+    expect(pick(heads(container), 0).getAttribute('aria-expanded')).toBe('false')
     // 组头本身不能被一起收掉——收掉就没有再点开的地方了
     expect(heads(container)).toHaveLength(2)
   })
@@ -767,9 +768,9 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
   it('折叠掉的组不参与 ↑↓：键盘序列只走看得见的行', async () => {
     const { container } = renderNarrow(depsOf())
     await screen.findByText('甲组第一条')
-    fireEvent.click(heads(container)[0]!)
+    fireEvent.click(pick(heads(container), 0))
     expect(visibleRows(container)).toEqual(['c'])
-    fireEvent.keyDown(container.querySelector('[data-dsh-session-delete="trash-list"]')!, { key: 'ArrowDown' })
+    fireEvent.keyDown(must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素'), { key: 'ArrowDown' })
     const selected = container.querySelector('[data-dsh-session-delete="trash-row"][aria-selected="true"]') as HTMLElement
     expect(selected.getAttribute('data-entry-id')).toBe('c')
   })
@@ -777,9 +778,9 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
   it('选中那条被折叠起来时，aria-activedescendant 不指向一个不在 DOM 的 id', async () => {
     const { container } = renderWide(depsOf())
     await screen.findByText('甲组第一条')
-    const list = container.querySelector('[data-dsh-session-delete="trash-list"]')!
+    const list = must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
     expect(list.getAttribute('aria-activedescendant')).toBe('sd-trash-a')
-    fireEvent.click(heads(container)[0]!)
+    fireEvent.click(pick(heads(container), 0))
     expect(list.hasAttribute('aria-activedescendant')).toBe(false)
     // 详情不跟着折叠走：右栏读的还是那一条（标题优先用清册那一份，见 trash-detail 头注③）
     const detail = container.querySelector('[data-dsh-session-delete="trash-detail"]') as HTMLElement
@@ -843,14 +844,14 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
   it('折叠与拖宽互不干扰：拖过之后折叠状态与条目可见性都照旧', async () => {
     const { container } = renderWide(depsOf())
     await screen.findByText('甲组第一条')
-    fireEvent.click(heads(container)[0]!)
+    fireEvent.click(pick(heads(container), 0))
     const handle = container.querySelector('[role="separator"]') as HTMLElement
     firePointer(handle, 'pointerdown', { clientX: 500 })
     firePointer(handle, 'pointermove', { clientX: 600 })
     firePointer(handle, 'pointerup', { clientX: 600 })
     expect(columnOf(container).style.width).toBe('520px')
     expect(visibleRows(container)).toEqual(['c'])
-    expect(heads(container)[0]!.getAttribute('aria-expanded')).toBe('false')
+    expect(pick(heads(container), 0).getAttribute('aria-expanded')).toBe('false')
   })
 })
 
@@ -873,10 +874,10 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     })
 
   const boxes = (container: HTMLElement) =>
-    [...container.querySelectorAll('[data-dsh-session-delete="trash-row"] input[type="checkbox"]')] as HTMLInputElement[]
+    [...container.querySelectorAll<HTMLInputElement>('[data-dsh-session-delete="trash-row"] input[type="checkbox"]')]
   const rowOf = (container: HTMLElement, id: string) =>
     container.querySelector(`[data-dsh-session-delete="trash-row"][data-entry-id="${id}"]`) as HTMLElement
-  const footerButton = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+  const footerButton = (name: string) => screen.getByRole<HTMLButtonElement>('button', { name })
 
   it('进多选：行内两颗按钮退场，每行左侧出勾选框，头部给计数', async () => {
     const { container } = renderNarrow(depsOf())
@@ -909,8 +910,8 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     const { container } = renderNarrow(depsOf())
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
-    fireEvent.click(boxes(container)[0]!)
-    expect(boxes(container)[0]!.checked).toBe(true)
+    fireEvent.click(pick(boxes(container), 0))
+    expect(pick(boxes(container), 0).checked).toBe(true)
     expect(screen.getByText('已选 1 条')).toBeInTheDocument()
   })
 
@@ -952,7 +953,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     fireEvent.click(footerButton('彻底删除 1 条'))
     fireEvent.click(await screen.findByRole('button', { name: '彻底删除' }))
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
-    const exit = screen.getByRole('button', { name: '退出多选' }) as HTMLButtonElement
+    const exit = screen.getByRole<HTMLButtonElement>('button', { name: '退出多选' })
     expect(exit.disabled).toBe(false)
     fireEvent.click(exit)
     expect(screen.getByRole('button', { name: '多选' })).toBeInTheDocument()
@@ -1099,7 +1100,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     act(() => { invalidateTrash() })
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     // 第二次**先**落地、第一次更晚才回 ⇒ 后到的那份旧数据必须被丢掉
-    second.resolve([three[2]])
+    second.resolve([pick(three, 2)])
     expect(await screen.findByText('第三条')).toBeInTheDocument()
     first.resolve(three)
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -1110,7 +1111,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     // 用宽档：窄档点行会下钻，清单整块离开 DOM，那时候量不到 grid 的 aria。
     const { container } = renderWide(depsOf())
     await screen.findByText('第一条')
-    const list = container.querySelector('[data-dsh-session-delete="trash-list"]')!
+    const list = must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
     expect(list.getAttribute('aria-multiselectable')).toBeNull()
     fireEvent.click(rowOf(container, 'a'))
     expect(rowOf(container, 'a').getAttribute('aria-selected')).toBe('true')
@@ -1127,7 +1128,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     // 宽档：首读完成会自动选中第一条，光标有个确定的起点（窄档没人选中，第一下 ArrowDown 是"落到第一条"）。
     const { container } = renderWide(depsOf())
     await screen.findByText('第一条')
-    const list = container.querySelector('[data-dsh-session-delete="trash-list"]')!
+    const list = must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     fireEvent.keyDown(list, { key: 'ArrowDown' })
     fireEvent.keyDown(list, { key: ' ' })
@@ -1168,12 +1169,12 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () =>
   it('点组头那颗 = 该项目全部会话入选，**包括折叠起来看不见的**；再点全取消', async () => {
     const { container } = renderNarrow(depsOf())
     await screen.findByText('第一条')
-    fireEvent.click(heads(container)[0]!)
+    fireEvent.click(pick(heads(container), 0))
     expect(visibleRows(container)).toEqual(['c'])
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
-    fireEvent.click(groupBoxes(container)[0]!)
+    fireEvent.click(pick(groupBoxes(container), 0))
     expect(screen.getByText('已选 2 条')).toBeInTheDocument()
-    fireEvent.click(groupBoxes(container)[0]!)
+    fireEvent.click(pick(groupBoxes(container), 0))
     expect(screen.getByText('已选 0 条')).toBeInTheDocument()
   })
 
@@ -1182,7 +1183,7 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () =>
     await screen.findByText('第一条')
     const rowOf = (id: string) =>
       container.querySelector(`[data-dsh-session-delete="trash-row"][data-entry-id="${id}"]`) as HTMLElement
-    const groupOne = () => groupBoxes(container)[0]!
+    const groupOne = () => pick(groupBoxes(container), 0)
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     expect(groupOne().checked).toBe(false)
     expect(groupOne().indeterminate).toBe(false)
@@ -1206,8 +1207,8 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () =>
     const { container } = renderNarrow(depsOf())
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
-    fireEvent.click(groupBoxes(container)[0]!)
-    expect(heads(container)[0]!.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(pick(groupBoxes(container), 0))
+    expect(pick(heads(container), 0).getAttribute('aria-expanded')).toBe('true')
     expect(visibleRows(container)).toEqual(['a', 'b', 'c'])
   })
 
@@ -1216,19 +1217,19 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () =>
   it('组头标题左对齐（button 的 UA 居中必须显式压掉）', async () => {
     const { container } = renderNarrow(depsOf())
     await screen.findByText('第一条')
-    expect(heads(container)[0]!.style.textAlign).toBe('start')
+    expect(pick(heads(container), 0).style.textAlign).toBe('start')
   })
 })
 
 describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点（2026-10-15）', () => {
   const threeRows = [
-    { ...rows[0]!, id: 'a', title: '甲组第一条', projectDir: '--P-one--' },
-    { ...rows[0]!, id: 'b', title: '乙组第一条', projectDir: '--P-two--' },
-    { ...rows[0]!, id: 'c', title: '丙组第一条', projectDir: '--P-three--' },
+    { ...pick(rows, 0), id: 'a', title: '甲组第一条', projectDir: '--P-one--' },
+    { ...pick(rows, 0), id: 'b', title: '乙组第一条', projectDir: '--P-two--' },
+    { ...pick(rows, 0), id: 'c', title: '丙组第一条', projectDir: '--P-three--' },
   ]
   const depsOfThree = (): FakeRemote => makeDeps({ list: vi.fn(async () => threeRows) })
   const listColumn = (container: HTMLElement): HTMLElement =>
-    container.querySelector('[data-dsh-session-delete="trash-list"]')!.parentElement as HTMLElement
+    must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素').parentElement as HTMLElement
   const renderAt = (width: number, deps: FakeRemote) => {
     const observer: WidthObserver = installWidthObserver()
     const view = render(<TrashPanel deps={deps} />)
@@ -1278,7 +1279,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
     const rows = [...container.querySelectorAll('[data-dsh-session-delete="trash-row"]')]
     const tabStops = rows.filter((row) => (row as HTMLElement).tabIndex === 0)
     expect(tabStops).toHaveLength(1)
-    expect(tabStops[0]!.textContent).toContain('甲组第一条')
+    expect(pick(tabStops, 0).textContent).toContain('甲组第一条')
   })
 
   it('选中之后落点跟着那一行走（其余全退回 -1，roving tabindex 只有一个）', async () => {
@@ -1288,7 +1289,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
     const rows = [...container.querySelectorAll('[data-dsh-session-delete="trash-row"]')]
     const tabStops = rows.filter((row) => (row as HTMLElement).tabIndex === 0)
     expect(tabStops).toHaveLength(1)
-    expect(tabStops[0]!.textContent).toContain('乙组第一条')
+    expect(pick(tabStops, 0).textContent).toContain('乙组第一条')
   })
 })
 
@@ -1318,7 +1319,7 @@ const KID_ROW = {
 
 function kidDeps(): FakeRemote {
   return makeDeps({
-    list: vi.fn(async () => [{ ...rows[0]!, subagentCount: 1, subagentBytes: 1024 }]),
+    list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 1, subagentBytes: 1024 }]),
     detail: vi.fn(async (id: string) => id === 'kid'
       ? { ...detailFixture, entryId: 'kid', blocks: [{ kind: 'user', id: '0', time: 1, text: '孩子的正文', truncated: false, attachments: [] }] }
       : { ...detailFixture, subagents: [KID_ROW] }),
@@ -1355,7 +1356,7 @@ describe('回收站面板 · 子会话详情', () => {
   // （判据住 `src/trash/groups.ts`），走清单可达——在孩子视图里再开一层会让那颗返回指着孙辈说话。
   it('宽档：孩子视图里不再画「子会话」段，返回仍交还清单选中那条', async () => {
     const deps = makeDeps({
-      list: vi.fn(async () => [{ ...rows[0]!, subagentCount: 1, subagentBytes: 1024 }]),
+      list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 1, subagentBytes: 1024 }]),
       detail: vi.fn(async (id: string) => id === 'kid'
         ? {
           ...detailFixture,
@@ -1388,7 +1389,7 @@ describe('回收站面板 · 子会话详情', () => {
     expect(await screen.findByText('回收站目录不在')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
 
-    fireEvent.click(document.getElementById('sd-trash-a')!)
+    fireEvent.click(must(document.getElementById('sd-trash-a'), '甲组那条行'))
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
     expect(screen.queryByText('回收站目录不在')).not.toBeInTheDocument()
   })

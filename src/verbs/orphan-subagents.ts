@@ -1,4 +1,5 @@
-import { bareSessionId, type SessionIdentity } from '../ports/host-port.js'
+import { bareSessionId, orphanRootsOf } from '../domain/closure.js'
+import type { SessionIdentity } from '../ports/host-port.js'
 import type { TrashEntry } from '../trash/entry.js'
 import type { OrphanCleanStatsWire, OrphanReportWire } from '../shared/wire.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
@@ -33,48 +34,18 @@ interface RawGroup {
  * 彻底删除（组语义见 `src/trash/groups.ts`），把它的根当孤儿删掉就是**替用户做了一个没人点过的决定**。孤儿只
  * 有一种来路：父被彻底删掉了（或被手工从盘上清掉了），清册里再也没有这一行。
  *
- * 根按**传递闭包**收全部后代（与 `HostCorpusPort.subagentMembersOf` 同一口径：孩子与孙代都算，深度不设上限），
- * 同一条记录只归一组（`claimed`）——数据里真出现环时结果是"少数一条"，不是把一个会话删两遍。
+ * 根按**传递闭包**收全部后代（与 `HostCorpusPort.subagentMembersOf` 同一实现：闭包核心住
+ * `src/domain/closure.ts` 的 `orphanRootsOf`，孩子与孙代都算，深度不设上限），同一条记录只归一组
+ * （`claimed`）——数据里真出现环时结果是"少数一条"，不是把一个会话删两遍。
  * 归堆与去重**两边都去 `session-` 前缀**：同一个父在两代宿主里写法不同（见 `bareSessionId` 的来历）。
  */
 export function orphanGroupsOf(
   corpus: readonly SessionIdentity[],
   trashSessionIds: readonly string[],
 ): RawGroup[] {
-  const known = new Set<string>()
-  for (const session of corpus) known.add(bareSessionId(session.sessionId))
-  for (const id of trashSessionIds) known.add(bareSessionId(id))
-
-  const children = new Map<string, SessionIdentity[]>()
-  for (const session of corpus) {
-    const parent = session.parentSessionId
-    if (parent === undefined) continue
-    const key = bareSessionId(parent)
-    const list = children.get(key)
-    if (list === undefined) children.set(key, [session])
-    else list.push(session)
-  }
-
-  const claimed = new Set<string>()
-  const groups: RawGroup[] = []
-  for (const session of corpus) {
-    const parent = session.parentSessionId
-    if (!session.subagent || parent === undefined) continue
-    if (known.has(bareSessionId(parent))) continue
-    if (claimed.has(bareSessionId(session.sessionId))) continue
-    const members: SessionIdentity[] = []
-    const queue: SessionIdentity[] = [session]
-    for (let i = 0; i < queue.length; i += 1) {
-      const current = queue[i]!
-      const id = bareSessionId(current.sessionId)
-      if (claimed.has(id)) continue
-      claimed.add(id)
-      members.push(current)
-      for (const child of children.get(id) ?? []) queue.push(child)
-    }
-    groups.push({ root: session, parentSessionId: parent, members })
-  }
-  return groups
+  // 薄包装：known 的口径（语料里的父 + 清册里的父）留在这里，闭包、防环与成组次序都在纯核心里。
+  const known = [...corpus.map((session) => session.sessionId), ...trashSessionIds]
+  return orphanRootsOf(corpus, known)
 }
 
 /** **本函数是纯扫描，不对账、不写清册行**（`/orphans` 声明为 pure，一次扫描不能顺手写行）。
@@ -116,7 +87,13 @@ export async function loadOrphanGroups(
         bytes: measured?.bytes ?? 0,
       })
     }
-    out.push({ root: members[0]!, parentSessionId: group.parentSessionId, members })
+    const root = members[0]
+    // 组定义写明 `members` 含根自己 ⇒ 必非空；真缺了是上游构造坏了，走本文件既有失败通道（宁炸不猜），
+    // 不拿第一成员硬当根（那会把一个错组静默写成正常读数）。
+    if (root === undefined) {
+      throw verbError('io', `无主子会话组没有成员（父 ${group.parentSessionId}）`)
+    }
+    out.push({ root, parentSessionId: group.parentSessionId, members })
   }
   return out
 }

@@ -15,6 +15,7 @@ import { zhTranslate } from '../../src/client/copy.js'
 import type { TrashEntryLike } from '../../src/client/remote.js'
 import { publishUndoNotice, resetUndoNotice, useUndoNotice } from '../../src/client/undo-notices.js'
 import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
+import { pick } from '../support/fixture.js'
 
 const rows: TrashEntryLike[] = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 10, releaseBytes: 10, title: 'A' },
@@ -67,16 +68,16 @@ describe('取数编排 · 最新票', () => {
     let first: Promise<void> | undefined
     let second: Promise<void> | undefined
     act(() => {
-      first = result.current.refreshAll()
-      second = result.current.refreshAll()
+      first = result.current.reload()
+      second = result.current.reload()
     })
-    const fresh = [{ ...rows[0]!, id: 'fresh' }]
+    const fresh = [{ ...pick(rows, 0), id: 'fresh' }]
     await act(async () => {
-      resolvers[1]!(fresh)
+      pick(resolvers, 1)(fresh)
       await second
     })
     await act(async () => {
-      resolvers[0]!(rows)
+      pick(resolvers, 0)(rows)
       await first
     })
     expect(result.current.list).toEqual({ status: 'ready', rows: fresh })
@@ -86,7 +87,7 @@ describe('取数编排 · 最新票', () => {
     const { result } = mount({
       list: vi.fn(async () => { throw Object.assign(new Error('清单损坏'), { code: 'sessiondelete/io' }) }),
     })
-    await act(async () => { await result.current.refreshAll() })
+    await act(async () => { await result.current.reload() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清单损坏' })
   })
 })
@@ -102,8 +103,7 @@ describe('取数编排 · deps 引用不需稳定', () => {
       { initialProps: { d: first } },
     )
     const stable = {
-      refreshAll: result.current.refreshAll,
-      refreshAfterWrite: result.current.refreshAfterWrite,
+      reload: result.current.reload,
       emptyTrash: result.current.emptyTrash,
       noteAttachmentCleanup: result.current.noteAttachmentCleanup,
     }
@@ -111,13 +111,12 @@ describe('取数编排 · deps 引用不需稳定', () => {
     const third = deps()
     rerender({ d: second })
     rerender({ d: third })
-    expect(result.current.refreshAll).toBe(stable.refreshAll)
-    expect(result.current.refreshAfterWrite).toBe(stable.refreshAfterWrite)
+    expect(result.current.reload).toBe(stable.reload)
     expect(result.current.emptyTrash).toBe(stable.emptyTrash)
     expect(result.current.noteAttachmentCleanup).toBe(stable.noteAttachmentCleanup)
 
     // 身份稳了还不够：回调必须读**最新**那一份 deps，不许把旧的冻进闭包。
-    await act(async () => { await result.current.refreshAll() })
+    await act(async () => { await result.current.reload() })
     expect(third.list).toHaveBeenCalledTimes(1)
     expect(second.list).not.toHaveBeenCalled()
     expect(first.list).not.toHaveBeenCalled()
@@ -134,8 +133,8 @@ describe('取数编排 · deps 引用不需稳定', () => {
 describe('取数编排 · 面板一次都不自动扫无主子会话', () => {
   it('挂载读、写后重读与清空都不发 /orphans', async () => {
     const { d, result } = mount()
-    await act(async () => { await result.current.refreshAll() })
-    await act(async () => { await result.current.refreshAfterWrite() })
+    await act(async () => { await result.current.reload() })
+    await act(async () => { await result.current.reload() })
     await act(async () => { await result.current.emptyTrash() })
     expect(d.list).toHaveBeenCalledTimes(3)
     expect(d.scanOrphans).not.toHaveBeenCalled()
@@ -271,7 +270,7 @@ describe('取数编排 · 清空走注入的闸', () => {
         throw Object.assign(new Error('清空失败'), { code: 'sessiondelete/io' })
       }),
     })
-    await act(async () => { await result.current.refreshAll() })
+    await act(async () => { await result.current.reload() })
     expect(result.current.list.status).toBe('ready')
     await act(async () => { await result.current.emptyTrash() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清空失败' })
@@ -281,7 +280,7 @@ describe('取数编排 · 清空走注入的闸', () => {
     // `false` 说的是「跑过、没清成」；挡回来的那趟什么都没跑，调用方要能把两者分开（否则会收框、丢缓存）。
     const blocked: Around = async () => undefined
     const { d, result } = mount({}, blocked)
-    await act(async () => { await result.current.refreshAll() })
+    await act(async () => { await result.current.reload() })
     const beforeList = result.current.list
     const beforeNotice = result.current.attachmentNotice
     await act(async () => { expect(await result.current.emptyTrash()).toBeUndefined() })
@@ -300,7 +299,7 @@ describe('取数编排 · 清空走注入的闸', () => {
       }),
     })
     let refreshing!: Promise<void>
-    act(() => { refreshing = result.current.refreshAll() })
+    act(() => { refreshing = result.current.reload() })
     await act(async () => { await result.current.emptyTrash() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清空失败' })
     await act(async () => {

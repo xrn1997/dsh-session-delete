@@ -3,10 +3,10 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
-import { purgeTrash } from '../src/verbs/purge-trash.js'
+import { createTrashScope } from '../src/verbs/trash-scope.js'
+import type { SessionIdentity } from '../src/ports/host-port.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
-import { groupOf } from '../src/trash/groups.js'
 import { createLogWorld, trashEntry } from './support/world.js'
 
 const HOME = '/h'
@@ -32,25 +32,34 @@ const NOTHING_CLEANED = { removed: 0, freedBytes: 0, failed: 0 } as const
 
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：世界由参数描述，不再自己凑端口。
  *  日志只记 evictLive / announceRemoved 两件——彻底删除对宿主内存做的事就这两件。 */
-function deps(seed: TrashEntry[]) {
+function deps(seed: TrashEntry[], over: { corpus?: readonly SessionIdentity[] } = {}) {
   const made = createLogWorld({
     seed,
+    corpus: over.corpus,
     fs: { size: 512 },
     logMethods: ['evictLive', 'announceRemoved'],
     format: (method, args) => `${method}(${String(args[0])})`,
   })
   const { deps: d, fs, host, manifest } = made
 
-  /** 直调路径自己按清册算组；批量层由 `batch-carried.ts` 递下来。
+  /** 直调路径自己开一个作用域：清册读一次、选组与收缩都在 scope 里（批量层同样整批只开一次）。
    *  这里的条目 id 是合成串（不是回收站目录名）⇒ 读 **raw** 算组：ledger 的对账会把它们当外人目录。
    *  这条用例集钉的是 purge 的组语义与执行顺序，对账已由 `tests/ledger.test.ts` 单独验穿。 */
-  async function purge(entryId?: string) {
-    const rows = await manifest.list()
-    return await purgeTrash(d)(entryId === undefined ? undefined : groupOf(rows, entryId), rows, entryId)
+  async function open() {
+    return createTrashScope(d, await manifest.list())
   }
 
-  return { calls: made.calls, fs, host, manifest, d, purge }
+  async function purge(entryId?: string) {
+    const scope = await open()
+    return entryId === undefined ? await scope.purgeAll() : await scope.purge(entryId)
+  }
+
+  return { calls: made.calls, fs, host, manifest, d, open, purge }
 }
+
+const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdentity => ({
+  sessionId, projectDir: '--p--', subagent: true, ...over,
+})
 
 describe('彻底删除', () => {
   it('删一条：目录被移除、清单少一条、返回释放字节', async () => {
@@ -61,12 +70,19 @@ describe('彻底删除', () => {
     expect(await manifest.list()).toHaveLength(1)
   })
 
-  it('不传 entryId = 清空：移除全部并移除各自的目录', async () => {
+  it('purgeAll = 清空：移除全部并移除各自的目录', async () => {
     const { fs, purge, manifest } = deps([trashEntry('a'), trashEntry('b')])
     const r = await purge()
-    expect(r.removed).toBe(2)
+    expect(r).toEqual({ removed: 2, freedBytes: 1024, attachments: NOTHING_CLEANED })
     expect(fs.removeDir).toHaveBeenCalledTimes(2)
     expect(await manifest.list()).toHaveLength(0)
+  })
+
+  it('purgeAll = 清空：空清册回零，不报 trash-empty', async () => {
+    const { fs, purge } = deps([])
+    const r = await purge()
+    expect(r).toEqual({ removed: 0, freedBytes: 0, attachments: NOTHING_CLEANED })
+    expect(fs.removeDir).not.toHaveBeenCalled()
   })
 
   // 彻底删除也必须把宿主内存里那一份请掉、并如实通告——否则文件与清单都没了，侧栏却还留着一行、还能点开
@@ -90,9 +106,10 @@ describe('彻底删除', () => {
     expect(host.announceRemoved).not.toHaveBeenCalled()
   })
 
-  it('条目不在清单里时报 trash-empty', async () => {
+  it('条目不在清单里时报 trash-empty，且原文点名那条 id', async () => {
     const { purge } = deps([])
-    await expect(purge('nope')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty' })
+    const message: unknown = expect.stringContaining('nope')
+    await expect(purge('nope')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty', message })
   })
 
   it('目录已被手工删掉：仍移除清单行，不报错', async () => {
@@ -246,6 +263,91 @@ describe('彻底删除', () => {
   })
 })
 
+describe('清册作用域：一份快照上的选面、选组与收缩', () => {
+  const parent = trashEntry('p')
+  const kid = { ...trashEntry('k'), parentEntryId: 'p' }
+
+  it('同批第一条清完后，第二条 idempotent 回 {removed:0,freedBytes:0}（不带附件读数）', async () => {
+    const { fs, open, manifest } = deps([parent, kid])
+    const scope = await open()
+    const first = await scope.purge('p')
+    expect(first.removed).toBe(2) // 父那一组：父 + 孩子
+    const second = await scope.purge('k')
+    // 与旧批量回执同形：这一趟没有附件读数，`attachments` 缺席，不拿零冒充"清过"。
+    expect(second).toEqual({ removed: 0, freedBytes: 0 })
+    expect(fs.removeDir).toHaveBeenCalledTimes(2)
+    expect(await manifest.list()).toHaveLength(0)
+  })
+
+  it('absent（原始快照里就认不出）⇒ trash-empty 且原文点名 id，不当成"被带走"', async () => {
+    const { open, fs } = deps([parent])
+    const scope = await open()
+    const message: unknown = expect.stringContaining('ghost')
+    await expect(scope.purge('ghost')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty', message })
+    expect(fs.removeDir).not.toHaveBeenCalled()
+  })
+
+  it('收缩视图按组摘：先清孩子再清父，父那一组不再连带已经清掉的孩子（经 purge 行为间接钉收缩）', async () => {
+    const { fs, open } = deps([parent, kid])
+    const scope = await open()
+    expect((await scope.purge('k')).removed).toBe(1)
+    // 收缩若没发生，父那一组会把快照里还在的 kid 行再数一遍（removed 2）——这道断言钉的正是那一次收缩
+    expect((await scope.purge('p')).removed).toBe(1)
+    expect(fs.removeDir).toHaveBeenCalledTimes(2)
+  })
+
+  it('purgeAll 把全部行当一组递进执行器：一条都不剩', async () => {
+    const { fs, manifest, open } = deps([parent, kid, trashEntry('z')])
+    const scope = await open()
+    const r = await scope.purgeAll()
+    expect(r).toEqual({ removed: 3, freedBytes: 1536, attachments: NOTHING_CLEANED })
+    expect(fs.removeDir).toHaveBeenCalledTimes(3)
+    expect(await manifest.list()).toHaveLength(0)
+  })
+
+  it('purgeAll 之后收缩到底：同一作用域再 purge 走 carried 幂等', async () => {
+    const { fs, open } = deps([trashEntry('a'), trashEntry('b')])
+    const scope = await open()
+    await scope.purgeAll()
+    expect(await scope.purge('a')).toEqual({ removed: 0, freedBytes: 0 })
+    expect(fs.removeDir).toHaveBeenCalledTimes(2)
+  })
+
+  it('orphanGroups 与收缩视图同一口径：已清的行不再算「已知父」', async () => {
+    const parent = trashEntry('p', { sessionId: 'session-p' })
+    const { open } = deps([parent], {
+      corpus: [s('session-kid', { parentSessionId: 'session-p' })],
+    })
+    const scope = await open()
+    expect(await scope.orphanGroups()).toEqual([])
+    await scope.purge('p')
+    const after = await scope.orphanGroups()
+    expect(after.map((group) => group.root.sessionId)).toEqual(['session-kid'])
+  })
+
+  it('orphanGroups(roots) 只处理点名根所在的组（两边去 session- 前缀再比），不传 = 全量', async () => {
+    const { fs, open } = deps([], {
+      corpus: [
+        s('session-a', { parentSessionId: 'gone-a' }),
+        s('session-b', { parentSessionId: 'gone-b' }),
+      ],
+    })
+    const scope = await open()
+    const named = await scope.orphanGroups(['a'])
+    expect(named.map((group) => group.root.sessionId)).toEqual(['session-a'])
+    // 只量点名的根：没被点的那组不递归量树
+    expect(fs.sizeOfDir).toHaveBeenCalledTimes(1)
+    const all = await scope.orphanGroups()
+    expect(all.map((group) => group.root.sessionId)).toEqual(['session-a', 'session-b'])
+  })
+
+  it('语料缺席 ⇒ io（委托给扫描，不拿空语料冒充"没有孤儿"）', async () => {
+    const { open } = deps([])
+    const scope = await open()
+    await expect(scope.orphanGroups()).rejects.toMatchObject({ code: 'sessiondelete/io' })
+  })
+})
+
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
 
 /**
@@ -254,9 +356,8 @@ const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
  */
 describe('purge 把删除顺序交给执行器', () => {
   it('选完目标之后直接接上计划与执行器', () => {
-    const text = readFileSync(join(ROOT, 'src/verbs/purge-trash.ts'), 'utf8')
-    expect(text).not.toContain('deps.fs.removeDir')
-    expect(text).not.toContain('createJournal')
+    const text = readFileSync(join(ROOT, 'src/verbs/trash-scope.ts'), 'utf8')
+    expect(text).not.toContain('fs.removeDir(')
     expect(text).toContain('planTrashRemoval(')
     expect(text).toContain('executeRemoval(')
   })

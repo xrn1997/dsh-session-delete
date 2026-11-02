@@ -141,7 +141,8 @@ async function memberRestore(
       label: '取消归档失败',
       undoOnFailure: true,
       run: async () => { await deps.host.unarchive(entry.sessionId) },
-      undo: () => stepUndo('重新归档失败', () => deps.host.archive(entry.sessionId, workspaceId)),
+      // 重新归档只认会话：归档是 registry 全局的，与工作区账目无关，这里不传 workspaceId。
+      undo: () => stepUndo('重新归档失败', () => deps.host.archive(entry.sessionId)),
     }]),
     // ④ 摘清单行是最后一件写。它失败时 journal 把前几步退回去，否则会留下一条
     //    **恢复不了也清不掉的幽灵行**（目录已经回了 `sessions/`，行却还在回收站里挂着）。

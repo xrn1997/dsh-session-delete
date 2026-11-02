@@ -25,6 +25,7 @@ import {
   type SessionDeleteRemote,
 } from '../../src/client/remote.js'
 import type { TrashPanelDeps } from '../../src/client/trash-panel.js'
+import { pick } from '../support/fixture.js'
 
 afterEach(() => {
   // 断言失败时也把 fetch 还原；否则下一条用例会拿着上一条的 stub 跑（新增用例不再依赖 finally）。
@@ -105,10 +106,16 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
     })
     await expect(createHttpRemote().detail('e1')).resolves.toMatchObject({ ok: true })
     await expect(createHttpRemote().detail('e1', 12)).resolves.toMatchObject({ ok: true })
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.detail}`)
-    expect(calls[0]!.init?.method).toBe('POST')
-    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.entryId]: 'e1' })
-    expect(JSON.parse(String(calls[1]!.init?.body))).toEqual({ [PARAMS.entryId]: 'e1', [PARAMS.before]: 12 })
+    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.detail.path}`)
+    expect(pick(calls, 0).init?.method).toBe('POST')
+    // 本仓只以 string 体调 fetch（remote.ts 里 body 一律 JSON.stringify）；用 typeof 证明收窄而不是
+    // String()，免得对象经 String 折成 '[object Object]' 还蒙着解析下一步。
+    const firstBody = pick(calls, 0).init?.body
+    if (typeof firstBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof firstBody}`)
+    expect(JSON.parse(firstBody)).toEqual({ [PARAMS.entryId]: 'e1' })
+    const secondBody = pick(calls, 1).init?.body
+    if (typeof secondBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof secondBody}`)
+    expect(JSON.parse(secondBody)).toEqual({ [PARAMS.entryId]: 'e1', [PARAMS.before]: 12 })
     vi.unstubAllGlobals()
   })
 
@@ -131,7 +138,7 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
       return envelope('pong')
     })
     await expect(probeChannel(createHttpRemote())).resolves.toBe(true)
-    expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.ping}`])
+    expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`])
     vi.unstubAllGlobals()
   })
 })
@@ -179,9 +186,9 @@ describe('createHttpRemote · orphans 那一趟（九段里的 `GET /orphans`）
       return envelope(report)
     })
     await expect(createHttpRemote().orphans()).resolves.toEqual({ ok: true, value: report })
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.orphans}`)
-    expect(calls[0]!.init?.method).toBe('GET')
-    expect(calls[0]!.init?.body).toBeUndefined()
+    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`)
+    expect(pick(calls, 0).init?.method).toBe('GET')
+    expect(pick(calls, 0).init?.body).toBeUndefined()
     vi.unstubAllGlobals()
   })
 
@@ -212,9 +219,9 @@ describe('createHttpRemote · 孤儿附件两段（九段里的 `GET /attachment
       return envelope(report)
     })
     await expect(createHttpRemote().attachmentOrphans()).resolves.toEqual({ ok: true, value: report })
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans}`)
-    expect(calls[0]!.init?.method).toBe('GET')
-    expect(calls[0]!.init?.body).toBeUndefined()
+    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`)
+    expect(pick(calls, 0).init?.method).toBe('GET')
+    expect(pick(calls, 0).init?.body).toBeUndefined()
     vi.unstubAllGlobals()
   })
 
@@ -226,16 +233,18 @@ describe('createHttpRemote · 孤儿附件两段（九段里的 `GET /attachment
       return envelope(cleanup)
     })
     await expect(createHttpRemote().attachmentClean()).resolves.toEqual({ ok: true, value: cleanup })
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean}`)
-    expect(calls[0]!.init?.method).toBe('POST')
-    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({})
+    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`)
+    expect(pick(calls, 0).init?.method).toBe('POST')
+    const cleanBody = pick(calls, 0).init?.body
+    if (typeof cleanBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof cleanBody}`)
+    expect(JSON.parse(cleanBody)).toEqual({})
     vi.unstubAllGlobals()
   })
 
   it('注入面展开两段：成功支给裸值，失败支抛原文与码', async () => {
     const report = { count: 3, totalBytes: 300, items: [] }
     vi.stubGlobal('fetch', async (path: string) => {
-      if (String(path).endsWith(ROUTES.attachmentOrphans)) return envelope(report)
+      if (path.endsWith(ROUTES.attachmentOrphans.path)) return envelope(report)
       return envelope({ removed: 2, freedBytes: 200, failed: 0 })
     })
     const deps = buildDeps(createHttpRemote())
@@ -271,9 +280,11 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
     })
     await expect(createHttpRemote().apply('restore', ['e1', 'e2'])).resolves.toMatchObject({ ok: true })
     expect(calls).toHaveLength(1)
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.apply}`)
-    expect(calls[0]!.init?.method).toBe('POST')
-    expect(JSON.parse(String(calls[0]!.init?.body))).toEqual({ [PARAMS.action]: 'restore', [PARAMS.ids]: ['e1', 'e2'] })
+    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`)
+    expect(pick(calls, 0).init?.method).toBe('POST')
+    const applyBody = pick(calls, 0).init?.body
+    if (typeof applyBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof applyBody}`)
+    expect(JSON.parse(applyBody)).toEqual({ [PARAMS.action]: 'restore', [PARAMS.ids]: ['e1', 'e2'] })
     vi.unstubAllGlobals()
   })
 
@@ -284,7 +295,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
       return envelope({ removed: 3, freedBytes: 1 })
     })
     await expect(createHttpRemote().empty()).resolves.toMatchObject({ ok: true, value: { removed: 3 } })
-    expect(calls[0]!.path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.empty}`)
+    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`)
     vi.unstubAllGlobals()
   })
 

@@ -102,10 +102,12 @@ describe('选择面 · 清单换了', () => {
   })
 
   it('清单未知（null）⇒ 勾选保留：未知只是不知道，不拿它当"没了"；读数回来再剔掉真不在的', () => {
+    // props 的类型在这一格声明：renderHook 的泛型由 initialProps 推断，裸 `{ entries: rows }` 会把 `null` 那一支丢掉
+    const initialProps: { entries: readonly TrashEntryLike[] | null } = { entries: rows }
     const { result, rerender } = renderHook(
       ({ entries }: { entries: readonly TrashEntryLike[] | null }) =>
         useTrashSelection({ entries, groups: groupByProject(entries ?? [], zhTranslate) }),
-      { initialProps: { entries: rows as readonly TrashEntryLike[] | null } },
+      { initialProps },
     )
     act(() => { result.current.toggleCheck('a1') })
     act(() => { result.current.toggleCheck('b1') })

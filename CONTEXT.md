@@ -86,8 +86,13 @@ _Avoid_: 纯度（纯度管是否进到达序链；`count` 是 pure/不读，`de
 _唯一实现_: `src/api/request-trust.ts` 的 `judgeRequest`（身份面住 `src/ports/connection-port.ts` 的 `ConnectionPort`）。裁决见 ADR-0022 / ADR-0023。
 _Avoid_: 同源栅栏（归属不看 Origin 同不同名；DNS rebinding 下同名照样是外人）；认证 / 登录（身份承宿主，插件不建立也不校验凭据）。
 
+**清册作用域（trash scope）**:
+一份调用方选好读面的清册快照上的收缩视图——purge 这条写路径的「拿目标」owner。写入口 = 真相读；报告入口不经作用域（`/orphans` 直接把 raw 快照交 `loadOrphanGroups`）。**选哪一格由调用方（路由行 / 批量层）定好交进来**（ADR-0012 的边界）；组与收缩视图归它且**不外露**（三态与按组收缩的判据是内部闭包，读「组」的 `claimOf` / `withoutGroup`）：`purge(id)` 只收一个 id（选组、同批带走的幂等、`trash-empty` 的原文点名都在它里面），`purgeAll()` 清全部行，`orphanGroups(roots?)` 把当前视图原样交给「无主子会话」的扫描。
+_唯一实现_: `src/verbs/trash-scope.ts` 的 `createTrashScope`。
+_Avoid_: purge-trash（三行 glue 已被作用域吸收；「彻底删除」说的是动作，不是模块）。
+
 **同批已带走集（batch carried set）**:
-同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记、恢复/彻底删除按条目 id 记，各一个 adapter；它决定这一条还该不该交给动词，entry 适配另交 purge 一份收缩中的当前只读视图（盘上后代要按清册里还在的 id 排除）。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
+同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记（会话 id 域按「会话闭包」的 `bareSessionId` 归一后再记），恢复按条目 id 记，各一个 adapter；它决定这一条还该不该交给动词，purge 那一半连同收缩中的当前视图（盘上后代要按清册里还在的 id 排除）住「清册作用域」。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
 _唯一实现_: `src/verbs/batch-carried.ts`
 _Avoid_: 账本（同批集合不要与宿主工作区注册表混用）。
 
@@ -95,12 +100,17 @@ _Avoid_: 账本（同批集合不要与宿主工作区注册表混用）。
 一次删除搬进来的父会话与**在盘上、进了回收站**的孩子。孩子那行记 `parentEntryId` 指向父那行的 id。判据只有一条：**接得住孩子的只有组根**——自己不记 `parentEntryId` 的那一行；父行不在、或父行自己也是孩子时，孩子必须自己占一行。**组的闭包按组根算，不按直接孩子算**（`kind:'parent'` 一次问一层，问到问空为止）。组语义住 `src/trash/groups.ts`。
 _Avoid_: 批次、集合（组是删除时一起搬进来的成员关系；批次是操作单位）。
 
+**会话闭包（session closure）**:
+「一个根的全部后代」与「同一个会话的两代写法」的唯一口径：比对一律先把 id 去掉 `session-` 前缀（`bareSessionId`；一个 id 的全部写法由 `sessionIdShapes` 给出，逐层问宿主时按写法问），闭包在 parent(bare) 到 children 的索引上逐层收（深度不设上限、防环、首见去重）。`closureOf` 收单根闭包，`orphanRootsOf` 在整表语料上收「父既不在语料也不在清册」的根闭包组，`firstByBare` 是按首见去重的唯一写法。端口保留「一层一次宿主调用」的 adapter 职责（`descendantsByParent`），动词保留各自的对象映射——闭包本体不再有第二份实现。
+_唯一实现_: `src/domain/closure.ts` 的 `closureOf` / `orphanRootsOf` / `firstByBare` / `bareSessionId` / `sessionIdShapes`。
+_Avoid_: 传递闭包、bare id 去重（算法名与实现细节可以出现在注释里说明为什么，命名与词条只说「会话闭包」）。
+
 **盘上后代（stranded descendants）**:
 跟着父被删、但**没进回收站**、仍留在 `sessions/` 上的后代（级联落地之前删掉的那些存量）。与「组里带进来的孩子」是两件事，界面上各说各的，不许一个冒充另一个。
 _唯一实现_: `src/verbs/permanent-removal.ts` 的 `planTrashRemoval`（`PlannedTrashRow` 的 `strandedCount`）。
 
 **无主子会话（orphan subagent）**:
-`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录与会话独占的图片附件副本（投影缓存不在范围内；共享图片保留，判据见 ADR-0020）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。
+`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录与会话独占的图片附件副本（投影缓存不在范围内；共享图片保留，判据见 ADR-0020）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。根闭包组的纯核心在「会话闭包」（`src/domain/closure.ts` 的 `orphanRootsOf`）——`orphanGroupsOf` 是按语料对象映射的薄包装，归堆与去重两边都去 `session-` 前缀。
 _唯一实现_: `src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrphanGroups`。
 
 **活体（live session）**:

@@ -20,16 +20,20 @@ const HOST_ERROR_CODE: Record<string, Code> = {
   WorkspaceActiveSessionError: 'live',
 }
 
-/** cause 链上第一个**宿主类型化错误**本身（不只它的名字）——它自己身上的字段还要当 `details` 用。
+/** cause 链上第一个**宿主类型化错误**本身（不只它的名字）——它自己身上的字段还要当 `details` 用；
+ *  码在 hasOwn 证明的同一处取回（表值恒在，编译器只认贴着取的这一份）。
  *  深度有界（链坏掉不递归下去）；查表必须 `hasOwn`：`in` 会命中 `Object.prototype` 的键。 */
-function hostErrorOf(error: unknown): (Error & { name: string }) | undefined {
+function hostErrorOf(error: unknown): { host: Error & { name: string }; code: Code } | undefined {
   let current: unknown = error
   for (let depth = 0; depth < 8; depth++) {
     if (current === null || typeof current !== 'object') return undefined
     const name = (current as { name?: unknown }).name
     // 必须 `hasOwn`：`'constructor' in {...}` 是 true（原型链），抛出的东西只要 `name` 叫 `constructor`
     // 或 `toString` 就会拿回一个**函数**当码（`sessiondelete/function Object(){…}`）。
-    if (typeof name === 'string' && Object.hasOwn(HOST_ERROR_CODE, name)) return current as Error & { name: string }
+    if (typeof name === 'string' && Object.hasOwn(HOST_ERROR_CODE, name)) {
+      const code = HOST_ERROR_CODE[name]
+      if (code !== undefined) return { host: current as Error & { name: string }, code }
+    }
     current = (current as { cause?: unknown }).cause
   }
   return undefined
@@ -59,6 +63,7 @@ function ownDetailsOf(error: unknown): Record<string, unknown> | undefined {
   const out: Record<string, unknown> = {}
   const source = error as Record<string, unknown>
   for (const key of ['sessionId', 'workspaceId', 'path']) {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- 不信任过线值：`typeof` 只把类型面收成 string，断言在这里是给"过线 JSON 的字段真值"留的显式痕迹（类型面与运行时形状分开记账）。
     if (typeof source[key] === 'string') out[key] = source[key] as string
   }
   if (source.activity !== undefined) {
@@ -102,6 +107,7 @@ export function toRemoteFailure(error: unknown): RemoteFailure {
     const carried = (error as { details?: unknown }).details
     return {
       code: error.code,
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-conversion -- 镜像是谎：过线 JSON 的 message 未必是 string；String() 是运行时归一。
       message: String(error.message),
       ...(isDetailsRecord(carried) ? { details: carried } : {}),
     }
@@ -116,11 +122,11 @@ export function toRemoteFailure(error: unknown): RemoteFailure {
 
   const host = hostErrorOf(error)
   // 「就近优先」：动词在抛出处挂的 details 比 cause 上的宿主字段更近，前者有就用前者。
-  const own = detailsOf(error) ?? (host === undefined ? undefined : detailsOf(host))
+  const own = detailsOf(error) ?? (host === undefined ? undefined : detailsOf(host.host))
   if (host === undefined && fromVerb === undefined && typeof raw === 'string' && raw.includes('/')) {
     // 形状像 code 但不是官方域、也不是我们的动词码（`sessiondelete/nope` 那类）⇒ 兜 io，但原文照带
     return { code: SESSION_DELETE_CODES.io, message: messageOf(error) }
   }
-  const code = host !== undefined ? HOST_ERROR_CODE[host.name] : fromVerb ?? 'io'
+  const code = host !== undefined ? host.code : fromVerb ?? 'io'
   return { code: SESSION_DELETE_CODES[code], message: messageOf(error), ...(own === undefined ? {} : { details: own }) }
 }

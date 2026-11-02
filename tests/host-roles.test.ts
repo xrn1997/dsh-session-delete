@@ -30,6 +30,7 @@ type ExactKeys<T, K extends PropertyKey> =
 
 /** 编译期类型相等（双向 `extends` 的经典写法）：`A` 与 `B` 是同一个类型才为 `true`。 */
 type Equal<A, B> =
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- 经典编译期相等判据：`T` 只出现一次正是这条写法的要求。
   (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false
 
 /**
@@ -68,6 +69,13 @@ const LIST_SESSIONS_READ = true satisfies Equal<
   Awaited<ReturnType<HostCorpusPort['listSessions']>>,
   CorpusRead<readonly SessionIdentity[]>
 >
+
+/**
+ * `archive` **恰好一个参数**：归档是 registry 全局的、与工作区账目无关（为什么住
+ * `src/ports/host-port.ts` 的成员注释），实现从不读第二参数 ⇒ interface 不许再暗示按工作区作用域。
+ * 带可选第二参时 `Parameters[…]` 算出 `[string, string?]`、`['length']` 是 `1 | 2`，这行编译不过。
+ */
+const ARCHIVE_ARITY = true satisfies Equal<Parameters<HostIdentityPort['archive']>['length'], 1>
 
 /**
  * 宿主 ctx 的最小替身：`createHostPort` 构造期只读 `workspaceRegistry`，`get` / `waterfall` / `emit`
@@ -139,6 +147,10 @@ describe('宿主端口的角色接口', () => {
 
   it('HostCorpusPort.listSessions 的返回类型就是 CorpusRead<readonly SessionIdentity[]>（undefined 不再是契约的一部分）', () => {
     expect(LIST_SESSIONS_READ).toBe(true)
+  })
+
+  it('HostIdentityPort.archive 恰好一个参数（归档是 registry 全局的，与工作区账目无关）', () => {
+    expect(ARCHIVE_ARITY).toBe(true)
   })
 })
 

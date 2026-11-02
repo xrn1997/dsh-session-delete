@@ -40,7 +40,7 @@ export interface SettledFacts<A extends ApplyAction> {
  */
 export type WritePresentationByAction = {
   delete: {
-    /** 外部写入座位：让回收站面板重读。面板写不传（自己的 `refreshAfterWrite` 就是重读）。 */
+    /** 外部写入座位：让回收站面板重读。面板写不传（自己的清单重读 `reload` 不走这条通告）。 */
     invalidate?(): void
     /** 撤销发布：settlement 从回执摘要取出落地条目 id 与请求名单、组好形之后交来；名单**非空**——
      *  全被同批前一条带走时没有落点，settlement 不发布没有可撤销动作的横幅。座位只决定发布哪一形与那一形带的标题。 */
@@ -69,6 +69,7 @@ const NO_PRESENTATION: WritePresentationByAction = {
 
 /** 没有呈现材质的座位用它：抛掉按 action 的联合，调用点不用各自造一个空对象字面量。 */
 export function noPresentation<A extends ApplyAction>(action: A): WritePresentation<A> {
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- 联合收窄：按 `A` 索引 `NO_PRESENTATION` 得到的是大联合，断言把它收敛到 `WritePresentation<A>`；删了调用点的材质钩子就不可赋值。
   return NO_PRESENTATION[action] as WritePresentation<A>
 }
 

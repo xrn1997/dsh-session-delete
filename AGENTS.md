@@ -1,6 +1,6 @@
 # dsh-session-delete — 给 agent 的工作须知
 
-DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读哪份、哪些门必须过、哪些红线跨所有改动。架构细节、构建步骤、历史裁决都不在这里。双半产物：Node 半（Cordis 插件 + `/dsh-session-delete-api`，`src/{ports,trash,verbs,api,log}`）与浏览器半（左侧栏回收站面板、行菜单、批量浮条、插件设置页维护卡，`src/client`）。
+DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读哪份、哪些门必须过、哪些红线跨所有改动。架构细节、构建步骤、历史裁决都不在这里。双半产物：Node 半（Cordis 插件 + `/dsh-session-delete-api`，`src/{domain,ports,trash,verbs,api,log}`）与浏览器半（左侧栏回收站面板、行菜单、批量浮条、插件设置页维护卡，`src/client`）。
 
 ## 先读哪份
 
@@ -21,14 +21,14 @@ DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读�
 
 ## 必须过的门
 
-1. **`pnpm typecheck` 与 `pnpm test` 同批跑，各自确认退出码**：tests 在 tsconfig 内而 vitest 不查类型；跑门与提交必须是两条命令，别看管道说了什么。`pnpm test` 全绿只证形状与逻辑，不证真机激活。
+1. **`pnpm gates` 是门的总入口**（typecheck / lint / test / build / pack，任一红即红）；`pnpm typecheck` 与 `pnpm test` 仍必须同批跑，各自确认退出码。`tsc` 管类型形状，**`any` 归 ESLint**——`tsc` 从不拒绝显式 `any`。
 2. **客户端半改动先在有可见浏览器的隔离 home 验过**：条目激活失败 = 宿主进程死（`web boot: N entry did not activate`），不是 warn、不是静默 pending。只在没有页面的宿主上冒烟会漏掉这类崩溃。完整走法见 `docs/development.md` 的「真机验证」。
 3. **Node 半改动必须重启宿主**；浏览器半走宿主 HMR。
-4. **发版前三道门**：`pnpm typecheck`、`pnpm test`、`pnpm build`，退出码逐个看过。
+4. **发版前跑 `pnpm gates`**，退出码看过；CI 与发版工作流共用同一条命令，不另抄步骤清单。
 
 ## 硬约束
 
-- **改通道先改契约**：段名 / 动作 / 形状 / 失败码住 `src/shared/wire.ts`，方法 / 纯度 / 读面 / body 住 `src/api/route-table.ts`；加一个新段名两处一起改。请求本身不对用 4xx，操作失败回 200 + 信封。为什么不用官方 `remote.<namespace>` 见 ADR-0009。
+- **改通道先改契约**：段名 / 动作 / 方法 / 形状 / 失败码住 `src/shared/wire.ts`（段名表每项 `{ path, method }`，两半只投影），纯度 / 读面 / body 住 `src/api/route-table.ts`；加一个新段名两处一起改。请求本身不对用 4xx，操作失败回 200 + 信封。为什么不用官方 `remote.<namespace>` 见 ADR-0009。
 - **删除 / 恢复不碰归档**：回收站与归档是两套状态；删除必须把 session 和它的 agent handle 一起摘掉，恢复走冷 resume。判据与已知限制见 ADR-0008。
 - **附件红线**：附件只随永久删除清 `.dsh` 内独占图片副本——不碰源文件、不碰普通文件、共享引用保留；剩余引用源读不出就跳过。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。孤儿会话与孤儿附件的检查/清理都是**手动**：只在插件设置页的维护卡里触发，任何面板与写后重读都不自动扫（ADR-0021）。
 - **浏览器半不许 import 任何宿主客户端包**（type-only 也不留）；跨插件一律 `import type`；宿主类型面用本地窄镜像，不装宿主类型包、不做 `declare module` 增强。

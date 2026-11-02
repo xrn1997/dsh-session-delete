@@ -15,14 +15,15 @@ import type { ReactElement, ReactNode } from 'react'
 import { AttachmentNotice, AttachmentStrip } from './attachment-view.js'
 import { useIdleClose } from './confirm-close.js'
 import { zhTranslate, type Translate } from './copy.js'
-import type { AttachmentOrphanItemWire } from '../shared/wire.js'
+import type { AttachmentOrphanItemWire, AttachmentOrphanReportWire } from '../shared/wire.js'
 import { MaintenanceBanner, MaintenanceFailure } from './maintenance-parts.js'
 import { OrphanMaintenance } from './orphan-maintenance.js'
 import { fileSizeText } from './ui/format.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
 import { BULK_DANGER, CARD } from './trash-view.js'
-import { useMaintenance, type Maintenance, type MaintenanceDeps, type MaintenancePhase } from './use-maintenance.js'
+import { useMaintenance, type MaintenanceDeps } from './use-maintenance.js'
+import type { MaintenanceSectionView, MaintenancePhase } from './use-maintenance-section.js'
 
 /** 卡片外壳：按内容高、铺满宿主给的宽度；不假设自己住在中央面板里（没有 `height:100%`）。 */
 const CARD_SHELL = {
@@ -40,16 +41,19 @@ interface MaintenanceSectionProps {
   slot: 'maintenance-orphans' | 'maintenance-attachments'
   title: string
   hint: string
-  status: string
-  /** 这一段自己的写动作在飞：检查按钮与段内动作一起按住。 */
-  busy: boolean
+  /** 这一段的计数（从报告里点名：孤儿会话念组数、附件念件数）；报告不在 = null。 */
+  count: number | null
+  countKey: 'maintenance.orphans.count' | 'maintenance.attachments.count'
+  /** 段对象：状态行的在飞档位 / 失败与检查按钮的忙碌都从它取（busy 由段自己给，不再当 prop 传）。 */
+  section: Pick<MaintenanceSectionView<unknown>, 'busy' | 'phase' | 'failure'>
   onScan: () => void
   t: Translate
   children: ReactNode
 }
 
 /** 一段的标题行：标题 + 说明 + 状态 + 检查按钮。状态按优先级：清理中 / 检查中 / 检查失败 / 尚未检查 / 没有发现 / N。 */
-function MaintenanceSection({ slot, title, hint, status, busy, onScan, t, children }: MaintenanceSectionProps): ReactElement {
+function MaintenanceSection({ slot, title, hint, count, countKey, section, onScan, t, children }: MaintenanceSectionProps): ReactElement {
+  const status = statusText({ phase: section.phase, failure: section.failure, count, countKey, t })
   return (
     <section
       data-dsh-session-delete={slot}
@@ -73,7 +77,7 @@ function MaintenanceSection({ slot, title, hint, status, busy, onScan, t, childr
         >
           {status}
         </span>
-        <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={busy} onClick={onScan}>
+        <Button variant="outline" size="sm" style={{ flex: 'none' }} disabled={section.busy} onClick={onScan}>
           {t('maintenance.scan')}
         </Button>
       </div>
@@ -103,12 +107,8 @@ function statusText(input: {
 }
 
 interface AttachmentMaintenanceProps {
-  query: Pick<
-    Maintenance,
-    | 'attachmentReport' | 'attachmentFailure' | 'attachmentNotice' | 'attachmentConfirm'
-    | 'setAttachmentConfirm' | 'openAttachmentPreview' | 'cleanAttachmentOrphans' | 'scanAttachmentOrphans'
-  >
-  busy: boolean
+  /** 段视图：读数、提示、确认框、忙碌与四个动作都在它上面（与孤儿会话段同一台状态机）。 */
+  section: MaintenanceSectionView<AttachmentOrphanReportWire>
   t: Translate
 }
 
@@ -116,46 +116,46 @@ interface AttachmentMaintenanceProps {
  * 孤儿附件段：报告 >0 时出横幅（数量 + 体积 + 查看并清理）；检查/清理失败在原位摆原文 + 重试；
  * 上一趟清理的回执单独一行（已清 / 跳过 / 逐文件失败）。确认框把三条边界说完再动手。
  */
-function AttachmentMaintenance({ query, busy, t }: AttachmentMaintenanceProps): ReactElement {
-  const { attachmentReport, attachmentFailure, attachmentNotice, attachmentConfirm } = query
+function AttachmentMaintenance({ section, t }: AttachmentMaintenanceProps): ReactElement {
+  const { report, failure, notice, confirm, busy } = section
   return (
     <>
-      {!busy && attachmentReport !== null && attachmentReport.count > 0 ? (
+      {!busy && report !== null && report.count > 0 ? (
         <MaintenanceBanner
           slot="attachment-banner"
           busy={busy}
           t={t}
-          onOpen={() => query.openAttachmentPreview()}
+          onOpen={() => section.openPreview()}
         >
           <div style={{ fontSize: 13, lineHeight: '19px' }}>
-            {t('maintenance.attachments.count', { count: attachmentReport.count })}
+            {t('maintenance.attachments.count', { count: report.count })}
             {' · '}
-            {fileSizeText(attachmentReport.totalBytes)}
+            {fileSizeText(report.totalBytes)}
           </div>
         </MaintenanceBanner>
       ) : null}
 
-      {attachmentFailure !== null ? (
+      {failure !== null ? (
         <MaintenanceFailure
           slot="attachment-failure"
-          message={attachmentFailure}
+          message={failure}
           busy={busy}
           t={t}
-          onRetry={() => void query.scanAttachmentOrphans()}
+          onRetry={() => void section.scan()}
         />
       ) : null}
 
       {/* 回执不是检查状态：清单/报告重读读不出来，所以它单独一行、只在上一趟真的清过或跳过时出现。 */}
-      <AttachmentNotice message={attachmentNotice} />
+      <AttachmentNotice message={notice} />
 
-      {attachmentConfirm && attachmentReport !== null ? (
+      {confirm && report !== null ? (
         <AttachmentConfirm
-          count={attachmentReport.count}
-          items={attachmentReport.items}
+          count={report.count}
+          items={report.items}
           busy={busy}
           t={t}
-          onCancel={() => query.setAttachmentConfirm(false)}
-          onConfirm={() => void query.cleanAttachmentOrphans()}
+          onCancel={() => section.cancel()}
+          onConfirm={() => void section.clean()}
         />
       ) : null}
     </>
@@ -225,7 +225,7 @@ export interface MaintenanceSettingsProps {
 }
 
 export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettingsProps): ReactElement {
-  // 两个 section 各自一份忙碌与报告；这个 hook 不自动扫描。
+  // 两个段各自一台状态机（busy / 报告 / 提示都从段对象取）；这个 hook 不自动扫描。
   const maintenance = useMaintenance({ deps, t })
   return (
     <div data-dsh-session-delete="maintenance-card" style={CARD_SHELL}>
@@ -235,38 +235,28 @@ export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettin
         slot="maintenance-orphans"
         title={t('maintenance.orphans.title')}
         hint={t('maintenance.orphans.hint')}
-        status={statusText({
-          phase: maintenance.orphanPhase,
-          failure: maintenance.orphanFailure,
-          count: maintenance.orphanReport?.totalSessions ?? null,
-          countKey: 'maintenance.orphans.count',
-          t,
-        })}
-        busy={maintenance.orphanBusy}
-        onScan={() => void maintenance.scanOrphans()}
+        count={maintenance.orphans.report?.totalSessions ?? null}
+        countKey="maintenance.orphans.count"
+        section={maintenance.orphans}
+        onScan={() => void maintenance.orphans.scan()}
         t={t}
       >
-        <OrphanMaintenance query={maintenance} busy={maintenance.orphanBusy} t={t} />
+        <OrphanMaintenance section={maintenance.orphans} t={t} />
         {/* 孤儿会话清理也会顺带清掉会话独占的图片副本：回执那半份读数单独一行，句子与孤儿附件段同一套。 */}
-        <AttachmentNotice message={maintenance.orphanAttachmentNotice} />
+        <AttachmentNotice message={maintenance.orphans.attachmentNotice} />
       </MaintenanceSection>
 
       <MaintenanceSection
         slot="maintenance-attachments"
         title={t('maintenance.attachments.title')}
         hint={t('maintenance.attachments.hint')}
-        status={statusText({
-          phase: maintenance.attachmentPhase,
-          failure: maintenance.attachmentFailure,
-          count: maintenance.attachmentReport?.count ?? null,
-          countKey: 'maintenance.attachments.count',
-          t,
-        })}
-        busy={maintenance.attachmentBusy}
-        onScan={() => void maintenance.scanAttachmentOrphans()}
+        count={maintenance.attachments.report?.count ?? null}
+        countKey="maintenance.attachments.count"
+        section={maintenance.attachments}
+        onScan={() => void maintenance.attachments.scan()}
         t={t}
       >
-        <AttachmentMaintenance query={maintenance} busy={maintenance.attachmentBusy} t={t} />
+        <AttachmentMaintenance section={maintenance.attachments} t={t} />
       </MaintenanceSection>
     </div>
   )

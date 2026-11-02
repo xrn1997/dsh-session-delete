@@ -38,21 +38,23 @@ interface 上消失，就地收缩快照的契约也一并消失。
 **同批已带走集**住 `src/verbs/batch-carried.ts`：
 entry / session 两种 id 域各一个 adapter——entry 的三态判据读 `trash/groups.ts` 的 `claimOf`，
 session 只记 `take` 过的会话 id（fresh / carried 两态）。`batch.ts` 消费它的 `claim` / `take`，
-purge 那一路另取 entry 域交回的当前只读视图（盘上后代要按清册里还在的 id 排除）；
+purge 那一路的快照与收缩视图住清册作用域（盘上后代按清册里还在的 id 排除）；
 删除动词的结果仍是 `{ entry, movedSessionIds }`，session adapter 从这份结果长出
 集合，不在每条删除后重读清册。它不是回调——一条请求 id 仍只产出一条结果。
 
-### 一点五、动词收到的是**只读的组 / 清册**
+### 一点五、动词收到的是**只读的组或一个 id**
 
-批量路径上，`restoreSession(entryId, group)` 与 `purgeTrash(targets, rows, requestedId?)` 收的是由
-`batch-carried.ts` 按组语义算好的只读目标（`targets === undefined` = 清空）。它不是批量语义，是
-**性能契约**：整批只读一次清册，读者把那一份递下去；收缩留在 `batch-carried.ts`，
-「已被同批前一条带走」的判据读 `trash/groups.ts` 的 `claimOf`（动词只读目标、绝不改它）。
-直调路径要自备这一组（一次清册读 + `trash/groups.ts` 的 `groupOf`）；批量层交给 `claimOf`，
-直调者自己按组语义算。ghost 父（父行已摘、只剩孩子）的组只有孩子：restore 照旧报 `trash-empty`，
+批量路径上，`restoreSession(entryId, group)` 收的是由 `batch-carried.ts` 按组语义算好的只读组；
+purge 那一路只收一个 id——选组、收缩视图与同批带走的幂等都住 `src/verbs/trash-scope.ts`（清册作用域）。
+它不是批量语义，是
+**性能契约**：整批只读一次清册，读者把那一份递下去；收缩视图各住各家（restore 在 `batch-carried.ts`、
+purge 在清册作用域），「已被同批前一条带走」的三态判据与「把这一组从视图里摘掉」的判据都读
+`trash/groups.ts`（`claimOf` / `withoutGroup`，动词只读目标、绝不改它）。
+直调路径要自备这一组（一次清册读 + `trash/groups.ts` 的 `groupOf`）；purge 不再有可直调的动词面——
+`/apply` 的 purge 批与 `/empty` 都经清册作用域。ghost 父（父行已摘、只剩孩子）的组只有孩子：restore 照旧报 `trash-empty`，
 purge 照旧清这一组；其余目标按组整体处理。
 不带这份目标就得让每个动词各读一遍清册（100 条 = 100 次读），那正是这一层要消灭的成本；
-批量路径由 `batch.ts` 读一次清册，交给 `batch-carried.ts` 持有收缩视图与只读快照。
+批量路径由 `batch.ts` 读一次清册，restore 的那份交 `batch-carried.ts`、purge 的那份连同收缩视图交清册作用域。
 
 ### 二、`src/verbs/member-journal.ts` 拥有「一次移动」
 
@@ -79,7 +81,8 @@ purge 照旧清这一组；其余目标按组整体处理。
 
 ## 后果
 
-- 删除的 interface 仍是一个 id；恢复收「id + 只读组」，purge 收「只读目标 + 只读清册」。
+- 删除的 interface 仍是一个 id；恢复收「id + 只读组」；purge 的拿目标与收缩视图住清册作用域
+  （`trash-scope.ts`，见「一点五」）。
   删除的结果是 `{ entry, movedSessionIds }`；批量请求仍归 `batch.ts`，同批已带走集与组级顺序
   分别住 `batch-carried.ts` / `move-group.ts`。
 - 22 处 `rollbackReason(` 变成步骤标签（数据），8 处 `withRollbackFailures(` 收进 `member-journal.ts`

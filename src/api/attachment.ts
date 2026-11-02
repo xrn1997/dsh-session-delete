@@ -44,9 +44,12 @@ function sniffImage(bytes: Buffer): string | undefined {
  */
 function safeFilename(name: string | null, fallback: string): string {
   const raw = name === null || name === '' ? fallback : name
-  const base = [...raw]
+  // `Array.from(string)` 与 `[...string]` 同为按码点切分；换成它只是避开 no-misused-spread 的
+  // 语法误报，码点安全语义不变（注释下一行说明了截断不劈代理对）。
+  const base = Array.from(raw)
     .slice(0, 120)
     .join('')
+    // eslint-disable-next-line no-control-regex -- 下载名消毒：控制字符正是被匹配、被替换成 `_` 的对象；去掉它们会让 HEAD 文件名带控制字符。
     .replace(/[\\/:*?"<>|\u0000-\u001f\uD800-\uDFFF]/gu, '_')
     .replace(/\.\./gu, '_')
   return base === '' ? fallback : base

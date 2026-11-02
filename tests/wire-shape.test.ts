@@ -10,6 +10,7 @@ import { toWire } from '../src/api/trash-rows.js'
 import { REQUIRED_ENTRY_FIELDS, type TrashEntry } from '../src/trash/entry.js'
 import {
   ROUTE_CODES,
+  ROUTES,
   SESSION_DELETE_CODES,
   SESSION_DELETE_ERROR_DOMAIN,
   TRASH_DIR_LABEL,
@@ -177,6 +178,17 @@ describe('响应信封的运行期判形（isRemoteResult）', () => {
     expect(isRemoteResult({ ok: true, value: 1 })).toBe(true)
     expect(isRemoteResult({ ok: true, value: [{ id: 'a' }] })).toBe(true)
     expect(isRemoteResult({ ok: false, error: { code: 'sessiondelete/io', message: 'm' } })).toBe(true)
+  })
+})
+
+describe('段名表 `ROUTES` 是结构化常量（路径与方法各一格，ADR-0004 就地订正后的家）', () => {
+  // 一条 wire 事实（某段的 path + method）只住这一张表；键集漂了（多一格、少一格、
+  // 某段退化回纯字符串）两半的投影就会静默分叉——这类漂移运行期不报错，只有键集比对抓得住。
+  it('每项恰有 path / method 两键，且 path 以 / 开头', () => {
+    for (const [name, seg] of Object.entries(ROUTES)) {
+      expect(`${name}:${Object.keys(seg).sort().join('+')}`).toBe(`${name}:method+path`)
+      expect(`${name}:${seg.path.startsWith('/')}`).toBe(`${name}:true`)
+    }
   })
 })
 

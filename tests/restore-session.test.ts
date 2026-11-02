@@ -176,9 +176,8 @@ describe('恢复动词', () => {
     ;d.host.attach =
       vi.fn(async () => { throw new Error('ledger boom') })
     const rename = d.fs.rename
-    await expect(restore(d, entry.id)).rejects.toMatchObject({
-      code: 'sessiondelete/io', cause: expect.objectContaining({ message: 'ledger boom' }),
-    })
+    const cause: unknown = expect.objectContaining({ message: 'ledger boom' })
+    await expect(restore(d, entry.id)).rejects.toMatchObject({ code: 'sessiondelete/io', cause })
     expect(rename.mock.calls).toEqual([[trashDir, sessionDir], [sessionDir, trashDir]])
     expect(await manifest.list()).toHaveLength(1)
   })
@@ -189,9 +188,8 @@ describe('恢复动词', () => {
     const host = d.host
     host.unarchive = vi.fn(async () => { throw new Error('unarchive boom') })
     const rename = d.fs.rename
-    await expect(restore(d, entry.id)).rejects.toMatchObject({
-      code: 'sessiondelete/io', cause: expect.objectContaining({ message: 'unarchive boom' }),
-    })
+    const cause: unknown = expect.objectContaining({ message: 'unarchive boom' })
+    await expect(restore(d, entry.id)).rejects.toMatchObject({ code: 'sessiondelete/io', cause })
     // 末尾那个 rename 是回滚（目录放回回收站），下一行按 rename 的两对入参逐对核对
     expect(calls).toEqual(['rename', 'attach', 'archive', 'rename'])
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
@@ -207,9 +205,8 @@ describe('恢复动词', () => {
     manifest.remove = vi.fn(async () => { throw new Error('storage boom') })
     const host = d.host
     const rename = d.fs.rename
-    await expect(restore(d, entry.id)).rejects.toMatchObject({
-      code: 'sessiondelete/io', cause: expect.objectContaining({ message: 'storage boom' }),
-    })
+    const cause: unknown = expect.objectContaining({ message: 'storage boom' })
+    await expect(restore(d, entry.id)).rejects.toMatchObject({ code: 'sessiondelete/io', cause })
     // 反向：archive 藏回去 → detach 摘账本 → rename 把目录放回回收站（detach 不在 calls 里，见夹具）
     expect(calls).toEqual(['rename', 'attach', 'unarchive', 'archive', 'rename'])
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
@@ -236,7 +233,7 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
     const { deps: d, fs, host, manifest } = world()
     await restore(d, parent.id)
     expect(fs.rename).toHaveBeenCalledTimes(3)
-    const fromTrash = fs.rename.mock.calls.filter((c) => String(c[0]).includes('session-trash'))
+    const fromTrash = fs.rename.mock.calls.filter((c) => c[0].includes('session-trash'))
     expect(fromTrash).toHaveLength(3)
     expect(await manifest.list()).toEqual([])
     // 通告归批量层：一次批量只调一次 `announceRestored(ids)`（ADR-0002）。
@@ -270,9 +267,8 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
       if (from.includes('/sessions/') && to.includes('session-trash')) throw new Error('EACCES')
     })
     const err = await failureOf(restore(d, parent.id))
-    expect(err.details).toMatchObject({
-      rollbackFailures: expect.arrayContaining([expect.stringContaining('EACCES')]),
-    })
+    const rollbackFailures: unknown = expect.arrayContaining([expect.stringContaining('EACCES')])
+    expect(err.details).toMatchObject({ rollbackFailures })
     expect(host.announceRemoved).not.toHaveBeenCalled()
   })
 

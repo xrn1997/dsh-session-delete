@@ -17,6 +17,7 @@ import {
   togglePick,
 } from '../../src/client/batch-selection-store.js'
 import { countOutcomes } from './support/outcomes.js'
+import { pick } from '../support/fixture.js'
 
 beforeEach(() => {
   resetSelection()
@@ -140,8 +141,7 @@ describe('浮条', () => {
   it('旧响应不落地：后发的勾选才是准的', async () => {
     const deferred: Array<(value: ApplyOutcome[]) => void> = []
     const applyOutcomes = vi.fn(
-      (_action: string, _ids: readonly string[]) =>
-        new Promise<ApplyOutcome[]>((resolve) => deferred.push(resolve)),
+      () => new Promise<ApplyOutcome[]>((resolve) => deferred.push(resolve)),
     )
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
@@ -149,13 +149,13 @@ describe('浮条', () => {
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
     togglePick({ sessionId: 'b', title: 'B' })
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
-    // 第二次的响应先回（a、b 都无子会话）……
-    deferred[1](countOutcomes(['a', 'b']))
+    // 第二次的响应先回（a、b 都无子会话）……上面那条次数断言已经把它推进来了
+    pick(deferred, 1)(countOutcomes(['a', 'b']))
     await screen.findByRole('button', { name: '移入回收站 2 条' })
     fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
     await screen.findByText('已选 2 条')
     // ……第一次的后回（a 带 2 个）——旧响应，不许把「含 2 个」盖回来
-    deferred[0](countOutcomes(['a'], { a: 2 }))
+    pick(deferred, 0)(countOutcomes(['a'], { a: 2 }))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(screen.queryByText(/子会话/)).not.toBeInTheDocument()
     view.unmount()

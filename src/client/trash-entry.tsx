@@ -21,7 +21,8 @@ import { IconTrashOutlineRegular } from './ui/icons.js'
 
 /** 宿主 `SidebarPanelIconOwnerProps`：请求的方形边长；`active` 收了但不用（见头注）。 */
 export interface TrashPanelIconProps {
-  size?: number
+  // 槽位宿主显式传 undefined（`{ size }: { size?: number }` 直转）：props 面可选即含 undefined。
+  size?: number | undefined
   active?: boolean
 }
 
