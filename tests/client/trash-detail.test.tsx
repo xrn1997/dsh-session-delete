@@ -777,4 +777,19 @@ describe('回收站详情块 · 子会话', () => {
     expect(listTitle).toHaveAttribute('title', '清册标题')
     expect(listHead.lastElementChild).toBe(within(listPane).getByRole('button', { name: '← 返回清单' }))
   })
+
+  // jsdom 量不了布局，钉的是声明契约：宽档父详情的标题排没有返回键、孩子视图有；
+  // 标题排不按紧凑按钮（28px）预留行高时，下方元信息会在父子切换时上下跳 6px。
+  it('标题排恒定预留紧凑按钮的行高：父子视图同高、没有返回键的父详情也不塌陷', () => {
+    const { container } = at({ kind: 'ready', entry, detail }, { wide: true })
+    const head = must(container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '详情标题排')
+    expect(head.style.minHeight).toBe('28px')
+    // 只钉一侧会漏掉另一侧的回退：父子同高才是这条不变量的全部。
+    const { container: kidContainer } = at(
+      { kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { wide: true, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } },
+    )
+    const kidHead = must(kidContainer.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '孩子详情标题排')
+    expect(kidHead.style.minHeight).toBe(head.style.minHeight)
+  })
 })

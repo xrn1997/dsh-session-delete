@@ -85,8 +85,10 @@ const SHELL: CSSProperties = {
   minWidth: 0,
 }
 
-/** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（docs/ui-spec.md 状态⑥）。 */
-const HEAD: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 10 }
+/** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（docs/ui-spec.md 状态⑥）。
+ *  标题排按紧凑按钮（`ui.css` 的 `.sd-button-sm`）预留高度：宽档父详情没有返回键、孩子视图有，
+ *  不预留时下方元信息会在父子切换时跳 6px。 */
+const HEAD: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 10, minHeight: 28 }
 
 const TITLE_LINE: CSSProperties = { ...ELLIPSIS, flex: '1 1 auto', minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: '22px' }
 
