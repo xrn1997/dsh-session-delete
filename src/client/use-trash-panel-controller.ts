@@ -61,7 +61,7 @@ export interface TrashPanelController {
   readonly detailNav: DetailNav
   /** 打开一个孩子（父详情子会话段点进来）：读它的详情，但清单选中不动。 */
   openChild(child: TrashEntryWire): Promise<void>
-  /** 回到父详情（宽档头部那颗「返回父会话」；窄档 back/Esc 的第一程也走它）。 */
+  /** 回到父详情（详情顶部那颗「返回父会话」；窄档 back/Esc 的第一程也走它）。 */
   closeChild(): void
   readonly drilled: boolean
   readonly detail: TrashDetailState

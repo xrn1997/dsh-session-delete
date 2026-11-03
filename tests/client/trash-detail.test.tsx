@@ -1,5 +1,5 @@
 // 回收站的详情块：四态 + 可折叠的正文块 + 分页（docs/ui-spec.md）
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
 import { TrashDetail, type DetailPager, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
@@ -130,8 +130,11 @@ describe('回收站详情块 · 四种状态', () => {
   })
 
   it('窄档下钻时详情顶部有返回，宽档没有（同屏就有清单）', () => {
-    at({ kind: 'ready', entry, detail })
-    expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+    const { container: narrowPane } = at({ kind: 'ready', entry, detail }, { wide: false })
+    expect(within(narrowPane).getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+
+    const { container: widePane } = at({ kind: 'ready', entry, detail }, { wide: true })
+    expect(within(widePane).queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
   })
 })
 
@@ -713,21 +716,65 @@ describe('回收站详情块 · 子会话', () => {
     expect(screen.getByRole('button', { name: '← 返回父会话' })).toHaveAttribute('title', '(无标题会话)')
   })
 
+  it('清册标题与日志标题都为空：标题行兜底成未命名，悬停也给全称', () => {
+    const { container } = at({ kind: 'ready', entry: { ...entry, title: '' }, detail: { ...detail, logTitle: '' } },
+      { wide: false })
+    expect(within(container).getByText('(无标题会话)')).toHaveAttribute('title', '(无标题会话)')
+    expect(within(container).getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+  })
+
   it('parentContext 缺席且宽档：两颗返回按钮都不画（现状不变）', () => {
     at({ kind: 'ready', entry, detail }, { wide: true })
     expect(screen.queryByRole('button', { name: '← 返回父会话' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
   })
 
-  // jsdom 量不了布局，钉的是 DOM 契约：两颗返回互斥、共用「返回清单」原来的左侧位置。
-  it('返回键沿用标题左端：两颗返回共用同一个位置', () => {
-    at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
-      { wide: true, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } })
-    const parentHead = screen.getByRole('button', { name: '← 返回父会话' }).parentElement as HTMLElement
-    expect(parentHead.firstElementChild?.textContent).toBe('← 返回父会话')
+  // jsdom 量不了布局，钉的是 DOM 与声明契约：两颗返回互斥、共用标题那一排的右端。
+  // 「右端」全靠 `flex: 1 1 auto` 那条——DOM 顺序只保证按钮紧跟标题，不保证它被推到最右。
+  it('返回键住标题那一排的右端：标题在前吃满余宽、按钮在后，两颗共用同一个位置', () => {
+    const headOf = (pane: HTMLElement) =>
+      must(pane.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '详情标题排')
+    const titleRowOf = (head: HTMLElement) =>
+      must(head.firstElementChild instanceof HTMLElement ? head.firstElementChild : null, '标题栏')
+    const expectEllipsis = (row: HTMLElement) => {
+      expect(row.style.overflow).toBe('hidden')
+      expect(row.style.textOverflow).toBe('ellipsis')
+      expect(row.style.whiteSpace).toBe('nowrap')
+      expect(row.style.minWidth).toBe('0')
+    }
 
-    at({ kind: 'ready', entry, detail }, { wide: false })
-    const listHead = screen.getByRole('button', { name: '← 返回清单' }).parentElement as HTMLElement
-    expect(listHead.firstElementChild?.textContent).toBe('← 返回清单')
+    const { container: kidPane } = at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { wide: true, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } })
+    const kidHead = headOf(kidPane)
+    const kidTitleRow = titleRowOf(kidHead)
+    const kidTitle = within(kidPane).getByText('孩子会话')
+    expect(kidTitleRow.style.flex).toBe('1 1 auto')
+    expectEllipsis(kidTitleRow)
+    expect(kidTitleRow.firstElementChild).toBe(kidTitle)
+    // 悬停提示挂在按文字收缩的内层，热区不跟着标题行铺满整行。
+    expect(kidTitleRow).not.toHaveAttribute('title')
+    expect(kidTitle).toHaveAttribute('title', '孩子会话')
+    expect(kidHead.lastElementChild).toBe(within(kidPane).getByRole('button', { name: '← 返回父会话' }))
+
+    // 窄档孩子视图：返回父会话仍占同一个位置，且不与「返回清单」同屏。
+    const { container: narrowKidPane } = at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { wide: false, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } })
+    const narrowKidHead = headOf(narrowKidPane)
+    const narrowKidTitleRow = titleRowOf(narrowKidHead)
+    expect(narrowKidTitleRow.style.flex).toBe('1 1 auto')
+    expectEllipsis(narrowKidTitleRow)
+    expect(narrowKidHead.lastElementChild).toBe(within(narrowKidPane).getByRole('button', { name: '← 返回父会话' }))
+    expect(within(narrowKidPane).queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+
+    const { container: listPane } = at({ kind: 'ready', entry, detail }, { wide: false })
+    const listHead = headOf(listPane)
+    const listTitleRow = titleRowOf(listHead)
+    const listTitle = within(listPane).getByText('清册标题')
+    expect(listTitleRow.style.flex).toBe('1 1 auto')
+    expectEllipsis(listTitleRow)
+    expect(listTitleRow.firstElementChild).toBe(listTitle)
+    expect(listTitleRow).not.toHaveAttribute('title')
+    expect(listTitle).toHaveAttribute('title', '清册标题')
+    expect(listHead.lastElementChild).toBe(within(listPane).getByRole('button', { name: '← 返回清单' }))
   })
 })

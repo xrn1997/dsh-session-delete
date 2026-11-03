@@ -85,7 +85,12 @@ const SHELL: CSSProperties = {
   minWidth: 0,
 }
 
+/** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（docs/ui-spec.md 状态⑥）。 */
 const HEAD: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 10 }
+
+const TITLE_LINE: CSSProperties = { ...ELLIPSIS, flex: '1 1 auto', minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: '22px' }
+
+const BACK: CSSProperties = { flex: 'none' }
 
 /** 元信息那张表：label 一列、值一列，窄档也不横向溢出。 */
 const META: CSSProperties = {
@@ -545,29 +550,28 @@ export function TrashDetail({
 
   return (
     <div style={SHELL}>
-      {/* 两颗返回互斥（看父 vs 看清单），共用「返回清单」原来的左侧位置；宽档没有父可回时不画。
+      {/* 两颗返回互斥（看父 vs 看清单），共用同一个位置；宽档没有父可回时不画。
           parentContext 的 title 是清册原文，未命名兜底在这里按 t 做（判据与翻译分居两半）。 */}
-      <div style={HEAD}>
+      <div data-dsh-session-delete="trash-detail-head" style={HEAD}>
+        <div style={TITLE_LINE}>
+          {/* 内层按文字收缩：悬停提示不跟着吃满整行。 */}
+          <span title={title}>{title}</span>
+        </div>
         {detailNav.parentContext !== undefined ? (
           <Button
             variant="ghost"
             size="sm"
-            style={{ flex: 'none' }}
+            style={BACK}
             onClick={detailNav.parentContext.onBack}
             title={detailNav.parentContext.title === '' ? t('common.untitled') : detailNav.parentContext.title}
           >
             {t('detail.backToParent')}
           </Button>
         ) : wide ? null : (
-          <Button variant="ghost" size="sm" style={{ flex: 'none' }} onClick={onBack}>
+          <Button variant="ghost" size="sm" style={BACK} onClick={onBack}>
             {t('detail.back')}
           </Button>
         )}
-        <div style={{ minWidth: 0 }}>
-          <div style={{ ...ELLIPSIS, fontSize: 15, fontWeight: 600, lineHeight: '22px' }} title={title}>
-            {title}
-          </div>
-        </div>
       </div>
 
       {state.kind === 'loading' ? <LoadingBody t={t} /> : null}
