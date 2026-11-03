@@ -16,6 +16,23 @@ describe('captureAgentHandles', () => {
     expect(disposed).toEqual(['s1', 's2'])
   })
 
+  it('disposes with the handle as receiver（宿主 dispose 可能是类方法，摘下会丢 this）', async () => {
+    const disposed: string[] = []
+    class HostHandle {
+      readonly agent: { id: string }
+      constructor(agent: { id: string }) { this.agent = agent }
+      async dispose(): Promise<void> { disposed.push(this.agent.id) }
+    }
+    const agents = {
+      resume: async () => new HostHandle({ id: 's1' }),
+      create: async () => new HostHandle({ id: 's2' }),
+    }
+    const store = captureAgentHandles({ get: (name) => name === 'agents' ? agents : undefined })
+    await agents.resume()
+    await store.dispose('s1')
+    expect(disposed).toEqual(['s1'])
+  })
+
   it('installs each wrapper once even when the service proxy returns a new function on read', async () => {
     const writes: string[] = []
     const raw = { resume: async () => ({ agent: { id: 's1' }, dispose: async () => {} }), create: async () => ({ agent: { id: 's2' }, dispose: async () => {} }) }

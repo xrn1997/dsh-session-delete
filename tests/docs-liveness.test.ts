@@ -62,7 +62,8 @@ const rootDocs = new Set([
   join(ROOT, 'CHANGELOG.md'),
 ])
 const docsRoot = join(ROOT, 'docs') + sep
-const docCorpus = corpus.filter(({ file }) => rootDocs.has(file) || file.startsWith(docsRoot))
+const isDoc = (file: string): boolean => rootDocs.has(file) || file.startsWith(docsRoot)
+const docCorpus = corpus.filter(({ file }) => isDoc(file))
 
 function eachLine(visit: (file: string, line: string, index: number) => void): void {
   for (const { file, lines } of corpus) lines.forEach((line, index) => visit(file, line, index))
@@ -276,7 +277,9 @@ describe('文档门 · 指名的仓内路径必须存在', () => {
         if (raw.includes('*') || raw.includes('<')) continue
         // 目录引用（尾斜杠）也要验：被删掉的家同样该红
         const path = raw.endsWith('/') ? raw.slice(0, -1) : raw
-        if (path in ALLOWED) continue
+        // 白名单只对手写文档生效：条目都是「旧 ADR 正文保留历史坐标」。代码注释里再提已删文件
+        // 不该被它放行——否则注释里新长出的死链会跟着被白名单放过，门从此不响。
+        if (isDoc(file) && path in ALLOWED) continue
         if (!exists(path)) broken.push(`${rel(file)}:${i + 1} → ${raw}`)
       }
     })
@@ -306,13 +309,15 @@ describe('文档门 · 指名的仓内路径必须存在', () => {
 
   it('白名单里没有已经不再出现的僵尸条目', () => {
     const seen = new Set<string>()
-    eachLine((_file, line) => {
-      for (const m of line.matchAll(PATH_REF)) {
-        const raw = normalize(`${m[1]}/${m[2]}`)
-        const path = raw.endsWith('/') ? raw.slice(0, -1) : raw
-        if (path in ALLOWED) seen.add(path)
+    for (const { lines } of docCorpus) {
+      for (const line of lines) {
+        for (const m of line.matchAll(PATH_REF)) {
+          const raw = normalize(`${m[1]}/${m[2]}`)
+          const path = raw.endsWith('/') ? raw.slice(0, -1) : raw
+          if (path in ALLOWED) seen.add(path)
+        }
       }
-    })
+    }
     expect(Object.keys(ALLOWED).filter((key) => !seen.has(key)), '这些白名单条目已无对应引用，删掉它们').toEqual([])
   })
 })

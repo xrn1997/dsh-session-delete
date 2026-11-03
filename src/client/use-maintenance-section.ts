@@ -36,13 +36,13 @@ export interface MaintenanceSectionView<R> {
   /** 段自己给的忙碌（在飞即忙），不再作为 prop 传递。 */
   readonly busy: boolean
   /** 手动检查（也是失败块的重试）。 */
-  scan(): Promise<void>
+  scan: () => Promise<void>
   /** 唯一开门：先清旧失败与旧提示再开确认框。 */
-  openPreview(): void
+  openPreview: () => void
   /** 清完必重查；回执句子由 config 拼。 */
-  clean(): Promise<void>
+  clean: () => Promise<void>
   /** 只收确认框，不碰提示 / 失败。 */
-  cancel(): void
+  cancel: () => void
 }
 
 /** `settle` 拼出的这一趟要摆的句子；**缺席的格子表示"不碰"**（重查刚摆上的状态保持原样）。 */
@@ -64,6 +64,10 @@ export interface MaintenanceSectionConfig<R, C> {
   beforeRescan?(outcome: RemoteOutcome<C>): R | null
   /** 检查读不到时的上屏句；本地化前缀各段自己给。 */
   scanFailureText(message: string): string
+  /** 这一趟检查**赢了**（没被更晚的检查顶掉）之后顺手收掉的东西；输家不调用。它在赢家的读数
+   *  落地**之前**触发，故只许写自己那份不属于读数的状态。孤儿会话段用它清上一趟清理的附件回执
+   *  ——「收掉旧回执」属于最新读数成立的一部分，放在发请求之前会让被顶掉的输家也清掉赢家的回执。 */
+  onScanWon?: () => void
   /** 清理回执（含顶层失败）→ 这一趟的句子。重查赢了才调用；段独有的第二回执（如孤儿会话段顺带
    *  清掉的附件读数）由它顺手写自己的状态——那不是这台状态机的格子。
    *  `report` 是**这一趟**点击那一刻的报告：回执要按请求名单逐条判读，名单只能随这一趟交下来；
@@ -90,6 +94,7 @@ export function useMaintenanceSection<R, C>(config: MaintenanceSectionConfig<R, 
     // config 交回的已经是落地面（glue 用 `callRemote` 包装、不会抛），这里不再包一层。
     const outcome = await config.scan()
     if (!ticket.current) return false
+    config.onScanWon?.()
     // 新一次检查是新的只读快照：旧失败与旧提示一起收掉，不冒充这一次的读数。
     if (outcome.ok) {
       setReport(outcome.value)

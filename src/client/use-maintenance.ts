@@ -76,13 +76,15 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
   /* ── 孤儿会话段：`GET /orphans` 读 + `/apply` 的 `orphan-clean` 写 ─────────── */
   const [orphanAttachmentNotice, setOrphanAttachmentNotice] = useState<string | null>(null)
   const orphans = useMaintenanceSection<OrphanReportWire, ApplyOutcome[]>({
-    scan: async () => {
-      // 新一次检查是新的只读快照：上一趟清理顺带清掉的附件回执一起收掉，不冒充这一次的读数。
-      setOrphanAttachmentNotice(null)
-      return callRemote(() => deps.scanOrphans())
-    },
+    scan: () => callRemote(() => deps.scanOrphans()),
+    // 新一次检查是新的只读快照：上一趟清理顺带清掉的附件回执一起收掉，不冒充这一次的读数。
+    // 只在赢了之后收（输家不收）：否则被后发检查顶掉的输家会把赢家的回执清掉。
+    onScanWon: () => { setOrphanAttachmentNotice(null) },
     clean: (report) => {
       if (report.roots.length === 0) return null
+      // 清理这一趟一起飞，上一趟的回执就不再是读数：写在发请求之前。这里不需要检查那套赢家判定
+      // ——同时只有一趟写在飞，靠的是界面上的忙碌禁用（`maintenance-parts.tsx` 与确认框的确认键），
+      // 不是这台状态机给的保证；改动这两处之一前先确认不会出现输家替赢家清场。
       setOrphanAttachmentNotice(null)
       return callRemote(() => deps.applyOutcomes('orphan-clean', report.roots))
     },

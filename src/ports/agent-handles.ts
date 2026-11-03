@@ -68,7 +68,9 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
             const id = handle?.agent?.id
             const dispose = handle?.dispose
             if (typeof id !== 'string' || id.length === 0 || typeof dispose !== 'function') return
-            handles.set(id, async () => { await dispose() })
+            // 必须带着接收者调用：宿主的 dispose 可能是类方法，摘下方法引用再裸调会丢 `this`
+            // （TypeError 会被 evictLive 折成 unknown、不通告 ⇒「删了但 agent 还活着」静默回归）。
+            handles.set(id, async () => { await dispose.call(handle) })
           }, () => undefined)
           return result
         }

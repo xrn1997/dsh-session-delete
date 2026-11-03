@@ -242,6 +242,40 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
     expect(current(result).orphans.report).toEqual(LATER)   // 输家什么都不落地
     expect(current(result).orphans.busy).toBe(false)         // 也不替赢家清 phase
   })
+
+  it('输家清不掉附件回执：清除只发生在赢家落地之后', async () => {
+    let resolveLoser!: (value: OrphanReportWire) => void
+    let resolveWinner!: (value: OrphanReportWire) => void
+    const scanOrphans = vi.fn()
+      .mockResolvedValueOnce(REPORT)                        // 首趟手动检查
+      .mockResolvedValueOnce(REPORT)                        // clean 之后的必发重查
+      .mockImplementationOnce(() => new Promise<OrphanReportWire>((resolve) => { resolveLoser = resolve }))
+      .mockImplementationOnce(() => new Promise<OrphanReportWire>((resolve) => { resolveWinner = resolve }))
+    const { result } = mount({
+      scanOrphans,
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
+        ids.map((id) => ok(action, id, {
+          removed: 1,
+          freedBytes: 2048,
+          attachments: { removed: 2, freedBytes: 100, failed: 1, skipped: '剩余引用源读不出' },
+        }))),
+    })
+    await act(async () => { await current(result).orphans.scan() })
+    await act(async () => { await current(result).orphans.clean() })
+    expect(current(result).orphans.attachmentNotice).not.toBeNull()
+
+    let loser!: Promise<void>
+    act(() => { loser = current(result).orphans.scan() })     // 先发：将被顶掉
+    let winner!: Promise<void>
+    act(() => { winner = current(result).orphans.scan() })    // 后发：赢下最新票
+
+    // 输家落地：回执仍在（清除若放在发请求之前，这里已经被清掉了）。
+    await act(async () => { resolveLoser(REPORT); await loser })
+    expect(current(result).orphans.attachmentNotice).not.toBeNull()
+
+    await act(async () => { resolveWinner(REPORT); await winner })
+    expect(current(result).orphans.attachmentNotice).toBeNull()   // 只有赢家清
+  })
 })
 
 describe('维护编排 · 孤儿会话清理', () => {

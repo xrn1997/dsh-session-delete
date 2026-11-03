@@ -16,7 +16,7 @@ export function must<T>(value: T | null | undefined, what: string): NonNullable<
   return value
 }
 
-/** 按位置取夹具条目；越界即响亮失败（序号按人数的第几项说，共几项一起给出）。 */
+/** 按位置取夹具条目；越界即响亮失败（消息用人话报序号：1 起的「第几项」，连总数一起给）。 */
 export function pick<T>(items: readonly T[], index: number): NonNullable<T> {
   return must(items[index], `第 ${index + 1} 项（共 ${items.length} 项）`)
 }
