@@ -12,13 +12,14 @@ import {
   executeImageAttachmentRemoval,
   isMissing,
   planImageAttachmentRemoval,
+  recheckImageRemovalExclusivity,
   type ImageRemovalPlan,
 } from '../trash/attachments.js'
 import type { HostCorpusPort, SubagentMember } from '../ports/host-port.js'
 import { bareSessionId, firstByBare } from '../domain/closure.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/wire.js'
-import { verbError } from './errors.js'
+import { verbError, rollbackReason, withRollbackFailures } from './errors.js'
 import { assertNoLive } from './live-admission.js'
 
 export interface MeasuredMemberDir {
@@ -42,9 +43,9 @@ interface DirProbe {
 }
 
 /** `exists → sizeOfDir` 的唯一一条度量口径（成员目录与回收站目录共用）：先问在不在，再量字节；
- *  ENOENT 是唯一一种当"不在"的失败，别的错误照旧响亮。别再在调用点各写一遍这段 try/catch。
+ *  缺席（ENOENT / ENOTDIR）才是"不在"，别的错误照旧响亮（ADR-0039）。别再在调用点各写一遍这段 try/catch。
  *
- *  **已知粒度**：`sizeOfDir` 递归里撞到的 ENOENT 与"目录本身没了"是同一个码，所以目录里某个文件
+ *  **已知粒度**：`sizeOfDir` 递归里撞到的缺席与"目录本身没了"是同一个码，所以目录里某个文件
  *  恰好在这一拍消失时，整条目录会被记成「不在」（`/list` 少算这条、删除计划里没有可删的字节，
  *  而清册行照旧摘——盘上留下目录等下一次 `reconcile` 重建成行，自愈、不丢数据）。复核一次
  *  `exists(dir)` 能把两者分开，却会让「宿主正在写、文件刚被挪走」这类正常竞态把 `/list` 整个打红——
@@ -334,15 +335,20 @@ export async function planOrphanRemoval(
  *
  * 顺序：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行
  * （在才删目录 → 摘清册行 → 通告成员离场）→ 逐条盘上成员（删目录 → 通告成员离场）→ 逐条附件对象。
- * 目录删掉就没有"退回去"这回事，中途失败**不回滚**；已经删掉的由下面的计数器如实交回。
- *
- * 附件清理排在**所有会话目录删完之后**：对象只在会话真的没了之后才动；单文件失败只进
- * `attachments.failed`，不影响（也不回滚）会话删除的回执。
+ * 目录删掉就没有"退回去"这回事，中途失败**不回滚目录**；已经删掉的由下面的计数器如实交回。
+ * **归档态回滚**：`unarchive` 排在所有删除之前（免得留下"会话没了、归档集还挂着"的幽灵 id），
+ * 所以中途失败时目录还在、归档位却已经摘了。失败出口把**目录还在**的那些（这一趟没删掉、也不是计划时
+ * 就缺席）按删除前的读数重新归档（`isArchived` 先读过一次，不是按 `wasArchived` 猜）；目录不在的跳过
+ * ——那时恢复归档只会造幽灵 id。
+ * 回滚自己的失败走 `details.rollbackFailures`，不让它把原错误吞掉（ADR-0040）。
+ * **附件计划在执行期复核**：计划到删对象之间的窗口里新增的引用会让计划过期；删对象前用同一套
+ * 剩余引用扫描重判一次，只删这一刻仍无引用的对象（ADR-0041）。
  *
  * 失败形状：
  * - `kind:'orphan'`（orphan-clean）⇒ `io` + `{removed, freedBytes, failedSessionId}`，不伪装成整组没动；
  * - `kind:'trash'`（purge）⇒ 同一个标签、不带 details；
- * - orphan-clean 的 unarchive / detach 原样抛出。
+ * - orphan-clean 的归档实况预读 / unarchive / detach 原样抛出；
+ * - 归档态回滚不干净时，原错误带 `details.rollbackFailures`（码仍按原错误的动词码）。
  *
  * 通告只经 `member-presence`（摘活体三态 + `api-session/removed`），不在这里另写一份。
  */
@@ -366,7 +372,7 @@ export async function executeRemoval(
     throw verbError('io', `${label}：${String(error)}`, error, details)
   }
 
-  /** 退归档集 / 摘账本这一步的失败形状：purge 折成带标签的 `io`；orphan-clean 原样抛。 */
+  /** 归档实况预读 / 退归档集 / 摘账本这一步的失败形状：purge 折成带标签的 `io`；orphan-clean 原样抛。 */
   const step = async (label: string, sessionId: string, run: () => Promise<void>): Promise<void> => {
     if (plan.kind === 'orphan') {
       await run()
@@ -379,56 +385,98 @@ export async function executeRemoval(
     }
   }
 
-  // 归档集与账本在**任何删除之前**退掉：失败时目录还在，重试还能清；也不会留下"会话没了、归档集还挂着"的幽灵 id。
+  // 归档态回滚名单：只放回删除前确实归档着的那些。`unarchive` 对未归档是 no-op，回滚时更不能
+  // 凭空把没归档过的会话归档了——所以先读一次，不按 `wasArchived` 猜（旧条目、盘上成员的归档事实
+  // 都可能与清册那一格不同）。预读失败与 unarchive 同走一条 `step` 形状（purge 折成带标签的 `io`、
+  // orphan-clean 原样抛），且此刻零写入。
+  const archivedBefore = new Set<string>()
   for (const sessionId of plan.unarchive) {
-    await step('取消归档失败', sessionId, () => deps.host.unarchive(sessionId))
+    await step('读取归档状态失败', sessionId, async () => {
+      if (await deps.host.isArchived(sessionId)) archivedBefore.add(sessionId)
+    })
   }
-  for (const member of plan.members) {
-    const workspaceId = member.workspaceId
-    if (workspaceId === undefined) continue
-    await step('摘账本失败', member.sessionId, () => deps.host.detach(member.sessionId, workspaceId))
-  }
+  /** 走到过 `unarchive` 这一步的 id（含失败那一条）：失败时按它回滚。 */
+  const unarchived: string[] = []
+  /** 计划时目录还在的 id：只有这些会话还有本体可挂归档。计划时就缺席的行 / 成员也在 `unarchive`
+   *  名单里（那一步顺带清幽灵 id），但没有目录可回滚。 */
+  const onDisk = new Set<string>([
+    ...plan.trash.filter((row) => row.present).map((row) => row.entry.sessionId),
+    ...plan.members.map((member) => member.sessionId),
+  ])
+  /** 目录已经真删掉的 id：没有归档态可放回去，跳过——否则会在 registry 里留下幽灵 id。 */
+  const deleted = new Set<string>()
 
-  // 回收站行：计划里 `present:false` 的行没有目录可删（执行期也不再问盘），但清册行仍要摘。
-  for (const row of plan.trash) {
-    if (row.present) {
-      try {
-        await deps.fs.removeDir(row.dir)
-      } catch (error) {
-        fail('删除回收站目录失败', error, row.entry.sessionId)
+  try {
+    // 归档集与账本在**任何删除之前**退掉：失败时目录还在，重试还能清；也不会留下"会话没了、归档集还挂着"的幽灵 id。
+    for (const sessionId of plan.unarchive) {
+      unarchived.push(sessionId)
+      await step('取消归档失败', sessionId, () => deps.host.unarchive(sessionId))
+    }
+    for (const member of plan.members) {
+      const workspaceId = member.workspaceId
+      if (workspaceId === undefined) continue
+      await step('摘账本失败', member.sessionId, () => deps.host.detach(member.sessionId, workspaceId))
+    }
+
+    // 回收站行：计划里 `present:false` 的行没有目录可删（执行期也不再问盘），但清册行仍要摘。
+    for (const row of plan.trash) {
+      if (row.present) {
+        try {
+          await deps.fs.removeDir(row.dir)
+        } catch (error) {
+          fail('删除回收站目录失败', error, row.entry.sessionId)
+        }
+        deleted.add(row.entry.sessionId)
+        freedSoFar += row.bytes
       }
-      freedSoFar += row.bytes
+      try {
+        await deps.ledger.remove(row.entry.id)
+      } catch (error) {
+        fail('摘除回收站条目失败', error, row.entry.sessionId)
+      }
+      removed += 1
+      await presence.memberGone(row.entry.sessionId)
     }
-    try {
-      await deps.ledger.remove(row.entry.id)
-    } catch (error) {
-      fail('摘除回收站条目失败', error, row.entry.sessionId)
-    }
-    removed += 1
-    await presence.memberGone(row.entry.sessionId)
-  }
 
-  // 盘上成员：标签按调用方区分（purge 说的是"盘上后代"，orphan-clean 说的是"会话目录"）。
-  const memberLabel = plan.kind === 'trash' ? '删除盘上后代目录失败' : '删除会话目录失败'
-  for (const member of plan.members) {
-    try {
-      await deps.fs.removeDir(member.dir)
-    } catch (error) {
-      fail(memberLabel, error, member.sessionId)
+    // 盘上成员：标签按调用方区分（purge 说的是"盘上后代"，orphan-clean 说的是"会话目录"）。
+    const memberLabel = plan.kind === 'trash' ? '删除盘上后代目录失败' : '删除会话目录失败'
+    for (const member of plan.members) {
+      try {
+        await deps.fs.removeDir(member.dir)
+      } catch (error) {
+        fail(memberLabel, error, member.sessionId)
+      }
+      deleted.add(member.sessionId)
+      removed += 1
+      freedSoFar += member.bytes
+      await presence.memberGone(member.sessionId)
     }
-    removed += 1
-    freedSoFar += member.bytes
-    await presence.memberGone(member.sessionId)
-  }
 
-  // 附件对象最后动：会话目录已经真的没了，失败只计数、不回滚，也不改会话删除的字节。
-  const attachments = await executeImageAttachmentRemoval(deps, plan.attachments)
-  return {
-    removed,
-    freedBytes: plan.bytes,
-    attachments: {
-      ...attachments,
-      ...(plan.attachments.skipped === undefined ? {} : { skipped: plan.attachments.skipped }),
-    },
+    // 附件对象最后动：会话目录已经真的没了，失败只计数、不回滚，也不改会话删除的字节。
+    // 删之前再复核一次独占：计划到这一刻的窗口里新增的引用（同图再贴一次 / 派生存储新写一条）
+    // 必须保住对象，否则删的是"这一刻仍被引用"的副本（ADR-0041）。
+    const attachmentPlan = await recheckImageRemovalExclusivity(deps, plan.attachments)
+    const attachments = await executeImageAttachmentRemoval(deps, attachmentPlan)
+    return {
+      removed,
+      freedBytes: plan.bytes,
+      attachments: {
+        ...attachments,
+        ...(attachmentPlan.skipped === undefined ? {} : { skipped: attachmentPlan.skipped }),
+      },
+    }
+  } catch (error) {
+    // 目录不回滚（删了就是删了）；归档态不是——条目还在回收站、目录也还在的那些，用户随后恢复时
+    // 恢复路径不会替他补归档（它只按 `wasArchived` 迁移旧条目），所以这里必须放回去（ADR-0040）。
+    const rollbackFailures: string[] = []
+    for (const sessionId of [...unarchived].reverse()) {
+      if (!archivedBefore.has(sessionId) || deleted.has(sessionId) || !onDisk.has(sessionId)) continue
+      try {
+        await deps.host.archive(sessionId)
+      } catch (rollbackError) {
+        rollbackFailures.push(rollbackReason('恢复归档失败', rollbackError))
+      }
+    }
+    throw rollbackFailures.length === 0 ? error : withRollbackFailures(error, rollbackFailures)
   }
 }

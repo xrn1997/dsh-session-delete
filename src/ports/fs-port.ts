@@ -1,11 +1,24 @@
-import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+
+/**
+ * **缺席**只认 ENOENT 与 ENOTDIR（"路径中间有一截不是目录"与"不存在"是同一种回答）。
+ *
+ * EACCES / EIO / ELOOP / 断挂载**不是缺席**：这些读数说明"我们看不见"，不是"那里没有"。
+ * 破坏性动作（删目录、删附件对象、按"没有引用"清共享图）据此做决定，把读不出折成没有
+ * 就是数据消失；ADR-0039 是这条判据的裁决。
+ */
+export function isAbsentPath(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
 
 export interface FsPort {
   /** 全部成员写成属性声明：端口方法会被**解构出来单独调**（`const { sizeOfDir } = port`，见下方
    *  模块级递归的注释），实现体一律不读 `this`。方法简写的隐式 `this: FsPort` 会让
    *  `unbound-method` 把这种正常用法报成可疑；契约（返回的 Promise 形状）一字未动。 */
+  /** 路径在不在。**只有 ENOENT / ENOTDIR 回 `false`**；权限、盘挂、I/O 等读错误照抛——
+   *  调用方拿它当"缺席"判据时，读不出必须是失败，不是"没有"（ADR-0039）。 */
   exists: (p: string) => Promise<boolean>
   /** 建目录（含中间层）。首删时 `~/.dsh/session-trash/` 还不存在，而 `rename` 不建父目录。 */
   ensureDir: (p: string) => Promise<void>
@@ -43,17 +56,28 @@ async function sizeOfDir(p: string): Promise<number> {
   return total
 }
 
+/** 路径在不在：只有缺席两种错误回 `false`，其余读错误照抛。`exists` 与 `rename` 的目标检查共用。 */
+async function pathPresent(p: string): Promise<boolean> {
+  try {
+    await stat(p)
+    return true
+  } catch (error) {
+    if (isAbsentPath(error)) return false
+    throw error
+  }
+}
+
 export function createFsPort(): FsPort {
   return {
-    // eslint-disable-next-line @typescript-eslint/require-await -- `FsPort` 其余成员都要 await，调用方按同一形状用；`existsSync` 是这里唯一不需要绕事件循环的一问，同步实现不必伪装成异步。
-    async exists(p) { return existsSync(p) },
+    exists: pathPresent,
     async ensureDir(p) { await mkdir(p, { recursive: true }) },
     async rename(from, to) {
       // 目标已存在一律失败：Linux 的 rename 会静默替代**空目录**，Windows 不会——"搬进回收站/放回
       // 会话目录"是这里唯一的目录搬迁动作，被替代 = 数据消失。把两个平台的语义钉成同一个。
       // 检查与 rename 之间仍有一个窗口（Linux 上恰好此时长出空目录会被覆盖）；本机可信部署
       // 接受这一残余竞态，不加锁——加锁会把一次本地搬移变成跨进程协议。
-      if (existsSync(to)) throw new Error(`目标已存在，拒绝覆盖：${to}`)
+      // 目标**读不出**也不搬：读不出不是"没有"（ADR-0039），抛错比冒险覆盖安全。
+      if (await pathPresent(to)) throw new Error(`目标已存在，拒绝覆盖：${to}`)
       try {
         await rename(from, to)
       } catch (error) {

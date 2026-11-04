@@ -51,7 +51,9 @@ function carriedRollbackFailures(error: unknown): string[] {
 
 /** 原错误保留，回滚失败作为 `details.rollbackFailures` 上线；码仍按原错误的动词码，
  *  没有可继承的就落 io。**内层的回滚失败要并进来**：一个成员自己退失败、兄弟也退失败时，
- *  两份失败都得在 details 里，消息也不能出现第二个「回滚未完成」。 */
+ *  两份失败都得在 details 里，消息也不能出现第二个「回滚未完成」。
+ *  **原错误 details 的其余键原样保留**：孤儿清理的部分回执（`removed` / `freedBytes` /
+ *  `failedSessionId`）就挂在它上面，整份替换会把已经发生的删除报成 0。 */
 export function withRollbackFailures(error: unknown, failures: readonly string[]): VerbError {
   const code = verbCodeOf(error) ?? 'io'
   const carried = carriedRollbackFailures(error)
@@ -62,10 +64,11 @@ export function withRollbackFailures(error: unknown, failures: readonly string[]
   const message = base.includes('；回滚未完成：')
     ? (extra.length > 0 ? `${base}；${extra.join('；')}` : base)
     : `${base}；回滚未完成：${merged.join('；')}`
+  const priorDetails = (error as { details?: Record<string, unknown> } | null | undefined)?.details
   return verbError(
     code,
     message,
     error,
-    { rollbackFailures: merged },
+    { ...priorDetails, rollbackFailures: merged },
   )
 }

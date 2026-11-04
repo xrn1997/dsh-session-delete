@@ -34,4 +34,21 @@ describe('回滚失败的结构化上报', () => {
     expect(wrapped.code).toBe('sessiondelete/io')
     expect(wrapped.details).toEqual({ rollbackFailures: ['x'] })
   })
+
+  // 孤儿清理的部分回执就挂在原错误的 details 上，且客户端按它显示「已经删掉了多少」；
+  // 回滚失败只能追加一项，不能把整份 details 换成只剩 rollbackFailures。
+  it('原错误的其他 details 原样保留，只并入 rollbackFailures', () => {
+    const inner = verbError('io', '删除会话目录失败：Error: EBUSY', undefined, {
+      removed: 1,
+      freedBytes: 100,
+      failedSessionId: 'session-kid',
+    })
+    const wrapped = withRollbackFailures(inner, ['恢复归档失败：registry down'])
+    expect(wrapped.details).toEqual({
+      removed: 1,
+      freedBytes: 100,
+      failedSessionId: 'session-kid',
+      rollbackFailures: ['恢复归档失败：registry down'],
+    })
+  })
 })

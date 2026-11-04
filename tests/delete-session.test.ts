@@ -236,6 +236,21 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     expect(movedSessionIds).toEqual(['session-parent', 'session-kidA'])
   })
 
+  // 读不出不是"盘上没有"：跳过的代价是那个孩子永远隐身（不在回收站、也不算孤儿）。
+  it('孩子目录读不出（EACCES）⇒ 整次删除失败、零写入，不按"目录缺席"跳过', async () => {
+    const d = deps({ members: { 'session-parent': [kidA, kidB] } })
+    const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    d.fs.exists = vi.fn(async (p: string) => {
+      if (p.includes('session-kidB')) throw eacces
+      return true
+    })
+
+    await expect(deleteSession(d.deps)('session-parent')).rejects.toThrow('EACCES: permission denied')
+    expect(d.fs.rename).not.toHaveBeenCalled()
+    expect(d.host.detach).not.toHaveBeenCalled()
+    expect(await d.manifest.list()).toEqual([])
+  })
+
   it('孩子在跑 ⇒ 整组拒绝，一个字节都不动（不替用户终止正在跑的活）', async () => {
     const d = deps({ members: { 'session-parent': [kidA, kidB] } })
     d.host.isLive = vi.fn(async (id: string) => id === 'session-kidB')

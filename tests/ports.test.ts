@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -12,6 +12,46 @@ afterEach(async () => {
 describe('文件层端口', () => {
   it('exists 对不存在的路径返回 false，不抛错', async () => {
     expect(await createFsPort().exists('C:/definitely/not/here')).toBe(false)
+  })
+
+  it('exists 只把 ENOENT / ENOTDIR 当缺席：其它读错误照抛，不折成"没有"', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshdel-'))
+    temps.push(root)
+    const fs = createFsPort()
+    const file = join(root, 'a.txt')
+    await writeFile(file, 'x')
+    // ENOTDIR（路径中间那一截是文件）与 ENOENT 同判：都回答"这里没有"。
+    expect(await fs.exists(join(file, 'child'))).toBe(false)
+    // 其它错误（NUL 路径 ⇒ ERR_INVALID_ARG_VALUE）必须露出来：读不出不是缺席（ADR-0039）。
+    await expect(fs.exists(join(root, 'bad\0name'))).rejects.toThrow()
+  })
+
+  // 权限错是这条判据真正要拦的那一类；Windows 上没有可移植的造法，POSIX 上非 root 才有意义。
+  // 问的是**锁住的目录里面**：`stat` 自己那条路径只查祖先目录的搜索位，对 000 的目录本身照样回 true。
+  it.runIf(process.platform !== 'win32')('exists 遇到 EACCES 抛错，不回 false', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshdel-'))
+    temps.push(root)
+    const locked = join(root, 'locked')
+    await mkdir(locked)
+    await writeFile(join(locked, 'inside.txt'), 'x')
+    await chmod(locked, 0o000)
+    try {
+      await expect(createFsPort().exists(join(locked, 'inside.txt'))).rejects.toThrow()
+    } finally {
+      await chmod(locked, 0o700)
+    }
+  })
+
+  // 拒绝覆盖的判据与 `exists` 同源：目标读不出时不能当成"没有"去搬（ADR-0039）。
+  it('rename 的目标读不出 ⇒ 拒绝搬移，源仍在', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dshdel-'))
+    temps.push(root)
+    const fs = createFsPort()
+    const from = join(root, 'from')
+    await mkdir(from)
+    // NUL 路径的 `stat` 不是 ENOENT / ENOTDIR ⇒ 目标"读不出"，不是"不存在"。
+    await expect(fs.rename(from, join(root, 'bad\0name'))).rejects.toThrow()
+    expect(await fs.exists(from)).toBe(true)
   })
 
   it('sizeOfDir 累加目录内文件字节（多个文件 + 子目录）', async () => {

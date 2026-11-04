@@ -366,6 +366,22 @@ describe('测量：exists 之后目录消失当"不在"，别的失败照旧响�
 
     await expect(planVisibleTrash(deps, [root], groups)).rejects.toThrow('EACCES: permission denied')
   })
+
+  // 目录读不出不是"目录不在"：`probeDir` 的第一问若把它折成 present:false，执行器就会跳过删目录、
+  // 照样摘清册行，回一份"已彻底删除"的假回执（ADR-0039）。
+  it('目录 exists 读不出（EACCES）⇒ 计划失败，不折成 present:false', async () => {
+    const root = entry('session-p')
+    const rootDir = trashDirOf(root.id, HOME)
+    const { deps } = world({ rows: [root], sizes: { [rootDir]: 100 } })
+    deps.fs.exists.mockImplementation(async (p: string) => {
+      if (p === rootDir) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      return true
+    })
+
+    await expect(planTrashRemoval(deps, [root], [root])).rejects.toThrow('EACCES: permission denied')
+    expect(deps.host.unarchive).not.toHaveBeenCalled()
+    expect(deps.fs.removeDir).not.toHaveBeenCalled()
+  })
 })
 
 describe('planTrashRemoval：purge 的删除计划', () => {
@@ -639,6 +655,57 @@ describe('附件连带清理：独占图片', () => {
     expect(plan.attachments.skipped).toBeUndefined()
   })
 
+  // 计划之后、删对象之前新增的引用必须保住对象：计划是数据、会过期（ADR-0041）。
+  it('计划之后另一个会话引用同一张图 ⇒ 执行时复核剔除，对象不删', async () => {
+    const root = entry('session-a')
+    const dir = trashDirOf(root.id, HOME)
+    const sessionRoot = `${HOME}/sessions`
+    const remaining = `${sessionRoot}/--p--/session-b`
+    const made = world({ rows: [root], sizes: { [dir]: 100 }, logMethods: [] })
+    // 计划期：只剩被删目录引用这张图。
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) => p === dir ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async (p: string) =>
+      p === `${dir}/session.v4.jsonl.zstd` ? imageLog() : Buffer.alloc(0))
+    made.fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath(IMAGE) ? 7 : 0 }))
+    const plan = await planTrashRemoval(made.deps, [root], [root])
+    expect(plan.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+
+    // 计划之后：另一个会话也引用了同一张图（内容寻址 ⇒ 同一个 sha256 id）。
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === sessionRoot ? ['--p--'] : p === `${sessionRoot}/--p--` ? ['session-b'] : [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === dir || p === remaining ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async () => imageLog())
+
+    const stats = await executeRemoval(made.deps, plan)
+
+    expect(made.fs.removeFile).not.toHaveBeenCalled()
+    expect(stats.attachments).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+  })
+
+  // 复核必须排在删目录之后：被删目录自己的引用在那时已经不在了，扫到的才是真正的剩余。
+  // 复核若提前，目录里的引用会把候选全判成共享，这一趟就白留一个孤儿（ADR-0041）。
+  it('执行期复核在删目录之后：被删目录自己的引用不再算剩余', async () => {
+    const root = entry('session-a')
+    const dir = trashDirOf(root.id, HOME)
+    const made = world({ rows: [root], sizes: { [dir]: 100 } })
+    // 盘上唯一的引用源就是被删的回收站目录本身；fake fs 的 removeDir 会落墓碑，exists 随之变假。
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === `${HOME}/session-trash` ? (await made.fs.exists(dir) ? [root.id] : []) : [])
+    made.fs.listFiles.mockImplementation(async (p: string) => p === dir ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async () => imageLog())
+    made.fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath(IMAGE) ? 7 : 0 }))
+
+    const plan = await planTrashRemoval(made.deps, [root], [root])
+    expect(plan.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+
+    const stats = await executeRemoval(made.deps, plan)
+
+    expect(made.fs.removeFile).toHaveBeenCalledWith(imagePath(IMAGE))
+    expect(stats.attachments).toEqual({ removed: 1, freedBytes: 7, failed: 0 })
+  })
+
   it('剩余清册行引用同一图片 ⇒ 计划为空、不置 skipped', async () => {
     const target = entry('session-a')
     const remaining = entry('session-b')
@@ -784,6 +851,125 @@ describe('executeRemoval：执行器', () => {
     expect(await manifest.list()).toEqual([])
     // 执行器只认计划：不再回头问盘上目录在不在（计划就是执行前的闸）。
     expect(deps.fs.exists).not.toHaveBeenCalled()
+  })
+
+  // 归档态不是"删了就是删了"：unarchive 排在所有删除之前，中途失败时条目还在回收站、
+  // 恢复路径也只按 wasArchived 迁移旧条目 ⇒ 不放回去就是静默丢用户的归档态（ADR-0040）。
+  it('删到一半失败：还没删掉的会话放回归档态，已删掉的跳过（不造幽灵 id）', async () => {
+    const root = entry('session-p')
+    const kid = entry('session-k', { parentEntryId: root.id })
+    const rootDir = trashDirOf(root.id, HOME)
+    const kidDir = trashDirOf(kid.id, HOME)
+    const { deps } = execWorld({ rows: [root, kid], sizes: { [rootDir]: 100, [kidDir]: 40 } })
+    deps.host.isArchived.mockResolvedValue(true)
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
+    deps.fs.removeDir.mockImplementation(async (p: string) => {
+      if (p === kidDir) throw new Error('EBUSY')
+    })
+
+    const error = await failureOf(executeRemoval(deps, plan))
+
+    expect(error).toMatchObject({ code: 'sessiondelete/io', message: '删除回收站目录失败：Error: EBUSY' })
+    expect(error.details).toBeUndefined()
+    // 父目录已经删掉：回滚它只会在 registry 里留一条没有会话的归档 id。
+    expect(deps.host.archive).toHaveBeenCalledTimes(1)
+    expect(deps.host.archive).toHaveBeenCalledWith('session-k')
+  })
+
+  it('删目录之前就失败（摘账本）：整批还没删掉的会话都放回归档态', async () => {
+    const root = entry('session-p')
+    const x = member('session-x')
+    const rootDir = trashDirOf(root.id, HOME)
+    const { deps } = execWorld({
+      rows: [root],
+      sizes: { [rootDir]: 100, [sessionDirOf('--p--', 'session-x', HOME)]: 20 },
+      members: { 'session-p': [x] },
+      workspaceOf: () => 'ws-1',
+    })
+    deps.host.isArchived.mockResolvedValue(true)
+    const plan = await planTrashRemoval(deps, [root], [root])
+    deps.host.detach.mockImplementation(async () => { throw new Error('registry boom') })
+
+    const error = await failureOf(executeRemoval(deps, plan))
+
+    expect(error).toMatchObject({ code: 'sessiondelete/io', message: '摘账本失败：Error: registry boom' })
+    expect(error.details).toBeUndefined()
+    expect(deps.host.archive.mock.calls.map((call) => call[0]).sort()).toEqual(['session-p', 'session-x'])
+    expect(deps.fs.removeDir).not.toHaveBeenCalled()
+  })
+
+  it('删除前没归档的会话：失败也不凭空归档', async () => {
+    const root = entry('session-p')
+    const rootDir = trashDirOf(root.id, HOME)
+    const { deps } = execWorld({ rows: [root], sizes: { [rootDir]: 100 } })
+    const plan = await planTrashRemoval(deps, [root], [root])
+    deps.fs.removeDir.mockImplementation(async () => { throw new Error('EBUSY') })
+
+    await failureOf(executeRemoval(deps, plan))
+
+    expect(deps.host.archive).not.toHaveBeenCalled()
+  })
+
+  // 回滚按删除前读到的归档实况逐条判，不按清册的 `wasArchived` 整批猜（ADR-0040）：
+  // 同一批里混合归档与未归档时，只放回原本归档着的那条。
+  it('同批混合归档与未归档：失败时只放回原本归档着的那条', async () => {
+    const archived = entry('session-archived')
+    const plain = entry('session-plain')
+    const archivedDir = trashDirOf(archived.id, HOME)
+    const plainDir = trashDirOf(plain.id, HOME)
+    const { deps } = execWorld({
+      rows: [archived, plain],
+      sizes: { [archivedDir]: 100, [plainDir]: 60 },
+    })
+    deps.host.isArchived.mockImplementation(async (id) => id === 'session-archived')
+    const plan = await planTrashRemoval(deps, [archived, plain], [archived, plain])
+    deps.fs.removeDir.mockImplementation(async () => { throw new Error('EBUSY') })
+
+    const error = await failureOf(executeRemoval(deps, plan))
+
+    expect(error.message).toContain('删除回收站目录失败')
+    expect(deps.host.archive.mock.calls.map((call) => call[0])).toEqual(['session-archived'])
+  })
+
+  it('归档态放不回去：原错误仍在，回滚失败进 details.rollbackFailures', async () => {
+    const root = entry('session-p')
+    const rootDir = trashDirOf(root.id, HOME)
+    const { deps } = execWorld({ rows: [root], sizes: { [rootDir]: 100 } })
+    deps.host.isArchived.mockResolvedValue(true)
+    const plan = await planTrashRemoval(deps, [root], [root])
+    deps.fs.removeDir.mockImplementation(async () => { throw new Error('EBUSY') })
+    deps.host.archive.mockImplementation(async () => { throw new Error('registry down') })
+
+    const error = await failureOf(executeRemoval(deps, plan))
+
+    expect(error.code).toBe('sessiondelete/io')
+    const rollbackFailures: unknown = expect.arrayContaining([expect.stringContaining('恢复归档失败')])
+    expect(error.details).toMatchObject({ rollbackFailures })
+    expect(error.message).toContain('删除回收站目录失败：Error: EBUSY')
+  })
+
+  // 目录计划时就缺席的行也在 unarchive 名单里（那一步顺带清幽灵 id），但它已经没有本体可挂：
+  // 失败时再 archive 一次，只会在 registry 里造一条幽灵 id（与删掉目录后跳过同一条理由）。
+  it('计划时就缺席的行：失败也不重新归档，不造幽灵 id', async () => {
+    const gone = entry('session-gone')
+    const here = entry('session-here')
+    const goneDir = trashDirOf(gone.id, HOME)
+    const hereDir = trashDirOf(here.id, HOME)
+    const { deps } = execWorld({
+      rows: [gone, here],
+      sizes: { [hereDir]: 100 },
+      missing: [goneDir],
+    })
+    deps.host.isArchived.mockResolvedValue(true)
+    const plan = await planTrashRemoval(deps, [gone, here], [gone, here])
+    expect(plan.trash.map((row) => row.present)).toEqual([false, true])
+    deps.fs.removeDir.mockImplementation(async (p: string) => {
+      if (p === hereDir) throw new Error('EBUSY')
+    })
+
+    await failureOf(executeRemoval(deps, plan))
+
+    expect(deps.host.archive.mock.calls.map((call) => call[0])).toEqual(['session-here'])
   })
 
   it('计划之后、执行之前有会话转为在跑 ⇒ 执行器再查一次 live，拒绝且零写', async () => {
@@ -957,6 +1143,34 @@ describe('executeRemoval：执行器', () => {
     expect(deps.host.evictLive).not.toHaveBeenCalledWith('session-kid')
   })
 
+  // 部分回执与回滚失败要同框：客户端按 details.removed/freedBytes 显示「已经发生了多少」，
+  // 回滚失败只能追加 rollbackFailures（ADR-0040），不能把已经发生的删除报成 0。
+  it('orphan 部分回执 + 归档放不回：两份 details 同时在', async () => {
+    const rootDir = sessionDirOf('--p--', 'session-root', HOME)
+    const kidDir = sessionDirOf('--p--', 'session-kid', HOME)
+    const { deps } = execWorld({
+      rows: [],
+      sizes: { [rootDir]: 100, [kidDir]: 60 },
+    })
+    deps.host.isArchived.mockResolvedValue(true)
+    const plan = await planOrphanRemoval(deps, [member('session-root'), member('session-kid')])
+    deps.fs.removeDir.mockImplementation(async (p: string) => {
+      if (p === kidDir) throw new Error('EBUSY')
+    })
+    deps.host.archive.mockImplementation(async () => { throw new Error('registry down') })
+
+    const error = await failureOf(executeRemoval(deps, plan))
+
+    expect(error.code).toBe('sessiondelete/io')
+    expect(error.details).toMatchObject({
+      removed: 1,
+      freedBytes: 100,
+      failedSessionId: 'session-kid',
+    })
+    const rollbackFailures: unknown = expect.arrayContaining([expect.stringContaining('恢复归档失败')])
+    expect(error.details).toMatchObject({ rollbackFailures })
+  })
+
   it('端口抛的已是本仓动词码：原样抛出，不折成 io、不改码', async () => {
     const root = entry('session-p')
     const { deps } = execWorld({ rows: [root], sizes: { [trashDirOf(root.id, HOME)]: 5 } })
@@ -984,6 +1198,25 @@ describe('executeRemoval：执行器', () => {
     expect(error.details).toBeUndefined()
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.detach).not.toHaveBeenCalled()
+    expect(await manifest.list()).toHaveLength(2)
+  })
+
+  it('purge 的归档实况预读失败：读取归档状态失败、io、零写入、清册不动', async () => {
+    const root = entry('session-p')
+    const kid = entry('session-k', { parentEntryId: root.id })
+    const { deps, manifest } = execWorld({
+      rows: [root, kid],
+      sizes: { [trashDirOf(root.id, HOME)]: 100, [trashDirOf(kid.id, HOME)]: 40 },
+    })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
+    deps.host.isArchived.mockImplementation(async () => { throw new Error('probe boom') })
+
+    const error = await failureOf(executeRemoval(deps, plan))
+
+    expect(error).toMatchObject({ code: 'sessiondelete/io', message: '读取归档状态失败：Error: probe boom' })
+    expect(error.details).toBeUndefined()
+    expect(deps.host.unarchive).not.toHaveBeenCalled()
+    expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(await manifest.list()).toHaveLength(2)
   })
 

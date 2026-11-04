@@ -11,6 +11,7 @@
  *    "目录里有东西"；非空才回落到上面的 fail closed（判据见 `imageIdsOfDir`）。
  */
 import path from 'node:path'
+import { isAbsentPath } from '../ports/fs-port.js'
 import type { FsPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
 import { TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
@@ -53,10 +54,10 @@ function numberOf(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
 }
 
-/** `statFile` / `readFile` / `sizeOfDir` 里只有 ENOENT 能当"不在"；权限、盘挂、I/O 错误都必须露成读不出。 */
-export function isMissing(error: unknown): boolean {
-  return (error as { code?: unknown } | undefined)?.code === 'ENOENT'
-}
+/** 路径缺席的判据只有一处：`src/ports/fs-port.ts` 的 `isAbsentPath`（ENOENT / ENOTDIR）。
+ *  `statFile` / `readFile` / `sizeOfDir` 的读错误里，"不在"只认这两枚；权限、盘挂、I/O 错误
+ *  都必须露成读不出（ADR-0039），别在这里另写一份只有 ENOENT 的抄本。 */
+export const isMissing = isAbsentPath
 
 /** 合法附件 ID → 宿主附件库里的绝对路径。`name` 不参与拼接。 */
 export function attachmentPathOf(home: string, kind: 'image' | 'file', id: string): string {
@@ -327,6 +328,25 @@ async function collectRemainingImageRefs(
   return { ids, unreadable }
 }
 
+/**
+ * 剩余引用扫描的 fail-closed 收口（独占计划 / 执行期复核 / 孤儿扫描三处共用同一形状）：扫描抛错或
+ * 任一引用源读不出都回 `reason`，读得出才交引用集——「读不出」绝不折成「没有引用」（ADR-0020；
+ * 缺席判据见 ADR-0039）。`reasonLabel` 只补"这次是为什么扫"的前半句，后半句是读数原文。
+ */
+async function remainingRefsFailClosed(
+  deps: AttachmentReadDeps,
+  excludeDirs: readonly string[],
+  reasonLabel: string,
+): Promise<{ ok: true; refs: RemainingImageRefs } | { ok: false; reason: string }> {
+  try {
+    const refs = await collectRemainingImageRefs(deps, { sessionRoot: `${deps.home}/sessions`, excludeDirs })
+    if (refs.unreadable.length > 0) return { ok: false, reason: `${reasonLabel}：${refs.unreadable[0]}` }
+    return { ok: true, refs }
+  } catch (error) {
+    return { ok: false, reason: `${reasonLabel}：${String(error)}` }
+  }
+}
+
 interface PlannedImageRemoval {
   id: string
   path: string
@@ -366,18 +386,9 @@ export async function planImageAttachmentRemoval(
     return { entries: [], bytes: 0, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) }
   }
 
-  let remaining: RemainingImageRefs
-  try {
-    remaining = await collectRemainingImageRefs(deps, {
-      sessionRoot: `${deps.home}/sessions`,
-      excludeDirs: removedDirs,
-    })
-  } catch (error) {
-    return { entries: [], bytes: 0, skipped: `读不到剩余引用源，无法证明独占：${String(error)}` }
-  }
-  if (remaining.unreadable.length > 0) {
-    return { entries: [], bytes: 0, skipped: `读不到剩余引用源，无法证明独占：${remaining.unreadable[0]}` }
-  }
+  const scanned = await remainingRefsFailClosed(deps, removedDirs, '读不到剩余引用源，无法证明独占')
+  if (!scanned.ok) return { entries: [], bytes: 0, skipped: scanned.reason }
+  const remaining = scanned.refs
 
   const entries: PlannedImageRemoval[] = []
   let bytes = 0
@@ -397,6 +408,37 @@ export async function planImageAttachmentRemoval(
   }
   if (unreadableObjects > 0) skipReasons.push(`${unreadableObjects} 个附件对象读不出`)
   return { entries, bytes, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) }
+}
+
+/**
+ * 执行期复核：计划与真删对象之间隔着一整趟目录删除（秒级），这期间别的会话可能把同一张图
+ * （内容寻址 ⇒ 同一个 sha256 id）再引用一次，或派生存储新写一条引用。计划是数据、会过期；
+ * 删对象之前用同一套剩余引用扫描再判一次，**只删这一刻仍无引用的那些**（ADR-0041）。
+ *
+ * 调用时机：会话 / 回收站目录已经删掉之后、`executeImageAttachmentRemoval` 之前——那时被删的
+ * 引用源已经不在了，扫到的就是真正的"剩余"。读不出照旧 fail closed：回空计划 + `skipped`，
+ * 宁可留下孤儿也不删共享。空计划直接返回（不为零删付一次全 home 扫描）。
+ */
+export async function recheckImageRemovalExclusivity(
+  deps: AttachmentReadDeps,
+  plan: ImageRemovalPlan,
+): Promise<ImageRemovalPlan> {
+  if (plan.entries.length === 0) return plan
+  const scanned = await remainingRefsFailClosed(deps, [], '读不到剩余引用源，无法复核独占')
+  if (!scanned.ok) {
+    // 计划期的 `skipped` 不丢：两条原因说的不是同一件事（候选日志读不出 / 复核读不出），
+    // 上屏时二选一等于替用户藏掉一条（ADR-0041 决定 4）。
+    const skipped = plan.skipped === undefined ? scanned.reason : `${plan.skipped}；${scanned.reason}`
+    return { entries: [], bytes: 0, skipped }
+  }
+  const remaining = scanned.refs
+  const entries = plan.entries.filter((entry) => !remaining.ids.has(entry.id))
+  const bytes = entries.reduce((total, entry) => total + entry.bytes, 0)
+  return {
+    entries,
+    bytes,
+    ...(plan.skipped === undefined ? {} : { skipped: plan.skipped }),
+  }
 }
 
 /**
@@ -455,18 +497,9 @@ const OBJECT_NAME = /^[0-9a-f]{64}$/u
  * 对象列表或 stat 读不出同样整份跳过：报告宁可失败，也不给一份"少算了一些"的清理计划。
  */
 export async function scanOrphanImageAttachments(deps: AttachmentReadDeps): Promise<ImageRemovalPlan> {
-  let remaining: RemainingImageRefs
-  try {
-    remaining = await collectRemainingImageRefs(deps, {
-      sessionRoot: `${deps.home}/sessions`,
-      excludeDirs: [],
-    })
-  } catch (error) {
-    return { entries: [], bytes: 0, skipped: `读不到引用源，无法判定孤儿附件：${String(error)}` }
-  }
-  if (remaining.unreadable.length > 0) {
-    return { entries: [], bytes: 0, skipped: `读不到引用源，无法判定孤儿附件：${remaining.unreadable[0]}` }
-  }
+  const scanned = await remainingRefsFailClosed(deps, [], '读不到引用源，无法判定孤儿附件')
+  if (!scanned.ok) return { entries: [], bytes: 0, skipped: scanned.reason }
+  const remaining = scanned.refs
 
   const objectsRoot = `${deps.home}/attachments/v1/objects`
   const entries: PlannedImageRemoval[] = []

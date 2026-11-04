@@ -8,6 +8,7 @@ import {
   executeImageAttachmentRemoval,
   imageIdsOfDir,
   planImageAttachmentRemoval,
+  recheckImageRemovalExclusivity,
   scanOrphanImageAttachments,
 } from '../src/trash/attachments.js'
 import { createFakeDeps } from './support/fake-deps.js'
@@ -329,6 +330,68 @@ describe('独占计划与执行', () => {
     const plan = await planImageAttachmentRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.skipped).toMatch(/无法证明独占|读不到/)
+  })
+
+  // 计划是数据、会过期：计划与真删对象之间新增的引用必须保住对象（ADR-0041）。
+  it('执行期复核：计划之后另一个会话引用了同一张图 ⇒ 从计划里剔除', async () => {
+    const remaining = '/h/sessions/--p--/session-b'
+    const made = makeWorld({
+      logs: { [`${remaining}/session.v4.jsonl.zstd`]: log(ID) },
+      dirs: (p) => p === '/h/sessions' ? ['--p--'] : p === '/h/sessions/--p--' ? ['session-b'] : [],
+      files: (p) => p === remaining ? ['session.v4.jsonl.zstd'] : [],
+    })
+    const plan = { entries: [{ id: ID, path: imagePath(ID), bytes: 7 }], bytes: 7 }
+
+    const rechecked = await recheckImageRemovalExclusivity(made.deps, plan)
+
+    expect(rechecked.entries).toEqual([])
+    expect(rechecked.bytes).toBe(0)
+  })
+
+  it('执行期复核读不出 ⇒ 空计划 + skipped（fail closed，宁可留孤儿）', async () => {
+    const remaining = '/h/sessions/--p--/session-b'
+    const made = makeWorld({
+      logs: {},
+      dirs: (p) => p === '/h/sessions' ? ['--p--'] : p === '/h/sessions/--p--' ? ['session-b'] : [],
+      // 非规范日志（明文）：这个引用源读不懂，复核必须整体跳过。
+      files: (p) => p === remaining ? ['session.v4.jsonl'] : [],
+    })
+    const plan = { entries: [{ id: ID, path: imagePath(ID), bytes: 7 }], bytes: 7 }
+
+    const rechecked = await recheckImageRemovalExclusivity(made.deps, plan)
+
+    expect(rechecked.entries).toEqual([])
+    expect(rechecked.bytes).toBe(0)
+    expect(rechecked.skipped).toMatch(/无法复核独占/)
+  })
+
+  // 计划期「候选日志读不出」与执行期「复核读不出」是两条不同的原因，二选一等于藏掉一条。
+  it('复核读不出：计划期的 skipped 与复核原因都保留', async () => {
+    const remaining = '/h/sessions/--p--/session-b'
+    const made = makeWorld({
+      logs: {},
+      dirs: (p) => p === '/h/sessions' ? ['--p--'] : p === '/h/sessions/--p--' ? ['session-b'] : [],
+      files: (p) => p === remaining ? ['session.v4.jsonl'] : [],
+    })
+    const plan = {
+      entries: [{ id: ID, path: imagePath(ID), bytes: 7 }],
+      bytes: 7,
+      skipped: '候选日志读不出：session-a',
+    }
+
+    const rechecked = await recheckImageRemovalExclusivity(made.deps, plan)
+
+    expect(rechecked.entries).toEqual([])
+    expect(rechecked.skipped).toContain('候选日志读不出：session-a')
+    expect(rechecked.skipped).toMatch(/无法复核独占/)
+  })
+
+  it('执行期复核：空计划不为零删付一次全 home 扫描', async () => {
+    const made = makeWorld({ logs: {} })
+    const empty = { entries: [], bytes: 0 } as const
+
+    expect(await recheckImageRemovalExclusivity(made.deps, empty)).toBe(empty)
+    expect(made.fs.listDirs).not.toHaveBeenCalled()
   })
 
   it('执行只碰计划里的 objects 路径；失败计数、成功字节分开算', async () => {

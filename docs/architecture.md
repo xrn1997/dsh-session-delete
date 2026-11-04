@@ -104,8 +104,8 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 在场能力的动词面（成员离场 / 归位 / 一批归位的三条签名） | `src/ports/presence-port.ts` 的 `PresenceCapability` | 三态与真值表、宿主调用顺序（归 `src/verbs/member-presence.ts`）；宿主端口的角色切分（归 `src/ports/host-port.ts`） |
 | 一次成员移动的步骤、反向动作与逐步 undo 结果（`restored(key)`） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
 | 组级成员移动的顺序、组根结果与整组回滚。调用方直接拿根结果，不索引数组；跟随者按序拿根结果。 | `src/verbs/move-group.ts` | 单成员步骤（`src/verbs/member-journal.ts`）；谁算一组（`src/trash/groups.ts`） |
-| 永久删除的计划与执行（成员 / 目录 / 字节 / 部分回执；成功回执的字节念计划、执行期只记进度） | `src/verbs/permanent-removal.ts` | 活体准入的判据归 `src/verbs/live-admission.ts`（这里只决定时机与名单：计划期查 targets 与枚举到的盘上后代，执行器第一笔写前用 `plan.unarchive` 再查一次）；组语义归 `src/trash/groups.ts`；purge 的拿目标（读面 / 选组 / 收缩视图）归 `src/verbs/trash-scope.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
-| 附件内容块提取 / ID 与路径闸 / 剩余引用扫描 / 独占计划与执行 | `src/trash/attachments.ts` | 什么时候删（归 `src/verbs/permanent-removal.ts`）；附件读取（归 `src/api/attachment.ts` 与宿主 `attachments` 服务，ADR-0035）；源文件与普通文件的删除（目前不删） |
+| 永久删除的计划与执行（成员 / 目录 / 字节 / 部分回执；成功回执的字节念计划、执行期只记进度；失败时回滚归档态，ADR-0040；附件计划在删对象前复核，ADR-0041） | `src/verbs/permanent-removal.ts` | 活体准入的判据归 `src/verbs/live-admission.ts`（这里只决定时机与名单：计划期查 targets 与枚举到的盘上后代，执行器第一笔写前用 `plan.unarchive` 再查一次）；组语义归 `src/trash/groups.ts`；purge 的拿目标（读面 / 选组 / 收缩视图）归 `src/verbs/trash-scope.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
+| 附件内容块提取 / ID 与路径闸 / 剩余引用扫描 / 独占计划与执行期复核 | `src/trash/attachments.ts` | 什么时候删（归 `src/verbs/permanent-removal.ts`）；附件读取（归 `src/api/attachment.ts` 与宿主 `attachments` 服务，ADR-0035）；源文件与普通文件的删除（目前不删） |
 | 活体准入的判据与那句原文（逐个问、任一在跑整组拒绝、短路） | `src/verbs/live-admission.ts` 的 `assertNoLive` | 什么时候查、查哪些 id（调用方给：永久删除见「永久删除的计划与执行」行，删除与孤儿清理各交名单） |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` | 对账 |
 | 清册读的两个读面（`list()` = 对账 + 读，供 `/list`、`/empty` 与写动词；`raw()` = 不对账、不写行，供 pure 的 `/orphans` 与 `/detail`） | `src/trash/ledger.ts` | 存储域绑定、对账的具体目录判据；哪一段拿哪一面归 `src/api/route-table.ts` |
@@ -117,7 +117,7 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 详情与维护卡预览的附件渲染 / 放大 / 失败占位 / 清理提示的呈现 | `src/client/attachment-view.tsx` | 什么时候出清理提示（面板归 `src/client/use-trash-query.ts`、维护卡归 `src/client/use-maintenance.ts`）；附件二进制怎么读（归 `src/api/attachment.ts`） |
 | 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
 | 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/reconcile.ts`） |
-| 盘与路径的适配（`FsPort`；`statFile` 只读；`removeFile` 在 `RemovalDeps` 这一层提供、`CoreFsPort` 不含，附件执行面另收更窄的 `AttachmentRemovalDeps` Pick） | `src/ports/fs-port.ts` | 该删哪些目录/文件（各动词与 `src/trash/attachments.ts` 的判据） |
+| 盘与路径的适配（`FsPort`；`exists` 只把 ENOENT / ENOTDIR 当缺席、其余读错误照抛，ADR-0039；`statFile` 只读；`removeFile` 在 `RemovalDeps` 这一层提供、`CoreFsPort` 不含，附件执行面另收更窄的 `AttachmentRemovalDeps` Pick） | `src/ports/fs-port.ts` | 该删哪些目录/文件（各动词与 `src/trash/attachments.ts` 的判据） |
 | 数据根的解析（`$DSH_HOME` / `~/.dsh`） | `src/ports/home.ts` | 宿主的显式配置（插件不可得） |
 | 恢复时「挂不挂账本」与那句「归入未分组」 | `src/verbs/restore-session.ts` 的 `attachableWorkspaceId` / `isWorkspaceMissing` | 工作区还在时的挂接失败 |
 | 宿主身份与归属（会话是谁、落哪个项目/工作区、活不活/归档没有、账本与归档的写面） | `src/ports/host-port.ts` 的 `HostIdentityPort` | 通告（`api-session/*`，归 `HostPresencePort`） |
@@ -179,11 +179,11 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 - **会话列表不是磁盘投影**：`sessionQuery.listSessions()` 是磁盘持久化 **∪** 宿主内存里 attach 着的活体会话；摘账本挡不住活体，客户端会把它归入「未分组」。删除必须 `evictLive` 把 session 与 agent handle 一起摘掉（ADR-0008）。
 - **删除 = 移入回收站**（可恢复，不自动过期）；**永久删除**只有三条路：purge（单条或一批）、清空回收站、无主子会话清理，都要二次确认；界面文案可以叫「彻底删除」。
 - **有成员在跑 ⇒ 整组拒绝、零副作用**：删除 / 永久删除 / 孤儿清理都先过活体准入；插件不替用户终止正在进行的活。
-- **回收站与归档解耦**（ADR-0008）：删除**不调** `archiveSession`；`evictLive` 把 session 与它的 agent handle 一起摘掉，恢复走冷 resume。`wasArchived` 只记删除前用户自己的归档事实；旧版本删除留下的归档态条目在恢复时迁移式 `unarchive`。
+- **回收站与归档解耦**（ADR-0008）：删除**不调** `archiveSession`；`evictLive` 把 session 与它的 agent handle 一起摘掉，恢复走冷 resume。`wasArchived` 只记删除前用户自己的归档事实；旧版本删除留下的归档态条目在恢复时迁移式 `unarchive`。**彻底删除失败时归档态要放回去**：执行器先读 `isArchived`，只回滚还没删掉的会话（ADR-0040）。
 - **工作区账本缺席不是恢复失败**：宿主「删除工作区」只删注册、保留目录与每一份会话日志；恢复照常回盘、跳过 `attach`、归入未分组。`sessions/<projectDir>` 不在仍是硬拒绝，绝不静默建目录。判据住 `src/verbs/restore-session.ts`。
 - **无主子会话维护只走官方面、只由插件设置页的维护卡手动触发**：扫描用 `/orphans`，清理是 `/apply` 的 `orphan-clean`；永久删除、不自动跑——回收站面板的挂载、写后重读与清空都不发这一问（ADR-0021），只清会话目录与会话独占的图片附件副本（共享副本保留，判据见 ADR-0020）。`sessionQuery` 缺席时 `/orphans` 响亮失败，purge 只清清册里的那部分。判据住 `src/verbs/orphan-subagents.ts` 与 `src/verbs/permanent-removal.ts`。
 - 会话日志是**多帧 zstd**：只读版本号最大的那代，绝不拼代（判据与用例住 `src/log/session-log.ts`、`src/log/zstd-frames.ts` 与 `tests/session-log.test.ts`、`tests/zstd-frames.test.ts`）。
-- **附件库在 `$DSH_HOME/attachments/v1`**：图片在 `objects/`，普通文件在 `file-objects/` + `files/`，宿主所有、没有删除接口。永久删除只清**独占图片副本**——被删会话引用、且剩余任何会话/派生存储都不再引用；共享副本保留，`$DSH_HOME` 之外的源文件不受影响；普通文件只渲染、不代删。剩余引用源读不出就整体跳过（宁可留孤儿也不删共享）。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。**读取优先走宿主 `attachments` 的 `readImage` / `readFileStream`（ADR-0035）**，直接 fs 只留没有服务/引用元数据时的 fallback 与孤儿扫描/删除。
+- **附件库在 `$DSH_HOME/attachments/v1`**：图片在 `objects/`，普通文件在 `file-objects/` + `files/`，宿主所有、没有删除接口。永久删除只清**独占图片副本**——被删会话引用、且剩余任何会话/派生存储都不再引用；共享副本保留，`$DSH_HOME` 之外的源文件不受影响；普通文件只渲染、不代删。剩余引用源读不出就整体跳过（宁可留孤儿也不删共享）；**删对象之前再复核一次**（目录已删、新引用可能已产生，ADR-0041）。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。**读取优先走宿主 `attachments` 的 `readImage` / `readFileStream`（ADR-0035）**，直接 fs 只留没有服务/引用元数据时的 fallback 与孤儿扫描/删除。
 - **孤儿附件也只有手动这一条路**：`/attachment-orphans` 报告、`/attachment-clean` 聚合清理，都由设置页维护卡在用户点「检查 / 清理」时发起；没有自动检测、没有定时器，面板挂载不读它。报告与清理共用同一套引用扫描（全部会话日志 + 全部 `session-trash` 目录 + `storages` / `cache` JSON），但每次调用各自现扫：任一读不出就报告失败、清理零删，不折成 0。判据住 `src/trash/attachments.ts`，裁决见 ADR-0021。
 
 ## 7. 改动面 → 先读什么
@@ -196,8 +196,8 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 路由 / 鉴权 / 远程身份 | 本文 §1、§4；`src/api/connection-route.ts`；ADR-0033（取代 ADR-0009、ADR-0022、ADR-0023） |
 | 删除 / 恢复 / 归档语义 | 本文 §6；`src/verbs/delete-session.ts`、`src/verbs/restore-session.ts`；ADR-0008 |
 | 批量与逐步撤销 | 本文 §4 的 `batch` / `member-journal` / `batch-carried` 行；ADR-0002；可见行来源见 ADR-0034 |
-| 永久删除 / 活体准入 | 本文 §4 的 `permanent-removal` / `live-admission` 行；ADR-0027 |
-| 附件与孤儿清理 | 本文 §6；`src/api/attachment.ts`、`src/ports/attachments-port.ts`、`src/trash/attachments.ts`；ADR-0020、ADR-0021、ADR-0035；上限/条数默认值见 `src/config.ts`（ADR-0037） |
+| 永久删除 / 活体准入 | 本文 §4 的 `permanent-removal` / `live-admission` 行；ADR-0027、ADR-0040 |
+| 附件与孤儿清理 | 本文 §6；`src/api/attachment.ts`、`src/ports/attachments-port.ts`、`src/trash/attachments.ts`；ADR-0020、ADR-0021、ADR-0035、ADR-0041；上限/条数默认值见 `src/config.ts`（ADR-0037） |
 | 清册 / 对账 | `src/trash/ledger.ts`、`src/trash/reconcile.ts`；ADR-0012 |
 | 会话日志读取 | `src/log/session-log.ts`、`src/log/zstd-frames.ts` |
 | 面板 / 交互 / 写入座位 | 本文 §3；`docs/ui-spec.md`；`src/client/write-seats.ts`、`src/client/write-settlement.ts` |

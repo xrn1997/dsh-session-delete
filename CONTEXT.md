@@ -66,6 +66,11 @@ _唯一实现_: `src/trash/attachments.ts` 的 `executeImageAttachmentRemoval` /
 宿主 `projectKey(cwd)` 的产物（`--…--` 裹边、分隔符折成 `-`、非分隔符走 `~XXXX` 转义）。**有损**：分隔符那段拆不回真实路径。
 _Avoid_: 项目路径、cwd（那是宿主的原始路径；`projectDir` 是有损编码）。
 
+**缺席（absence）**:
+路径「不在」的唯一判据：`stat` 抛 `ENOENT` 或 `ENOTDIR`。权限、断挂载、I/O 等**读错误不是缺席**——那是"我们看不见"，要响亮失败、零写入，不许折成"没有"（ADR-0039）；引用扫描的「根不存在」仍按没有引用源处理。`FsPort.exists` 与 `rename` 的目标检查共用这一判据。
+_唯一实现_: `src/ports/fs-port.ts` 的 `isAbsentPath`（`src/trash/attachments.ts` 的 `isMissing` 是它的别名）。
+_Avoid_: 不存在（口语；判据只认那两种错误码）、读不到（那是读错误，恰恰**不是**缺席）。
+
 **回收站（trash）**:
 被删除会话的本体，住在数据根的 `session-trash/` 下，与 `sessions/` **同卷**（搬移靠整目录 `rename`，原子）。**不自动过期**；清空是显式动作。手工翻回收站目录时看到比清单多的目录，那是跟着父进来的子会话，各有自己的条目。
 _Avoid_: 垃圾桶、删除列表（会把它说成一个 UI 或一个临时缓存）。
