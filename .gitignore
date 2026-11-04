@@ -42,6 +42,10 @@ Thumbs.db
 .task-scratch/
 .worktrees/
 
+# Qoder 的本地产物整棵不入库（含生成的 repowiki 知识快照）：工具产物、不是事实源，且只能在
+# Qoder 里整棵重生成；入库会让一份落后的“现状”跟着每次 clone 走（docs/development.md 的「已知的环境坑」）。
+.qoder/
+
 # 本地调试临时文件（probe 页面等）——只忽略仓库根层：
 # 无斜杠的 `tmp-*` 会递归匹配任意深度，把 tests/ 下任何 tmp-*.ts 静默漏掉入库。
 /tmp-*

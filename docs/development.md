@@ -86,4 +86,4 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 - 回收站的运行时数据不在本仓：`$DSH_HOME/session-trash/`（本体）与 `$DSH_HOME/storages/`（内部索引，别手碰）；`DSH_HOME` 缺省是 `~/.dsh`。
 - 会话文件是**多帧** zstd，Node 自带 API 只给第一帧——读法与用例住 `src/log/zstd-frames.ts` 与 `tests/zstd-frames.test.ts`。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
-- **`.qoder/repowiki` 是生成的知识库快照**：它的基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它不是事实源，判断口径见 `docs/AGENTS.md`。
+- **`.qoder/repowiki` 是生成的知识库快照，而且不入库**（`.gitignore`）：本机那份的基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它既不是事实源、也不随 clone 走，判断口径见 `docs/AGENTS.md`。新 clone 里没有这棵树是正常的。

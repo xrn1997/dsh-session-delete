@@ -21,7 +21,7 @@
 | 读数 | `tests/**` 与代码注释 | 可复核的测试读数与局部口径 | 散文论证、用户可见事实 | 是（读数） |
 | 活跃工单 | GitHub Issues | 进行中的任务与验收 | 长期事实、裁决 | 否 |
 | 过程工件 | 本机 `.superpowers/`、`.task-scratch/` | 任务简报、报告、审查草稿、采样脚本 | 入库、作为事实源 | 否 |
-| 生成快照 | `.qoder/repowiki/` | 工具生成的知识快照 | 手改、架构判断依据 | 否 |
+| 生成快照 | `.qoder/repowiki/`（不入库，见 `.gitignore`） | 工具生成的知识快照 | 手改、架构判断依据、入库 | 否 |
 
 本仓不另写跨半契约规格：契约的唯一主人是 `src/shared/wire.ts`，路由与形状住 `src/api/route-table.ts`，另写一份规格会造第二份契约。界面的现行状态与层级住 `docs/ui-spec.md`，不写进 architecture。
 
