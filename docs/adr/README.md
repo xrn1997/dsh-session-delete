@@ -41,6 +41,7 @@
 | `0035` | 附件读取为什么走宿主 `attachments` 的 `readImage` / `readFileStream`、直接 fs 只留 fallback（宿主已公开字节校验与归一化） |
 | `0036` | 主视图重开为什么用 snapshot `subscribe` 等摘要、不再轮询（一个 2 秒放弃 timer，pending 归 cleanup 与 `ctx.effect`） |
 | `0037` | 可调项为什么走本地 Standard Schema 的 `Config`、不引宿主 schema 库（三只旋钮 + `cordis.patch.yml`；字段表单是已知偏离） |
+| `0038` | 组员判据为什么只看 `origin:'subagent'`、`parentSession` 为什么不是分类器（`0.2.1-rc.5` 及更早的 fork 也写它；被否：按宿主版本分支、改写 header） |
 
 ## 文档与真相
 

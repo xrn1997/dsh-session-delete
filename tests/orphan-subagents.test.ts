@@ -58,8 +58,8 @@ describe('孤儿分组（纯函数）', () => {
   it('根是父不在语料/清册里的 subagent；后代全收；清册里的父不算孤儿', () => {
     const corpus = [
       s('session-root', { parentSessionId: 'session-gone' }),
-      s('session-kid', { parentSessionId: 'session-root', subagent: false }),
-      s('session-g1', { parentSessionId: 'session-kid', subagent: false }),
+      s('session-kid', { parentSessionId: 'session-root', subagent: true }),
+      s('session-g1', { parentSessionId: 'session-kid', subagent: true }),
       s('session-stranded', { parentSessionId: 'session-trashed' }),
       s('session-normal', { subagent: false }),
     ]
@@ -81,7 +81,7 @@ describe('扫描报告与清理', () => {
   it('loadOrphanGroups 量字节；report 汇总根、闭包、缺失父与项目分组', async () => {
     const { d } = deps([
       s('session-root', { parentSessionId: 'session-gone' }),
-      s('session-kid', { parentSessionId: 'session-root', subagent: false, projectDir: '--q--' }),
+      s('session-kid', { parentSessionId: 'session-root', subagent: true, projectDir: '--q--' }),
     ])
     const groups = await loadOrphanGroups(d, [])
     expect(groups).toHaveLength(1)
@@ -136,7 +136,7 @@ describe('扫描报告与清理', () => {
   it('清理：逐条 live 检查 → unarchive → detach → 删目录并通告', async () => {
     const { d, fs, host, calls } = deps([
       s('session-root', { parentSessionId: 'session-gone' }),
-      s('session-kid', { parentSessionId: 'session-root', subagent: false }),
+      s('session-kid', { parentSessionId: 'session-root', subagent: true }),
     ])
     const [group] = await loadOrphanGroups(d, [])
     const result = await cleanOrphanGroup(d, group as OrphanGroup)
@@ -175,7 +175,7 @@ describe('扫描报告与清理', () => {
   it('成员目录缺席 ⇒ 跳过它的删除与计数，但不跳过归档集摘除', async () => {
     const { d, fs, host } = deps([
       s('session-root', { parentSessionId: 'session-gone' }),
-      s('session-kid', { parentSessionId: 'session-root', subagent: false }),
+      s('session-kid', { parentSessionId: 'session-root', subagent: true }),
     ])
     const [group] = await loadOrphanGroups(d, [])
     fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith('session-kid'))
@@ -189,7 +189,7 @@ describe('扫描报告与清理', () => {
   it('删到一半失败 ⇒ io 的错误 details 带已删计数与字节，不伪装成整组没动', async () => {
     const { d, fs } = deps([
       s('session-root', { parentSessionId: 'session-gone' }),
-      s('session-kid', { parentSessionId: 'session-root', subagent: false }),
+      s('session-kid', { parentSessionId: 'session-root', subagent: true }),
     ])
     const [group] = await loadOrphanGroups(d, [])
     fs.removeDir.mockImplementation(async (...args: unknown[]) => {
@@ -204,7 +204,7 @@ describe('扫描报告与清理', () => {
   it('任一成员在跑 ⇒ live，零写：unarchive/removeDir 都不许发生', async () => {
     const { d, fs, host } = deps([
       s('session-root', { parentSessionId: 'session-gone' }),
-      s('session-kid', { parentSessionId: 'session-root', subagent: false }),
+      s('session-kid', { parentSessionId: 'session-root', subagent: true }),
     ])
     const [group] = await loadOrphanGroups(d, [])
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')

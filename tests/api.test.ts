@@ -1098,7 +1098,7 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
 describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2026-10-19）', () => {
   const corpus = () => [
     { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--p--', subagent: true },
-    { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--p--', subagent: false },
+    { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--p--', subagent: true },
   ]
 
   it('GET /orphans 是纯读：交回闭包总数、字节、项目分组；不删任何东西', async () => {

@@ -46,7 +46,7 @@ function makeEnv(over: {
    *  `filterSessions` 可缺席：用例要钉「服务在场、方法不在」那一支的缺席（不是空表）。 */
   sessionQuery?: {
     listSessions?: () => Promise<Array<{ header?: { id?: string; cwd?: string; parentSession?: string; origin?: string } }>>
-    filterSessions?: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string } }>>
+    filterSessions?: (filters: Array<{ kind: string; values: string[] }>) => Promise<Array<{ header: { id?: string; cwd?: string; parentSession?: string; origin?: string } }>>
   }
   /** `ctx.emit` 的替身（通告走的就是它）。 */
   emit?: (name: string, ...args: unknown[]) => void
@@ -204,8 +204,8 @@ describe('宿主服务层端口的接线', () => {
             const values = new Set(filters[0]?.values ?? [])
             asked.push([...values])
             return [
-              { header: { id: 'session-k1', parentSession: 'session-a' } },
-              { header: { id: 'k2', parentSession: 'b' } },
+              { header: { id: 'session-k1', parentSession: 'session-a', origin: 'subagent' } },
+              { header: { id: 'k2', parentSession: 'b', origin: 'subagent' } },
             ].filter((r) => values.has(r.header.parentSession))
           },
         },
@@ -224,6 +224,48 @@ describe('宿主服务层端口的接线', () => {
       expect(asked).toHaveLength(0)
     })
 
+    it('普通 fork 不算成员：parentSession 在、origin 不在 ⇒ 不进组，也不穿透它的 subagent 孩子', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async (filters) => {
+            const values = new Set(filters[0]?.values ?? [])
+            asked.push([...values])
+            return [
+              { header: { id: 'session-fork', parentSession: 'session-parent' } },
+              { header: { id: 'session-real-child', parentSession: 'session-parent', origin: 'subagent' } },
+              { header: { id: 'session-fork-child', parentSession: 'session-fork', origin: 'subagent' } },
+            ].filter((r) => values.has(r.header.parentSession))
+          },
+        },
+      })
+      const read = await createHostPort(ctx).subagentMembersOf(['session-parent'])
+      expect(read).toEqual({
+        available: true,
+        value: { 'session-parent': [{ sessionId: 'session-real-child', projectDir: '_no-cwd' }] },
+      })
+      expect(asked).toHaveLength(2)
+      expect(asked[1]).not.toContain('session-fork')
+    })
+
+    it('fork 自己做根时它的 subagent 孩子照常算成员（过滤只针对遇到的非 subagent 记录）', async () => {
+      const { ctx } = makeEnv({
+        sessionQuery: {
+          filterSessions: async (filters) => {
+            const values = new Set(filters[0]?.values ?? [])
+            return [
+              { header: { id: 'session-fork-child', parentSession: 'session-fork', origin: 'subagent' } },
+            ].filter((r) => values.has(r.header.parentSession))
+          },
+        },
+      })
+      const read = await createHostPort(ctx).subagentMembersOf(['session-fork'])
+      expect(read).toEqual({
+        available: true,
+        value: { 'session-fork': [{ sessionId: 'session-fork-child', projectDir: '_no-cwd' }] },
+      })
+    })
+
     it('调官方 filterSessions 的 kind:"parent"，两种前缀写法归到同一个父（清单的计数就是成员长度）', async () => {
       const seen: Array<Array<{ kind: string; values: string[] }>> = []
       const { ctx } = makeEnv({
@@ -233,9 +275,9 @@ describe('宿主服务层端口的接线', () => {
             // 每条都带 `header.id`——那是宿主记录本来就有的一件（闭包靠它去重与往下问，
             // 缺 id 的记录整条跳过，见下面那条用例）
             return [
-              { header: { id: 'session-k1', parentSession: 'session-a' } },
-              { header: { id: 'session-k2', parentSession: 'session-a' } },
-              { header: { id: 'k3', parentSession: 'a' } },
+              { header: { id: 'session-k1', parentSession: 'session-a', origin: 'subagent' } },
+              { header: { id: 'session-k2', parentSession: 'session-a', origin: 'subagent' } },
+              { header: { id: 'k3', parentSession: 'a', origin: 'subagent' } },
               { header: { id: 'session-kz', parentSession: 'session-z' } }, // 没问它的父：不许混进结果
             ]
           },
@@ -282,8 +324,8 @@ describe('宿主服务层端口的接线', () => {
       const { ctx } = makeEnv({
         sessionQuery: {
           filterSessions: async () => [
-            { header: { id: 'session-child1', parentSession: 'session-parent', cwd: 'C:/develop/p' } },
-            { header: { id: 'session-child2', parentSession: 'session-parent', cwd: 'C:\\develop\\p' } },
+            { header: { id: 'session-child1', parentSession: 'session-parent', cwd: 'C:/develop/p', origin: 'subagent' } },
+            { header: { id: 'session-child2', parentSession: 'session-parent', cwd: 'C:\\develop\\p', origin: 'subagent' } },
           ],
         },
       })
@@ -314,7 +356,7 @@ describe('宿主服务层端口的接线', () => {
         sessionQuery: {
           filterSessions: async () => [
             { header: { parentSession: 'p', cwd: 'C:/x' } },
-            { header: { id: 'session-kid', parentSession: 'p', createdAt: 1 } },
+            { header: { id: 'session-kid', parentSession: 'p', createdAt: 1, origin: 'subagent' } },
           ],
         },
       })
@@ -345,7 +387,7 @@ describe('宿主服务层端口的接线', () => {
           asked.push([...values])
           return records
             .filter(r => typeof r.parentSession === 'string' && values.has(r.parentSession))
-            .map(r => ({ header: r }))
+            .map(r => ({ header: { ...r, origin: 'subagent' } }))
         },
       }
     }

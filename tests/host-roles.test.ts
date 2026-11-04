@@ -110,7 +110,7 @@ function closingQuery(
     filterSessions: async (filters: readonly { readonly kind: string; readonly values: readonly string[] }[]) => {
       const values = new Set(filters[0]?.values ?? [])
       asked.push([...values])
-      return records.filter(r => values.has(r.parentSession)).map(r => ({ header: r }))
+      return records.filter(r => values.has(r.parentSession)).map(r => ({ header: { ...r, origin: 'subagent' } }))
     },
   }
 }

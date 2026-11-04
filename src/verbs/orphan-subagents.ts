@@ -34,8 +34,9 @@ interface RawGroup {
  * 彻底删除（组语义见 `src/trash/groups.ts`），把它的根当孤儿删掉就是**替用户做了一个没人点过的决定**。孤儿只
  * 有一种来路：父被彻底删掉了（或被手工从盘上清掉了），清册里再也没有这一行。
  *
- * 根按**传递闭包**收全部后代（与 `HostCorpusPort.subagentMembersOf` 同一实现：闭包核心住
- * `src/domain/closure.ts` 的 `orphanRootsOf`，孩子与孙代都算，深度不设上限），同一条记录只归一组
+ * 根按**传递闭包**收全部 subagent 后代（与 `HostCorpusPort.subagentMembersOf` 同一实现：闭包核心住
+ * `src/domain/closure.ts` 的 `orphanRootsOf`，孩子与孙代都算，深度不设上限；普通 fork 不是成员、
+ * 也不穿过它收后代），同一条记录只归一组
  * （`claimed`）——数据里真出现环时结果是"少数一条"，不是把一个会话删两遍。
  * 归堆与去重**两边都去 `session-` 前缀**：同一个父在两代宿主里写法不同（见 `bareSessionId` 的来历）。
  */

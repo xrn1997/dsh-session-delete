@@ -166,14 +166,17 @@ interface SessionQueryLike {
   }[]>
   filterSessions(
     filters: readonly { readonly kind: string; readonly values: readonly string[] }[],
-  ): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string } }[]>
+  ): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string; readonly origin?: string } }[]>
 }
 
-/** 官方的「这些父的孩子」那一支：`kind:'parent'` 的判据逐字是 `values.includes(record.header.parentSession ?? null)`。 */
+/** 官方的「这些父的孩子」那一支：`kind:'parent'` 的判据逐字是 `values.includes(record.header.parentSession ?? null)`。
+ *  它只按 `parentSession` 原样匹配，**不是**子会话分类器：旧宿主（≤0.2.1-rc.5）的普通 fork 也写
+ *  `parentSession`，0.2.2-alpha.2 起才不写。子会话的判据是 `origin` 的 subagent 标记（宿主归档闸、归档
+ *  准入、持久化找子日志三处一致），所以调用方必须再按 origin 筛一遍。 */
 async function filterChildrenOf(
   sessionQuery: SessionQueryLike,
   values: readonly string[],
-): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string } }[]> {
+): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string; readonly origin?: string } }[]> {
   return sessionQuery.filterSessions([{ kind: 'parent', values: [...values].sort() }])
 }
 
@@ -215,10 +218,13 @@ async function descendantsByParent(
       const parent = record.header?.parentSession
       if (typeof id !== 'string' || id.length === 0) continue
       if (typeof parent !== 'string' || parent.length === 0) continue
+      // 只有 subagent 才是组员；普通 fork 的 parentSession 只是来源记录（旧版宿主 fork 会写它）。
+      // 非 subagent 不穿透：它自己的 subagent 孩子属于它，不属于正在删的父。
+      if (record.header?.origin !== 'subagent') continue
       const bare = bareSessionId(id)
       if (seen.has(bare)) continue
       seen.add(bare)
-      const cwd = record.header?.cwd
+      const cwd = record.header.cwd
       const descendant: SubagentMember = {
         sessionId: id, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
       }

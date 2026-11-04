@@ -111,7 +111,7 @@ _Avoid_: 账本（同批集合不要与宿主工作区注册表混用）。
 _Avoid_: 批次、集合（组是删除时一起搬进来的成员关系；批次是操作单位）。
 
 **会话闭包（session closure）**:
-「一个根的全部后代」与「同一个会话的两代写法」的唯一口径：比对一律先把 id 去掉 `session-` 前缀（`bareSessionId`；一个 id 的全部写法由 `sessionIdShapes` 给出，逐层问宿主时按写法问），闭包在 parent(bare) 到 children 的索引上逐层收（深度不设上限、防环、首见去重）。`closureOf` 收单根闭包，`orphanRootsOf` 在整表语料上收「父既不在语料也不在清册」的根闭包组，`firstByBare` 是按首见去重的唯一写法。端口保留「一层一次宿主调用」的 adapter 职责（`descendantsByParent`），动词保留各自的对象映射——闭包本体不再有第二份实现。
+「一个根的全部后代」与「同一个会话的两代写法」的唯一口径：比对一律先把 id 去掉 `session-` 前缀（`bareSessionId`；一个 id 的全部写法由 `sessionIdShapes` 给出，逐层问宿主时按写法问），闭包在 parent(bare) 到 children 的索引上逐层收（深度不设上限、防环、首见去重）。`closureOf` 收单根闭包，`orphanRootsOf` 在整表语料上收「父既不在语料也不在清册」的根闭包组，`firstByBare` 是按首见去重的唯一写法。端口保留「一层一次宿主调用」的 adapter 职责（`descendantsByParent`），动词保留各自的对象映射——闭包本体不再有第二份实现。组员的判据是 `origin:'subagent'`：普通 fork 的 `parentSession` 只是来源记录——闭包不把 fork 收作组员、也不穿过它，但 fork 自己做根时它的 subagent 孩子照常算成员（ADR-0038）。
 _唯一实现_: `src/domain/closure.ts` 的 `closureOf` / `orphanRootsOf` / `firstByBare` / `bareSessionId` / `sessionIdShapes`。
 _Avoid_: 传递闭包、bare id 去重（算法名与实现细节可以出现在注释里说明为什么，命名与词条只说「会话闭包」）。
 
@@ -120,7 +120,7 @@ _Avoid_: 传递闭包、bare id 去重（算法名与实现细节可以出现在
 _唯一实现_: `src/verbs/permanent-removal.ts` 的 `planTrashRemoval`（`PlannedTrashRow` 的 `strandedCount`）。
 
 **无主子会话（orphan subagent）**:
-`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录与会话独占的图片附件副本（投影缓存不在范围内；共享图片保留，判据见 ADR-0020）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。根闭包组的纯核心在「会话闭包」（`src/domain/closure.ts` 的 `orphanRootsOf`）——`orphanGroupsOf` 是按语料对象映射的薄包装，归堆与去重两边都去 `session-` 前缀。
+`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录与会话独占的图片附件副本（投影缓存不在范围内；共享图片保留，判据见 ADR-0020）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。根闭包组的纯核心在「会话闭包」（`src/domain/closure.ts` 的 `orphanRootsOf`）——`orphanGroupsOf` 是按语料对象映射的薄包装，归堆与去重两边都去 `session-` 前缀。组内后代同样只收 `origin:'subagent'` 的会话；闭包不穿过普通 fork（ADR-0038）。
 _唯一实现_: `src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrphanGroups`。
 
 **活体（live session）**:

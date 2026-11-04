@@ -95,8 +95,8 @@ describe('orphanRootsOf：父既不在 known 也不在回收站的根闭包组',
   it('根按传递闭包收全部后代；组序与成员序按语料原序', () => {
     const corpus = [
       n('session-root', { parentSessionId: 'session-gone' }),
-      n('session-kid', { parentSessionId: 'session-root', subagent: false }),
-      n('session-g1', { parentSessionId: 'session-kid', subagent: false }),
+      n('session-kid', { parentSessionId: 'session-root', subagent: true }),
+      n('session-g1', { parentSessionId: 'session-kid', subagent: true }),
       n('session-trashed-kid', { parentSessionId: 'session-trashed' }),
     ]
     const groups = orphanRootsOf(corpus, ['session-trashed'])
@@ -105,6 +105,19 @@ describe('orphanRootsOf：父既不在 known 也不在回收站的根闭包组',
     expect(pick(groups, 0).parentSessionId).toBe('session-gone')
     expect(pick(groups, 0).members.map((member) => member.sessionId))
       .toEqual(['session-root', 'session-kid', 'session-g1'])
+  })
+
+  it('subagent 的普通 fork 孩子不算成员，也不穿透它的 subagent 后代', () => {
+    const corpus = [
+      n('session-root', { parentSessionId: 'session-gone' }),
+      n('session-fork', { parentSessionId: 'session-root', subagent: false }),
+      n('session-fork-child', { parentSessionId: 'session-fork' }),
+    ]
+    // 生产里 `orphanGroupsOf` 把全部语料 id 都交作 known：fork 自己不进组，但仍是它孩子的
+    // 已知父 ⇒ fork-child 不另起一组。
+    const groups = orphanRootsOf(corpus, corpus.map((node) => node.sessionId))
+    expect(groups).toHaveLength(1)
+    expect(pick(groups, 0).members.map((member) => member.sessionId)).toEqual(['session-root'])
   })
 
   it('claimed 防环：环上一条只归首见的那组，不挂死', () => {

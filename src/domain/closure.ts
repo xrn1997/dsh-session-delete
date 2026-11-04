@@ -75,6 +75,9 @@ export function firstByBare<N extends ClosureNode>(members: readonly N[]): N[] {
  * 已被前一组收走的那条，连同它整支子树都不再出现在这一组里——后代在那一组已被全部认领，所以
  * 「丢掉已认领的」与「不走进已认领的那支」交回的是同一个集合。环上的代价是「少数一条」，
  * 不是把一次扫描挂死。组序与成员序都按语料原序。
+ *
+ * 后代也必须是 subagent 起源：普通 fork 的 `parentSession` 只是来源记录，它不进组、也不穿过它收孩子
+ * （否则从 subagent 分出去的分支会被当成孤儿永久删掉）。
  */
 export function orphanRootsOf<N extends ClosureNode & { readonly parentSessionId?: string; readonly subagent: boolean }>(
   corpus: readonly N[],
@@ -87,6 +90,7 @@ export function orphanRootsOf<N extends ClosureNode & { readonly parentSessionId
   for (const session of corpus) {
     const parent = session.parentSessionId
     if (parent === undefined) continue
+    if (!session.subagent) continue
     const key = bareSessionId(parent)
     const list = children.get(key)
     if (list === undefined) children.set(key, [session])
