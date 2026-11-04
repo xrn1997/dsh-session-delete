@@ -13,6 +13,7 @@
  * **砍掉的**：`anchor`（把横幅对齐到某个元素的水平中心——本插件的撤销提示就是窗口居中）、
  * `actions[].prefix`（动作文案前的连接词，本插件只用「撤销」两个字）。**没砍 `text`/`icon`/`tone`/
  * `holdMs`/`actions`/`onDone`**：唯一的调用点这几样都在用。
+ * **本插件加的**：`paused`（撤销在飞时冻结停留与淡出，失败原文要落回同一条横幅；官方没有这个开关）。
  */
 import {
   useEffect,
@@ -48,28 +49,44 @@ export interface ToastProps {
   holdMs?: number
   /** 句尾的行内动作（照着句子的顺序排）。 */
   actions?: readonly ToastAction[] | undefined
+  /** 暂停自动熄灭：这一趟还有下文（撤销在飞），先把横幅留着——失败原文要靠它上屏。 */
+  paused?: boolean | undefined
   /** 淡出完成时调用一次：在这里卸载。 */
   onDone: () => void
 }
 
-export function Toast({ text, icon, tone, holdMs = DEFAULT_HOLD_MS, actions, onDone }: ToastProps): ReactElement {
+export function Toast({ text, icon, tone, holdMs = DEFAULT_HOLD_MS, actions, paused = false, onDone }: ToastProps): ReactElement {
   const latestOnDone = useRef(onDone)
   useLayoutEffect(() => {
     latestOnDone.current = onDone
   }, [onDone])
+  /** 暂停时剩下的停留时间：`null` = 还没起表（新挂载）。淡出动画被 `animationPlayState` 冻住，
+   *  timer 也从同一冻结点续，两者才不会一个先到终点。 */
+  const remaining = useRef<number | null>(null)
   useEffect(() => {
+    if (paused) return
+    const wait = remaining.current ?? holdMs + FADE_MS
+    const deadline = Date.now() + wait
     const timer = setTimeout(() => {
       latestOnDone.current()
-    }, holdMs + FADE_MS)
+    }, wait)
     return () => {
       clearTimeout(timer)
+      // 暂停（或卸载）时把剩下的停留记下来；恢复时从这里续，不重新计满——重新计时会让
+      // 冻住的淡出先走完，留下一条透明却仍占着 `role=alert` 的横幅。
+      remaining.current = Math.max(0, deadline - Date.now())
     }
-  }, [holdMs])
+  }, [holdMs, paused])
   return createPortal(
     <div
       className="sd-toast"
       role="alert"
-      style={{ '--dsh-toast-hold': `${String(holdMs)}ms` } as CSSProperties}
+      style={{
+        '--dsh-toast-hold': `${String(holdMs)}ms`,
+        // 退场动画与 JS timer 同源：暂停时连淡出也一起停住（只停 timer 会留下一条透明但仍占着
+        // `role=alert` 的横幅），恢复时两者从同一冻结点继续。
+        ...(paused ? { animationPlayState: 'paused' } : {}),
+      } as CSSProperties}
     >
       {tone === 'success' ? (
         <span className="sd-toast-icon sd-toast-icon-success" aria-hidden="true">

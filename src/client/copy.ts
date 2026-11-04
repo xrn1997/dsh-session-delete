@@ -464,18 +464,40 @@ interface LocaleServiceLike {
   bind(ns: string): (key: string, params?: CopyParams) => string
 }
 
+/** 探测宿主 locale 服务：缺席 / `ctx.get` 抛错都回 `undefined`，不往上抛。 */
+function detectLocaleService(ctx: ClientContextLike): LocaleServiceLike | undefined {
+  try {
+    const found = ctx.get?.('locale')
+    return found == null ? undefined : (found as LocaleServiceLike)
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * 注册字典并交回本插件的 `t`。服务不在时返回 `zhTranslate`（不抛、不 pending）。
+ *
+ * **空值判据同时认 `undefined` 与 `null`**：宿主 `ctx.get` 可以回 null（同一条窄镜像的读法见
+ * `main-view.ts` 的 `isReadyUiWorkspace`）。这里只判 `undefined` 的版本会把 null 当成"服务在"，
+ * 下一句 `service.register` 抛错——而本函数跑在**任何槽位注册之前**，抛出去等于整个客户端条目
+ * 从页面消失（`apply` 只打一条 warn）。注册 / 绑定自身失败同样退回内置 zh：文案降级远好过没有插件。
+ * `bind` 在注册之后才跑，它失败时字典已挂上但没人用——留着无害（宿主只是多一份不用的词典），
+ * 不为它补撤销路径再引入新的失败面。
  *
  * 注册必须挂在 `ctx.effect` 上：`register` 返回的 disposer 是**官方契约**（卸载时要把字典摘掉），
  * 而且同一命名空间的同一语言**只能注册一次**——effect 没挂，HMR 重挂就撞 "already has locale"。
  */
 export function createTranslate(ctx: ClientContextLike): Translate {
-  const service = ctx.get?.('locale') as LocaleServiceLike | undefined
+  const service = detectLocaleService(ctx)
   if (service === undefined) return zhTranslate
-  ctx.effect(() => service.register(COPY_NS, { zh: ZH, en: EN }), 'session-delete: copy dictionaries')
-  const bound = service.bind(COPY_NS)
-  return (key, params) => bound(key, params)
+  try {
+    ctx.effect(() => service.register(COPY_NS, { zh: ZH, en: EN }), 'session-delete: copy dictionaries')
+    const bound = service.bind(COPY_NS)
+    return (key, params) => bound(key, params)
+  } catch (error) {
+    console.warn('[dsh-session-delete] locale 服务不可用，退回内置中文：', error)
+    return zhTranslate
+  }
 }
 
 /**

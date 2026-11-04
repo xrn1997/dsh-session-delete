@@ -40,6 +40,9 @@ function harness() {
     toggleCheck,
     back,
     focusRow,
+    // scope 必传（生产入口是面板根）：这里的用例走 document 派发（合成目标），不含面板内/外的对账，
+    // 交给一个没挂节点的空引用；要验作用域的用例自己传真实节点。
+    scope: { current: null },
     ...over,
   })
   const mount = (over: Partial<TrashNavInput> = {}) =>
@@ -249,6 +252,42 @@ describe('清单导航 · Esc 交还焦点', () => {
     act(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' })) })
     expect(h.back).not.toHaveBeenCalled()
     expect(h.focusRow).not.toHaveBeenCalled()
+  })
+
+  // 下钻时清单不在 DOM，但监听在 document 上：没有作用域判据时，焦点在侧栏按 Esc 也会退出下钻，
+  // 并把焦点拽进回收站（用户以为自己按错了地方）。
+  it('焦点在面板外时 Esc 不归清单；面板里才退出下钻', () => {
+    const h = harness()
+    const panel = document.createElement('div')
+    const inside = document.createElement('button')
+    const outside = document.createElement('button')
+    panel.append(inside)
+    document.body.append(panel, outside)
+    const scope = { current: panel }
+    try {
+      h.mount({ selectedId: 'b', drilled: true, scope })
+      act(() => { outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+      expect(h.back).not.toHaveBeenCalled()
+
+      act(() => { inside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+      expect(h.back).toHaveBeenCalledTimes(1)
+    } finally {
+      panel.remove()
+      outside.remove()
+    }
+  })
+
+  it('焦点在页面空地（body）时 Esc 仍归清单：没有“面板外”的证据，保住可发现性', () => {
+    const h = harness()
+    const panel = document.createElement('div')
+    document.body.append(panel)
+    try {
+      h.mount({ selectedId: 'b', drilled: true, scope: { current: panel } })
+      act(() => { document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })) })
+      expect(h.back).toHaveBeenCalledTimes(1)
+    } finally {
+      panel.remove()
+    }
   })
 
   it('宽档即使残留 drilled，Esc 也不归清单', () => {

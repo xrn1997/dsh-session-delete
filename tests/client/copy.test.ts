@@ -92,6 +92,45 @@ describe('文案接线', () => {
     expect(withNone('menu.delete')).toBe('删除')
   })
 
+  // 宿主 `ctx.get` 可以回 null（同一条读法见 main-view.ts）：只判 undefined 会让下一句
+  // `service.register` 抛错，而它跑在所有槽位注册之前 ⇒ 整个插件从页面消失。
+  it('服务回 null 也算缺席', () => {
+    const ctx: ClientContextLike = {
+      slots: { inject: vi.fn(), register: vi.fn() },
+      get: () => null,
+      effect: vi.fn(),
+    }
+    expect(createTranslate(ctx)).toBe(zhTranslate)
+    expect(ctx.effect).not.toHaveBeenCalled()
+  })
+
+  it('locale 注册抛错 ⇒ 退回内置 zh，不把整个客户端条目拖下水', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const service = fakeLocale()
+      service.register.mockImplementation(() => {
+        throw new Error('locale namespace already has locale')
+      })
+      const ctx = contextWith(service)
+
+      expect(createTranslate(ctx)('trash.title')).toBe('回收站')
+      expect(service.bind).not.toHaveBeenCalled()
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('读服务本身抛错 ⇒ 同样降级，不往上抛', () => {
+    const ctx: ClientContextLike = {
+      slots: { inject: vi.fn(), register: vi.fn() },
+      get: () => { throw new Error('boom') },
+      effect: vi.fn(),
+    }
+    expect(createTranslate(ctx)).toBe(zhTranslate)
+    expect(ctx.effect).not.toHaveBeenCalled()
+  })
+
   it('注册是 effect（卸载即摘）：`register` 交回的 disposer 真进了框架', () => {
     const service = fakeLocale()
     const dispose = vi.fn()

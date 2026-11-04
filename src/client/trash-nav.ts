@@ -10,10 +10,10 @@
  * - 方向键走环：未选中时 ↓ 落第一条、↑ 落最后一条；到端回卷。
  * - aria-activedescendant 只指向在 DOM 里的行；tab 落点永远有一行拿着。
  * - Esc 只在下钻期间生效，回退分两程（先收孩子视图、再退下钻）；退出下钻后把焦点交还选中行一次；
- *   最上层是确认框/菜单时让路。
+ *   最上层是确认框/菜单时让路；焦点在面板外时不归清单（`scope`）。
  */
 import { useCallback, useEffect, useRef } from 'react'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
 import type { TrashEntryLike } from './remote.js'
 import { hasTopLayer } from './ui/top-layer.js'
 
@@ -37,6 +37,10 @@ export interface TrashNavInput {
   toggleCheck: (entryId: string) => void
   back: () => void
   focusRow: (entryId: string) => void
+  /** Esc 的作用域（面板根节点；生产入口必须传，测试可传空引用对象）。下钻时清单不在 DOM，
+   *  但详情在面板里；**焦点在面板外**的 Esc 不归清单——否则在侧栏或别的面板按 Esc 会退出下钻，
+   *  还会把焦点拽进回收站。根还没挂上时无从判断包含关系，Esc 不处理。 */
+  scope: RefObject<HTMLElement | null>
 }
 
 export interface TrashNav {
@@ -54,6 +58,18 @@ function isListOwnedEvent(event: ReactKeyboardEvent<HTMLElement>): boolean {
   const target = event.target as HTMLElement | null | undefined
   if (target == null || target === event.currentTarget) return true
   return typeof target.getAttribute === 'function' && target.getAttribute('role') === 'row'
+}
+
+/** 这条 Esc 该不该归清单处理（回答的是"清单收不收这一下"，不是"target 在不在作用域里"）。
+ *  焦点在页面空地（`body` / `html`）时没有"面板外"的证据，按清单处理，保住窄档下钻的可发现性；
+ *  `document` 是 `fireEvent.keyDown(document, …)` 这类合成事件的目标，同样没有焦点信息。
+ *  其余按作用域根的包含关系判；根还没挂上时按不处理。 */
+function shouldHandleEsc(event: KeyboardEvent, scope: RefObject<HTMLElement | null>): boolean {
+  const target = event.target
+  if (!(target instanceof Node)) return true
+  if (target === document || target === document.body || target === document.documentElement) return true
+  const root = scope.current
+  return root !== null && root.contains(target)
 }
 
 export function useTrashNav(input: TrashNavInput): TrashNav {
@@ -98,17 +114,20 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
   // 监听挂 `document`：窄档下钻时清单不在 DOM 里，挂在容器上的 Esc 是一条永远收不到的死路径。
   // `drillEnabled` 也进条件：宽档里即使残留着 `drilled`（例如从窄档拖宽），Esc 也不归清单。
   // 最上层有 dialog / menu 时让路：那一层自己收 Esc；这里先退下钻会和它抢同一下按键。
+  // 作用域：焦点在面板外的 Esc 不归清单（见 `TrashNavInput.scope`）。
+  const scope = input.scope
   useEffect(() => {
     if (!drilled || !drillEnabled) return
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape' || event.defaultPrevented) return
+      if (!shouldHandleEsc(event, scope)) return
       if (hasTopLayer(document)) return
       refocusRow.current = selectedId
       back()
     }
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('keydown', onKey) }
-  }, [drillEnabled, drilled, back, selectedId])
+  }, [drillEnabled, drilled, scope, back, selectedId])
 
   // 只在下钻**刚刚退出**、且手里真的有 id 时交还一次焦点；交完就清账，后续重渲染不会重复抢焦点。
   useEffect(() => {

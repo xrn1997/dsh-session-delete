@@ -79,6 +79,32 @@ describe('通知台 seq', () => {
     await waitFor(() => expect(view.result.current?.seq).toBe(2))
     expect(view.result.current?.failure).toBe('原项目目录已不在')
   })
+
+  // 横幅到点自动熄灭与撤销在飞是两件事：先熄灭再失败，失败原文就没有落点了（只有面板 invalidate），
+  // 直接违反「失败不吞」。在飞期间 timer 与淡出都暂停。
+  it('撤销在飞时横幅到点也不熄灭：慢失败原文仍能上屏', async () => {
+    vi.useFakeTimers()
+    try {
+      let rejectApply!: (reason: unknown) => void
+      const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((_resolve, reject) => {
+        rejectApply = reject
+      }))
+      publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
+      const view = renderHook(() => useUndoNotice())
+      render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+      fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+
+      act(() => { vi.advanceTimersByTime(7000) })
+      expect(view.result.current).not.toBeNull()
+
+      await act(async () => {
+        rejectApply(Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' }))
+      })
+      expect(view.result.current?.failure).toBe('原项目目录已不在')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('按条目熄灭撤销横幅', () => {

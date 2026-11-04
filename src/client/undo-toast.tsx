@@ -56,6 +56,10 @@ function NoticeToast({ deps, current, t }: { deps: UndoToastDeps; current: UndoN
           : t('undo.movedBatch', { n: current.n })
       }
       holdMs={UNDO_HOLD_MS}
+      // 撤销在飞时横幅不自动熄灭：失败原文要落回这一条，先收掉就只剩一条「失败被吞」。
+      // 成功由 `restoreFromUndo` 自己收，失败由 `failNotice` 换 seq 重挂。
+      paused={gate.busy}
+      onDone={clearUndoNotice}
       actions={
         canUndo
           ? [{
@@ -67,7 +71,6 @@ function NoticeToast({ deps, current, t }: { deps: UndoToastDeps; current: UndoN
             }]
           : undefined
       }
-      onDone={clearUndoNotice}
     />
   )
 }

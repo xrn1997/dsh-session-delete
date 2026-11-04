@@ -276,6 +276,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     toggleCheck,
     back: controller.back,
     focusRow,
+    // Esc 只在面板里归清单：焦点在侧栏/宿主别的面板时，别把下钻退掉、更别把焦点拽进来。
+    scope: rootRef,
   })
 
   // 恢复确认框要摆的条目由控制器从勾选与当前清单派生（顺序与"清单从上往下"一致）。
