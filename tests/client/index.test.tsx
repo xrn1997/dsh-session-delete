@@ -195,6 +195,7 @@ async function bootstrap(
   raw: RawSessionDeleteRemote = rawRemote(),
   channel: Channel = 'up',
   uiWorkspace?: unknown,
+  services: { contextMenus?: unknown; sessions?: unknown } = {},
 ) {
   const fetchCalls = installFetch(raw, channel).calls
   const injected: string[] = []
@@ -210,9 +211,13 @@ async function bootstrap(
         return component
       },
     },
-    ...(uiWorkspace === undefined ? {} : {
-      get: (name: string) => (name === 'uiWorkspace' ? uiWorkspace : undefined),
-    }),
+    get: (name: string) => {
+      if (name === 'uiWorkspace') return uiWorkspace
+      if (name === 'contextMenus') return services.contextMenus
+      if (name === 'sessions') return services.sessions
+      return undefined
+    },
+    effect: (execute: () => unknown, _label?: string) => execute(),
   }
   apply(ctx)
   await settle()
@@ -383,6 +388,85 @@ describe('apply 的装配面', () => {
     const settingsRow = registered.find((row) => row.name === SETTINGS_SLOT)
     expect(settingsRow?.key).toBe('@xrn1997/dsh-session-delete')
     expect(settingsRow?.id).toBeUndefined()
+  })
+
+  it('0.2.2+：两行菜单改注册为 contextMenus 数据动作，legacy 菜单槽不再占用', async () => {
+    interface Contribution {
+      id: string
+      target: string
+      order: number
+      observe?: (target: { sessionId: string; displayTitle: string }) => readonly unknown[]
+      resolve: (
+        target: { sessionId: string; displayTitle: string },
+      ) => readonly Record<string, unknown>[] | Promise<readonly Record<string, unknown>[]>
+    }
+    const contributions: Contribution[] = []
+    const contextMenus = {
+      register(contribution: Contribution): () => void {
+        contributions.push(contribution)
+        return () => undefined
+      },
+    }
+    let running = false
+    const sessions = {
+      list: {
+        getSnapshot: () => ({ byId: { 'session-a': { running } } }),
+        subscribe: () => () => undefined,
+      },
+    }
+    const { injected, registered } = await bootstrap(rawRemote(), 'up', undefined, {
+      contextMenus,
+      sessions,
+    })
+
+    // 数据动作路径不再注册 legacy 菜单行；图标座位各注册一次。
+    expect(injected).not.toContain(MENU_SLOT)
+    expect(injected.filter((key) => key === 'contextMenu.icon')).toHaveLength(2)
+    expect(registered.filter((row) => row.name === MENU_SLOT)).toHaveLength(0)
+
+    expect(contributions).toHaveLength(1)
+    const contribution = contributions[0]
+    if (contribution === undefined) throw new Error('没有注册 contextMenus 贡献')
+    expect(contribution.target).toBe('session')
+    expect(contribution.order).toBe(700)
+    expect(contribution.observe?.({ sessionId: 'session-a', displayTitle: '/code-review' })).toEqual([
+      sessions.list,
+    ])
+
+    const actions = await contribution.resolve({ sessionId: 'session-a', displayTitle: '/code-review' })
+    expect(actions.map((action) => action['id'])).toEqual(['batch-select', 'delete'])
+    const batchIcon: unknown = actions[0]?.['icon']
+    expect(actions[0]).toMatchObject({
+      label: '多选',
+      afterContent: true,
+      separatorBefore: true,
+    })
+    expect(batchIcon).toHaveProperty('key')
+    const batchKey = (batchIcon as { key?: unknown }).key
+    expect(typeof batchKey).toBe('string')
+    expect(actions[1]).toMatchObject({
+      label: '删除',
+      disabled: false,
+      danger: true,
+      afterContent: true,
+    })
+
+    running = true
+    const live = await contribution.resolve({ sessionId: 'session-a', displayTitle: '/code-review' })
+    expect(live[1]).toMatchObject({ label: '删除（运行中）', disabled: true })
+  })
+
+  it('contextMenus 注册失败时回退 legacy 菜单行，且不注册图标', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const contextMenus = { register() { throw new Error('register failed') } }
+      const { injected, registered } = await bootstrap(rawRemote(), 'up', undefined, { contextMenus })
+      expect(injected.filter((key) => key === MENU_SLOT)).toHaveLength(2)
+      expect(registered.filter((row) => row.name === MENU_SLOT)).toHaveLength(2)
+      expect(injected).not.toContain('contextMenu.icon')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {

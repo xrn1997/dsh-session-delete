@@ -90,9 +90,6 @@ function makeCtx(options: { readonly sessionQuery?: unknown } = {}): unknown {
       archivedSessionIds: [],
       unarchiveSession: async () => {},
       archiveSession: async () => {},
-      readSessionHeader: async () => {
-        throw new Error('minimal ctx: no such session')
-      },
     },
     waterfall: async (_name: string, _args: object, next: () => Promise<readonly unknown[]>) => next(),
     get: (name: string) => (name === 'sessionQuery' ? options.sessionQuery : undefined),

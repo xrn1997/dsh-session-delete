@@ -33,12 +33,15 @@ const manifest = JSON.parse(
 }
 
 /** 本插件真跑过的宿主代次（桌面版实测）。新增一代先在这里落账，再同步 dshReleases。 */
-const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5']
+const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.1']
 
 /** 完整功能的最低宿主代次（2026-10-19 **CLI 台架**实测：四个槽位齐全、激活零错误、ping 通）。
  *  它只决定 `engines.dsh` 的地板——**台架读数不进 `dshReleases`**（那份只收真机跑过的代次）。
- *  边界实测：0.1.7-rc.1 缺 `sidebar.session.row.leading`（行首勾选静默缺席），0.1.5-rc.1 起
- *  `menu.item` / `row.action` / `row.leading` 三个会话行槽位都没有（删不了会话）。 */
+ *  2026-11-04 按源码 tag 复核：0.1.7-rc.2 是第一个同时具备 `sidebar.session.row.leading`、
+ *  `menu.item`、`row.action` 与 `workspaceRegistry.unarchiveSession` 的代次；0.1.7-rc.1 缺
+ *  `leading`，0.1.7-alpha.* 缺 `menu`/`leading`，0.1.6-alpha.* 缺 `menu`，0.1.5 及以前还缺
+ *  `row.action`/`unarchiveSession`。exact Fetch 路由不是地板来源：`ConnectionFetchRoute`
+ *  自 0.1.3-alpha.2 起形状未变。 */
 const BENCH_VERIFIED_FLOOR = '0.1.7-rc.2'
 
 /** 宿主要求的唯一声明处。天花板是下一条线的起点——`<0.3.0-0` 才能连 0.3.0 的预发布
@@ -130,10 +133,14 @@ describe('宿主要求声明与浏览器半声明', () => {
   // `dsh.client.inject` 的语义是**包行**（自带 `./client` 的 client 插件包）先到，不是静态表键：
   // 宿主浏览器半 `arriveGraphRow` 逐字 `for (const packageName of row.inject) { const dependency =
   // this.graphRows.get(packageName); if (dependency !== void 0) await this.arriveDependency(...) }`
-  // ——名字取不到就静默跳过。本插件唯一需要先到的是 locale 包：客户端半要读 `locale` 服务。
-  it('dsh.client.inject 只列 web 组合花名册里真实存在的 client 包（locale）', () => {
-    expect(manifest.dsh.client.inject).toEqual(['@deepseek-ai/dsh-client-locale'])
-    expect(FROZEN_PLATFORM_MODULES).not.toContain('@deepseek-ai/dsh-client-locale')
+  // ——名字取不到就静默跳过。locale 先到（客户端半要读 `locale` 服务）；0.2.2+ 的 context-menu
+  // 先到（数据动作要读 `contextMenus` 服务），旧宿主取不到这个名字也不会挡激活。
+  it('dsh.client.inject 只列 web 组合花名册里真实存在的 client 包（locale + context-menu）', () => {
+    expect(manifest.dsh.client.inject).toEqual([
+      '@deepseek-ai/dsh-client-locale',
+      '@deepseek-ai/dsh-client-ui-context-menu',
+    ])
+    for (const name of manifest.dsh.client.inject) expect(FROZEN_PLATFORM_MODULES).not.toContain(name)
   })
 
   it('manifest 里没有 @deepseek-ai/dsh-client-ui-primitives（已自造控件，不再依赖宿主客户端包）', () => {

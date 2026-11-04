@@ -83,7 +83,8 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-locale"
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-context-menu"
       ],
       "platform": "web"
     },
@@ -93,7 +94,8 @@
         "0.2.1-rc.1": "compatible",
         "0.2.1-rc.2": "compatible",
         "0.2.1-rc.3": "compatible",
-        "0.2.1-rc.5": "compatible"
+        "0.2.1-rc.5": "compatible",
+        "0.2.2-rc.1": "compatible"
       }
     }
   },

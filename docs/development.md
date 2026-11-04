@@ -56,7 +56,7 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 
 **客户端半的条目激活失败 = 宿主进程死**（`web boot: N entry did not activate` ⇒ 桌面壳 `reportFatal`）。所以：
 
-1. **改动 `src/client/` 后**，先在**有可见浏览器的隔离 home**（临时 `DSH_HOME`，镜像目标 profile 的插件组成）上验「页面加载 + 槽位注册 + 控制台零 error/warn」，再装进任何 live profile。台架走法：`DSH_HOME=<临时目录> dsh --profile <名> --from-default-profile web --no-open --port 0`，浏览器看控制台；指针驱动的交互在没有可视视口的环境里测不了，那部分交真机目视。
+1. **改动 `src/client/` 后**，先在**有可见浏览器的隔离 home**（临时 `DSH_HOME`，镜像目标 profile 的插件组成）上验「页面加载 + 槽位注册 + 控制台零 error/warn」，再装进任何 live profile。台架走法：`DSH_HOME=<临时目录> dsh --profile <名> --from-default-profile web --no-open --port 0`，浏览器看控制台；指针驱动的交互在没有可视视口的环境里测不了，那部分交真机目视。0.2.2+ 的菜单数据动作还要目视确认「归档 → 多选 → 删除」顺序、没有 legacy 重复行、运行中显示「删除（运行中）」；≤0.2.1 的 legacy 路径（tooltip + order 850/900）由单测覆盖，有旧宿主时再补一次真机。
 2. **改动 Node 半后**必须重启宿主。
 3. **`dshReleases` 只列桌面真机跑过的代次**（`tests/skeleton.test.ts` 双向钉）；CLI 台架读数只用于定 `engines.dsh` 地板，不进那份名单。
 4. 真机验收清单随对应 issue/PR 或提交说明走（本仓不再存批次日志）——**代签不了**：构建绿与单测绿只证形状与逻辑，不证激活。

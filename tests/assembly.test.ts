@@ -65,16 +65,6 @@ function makeEnv(over: {
       archivedSessionIds: over.archived ?? [],
       unarchiveSession: async (id: string) => { calls.push(`registry.unarchiveSession(${id})`) },
       archiveSession: async (id: string) => { calls.push(`registry.archiveSession(${id})`) },
-      readSessionHeader: async (id: string) => {
-        calls.push(`registry.readSessionHeader(${id})`)
-        const header = (over.headers ?? {})[id]
-        // 未知会话抛的是宿主那句**裸 Error**（asar 原文逐字），不是替身自己编的消息：
-        // `projectDirOf` 的「未命中回 undefined」正是按这一句判的，写别的句子会让用例失去意义。
-        if (header === undefined) {
-          throw new Error(`cannot validate session '${id}': session persistence holds no such session`)
-        }
-        return header
-      },
     },
     waterfall: async (name: string, args: { sessionId: string }, next: () => Promise<unknown[]>) => {
       calls.push(`waterfall(${name},${args.sessionId})`)
@@ -84,6 +74,15 @@ function makeEnv(over: {
       calls.push(`get(${name})`)
       if (name === 'sessionProjectionCache') return over.projectionCache
       if (name === 'sessions') return over.sessions
+      if (name === 'sessionPersistence') {
+        return {
+          stat: async (id: string) => {
+            calls.push(`sessionPersistence.stat(${id})`)
+            const header = (over.headers ?? {})[id]
+            return header === undefined ? undefined : { header }
+          },
+        }
+      }
       if (name === 'agents') return over.agents
       if (name === 'sessionController') return over.sessionController
       if (name === 'sessionQuery') return over.sessionQuery
@@ -146,18 +145,46 @@ describe('宿主服务层端口的接线', () => {
     expect(back).toContain('~literal')  // 字面 `~` 编成 ~007E，还原后不许变成别的字符
   })
 
-  it('projectDirOf 的 cwd 来自 workspaceRegistry.readSessionHeader（官方 header 读面）', async () => {
+  it('projectDirOf 的 cwd 来自公开 sessionPersistence.stat（不再读私有的 readSessionHeader）', async () => {
     const { ctx, calls } = makeEnv({ headers: { s9: { cwd: 'C:/x' } } })
     await createHostPort(ctx).projectDirOf('s9')
-    expect(calls).toEqual(['get(agents)', 'registry.readSessionHeader(s9)'])
+    expect(calls).toEqual([
+      'get(agents)',
+      'get(sessions)',
+      'get(sessionPersistence)',
+      'sessionPersistence.stat(s9)',
+    ])
   })
 
-  // 未知会话这条：宿主 `readSessionHeader(id)` 抛的是**裸 Error**（无类型、无码）。它是**未命中**，
-  // 与 `workspaceOf` 同一口径回 `undefined`——否则 `delete-session.ts` 里
-  // `if (!projectDir) throw verbError('not-found', …)` 的 `!projectDir` 永远是假。
-  it('projectDirOf 对未知会话返回 undefined（裸抛的 miss 不算故障）', async () => {
+  // header 读面保留宿主原来的优先级：live 会话的 header 先答，不落持久化。
+  it('header 读面优先用 live sessions.get(id).header', async () => {
+    const { ctx, calls } = makeEnv({
+      headers: { s1: { cwd: 'C:/persisted' } },
+      sessions: {
+        get: () => ({ header: { cwd: 'C:/live' } }),
+        liveEntryFor: () => undefined,
+      },
+    })
+    expect(await createHostPort(ctx).projectDirOf('s1')).toBe('--C-live--')
+    expect(calls).not.toContain('sessionPersistence.stat(s1)')
+  })
+
+  // 未知会话：公开 stat 回 undefined，就是未命中；与 `workspaceOf` 同一口径回 `undefined`——
+  // 否则 `delete-session.ts` 里 `if (!projectDir) throw verbError('not-found', …)` 的 `!projectDir` 永远是假。
+  it('projectDirOf 对未知会话返回 undefined（stat 的 miss 不算故障）', async () => {
     const { ctx } = makeEnv({ headers: { s1: { cwd: 'C:/p' } } })
     expect(await createHostPort(ctx).projectDirOf('ghost')).toBeUndefined()
+  })
+
+  // 公开服务缺席是形状漂移，不偷偷回退私有方法：projectDirOf 响亮失败，titleOf 按契约降级空串。
+  it('sessionPersistence 缺席：projectDirOf 抛错、titleOf 回空串', async () => {
+    const { ctx } = makeEnv({ headers: { s1: { cwd: 'C:/p' } } })
+    const host = createHostPort({
+      ...ctx,
+      get: (name: string) => (name === 'sessionPersistence' ? undefined : ctx.get(name)),
+    })
+    await expect(host.projectDirOf('s1')).rejects.toThrow(/sessionPersistence/)
+    expect(await host.titleOf('s1')).toBe('')
   })
 
   describe('listSessions（无主子会话扫描的语料）', () => {
@@ -461,16 +488,15 @@ describe('宿主服务层端口的接线', () => {
     })
   })
 
-  // 同一段 try/catch 的另一半：认不出来的错误必须**照抛**，真存储故障不许被伪装成「无此会话」
+  // 公开 stat 的 miss 由 `undefined` 表达，读盘失败必须**照抛**——不许被伪装成「无此会话」
   // （伪装了会让读盘失败以 `not-found` 回客户端，用户以为会话不存在，实际上盘读不了）。
-  it('projectDirOf 只吞「账本里没有此会话」，真存储故障照抛', async () => {
+  it('projectDirOf 对持久化读故障照抛（miss 由 undefined 表达）', async () => {
     const { ctx } = makeEnv()
     const host = createHostPort({
       ...ctx,
-      workspaceRegistry: {
-        ...ctx.workspaceRegistry,
-        readSessionHeader: async () => { throw new Error('ENOENT: 账本读不了') },
-      },
+      get: (name: string) => (name === 'sessionPersistence'
+        ? { stat: async () => { throw new Error('ENOENT: 账本读不了') } }
+        : ctx.get(name)),
     })
     await expect(host.projectDirOf('s1')).rejects.toThrow(/ENOENT/)
   })
@@ -786,10 +812,9 @@ describe('宿主服务层端口的接线', () => {
     const boom = makeEnv({ headers: { s1: { cwd: 'C:/p' } }, projectionCache: view({ title: 'x' }) })
     expect(await createHostPort({
       ...boom.ctx,
-      workspaceRegistry: {
-        ...boom.ctx.workspaceRegistry,
-        readSessionHeader: async () => { throw new Error('storage fault') },
-      },
+      get: (name: string) => (name === 'sessionPersistence'
+        ? { stat: async () => { throw new Error('storage fault') } }
+        : boom.ctx.get(name)),
     }).titleOf('s1')).toBe('')
   })
 })

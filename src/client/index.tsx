@@ -3,11 +3,14 @@
  *
  * 槽位贡献的注册面见 docs/architecture.md §3，语义归属见 §4 的主人清单；
  * 本文件只做注册与槽位接线。
- * 两行菜单项的 order 与分隔线由下方注册调用和行包装拥有，均排在宿主官方菜单行之后。
+ * 菜单两行有两条路径：0.2.2+ 走 `ctx.contextMenus` 数据动作（`context-menu-actions.ts`，
+ * afterContent、排在 Archive 之后）；旧宿主没有这个服务，才注册 legacy 槽位行。
  *
  * 槽位出处（宿主产物，不是猜的；换代先复核）：
  * - sidebar.workspaces.session.menu.item：声明 asar @46391872；数据面投影 @46271806；
  *   menuOpenState hook 工厂 @46195835；宿主官方菜单行 @46392466 起（pin/rename/fork/archive/session-id）。
+ *   0.2.2 起内置动作改住 ctx.contextMenus，此槽位只剩 legacy React 扩展位；本插件把多选/删除
+ *   迁到数据动作，见 `context-menu-actions.ts`。
  * - shell.overlay：声明 asar @21206189。
  * - sidebar.panellist：声明 @44796980；行渲染 @44783481；label 解析 @44795361（thunk 随 locale）。
  * - main：渲染 @21185725；id 与 panellist 同字，selectPanel 只校验已注册 @21199710。
@@ -24,6 +27,13 @@ import { BatchBar } from './batch-bar.js'
 import { BatchConfirmHost } from './batch-confirm.js'
 import { BatchSelectMenuItem } from './batch-menu-item.js'
 import { BatchPickButton, BatchPickCheckbox } from './batch-select.js'
+import {
+  createSessionMenuContribution,
+  ICON_BATCH,
+  ICON_DELETE,
+  type ContextMenusLike,
+  type SessionsServiceLike,
+} from './context-menu-actions.js'
 import { type ClientContextLike } from './context.js'
 import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
@@ -38,6 +48,7 @@ import {
 } from './remote.js'
 import { TrashPanelIcon } from './trash-entry.js'
 import { TrashPanel } from './trash-panel.js'
+import { IconCheckOutlineRegular, IconTrashOutlineRegular } from './ui/icons.js'
 import { UndoToast } from './undo-toast.js'
 
 export const name = '@xrn1997/dsh-session-delete/client'
@@ -49,9 +60,12 @@ export const name = '@xrn1997/dsh-session-delete/client'
  * **`locale` 也不在这里**：宿主自己的 `ui-sidebar` 是硬注入它的，但那是"宿主知道自己那一代"的前提；
  * 本插件要跨代活着 ⇒ 走 `ctx.get('locale')` 可选读，缺席时降级到内置 zh 文案（见 `copy.ts` 头注）。
  * 写进 inject 就等于"这一代没有 locale 就不让整个客户端条目激活"，而那等于宿主进程死。
+ * **`contextMenus` 同理**：0.2.2+ 用 `ctx.get('contextMenus')` 探测，包本身在 package.json 的
+ * `dsh.client.inject` 里排到前面；旧宿主没有这个服务时回退 legacy 槽位。
  */
 export const inject = ['slots']
 
+/** legacy 菜单槽：只在 contextMenus 不可用时注册（0.2.2+ 的内置动作已迁到数据动作）。 */
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
 /** 会话行首 16px 格（无状态点时归第三方装饰）；批量删除的主勾选框落这里，多选模式内可见。 */
 const LEADING_SLOT = 'sidebar.session.row.leading'
@@ -202,21 +216,52 @@ async function activate(client: ClientContextLike): Promise<void> {
   // 文案：宿主 locale 服务在就注册字典并绑命名空间，不在就降级到内置 zh（见 `copy.ts` 头注）。
   const t = createTranslate(client)
 
-  // ① 菜单行：只发请求，注入面一件都不需要（会话 id / 名字由槽位投影给）。
-  client.slots.inject(MENU_SLOT, () =>
-    client.slots.register(
-      { name: MENU_SLOT, id: `${PLUGIN_ID}.delete`, order: 900, inject: () => ({ t }) },
-      DeleteRow,
-    ),
-  )
+  // 0.2.2+：两行菜单改住 ctx.contextMenus，才能排在 Archive(600) 之后；旧宿主没有这个服务，
+  // 继续走 legacy 槽位（两套注册互斥）。贡献对象住 context-menu-actions.ts，注册仍只在本文件。
+  let usesContextMenus = false
+  const contextMenus = client.get?.('contextMenus') as ContextMenusLike | null | undefined
+  if (contextMenus !== null && contextMenus !== undefined && typeof contextMenus.register === 'function') {
+    const sessions = client.get?.('sessions') as SessionsServiceLike | null | undefined
+    try {
+      client.effect(
+        () => contextMenus.register(createSessionMenuContribution(t, sessions?.list)),
+        'session-delete: context menu actions',
+      )
+      usesContextMenus = true
+    } catch (error) {
+      console.warn('[dsh-session-delete] context menu 注册失败，回退 legacy 菜单行：', error)
+    }
+    if (usesContextMenus) {
+      try {
+        client.slots.inject('contextMenu.icon', () =>
+          client.slots.register({ name: 'contextMenu.icon', key: ICON_BATCH }, IconCheckOutlineRegular),
+        )
+        client.slots.inject('contextMenu.icon', () =>
+          client.slots.register({ name: 'contextMenu.icon', key: ICON_DELETE }, IconTrashOutlineRegular),
+        )
+      } catch (error) {
+        console.warn('[dsh-session-delete] context menu 图标注册失败：', error)
+      }
+    }
+  }
 
-  // ①' 多选入口：官方菜单行之后、删除之前（order 850，带发丝线）；按下进入/退出多选模式并收菜单。
-  client.slots.inject(MENU_SLOT, () =>
-    client.slots.register(
-      { name: MENU_SLOT, id: `${PLUGIN_ID}.batch-select`, order: 850, inject: () => ({ t }) },
-      SelectRow,
-    ),
-  )
+  if (!usesContextMenus) {
+    // ① 菜单行：只发请求，注入面一件都不需要（会话 id / 名字由槽位投影给）。
+    client.slots.inject(MENU_SLOT, () =>
+      client.slots.register(
+        { name: MENU_SLOT, id: `${PLUGIN_ID}.delete`, order: 900, inject: () => ({ t }) },
+        DeleteRow,
+      ),
+    )
+
+    // ①' 多选入口：官方菜单行之后、删除之前（order 850，带发丝线）；按下进入/退出多选模式并收菜单。
+    client.slots.inject(MENU_SLOT, () =>
+      client.slots.register(
+        { name: MENU_SLOT, id: `${PLUGIN_ID}.batch-select`, order: 850, inject: () => ({ t }) },
+        SelectRow,
+      ),
+    )
+  }
 
   // ①' 行首勾选框：多选模式内的主勾选。宿主只在没有状态点、非归档的行渲染这一格；
   // 槽位只投 sessionId，标题由 root hook 补。勾选是原生 Checkbox，自己挡住冒泡（不误开会话）。

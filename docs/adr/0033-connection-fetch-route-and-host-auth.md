@@ -16,7 +16,7 @@ Status: accepted
 
 因此「旧宿主没有该 API」不成立：旧前缀 fallback 不是版本兼容税，而是**未支持的自定义组合**（有 `webServer`、没装 `client-connection`）的兼容税。它在 web UI 与桌面端里是死代码，却要长期维护两套传输、两套测试。
 
-另一个版本事实：exact route 的 owner-peer 限制是 2026-10-13（`f6316536ea`，首个 tag `dsh-v0.2.1-alpha.3`）才加的；`0.2.0-rc.2`、`0.2.1-rc.1/rc.2` 仍只要求过 `/api` 的 Host/Origin + 浏览器认证。插件不把 owner-only 当作自己的安全边界；鉴权归宿主，随宿主代次走。
+另一个版本事实：exact route 的 owner-peer 限制是 2026-10-13（`f6316536ea`，首个 tag `dsh-v0.2.1-alpha.3`）才加的；`0.2.0-rc.2`、`0.2.1-alpha.1/alpha.2` 仍只要求过 `/api` 的 Host/Origin + 浏览器认证，`0.2.1-alpha.3` 起（含 `0.2.1-rc.1/rc.2`）带这道校验。插件不把 owner-only 当作自己的安全边界；鉴权归宿主，随宿主代次走。
 
 ## 决定
 

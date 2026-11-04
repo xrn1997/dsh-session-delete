@@ -69,9 +69,9 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 
 ## 3. 浏览器半：槽位贡献与可丢弃投影
 
-- 注册处只有一处：`src/client/index.tsx`（菜单行、行首勾选、行尾兜底、overlay 浮条/确认框、面板行 + 中央面板、插件设置页的维护卡）。**槽位只挂官方已声明的**——向未声明槽位注册在插件激活时响亮失败。
+- 注册处只有一处：`src/client/index.tsx`（菜单行、行首勾选、行尾兜底、overlay 浮条/确认框、面板行 + 中央面板、插件设置页的维护卡；0.2.2+ 的多选/删除数据动作与 `contextMenu.icon` 也在这里注册，贡献对象由 `src/client/context-menu-actions.ts` 造）。**槽位只挂官方已声明的**——向未声明槽位注册在插件激活时响亮失败。
 - **通道探测决定入口出现与否**：注册任何贡献之前先探 `/ping`；只有成功信封（`pong`）才算通道在。打不通 / 回的不是信封 / 401·403（页面没有宿主身份）/ 失败信封都按探测不过处理，一个入口都不注册（"不可用"以入口不出现表达，不新造禁用态 UI——半吊子 UI 比没有 UI 更糟），也不回退旧前缀（ADR-0033）。
-- **客户端条目 pending = 宿主进程死**：可选服务（locale）走 `ctx.get` 而不是 `inject`。
+- **客户端条目 pending = 宿主进程死**：可选服务（locale、0.2.2+ 的 contextMenus/sessions）走 `ctx.get` 而不是 `inject`；context-menu 包本身在 `dsh.client.inject` 里排到前面，旧宿主取不到包名会静默跳过。
 - 文案住 `src/client/copy.ts` 的命名空间字典（zh 真源 + en 逐键镜像），经宿主 locale 服务可选读，缺席降级内置 zh。**渠道错误原文除外**：`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale；它们是协议诊断原文，不是界面标签。
 - **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与脏标记）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与快照住 `src/client/host-rows.ts`，全选 / 判定 / 整行点击守卫住 `src/client/batch-pick.ts`）。
 - **重开等待住一个可取消句柄**：`src/client/main-view.ts` 只决定关谁、开谁；票、订阅、放弃 timer 与 settle 住 `src/client/pending-open.ts` 的 `createPendingOpen`（ADR-0036）。
@@ -156,7 +156,7 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 批量的全选 / 全选判定 / 模式内整行点击守卫（DOM 只把指针映射成 sessionId，再查登记） | `src/client/batch-pick.ts` | 可见行的事实源（`src/client/host-rows.ts`）；选中集本身（`src/client/batch-selection-store.ts`） |
 | 回收站面板状态机（选中 / 孩子视图（离清单单级导航）/ 详情缓存 / 详情分页（`olderCursor`、在飞、晚到不落屏）/ 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
 | 各张确认框的 busy 关框规则 | `src/client/confirm-close.ts` 的 `useIdleClose` | 各框的按钮文案与禁用呈现 |
-| 槽位贡献与注册（含设置页按 bundle 包名寻址的 keyed 槽位） | `src/client/index.tsx` | 各贡献自己的渲染 |
+| 槽位贡献与注册（含设置页按 bundle 包名寻址的 keyed 槽位；0.2.2+ 的 contextMenus 数据动作与图标） | `src/client/index.tsx`（贡献对象在 `src/client/context-menu-actions.ts`） | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
 | 抄来的官方控件样式（`sd-` 前缀）与点名的自造差异（含 `--sd-*` 别名层） | `src/client/ui/ui.css` 文件头那张来源表 | token 的取值 |
 

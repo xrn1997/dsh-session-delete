@@ -206,6 +206,8 @@ const ZH = {
 
   'menu.delete': '删除',
   'menu.live': '会话正在运行，先停止再删除',
+  // 0.2.2+ 数据动作没有 disabledReason：禁用时直接把这个短句当 label。
+  'menu.deleteLive': '删除（运行中）',
 
   'dialog.title': '删除这个会话？',
   'dialog.subagents': '含 {n} 个子会话，将一起移入回收站。',
@@ -416,6 +418,7 @@ const EN: Record<CopyKey, string> = {
 
   'menu.delete': 'Delete',
   'menu.live': 'This session is running. Stop it first.',
+  'menu.deleteLive': 'Delete (running)',
 
   'dialog.title': 'Delete this session?',
   'dialog.subagents': 'It also moves {n} subagent sessions to the trash.',

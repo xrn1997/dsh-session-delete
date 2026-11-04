@@ -14,10 +14,12 @@ export interface HostIdentityPort {
    *  宿主的「删除工作区」只删注册、保留目录与日志；恢复这类会话时跳过 attach，归入「未分组」。 */
   workspaceExists(workspaceId: string): Promise<boolean>
   /** 会话落盘的**项目目录名**（`<sessions>/<projectKey(cwd)>`）；账本里没有这个会话 ⇒ `undefined`。
-   *  与 `workspaceOf` 同一口径：**未命中是正常的 no-op，不是故障**（存储真故障照抛）。 */
+   *  header 走公开 live/持久化读面；与 `workspaceOf` 同一口径：**未命中是正常的 no-op，不是故障**
+   *  （存储真故障照抛）。 */
   projectDirOf(sessionId: string): Promise<string | undefined>
   /** 删除时**尽力**取的会话标题；取不到返回空串，绝不因此让删除失败。
-   *  标题只存在于宿主自己的账本/缓存里（`FsPort` 不直读文件）⇒ 取数面归宿主端口，接官方投影缓存 API。 */
+   *  标题只存在于宿主自己的账本/缓存里（`FsPort` 不直读文件）⇒ 取数面归宿主端口，接官方投影缓存 API；
+   *  header 与 `projectDirOf` 走同一个公开读面。 */
   titleOf(sessionId: string): Promise<string>
   isLive(sessionId: string): Promise<boolean>
   isArchived(sessionId: string): Promise<boolean>
@@ -107,11 +109,10 @@ interface WorkspaceRegistryLike {
   readonly archivedSessionIds: readonly string[]
   unarchiveSession(sessionId: string): Promise<void>
   archiveSession(sessionId: string, options?: { readonly stopActivity?: boolean }): Promise<void>
-  readSessionHeader(id: string): Promise<{ readonly cwd?: string }>
 }
 
-/** `ctx.sessions` 的最小面：`get(id)` 取会话，`liveEntryFor(session).detach()` 摘活体。
- *  出处：asar `dsh-session/lib/index.js` 的 `SessionStore.get` / `liveEntryFor` / `detachEntered`。
+/** `ctx.sessions` 的最小面：`get(id)` 取会话（header 供公开 header 读面用），`liveEntryFor(session).detach()`
+ *  摘活体。出处：asar `dsh-session/lib/index.js` 的 `SessionStore.get` / `liveEntryFor` / `detachEntered`。
  *  detach 是宿主 owner 自己的摘除路（单次、幂等、会发 `session/disposed`）；宿主换代先复核这两个方法。 */
 interface LiveSessionsLike {
   get(id: string): unknown
@@ -127,6 +128,36 @@ function liveSessionsOf(ctx: HostCtxLike): LiveSessionsLike | undefined {
   if (store === undefined || store === null) return undefined
   if (typeof store.get !== 'function' || typeof store.liveEntryFor !== 'function') return undefined
   return store
+}
+
+/** `ctx.sessionPersistence` 的最小面：公开的单条会话元数据读面。
+ *  出处：`@deepseek-ai/dsh-session-persistence` 的 `SessionPersistence.stat`；快照的 `header` 带 `cwd`。
+ *  它是 `workspaceRegistry` 的硬注入服务（标准组合必有），按 `ctx.get` 可选读、不进 inject。 */
+interface SessionPersistenceLike {
+  stat(id: string, options?: unknown): Promise<{ readonly header?: { readonly cwd?: string } } | undefined>
+}
+
+/**
+ * 会话 header 的**公开**读面：live `sessions.get(id).header` 优先（保留宿主原来的优先级），
+ * 否则 `sessionPersistence.stat(id).header`。未知会话回 `undefined`；需要落到持久化时服务缺席 /
+ * 形状不符抛错，由调用方决定是响亮失败（projectDirOf）还是降级（titleOf 的空串）。
+ */
+async function headerOf(host: HostCtxLike, sessionId: string): Promise<{ readonly cwd?: string } | undefined> {
+  const store = liveSessionsOf(host)
+  if (store !== undefined) {
+    try {
+      const live = store.get(sessionId) as { header?: { cwd?: string } } | null | undefined
+      if (live?.header !== undefined) return live.header
+    } catch {
+      // live 读面失败不改走"未命中"：交给持久化再答一次
+    }
+  }
+  const persistence = host.get('sessionPersistence') as SessionPersistenceLike | null | undefined
+  if (persistence === undefined || persistence === null || typeof persistence.stat !== 'function') {
+    throw new Error('session-delete: sessionPersistence 服务缺席')
+  }
+  const snapshot = await persistence.stat(sessionId)
+  return snapshot?.header
 }
 
 /** 会话标题的投影缓存读面；可选服务，按 `ctx.get` 读，不进 inject。
@@ -300,17 +331,6 @@ function projectionCacheOf(ctx: HostCtxLike): ProjectionCacheLike | undefined {
   return cache
 }
 
-/** 宿主 `readSessionHeader` 对未知会话抛的是裸 `Error`，只认这句；真存储故障照抛，不能折成未命中。
- *  出处：asar `dsh-workspace/lib/types/index.js` 的
- *  `cannot validate session '${id}': session persistence holds no such session`。
- *  同文件有类型的近似句是 `WorkspaceUnknownSessionError`（`hold` 无 `s`），不会误伤。 */
-const NO_SUCH_SESSION = 'session persistence holds no such session'
-
-/** 只认上面那一句；其余（含非 Error 抛出物）一律**不算未命中**。 */
-function isUnknownSession(error: unknown): boolean {
-  return error instanceof Error && error.message.includes(NO_SUCH_SESSION)
-}
-
 /** 宿主会话表的一次取数（`ctx.sessionController.list()` 的两种返回形状都折成数组）。
  *  服务没挂 / 形状不对 / 抛错 ⇒ 空表——**这条不替宿主兜错误**：调用方拿空表的语义都是"少发一条通告"，
  *  不是"恢复失败"。 */
@@ -361,24 +381,21 @@ export function createHostPort(ctx: unknown): HostPort {
 
     /**
      * cwd → 宿主项目目录名；没有 cwd 落到 `_no-cwd`。
-     * 账本里没有这个会话回 `undefined`（未命中，不是故障）；真存储故障照抛。
+     * header 走公开面（live `sessions` → `sessionPersistence.stat`）；未知会话回 `undefined`
+     * （未命中，不是故障）；服务缺席/真存储故障照抛。
      * 未命中由 `delete-session.ts` 折成 `not-found`，真故障留 `io`——两者不能混。
      */
     async projectDirOf(sessionId) {
-      let header: { readonly cwd?: string }
-      try {
-        header = await registry.readSessionHeader(sessionId)
-      } catch (error) {
-        if (isUnknownSession(error)) return undefined
-        throw error
-      }
+      const header = await headerOf(host, sessionId)
+      if (header === undefined) return undefined
       return header.cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(header.cwd)
     },
 
-    /** 标题走宿主投影缓存；尽力取，取不到返回空串，绝不因此让删除失败。 */
+    /** 标题走宿主投影缓存；header 来自公开的 live/持久化读面，尽力取，取不到返回空串。 */
     async titleOf(sessionId) {
       try {
-        const header = await registry.readSessionHeader(sessionId)
+        const header = await headerOf(host, sessionId)
+        if (header === undefined) return ''
         const cache = projectionCacheOf(host)
         const block = cache?.cachedSnapshot(header, ['title']) ?? cache?.cachedPredecessorTitle(header)
         const title = block?.values.title
