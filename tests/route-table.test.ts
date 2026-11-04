@@ -5,7 +5,7 @@
  * 都在这里红——而不是等到真机上"删除按钮被一次探测堵在身后"或"写动作绕开了串行链"。
  */
 import { describe, expect, it } from 'vitest'
-import { APPLY_ACTIONS, ROUTE_TABLE, routeOf, type RouteSpec, type SliceDeps } from '../src/api/route-table.js'
+import { APPLY_ACTIONS, ROUTE_TABLE, routeOf, type JsonRouteSpec, type SliceDeps } from '../src/api/route-table.js'
 import { ROUTES } from '../src/shared/wire.js'
 import type { ApplyAction } from '../src/shared/wire.js'
 
@@ -18,12 +18,11 @@ const SEGMENTS = Object.values(ROUTES).map((seg) => seg.path)
  */
 async function runApply(body: Record<string, unknown>): Promise<unknown> {
   try {
-    await routeOf(ROUTES.apply.path)?.run(
+    await (routeOf(ROUTES.apply.path) as JsonRouteSpec<'full'> | undefined)?.run(
       // @ts-expect-error  空替身：这条用例只验动作栅栏，deps 不会被消费
       {},
       body,
       { rows: async () => [] },
-      new URLSearchParams(),
     )
     return undefined
   } catch (error) {
@@ -169,11 +168,15 @@ describe('路由表 · `/apply` 的动作表由类型派生', () => {
 })
 
 describe('路由表 · 按段声明 deps 切片', () => {
-  it('读与探测六段声明 core：它们只要基础面（不删盘、不读时钟）', () => {
-    const core: readonly string[] = [ROUTES.list.path, ROUTES.ping.path, ROUTES.attachment.path, ROUTES.attachmentOrphans.path, ROUTES.orphans.path, ROUTES.detail.path]
+  it('读与探测五段声明 core：它们只要基础面（不删盘、不读时钟）', () => {
+    const core: readonly string[] = [ROUTES.list.path, ROUTES.ping.path, ROUTES.attachmentOrphans.path, ROUTES.orphans.path, ROUTES.detail.path]
     for (const segment of core) {
       expect(`${segment}:${routeOf(segment)?.slice}`).toBe(`${segment}:core`)
     }
+  })
+
+  it('attachment 段声明 attachment：它多一条宿主 attachments 读面，不拿删除能力', () => {
+    expect(routeOf(ROUTES.attachment.path)?.slice).toBe('attachment')
   })
 
   it('两个删盘段声明 removal：只多删除能力（removeDir / removeFile），仍不读时钟', () => {
@@ -198,14 +201,14 @@ describe('路由表 · 按段声明 deps 切片', () => {
     // 闭包只作类型证据、不真跑（真跑要一组假端口，那归 `tests/api.test.ts`）。
     const callWithEmptyDeps = (): unknown =>
       // @ts-expect-error core 段的 run 只吃自己那一格：空 deps 必须编译不过
-      routeOf(ROUTES.list.path)?.run({}, null, { rows: async () => [] }, new URLSearchParams())
+      (routeOf(ROUTES.list.path) as JsonRouteSpec<'core'> | undefined)?.run({}, null, { rows: async () => [] })
     expect(callWithEmptyDeps).toBeTypeOf('function')
   })
 
   it('run 是函数属性而不是方法：显式标注更宽的 deps 也过不了切片闸', () => {
     // 方法签名是双变的——把 run 写成方法时，这条宽参写法能编译；改成函数属性后按逆变拒绝。
-    const wideRun: RouteSpec<'core'> = {
-      ...(routeOf(ROUTES.list.path) as RouteSpec<'core'>),
+    const wideRun: JsonRouteSpec<'core'> = {
+      ...(routeOf(ROUTES.list.path) as JsonRouteSpec<'core'>),
       // @ts-expect-error core 段的 run 不接受 full 面（DeleteDeps）
       run: async (deps: SliceDeps['full']) => { void deps.now() },
     }

@@ -12,6 +12,7 @@
  */
 import path from 'node:path'
 import type { FsPort } from '../ports/fs-port.js'
+import type { SessionDeleteConfig } from '../config.js'
 import { TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
 import { isCanonicalSessionLogName, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 
@@ -142,6 +143,7 @@ function scanImageIdsInLog(raw: Buffer): LogImageIds {
 export interface AttachmentReadDeps {
   fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile' | 'realpath'>
   home: string
+  config: Pick<SessionDeleteConfig, 'maxJsonRefBytes'>
 }
 
 export interface AttachmentRemovalDeps extends AttachmentReadDeps {
@@ -254,9 +256,6 @@ interface RemainingImageRefs {
   unreadable: string[]
 }
 
-/** 单个 JSON 引用源的扫描上限；超过就记成不可读（fail closed），**不许当作"没有引用"跳过**。 */
-const MAX_JSON_REF_BYTES = 10 * 1024 * 1024
-
 /** 读全部剩余引用源；任何一处读不出都记进 `unreadable`。 */
 async function collectRemainingImageRefs(
   deps: AttachmentReadDeps,
@@ -294,6 +293,7 @@ async function collectRemainingImageRefs(
 
   const scanJson = async (root: string): Promise<void> => {
     if (!(await deps.fs.exists(root))) return
+    const maxJsonRefBytes = deps.config.maxJsonRefBytes
     const stack = [root]
     const seen = new Set<string>()
     while (stack.length > 0) {
@@ -308,9 +308,9 @@ async function collectRemainingImageRefs(
           if (!name.endsWith('.json')) continue
           const file = `${dir}/${name}`
           const stat = await deps.fs.statFile(file)
-          if (stat.size > MAX_JSON_REF_BYTES) {
+          if (stat.size > maxJsonRefBytes) {
             // 超过上限不读，但**绝不能**当成"这里没有引用"——它可能正是那个共享引用的唯一出处。
-            unreadable.push(`${file}: JSON 引用源 ${stat.size} 字节超过扫描上限 ${MAX_JSON_REF_BYTES} 字节，未扫描`)
+            unreadable.push(`${file}: JSON 引用源 ${stat.size} 字节超过扫描上限 ${maxJsonRefBytes} 字节，未扫描`)
             continue
           }
           const text = (await deps.fs.readFile(file)).toString('utf8')

@@ -16,19 +16,19 @@
 | `0006` | 永久删除为什么收进 `src/verbs/permanent-removal.ts` 一个只读计划 + 执行器（当时 purge 与 orphan 各手写一遍删除序列，purge 还借 journal 放没有反向动作的步骤；`/list` 念的是清册里记的旧 `sizeBytes`）（已被 `0027` 取代） |
 | `0007` | 宿主端口为什么按角色切成身份 / 在场 / 语料三片、语料缺席为什么显式成 `CorpusRead`（当时 19 个方法平铺一个接口、缺席有 `undefined`/`{}`/`[]` 三种形状、三个 BFS 口共用一次遍历）（已被 `0019` 取代） |
 | `0008` | 回收站为什么与归档解耦、删除为什么必须把 session + agent 一起摘掉（当时删除用归档藏会话、`evictLive` 只摘 session，恢复后旧 agent 拦住 prompt） |
-| `0009` | 通道为什么走插件专属前缀路由、不挂官方 `remote.<namespace>`（第三方拿不到 Typert 描述符的动态发现挂载点） |
+| `0009` | 通道为什么走插件专属前缀路由、不挂官方 `remote.<namespace>`（第三方拿不到 Typert 描述符的动态发现挂载点）（已被 `0033` 取代） |
 | `0012` | 清册读为什么收进 `src/trash/ledger.ts` 一个 ledger seam（当时五个入口各自记得先对账，漏写两次） |
 | `0013` | 逐条 `/apply` 的写入收尾为什么按 action 收进 `src/client/write-settlement.ts`（当时五个面各拼一遍顺序） |
 | `0014` | 恢复通告为什么收成一条 `announceRestored(ids)`、预取为什么归 adapter（当时三条方法、调用方要记得先预取） |
-| `0015` | 宿主可见行的渲染读数为什么走快照订阅、DOM 观察为什么留在适配器（当时每个组件各自在渲染期查 DOM，DOM 变了也不重渲染） |
+| `0015` | 宿主可见行的渲染读数为什么走快照订阅、DOM 观察为什么留在适配器（当时每个组件各自在渲染期查 DOM，DOM 变了也不重渲染）（已被 `0034` 取代） |
 | `0016` | 写后要不要重扫残留为什么由这次的 `WriteOutcome` 派生（当时调用方传 `rescan` 标记，漏传留下不露面的孤儿、全传每次白扫）（已被 `0021` 取代） |
 | `0017` | `undo-toast.tsx` ↔ `write-seats.ts` 的 import 环为什么按 init-safe 收下、为什么不用事件总线（settlement 自己发布会成更深的环）（已被 `0018` 取代） |
 | `0018` | 撤销通知台为什么从 Toast 组件里独立成 `undo-notices.ts`、环为什么消失 |
 | `0019` | 在场能力为什么从宿主端口拆成 `CoreDeps.presence`（ADR-0007 曾决定不拆这个字段；这里把危险能力从动词的 `host` 上摘掉；取代 `0005` / `0007` 的在场通告边界） |
 | `0020` | 附件为什么只随永久删除清 `.dsh` 内独占图片副本、为什么不碰源文件与普通文件、为什么没有自动 GC |
 | `0021` | 孤儿会话与孤儿附件为什么只在插件设置页手动检查/清理、为什么共住一张维护卡（回收站面板不再自动扫；被否：自动扫、留在面板、一次性脚本） |
-| `0022` | 非回环客户端（LAN / 反代部署）为什么不再被回环 socket 挡住、归属怎么判、远程身份为什么承宿主的 `connection.requestRejection`（被否：issue 的「同源 Origin/Referer 任一存在即放行」、只支持本机、插件自配 trustedHosts、复刻 cookie 校验） |
-| `0023` | 请求归属为什么只由 Host 决定、回环 socket 为什么不是 rebinding 的豁免（Origin==Host 只证同名，不证归属） |
+| `0022` | 非回环客户端（LAN / 反代部署）为什么不再被回环 socket 挡住、归属怎么判、远程身份为什么承宿主的 `connection.requestRejection`（被否：issue 的「同源 Origin/Referer 任一存在即放行」、只支持本机、插件自配 trustedHosts、复刻 cookie 校验）（已被 `0033` 取代） |
+| `0023` | 请求归属为什么只由 Host 决定、回环 socket 为什么不是 rebinding 的豁免（Origin==Host 只证同名，不证归属）（已被 `0033` 取代） |
 | `0025` | 发版为什么在 `V*` tag 上产出 GitHub Release 预构建 tarball、为什么 CI 不代发 npm（被否：恢复 `prepare`、`lib/` 入库、CI 代发 npm、只保留 npm） |
 | `0026` | 回收站详情为什么从“过滤后的消息”改成“对话全量块”：注入/思考/工具都进正文、宿主式折叠、游标分页（被否：复用宿主加载/渲染、Trajectory 逐事件全量、一次返回只提高总闸） |
 | `0027` | 永久删除为什么仍是计划 + 执行器、活体准入为什么在计划期与首笔写前各查一次（被否：只靠计划期准入、逐条复查、把附件扫描挪进计划） |
@@ -36,6 +36,11 @@
 | `0029` | 子会话的查看入口为什么住详情不住清单：孩子身份随 `TrashDetailWire.subagents` 过线、孩子视图是离清单的单级导航（被否：清单行展开子行、双入口、摘要放 `TrashRowWire`、新开 `/children` 段） |
 | `0031` | 只读清单为什么不吃账本归属：字节口径仍同源，`workspaceOf` 只由删除计划付（接住 ADR-0027 的测量决定） |
 | `0032` | 路由行为什么声明 deps 切片：读段运行期拿不到删除能力与时钟，宽 deps 为什么编译不过（ADR-0004 的路由记录之上） |
+| `0033` | 通道为什么只走宿主 `connection` 的 exact Fetch 路由：九段注册在 `/api`、鉴权归宿主；旧前缀 + 请求栅栏已删，支持面是 web UI 与桌面端（附件段另设同源取数闸收字节 oracle） |
+| `0034` | 批量可见行为什么从 slot 注册读、DOM 只留整行点击守卫（ADR-0015 的 DOM 观察被推翻；点击守卫是受约束偏离） |
+| `0035` | 附件读取为什么走宿主 `attachments` 的 `readImage` / `readFileStream`、直接 fs 只留 fallback（宿主已公开字节校验与归一化） |
+| `0036` | 主视图重开为什么用 snapshot `subscribe` 等摘要、不再轮询（一个 2 秒放弃 timer，pending 归 cleanup 与 `ctx.effect`） |
+| `0037` | 可调项为什么走本地 Standard Schema 的 `Config`、不引宿主 schema 库（三只旋钮 + `cordis.patch.yml`；字段表单是已知偏离） |
 
 ## 文档与真相
 

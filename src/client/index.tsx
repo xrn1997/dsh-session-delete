@@ -137,7 +137,8 @@ function PickLeadingRow({
   const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
   // 与宿主 `sessionTitle()` 同一口径（trim 后空串兜底），免得两颗入口给确认框的标题不一样。
   const title = select((state) => state?.byId?.[sessionId]?.title?.trim() ?? '')
-  return <BatchPickCheckbox sessionId={sessionId} title={title} t={t} />
+  const live = select((state) => state?.byId?.[sessionId]?.running === true)
+  return <BatchPickCheckbox sessionId={sessionId} title={title} live={live} t={t} />
 }
 
 /** 行尾兜底勾选开关的宿主：投影与菜单行同款（`sessionId` / `displayTitle`），`live` 自己从 root hook 读。 */
@@ -180,10 +181,12 @@ function TrashPanelIconSlot({ size }: { size?: number }) {
 /**
  * **探测 → 注册**：取数通道在不在，只有真发一次请求才知道。
  *
- * - 探测不过（打不通 / 回的不是信封）⇒ **早返回**：一个槽位贡献都不注册。页面上的表现是"本插件
- *   不存在"，而不是点下去必然失败的入口——半吊子 UI 比没有 UI 更糟（docs/architecture.md §3「通道探测决定入口出现与否」）。
- * - 探测过（哪怕 `ping` 回的是 `{ok:false,error}`）⇒ 注册：那次往返证明路由在、依赖接上了、
- *   错误映射也生效了，失败该做的是把原文交给用户看。
+ * - 探测不过（打不通 / 回的不是信封 / 401·403 表示没有宿主身份 / 失败信封）⇒ **早返回**：
+ *   一个槽位贡献都不注册。页面上的表现是"本插件不存在"，而不是点下去必然失败的入口——半吊子 UI
+ *   比没有 UI 更糟（docs/architecture.md §3「通道探测决定入口出现与否」）。
+ * - 探测过（`ping` 回成功信封的 `pong`）⇒ 注册：那次往返证明路由在、依赖接上了、鉴权也过了。
+ *
+ * 支持面是 web UI 与桌面端，二者都从宿主 `/api` 取数（ADR-0033）；没有旧前缀可退回。
  *
  * 面板那两条是**一对座位**：行的 `selectPanel(id)` 要求 `main` 里有同字 key，缺了面板那一头，
  * 用户点一下就是宿主自己的 `layout.selectPanel: main panel "…" is not registered`。

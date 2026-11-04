@@ -1,6 +1,6 @@
 # 非回环客户端的门禁对齐宿主：归属自己判，身份承 connection
 
-Status: accepted
+Status: superseded by 0033
 
 宿主绑到局域网地址时，插件所有段名都回 403「非受信来源」——旧栅栏把「源地址必须是回环」当成了唯一门。决定：删掉这条前提，回环降为一条**接受支**（本机工具与转发落在回环的桌面壳），归属改由 Host 判定；远程客户端再要过宿主 `connection` 服务的 `requestRejection`，身份就是那次 `dsh web` 打印的 URL 换来的签名 cookie；服务缺席时远程一律拒。
 

@@ -1,5 +1,6 @@
 import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_CONFIG, type SessionDeleteConfig } from '../src/config.js'
 import {
   attachmentPathOf,
   attachmentsInContent,
@@ -79,9 +80,11 @@ function makeWorld(over: {
   statFile?: ((p: string) => { size: number }) | undefined
   removeFile?: ((p: string) => void) | undefined
   realpath?: ((p: string) => string) | undefined
+  config?: SessionDeleteConfig | undefined
 }) {
   const made = createFakeDeps({
     home: HOME,
+    config: over.config,
     fs: {
       exists: true,
       dirs: over.dirs ?? (() => []),
@@ -461,6 +464,22 @@ describe('引用源不可读（fail closed）', () => {
     expect(plan.skipped).toContain(big)
     expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
     expect(made.fs.removeFile).not.toHaveBeenCalled()
+  })
+
+  it('JSON 引用源的上限取配置（ADR-0037）', async () => {
+    const removed = '/h/session-trash/20260101T000000Z-session-a'
+    const storages = '/h/storages'
+    const oversized = `${storages}/session_projcache.json`
+    const made = makeWorld({
+      config: { ...DEFAULT_CONFIG, maxJsonRefBytes: 100 },
+      logs: { [`${removed}/session.v4.jsonl.zstd`]: log(ID) },
+      files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : p === storages ? ['session_projcache.json'] : [],
+      statFile: () => ({ size: 101 }),
+    })
+    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    expect(plan.entries).toEqual([])
+    expect(plan.skipped).toMatch(/超过扫描上限 100 字节/)
+    expect(plan.skipped).toContain(oversized)
   })
 
   it('剩余会话目录只有明文日志（没有规范 zstd）：非空目录按读不出处理，整体跳过', async () => {

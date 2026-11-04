@@ -1,8 +1,10 @@
 /**
- * 浏览器半的取数通道：同源 fetch /dsh-session-delete-api，并处理信封与失败原文。
+ * 浏览器半的取数通道：同源 fetch 宿主 `connection.fetch` 的 exact Fetch 路由（`/api` + 插件前缀）。
+ * 信封与失败原文在这一层收口。
  *
- * - 路由是宿主 web server 上的插件前缀；官方 remote.<namespace> 需要生成的 Typert 描述符，
- *   第三方无法动态挂载，因此走这条薄线（ADR-0009）。
+ * - 九段注册在宿主 `connection.fetch.register` 上，鉴权归宿主 `/api` bridge（ADR-0033）；
+ *   没有旧前缀 fallback——支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`。
+ *   官方 remote.<namespace> 仍不可用（第三方拿不到 Typert 描述符的动态发现挂载点）。
  * - 九段的**段名与方法**住 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`），
  *   本文件只投影路径（`prefix + ROUTES.x.path`）与方法（GET 段直接取 `ROUTES.x.method`，写段把它
  *   交给 `post()`）——方法字面量不在本文件出现第二份；
@@ -16,7 +18,7 @@
 import {
   PARAMS,
   ROUTES,
-  SESSION_DELETE_API_PREFIX,
+  OFFICIAL_SESSION_DELETE_API_PREFIX,
   isDSHRemoteError,
   isRemoteResult,
   type ApplyAction,
@@ -143,13 +145,18 @@ export interface RawSessionDeleteRemote {
   empty(): Promise<RemoteResult<PurgeResultLike>>
 }
 
-/* ── 通道实现：同源 fetch 我们自己的前缀路由 ─────────────── */
+/* ── 通道实现：同源 fetch，单一 /api 基础路径 ───────────── */
+/* `OFFICIAL_SESSION_DELETE_API_PREFIX` 只从 `wire.ts` 投影；本文件不另写 `/api`、段名或基础路径。 */
+
+/** 宿主 `/api` 的 401/403 是纯文本，不是本插件信封：固定中文原文只住这里（浏览器半唯一消费者）。 */
+const UNTRUSTED_MESSAGE = '非受信来源'
+const UNAUTHENTICATED_MESSAGE = '需要宿主的 Web 身份：请用 dsh web 打印的那一行 URL 打开页面后重试'
 
 /**
  * 一次 HTTP 往返 → 信封。**`ok:false` 也是落地**（返回，不抛）；只有往返本身失败才抛：
- * 打不通（宿主没起来 / 路由没挂）或回的不是信封（前缀路由缺席时请求会落到 SPA 兜底处理器上，
- * 回的是 index.html；中间层也可能回 `{}` / `{"error":"…"}` 这类非信封 JSON——判形住
- * `isRemoteResult`，两种都落同一条诊断）。两种抛都带原文，组件侧的 `failureOf` 会把它们显示成 `client/unknown` + 原因。
+ * 打不通（宿主没起来 / 路由没挂）或回的不是信封（中间层回 `{}` / `{"error":"…"}` 这类非信封 JSON，
+ * 或 SPA 兜底的 index.html——判形住 `isRemoteResult`，几种都落同一条诊断）。两种抛都带原文，
+ * 组件侧的 `failureOf` 会把它们显示成 `client/unknown` + 原因。
  */
 async function requestEnvelope<T>(path: string, init: RequestInit): Promise<RemoteResult<T>> {
   let response: Response
@@ -163,23 +170,25 @@ async function requestEnvelope<T>(path: string, init: RequestInit): Promise<Remo
   try {
     body = await response.json()
   } catch {
-    // 非 JSON（SPA 兜底的 index.html）：落成下面同一个「不是信封」诊断。
+    // 非 JSON：落成下面同一个「不是信封」诊断。
     body = undefined
   }
   // 判形不过（中间层回 `{}` / `{"error":"…"}` 这类垃圾）与解析失败同诊断：失败路径正是最需要可读性的地方。
+  // 宿主 `/api` bridge 的 401/403 是纯文本：那是身份/归属失败，不是「回的不是信封」；固定原文上屏。
   if (!isRemoteResult(body)) {
+    if (response.status === 401) throw new Error(UNAUTHENTICATED_MESSAGE)
+    if (response.status === 403) throw new Error(UNTRUSTED_MESSAGE)
     throw new Error(`取数通道回的不是信封（HTTP ${String(response.status)}）`)
   }
   return body as RemoteResult<T>
 }
 
 /**
- * 前缀路由的 fetch 实现。**相对路径**：不拼 base、不认 origin——页面本身就是从宿主 web server
- * 加载的，同源是这条薄线的全部前提。本机（含转发落在回环的桌面壳）靠回环 + Origin/Referer 过栅栏；
- * 远程（LAN / 反代）客户端另由宿主 `connection` 判「已认证的 Web 身份」，所以这条通道**只对**
- * `dsh web` 打印的 URL 打开过的页面成立（凭据是那行 URL 换来的 cookie，不是插件自己的秘密）。
+ * exact Fetch 路由的 fetch 实现。**相对路径**：不拼 host、不认 origin——页面本身就是从宿主页面
+ * 加载的，同源是这条通道的全部前提；鉴权归宿主 `/api` bridge（ADR-0033）。所以这条通道**只对**
+ * 宿主页面打开过、带宿主身份的客户端成立（凭据是那次访问换来的 cookie，不是插件自己的秘密）。
  */
-export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): RawSessionDeleteRemote {
+export function createHttpRemote(): RawSessionDeleteRemote {
   const post = (route: { readonly method: 'GET' | 'POST' }, body: Record<string, unknown>): RequestInit => ({
     method: route.method,
     headers: { 'content-type': 'application/json' },
@@ -187,37 +196,44 @@ export function createHttpRemote(prefix: string = SESSION_DELETE_API_PREFIX): Ra
   })
   return {
     // 每段的方法都从段名表投影：GET 段直接取，写段交给 `post()` 带上同一格。
-    list: () => requestEnvelope<TrashEntryLike[]>(prefix + ROUTES.list.path, { method: ROUTES.list.method }),
-    ping: () => requestEnvelope<string>(prefix + ROUTES.ping.path, { method: ROUTES.ping.method }),
-    orphans: () => requestEnvelope<OrphanReportWire>(prefix + ROUTES.orphans.path, { method: ROUTES.orphans.method }),
+    list: () => requestEnvelope<TrashEntryLike[]>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.list.path, { method: ROUTES.list.method }),
+    ping: () => requestEnvelope<string>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.ping.path, { method: ROUTES.ping.method }),
+    orphans: () =>
+      requestEnvelope<OrphanReportWire>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.orphans.path, { method: ROUTES.orphans.method }),
     attachmentOrphans: () =>
-      requestEnvelope<AttachmentOrphanReportWire>(prefix + ROUTES.attachmentOrphans.path, { method: ROUTES.attachmentOrphans.method }),
+      requestEnvelope<AttachmentOrphanReportWire>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.attachmentOrphans.path, {
+        method: ROUTES.attachmentOrphans.method,
+      }),
     // 这一段没有入参；空 JSON 体只是让 POST 与其余写段同一形状（路由表声明 body: none，不读它）。
-    attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(prefix + ROUTES.attachmentClean.path, post(ROUTES.attachmentClean, {})),
+    attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(
+      OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.attachmentClean.path,
+      post(ROUTES.attachmentClean, {}),
+    ),
     detail: (entryId, before) =>
-      requestEnvelope<TrashDetailLike>(prefix + ROUTES.detail.path, post(ROUTES.detail, {
+      requestEnvelope<TrashDetailLike>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.detail.path, post(ROUTES.detail, {
         [PARAMS.entryId]: entryId,
         ...(before === undefined ? {} : { [PARAMS.before]: before }),
       })),
     apply: (action, ids) =>
-      requestEnvelope<ApplyOutcome[]>(prefix + ROUTES.apply.path, post(ROUTES.apply, { [PARAMS.action]: action, [PARAMS.ids]: [...ids] })),
-    empty: () => requestEnvelope<PurgeResultLike>(prefix + ROUTES.empty.path, post(ROUTES.empty, {})),
+      requestEnvelope<ApplyOutcome[]>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.apply.path, post(ROUTES.apply, {
+        [PARAMS.action]: action,
+        [PARAMS.ids]: [...ids],
+      })),
+    empty: () => requestEnvelope<PurgeResultLike>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.empty.path, post(ROUTES.empty, {})),
   }
 }
 
 /**
- * 取数通道探测：一次 `GET /ping` 走通（或走到）就是"通道在"。
+ * 探测唯一通道：一次 `GET /ping` 回成功信封（`pong`）才注册入口。
  *
- * 判据是**「拿到信封」而不是「操作成功」**：`{ok:false, error}` 也是一次成功的往返（路由在、依赖接上了、
- * 错误映射也生效了），那时该做的是把入口显示出来、让原文上屏；只有往返本身失败才算通道缺席 ⇒
- * 一个槽位贡献都不注册（docs/architecture.md §3「通道探测决定入口出现与否」）。
- *
- * 探测用一次零成本的 `GET /ping`，不读清单，避免每次页面加载都跑全表对账。
+ * - 401/403 是宿主 `/api` 的纯文本身份/归属失败：入口不出现，不装禁用态。
+ * - 失败信封 / 404 / 非信封同样按不可用处理：`/api` 网关对未知路径也可能回错误形状，
+ *   不能据此把入口摆出来让每个动作都失败。
  */
 export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean> {
   try {
-    await raw.ping()
-    return true
+    const result = await raw.ping()
+    return result.ok && result.value === 'pong'
   } catch {
     return false
   }
@@ -257,7 +273,7 @@ export interface SessionDeleteRemote {
   /** 回收站之外的无主子会话报告（纯读）。读不到就是 throw —— 界面上那是**一次失败的检查**，
    *  不是"零条残留"（把 `io` 折成空报告等于把"不知道"说成"没有"）。 */
   scanOrphans(): Promise<OrphanReportWire>
-  /** `.dsh` 内无引用图片对象的报告（纯读；含最多 200 条预览清单）。读不到就是 throw，同样不许折成 0。 */
+  /** `.dsh` 内无引用图片对象的报告（纯读；预览清单条数由 Node 半配置，默认 200）。读不到就是 throw，同样不许折成 0。 */
   scanAttachmentOrphans(): Promise<AttachmentOrphanReportWire>
   /** 清掉报告那一刻无引用的图片副本（聚合回执）。 */
   cleanAttachmentOrphans(): Promise<AttachmentCleanupWire>

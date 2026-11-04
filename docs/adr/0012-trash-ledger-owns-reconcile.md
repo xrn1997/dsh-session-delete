@@ -15,7 +15,7 @@ Status: accepted
 - 不改清册的记录形状与存储域绑定。
 - 不改 `/list` 的“对账 + 读”语义；只是把这条语义从入口搬进 seam。
 - 对账仍是幂等、零漂移零写入。
-- 纯读面（`/orphans`、`/detail`）仍不写清单：路由记录把 `read:'raw'` 交成 `RouteRead`，处理函数只消费这一面，不再自己挑 `ledger.raw()` / `list()`；`/list` 与 `/empty` 的 `read:'list'` 也由路由选面（后两者本来就写清册）。**这条不是类型面替人挡着的**——`RouteSpec.run` 的 deps 现在由每行的 `slice` 定型（ADR-0032），但切片只收窄 fs 的删除能力与时钟，`ledger.list` / `raw` 在三格里都够得到，所以 `read` 仍是路由层选面的约定；实现选择由 `tests/api.test.ts` 里零 `listDirs` 的用例钉住：这两条请求一次对账都不发生。`/detail` 遇到“行在 raw 里、目录不在”照旧判 `io`，不靠对账摘行。
+- 纯读面（`/orphans`、`/detail`）仍不写清单：路由记录把 `read:'raw'` 交成 `RouteRead`，处理函数只消费这一面，不再自己挑 `ledger.raw()` / `list()`；`/list` 与 `/empty` 的 `read:'list'` 也由路由选面（后两者本来就写清册）。**这条不是类型面替人挡着的**——`RouteSpec.run` 的 deps 现在由每行的 `slice` 定型（ADR-0032），但切片只收窄 fs 的删除能力与时钟，`ledger.list` / `raw` 在每一格里都够得到，所以 `read` 仍是路由层选面的约定；实现选择由 `tests/api.test.ts` 里零 `listDirs` 的用例钉住：这两条请求一次对账都不发生。`/detail` 遇到“行在 raw 里、目录不在”照旧判 `io`，不靠对账摘行。
 
 ## 被否掉的替代
 

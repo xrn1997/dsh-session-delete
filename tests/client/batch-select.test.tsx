@@ -2,6 +2,7 @@
 // `batch-selection-store.test.ts`，这里只钉"控件渲染与翻转"这一半）。
 // 两个现场都是模块级（跨用例存活）：每个用例前清一次。
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton, BatchPickCheckbox, fetchCounts } from '../../src/client/batch-select.js'
 import { readVisibleSelectableRows, resetHostRows } from '../../src/client/host-rows.js'
@@ -29,32 +30,45 @@ describe('多选态的渲染门', () => {
   })
 })
 
-describe('行信息登记（守卫读的那张表）', () => {
+describe('行信息登记（守卫与可见行读的那张表）', () => {
   it('模式外也登记：进入模式的那一帧守卫就有标题，不必等这一行重挂载', () => {
-    const row = document.createElement('div')
-    row.setAttribute('data-row-key', 'session:s1')
-    document.body.appendChild(row)
-    try {
-      render(<BatchPickButton sessionId="s1" title="行尾登记的名字" />)
-      expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行尾登记的名字' }])
-    } finally {
-      row.remove()
-    }
+    render(<BatchPickButton sessionId="s1" title="行尾登记的名字" />)
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行尾登记的名字' }])
   })
 
   // 登记表跟着开关的挂载走：行被宿主卸掉后不能再拿旧标题冒充「当前可见」。
-  it('开关卸载即注销：DOM 行还在也不再被全选收进去', () => {
-    const row = document.createElement('div')
-    row.setAttribute('data-row-key', 'session:s1')
-    document.body.appendChild(row)
-    try {
-      const { unmount } = render(<BatchPickButton sessionId="s1" title="行尾登记的名字" />)
-      expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行尾登记的名字' }])
-      unmount()
-      expect(readVisibleSelectableRows()).toEqual([])
-    } finally {
-      row.remove()
+  it('开关卸载即注销：不再被全选收进去', () => {
+    const { unmount } = render(<BatchPickButton sessionId="s1" title="行尾登记的名字" />)
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行尾登记的名字' }])
+    unmount()
+    expect(readVisibleSelectableRows()).toEqual([])
+  })
+
+  it('行首勾选框也登记：只有行首槽的宿主代次也进可见集（ADR-0034 决定 1）', () => {
+    render(<BatchPickCheckbox sessionId="s1" title="行首登记的名字" />)
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 's1', title: '行首登记的名字' }])
+  })
+
+  it('标题变化只更新登记，不把这一行挪到可见序末尾', () => {
+    function Pair({ title }: { title: string }): ReactElement {
+      return (
+        <>
+          <BatchPickButton sessionId="a" title={title} />
+          <BatchPickButton sessionId="b" title="B" />
+        </>
+      )
     }
+    const { rerender } = render(<Pair title="A" />)
+    expect(readVisibleSelectableRows()).toEqual([
+      { sessionId: 'a', title: 'A' },
+      { sessionId: 'b', title: 'B' },
+    ])
+
+    rerender(<Pair title="A2" />)
+    expect(readVisibleSelectableRows()).toEqual([
+      { sessionId: 'a', title: 'A2' },
+      { sessionId: 'b', title: 'B' },
+    ])
   })
 })
 

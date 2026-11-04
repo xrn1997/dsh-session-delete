@@ -6,11 +6,11 @@ import * as plugin from '../src/index.js'
 import { createHostPort } from '../src/ports/host-port.js'
 import { createMemberPresence } from '../src/verbs/member-presence.js'
 import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
-import { SESSION_DELETE_API_PREFIX, unescapeProjectKey } from '../src/shared/wire.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES, unescapeProjectKey } from '../src/shared/wire.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import type { DeleteDeps } from '../src/deps.js'
 import type { TrashEntry } from '../src/trash/entry.js'
-import { must, pick } from './support/fixture.js'
+import { must } from './support/fixture.js'
 import { trashEntry } from './support/world.js'
 
 /**
@@ -892,31 +892,34 @@ describe('清单的 storage domain 绑定', () => {
  * Node 半组合根的接线（src/index.ts）
  * ------------------------------------------------------------------ */
 
-/** 一次注册进来的前缀路由（宿主 `webServer.register` 的入参形状）。 */
-interface RegisteredRoute {
-  kind: string
+/** 一次注册进来的 exact Fetch 路由（宿主 `connection.fetch.register` 的入参形状）。 */
+interface RegisteredExactRoute {
   path: string
-  handler: (req: never, res: never) => Promise<void>
+  methods: readonly string[]
+  requestBody: string
+  fetch: (request: Request) => Promise<Response>
 }
 
 /**
- * 组合根用自己的夹具（上面那份 `makeEnv` 只喂端口，不喂 `webServer` / `effect`）：只声明 `apply`
+ * 组合根用自己的夹具（上面那份 `makeEnv` 只喂端口，不喂 `connection` / `effect`）：只声明 `apply`
  * 真正碰到的成员，所以写错的成员名会让用例红，而不是被夹具喂绿。
  *
- * 为什么值得钉：`bindHost` 与 `connection` 这两根线**掉了也不会报错**——插件照常激活、本机照常工作，
- * 症状只是「局域网客户端全部 403」，正是 ADR-0022 要修的那个缺陷本身。判据层（`judgeRequest`）的
- * 矩阵在 `tests/request-trust.test.ts`，这里钉的是「组合根真把那两份事实喂给了它」。
+ * 为什么值得钉：`connection` 是 exact Fetch 路由的唯一注册点。它缺席或形状漂移时插件必须
+ * **响亮失败**，不能静默注册零条路由——那会表现为「插件在、所有入口不出现」，最难排查。
  */
-function makeRootEnv(over: {
-  /** `webServer.host`：监听器 bind 的那个 IP 字面量。缺席 = 老代次没有这个 getter。 */
-  bindHost?: string
-  /** `ctx.get('connection')` 的替身；可以用 `setConnection` 模拟"服务晚到"。 */
-  connection?: unknown
-} = {}) {
-  const routes: RegisteredRoute[] = []
+function makeRootEnv(over: { connection?: unknown } = {}) {
+  const exact: RegisteredExactRoute[] = []
   const effects: string[] = []
   const gets: string[] = []
-  let connection = over.connection
+  const fallbackConnection = {
+    fetch: {
+      register: (route: RegisteredExactRoute) => {
+        exact.push(route)
+        return async () => {}
+      },
+    },
+  }
+  const connection = 'connection' in over ? over.connection : fallbackConnection
   const ctx = {
     // 探针只打 `GET /ping`（路由表里唯一"不碰清册、不碰盘、不进链"的一段），域开不到这里。
     storageDomain: { open: async () => { throw new Error('ping 不该开域') } },
@@ -924,29 +927,8 @@ function makeRootEnv(over: {
     get: (name: string) => { gets.push(name); return name === 'connection' ? connection : undefined },
     // 真 cordis 的语义：`effect(fn)` 当场跑 `fn()` 拿 disposer——路由就是在那一刻注册的。
     effect: (fn: () => unknown, label?: string) => { effects.push(String(label)); fn(); return undefined },
-    webServer: {
-      ...(over.bindHost === undefined ? {} : { host: over.bindHost }),
-      register: (route: RegisteredRoute) => { routes.push(route); return () => {} },
-    },
   }
-  return { ctx, routes, effects, gets, setConnection: (value: unknown) => { connection = value } }
-}
-
-/** 打一发 `GET /ping` 到注册进来的那个 handler。栅栏的全部输入就是 headers 与源地址。 */
-async function ping(
-  route: RegisteredRoute,
-  headers: Record<string, string>,
-  remoteAddress: string,
-): Promise<{ status: number; body: { ok: boolean; value?: unknown; error?: { message?: string } } }> {
-  let status = 0
-  let text = ''
-  const req = { method: 'GET', url: `${route.path}/ping`, headers, socket: { remoteAddress } }
-  const res = {
-    writeHead: (code: number) => { status = code },
-    end: (chunk?: string) => { text = chunk ?? '' },
-  }
-  await route.handler(req as never, res as never)
-  return { status, body: JSON.parse(text) as { ok: boolean; value?: unknown; error?: { message?: string } } }
+  return { ctx, exact, effects, gets }
 }
 
 describe('Node 半组合根的接线', () => {
@@ -967,49 +949,26 @@ describe('Node 半组合根的接线', () => {
   const applyWith = (over: Parameters<typeof makeRootEnv>[0] = {}) => {
     const env = makeRootEnv(over)
     plugin.apply(env.ctx as never)
-    expect(env.routes.length).toBe(1)
+    expect(env.exact).toHaveLength(Object.values(ROUTES).length)
     return env
   }
 
-  it('前缀路由按官方那三格挂上，两条 effect 各有自己的标签', () => {
+  it('九段按 exact Fetch 注册点挂上，方法、body 模式与 effect 标签都在', () => {
     const env = applyWith()
-    // `applyWith` 已经把「只注册了一条」断言在前面了，取位只是把这件事交给编译器
-    const route = pick(env.routes, 0)
-    expect(route.kind).toBe('prefix')
-    expect(route.path).toBe(SESSION_DELETE_API_PREFIX)
-    expect(env.effects).toEqual(['session-delete.manifest', 'session-delete: /dsh-session-delete-api routes'])
+    expect(env.exact.map((route) => `${route.path}:${route.methods.join(',')}`).sort()).toEqual(
+      Object.values(ROUTES).map((route) => `${OFFICIAL_SESSION_DELETE_API_PREFIX}${route.path}:${route.method}`).sort(),
+    )
+    expect(env.exact.every((route) => route.requestBody === 'buffered')).toBe(true)
+    expect(env.effects).toEqual(['session-delete.manifest', 'session-delete: /api exact Fetch routes'])
   })
 
-  it('栅栏的 bindHost 取自 webServer.host：本机用 LAN IP 自访放行；getter 缺席则 fail-closed', async () => {
-    const headers = { host: '192.168.50.199:3080' }
-    const wired = applyWith({ bindHost: '192.168.50.199' })
-    expect(await ping(pick(wired.routes, 0), headers, '127.0.0.1'))
-      .toMatchObject({ status: 200, body: { ok: true, value: 'pong' } })
-    // 老代次没有 `host` getter：bind 字面量判不出归属，身份层又缺席 ⇒ 拒（退化，不是放行）。
-    const legacy = applyWith()
-    expect((await ping(pick(legacy.routes, 0), headers, '127.0.0.1')).status).toBe(403)
+  it('connection 缺席 ⇒ apply 响亮失败，不静默注册零条路由', () => {
+    const env = makeRootEnv({ connection: undefined })
+    expect(() => plugin.apply(env.ctx as never)).toThrow('connection 服务缺席')
   })
 
-  // `connection` 若被组合根在激活时取一次，服务晚到就永远缺席（LAN 全 403 且难排查）——
-  // 判据住 `src/ports/connection-port.ts`，这里钉的是组合根确实走的是那条惰性端口。
-  it('栅栏的身份面每次请求走 ctx.get("connection")：缺席拒、宿主认可放行、服务晚到也认', async () => {
-    const env = applyWith()
-    const route = pick(env.routes, 0)
-    const remote = { host: 'dsh.internal:3080' }
-    const from = '192.168.50.77'
-
-    expect(await ping(route, remote, from))
-      .toMatchObject({ status: 403, body: { ok: false, error: { message: '非受信来源' } } })
-    expect(env.gets).toContain('connection')
-
-    env.setConnection({ requestRejection: () => undefined })
-    expect(await ping(route, remote, from))
-      .toMatchObject({ status: 200, body: { ok: true, value: 'pong' } })
-
-    // 宿主回 401 = 归属对、缺身份 ⇒ 原文指路（不是「非受信来源」）。
-    env.setConnection({ requestRejection: () => 401 })
-    const denied = await ping(route, remote, from)
-    expect(denied.status).toBe(403)
-    expect(denied.body.error?.message).toMatch(/宿主的 Web 身份/)
+  it('connection 没有 fetch.register ⇒ apply 响亮失败（宿主形状漂移）', () => {
+    const env = makeRootEnv({ connection: {} })
+    expect(() => plugin.apply(env.ctx as never)).toThrow(/connection\.fetch\.register/)
   })
 })

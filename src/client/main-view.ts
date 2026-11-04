@@ -11,19 +11,22 @@
  * 所以关闭/重开是**一段生命周期**，不是一个 id：删除成功后 `afterDelete` 关掉当前
  * 主视图并记下"这一条是我们关掉的"；撤销成功后 `afterRestore` 只重开自己记过的那些。调用方不再
  * 各自判定该不该关、也不再把会话 id 塞进撤销提示传一圈——判据全在这一处。两次重开排队时只有最新
- * 那条会打开（最新票守卫），`resetMainView()` 清掉这份记忆并让在等的重开作废。
+ * 那条会打开（等待本身住 `src/client/pending-open.ts` 的票与订阅），`resetMainView()` 清掉这份记忆
+ * 并取消在等的重开。
  *
  * **不 import 宿主客户端包**（AGENTS.md 红线）：只通过 `ctx.get('uiWorkspace')` 可选读服务，
  * 形状不符/服务缺席都安静退回，绝不影响插件激活。字段与方法名来自上面两个包的产物原文；
  * 宿主换代时先复核 `UiWorkspaceService` 的 `selection` / `sessions` / `clearMain` / `openSession`。
  */
 import type { ClientContextLike } from './context.js'
-import { createLatestWins } from './store.js'
+import { createPendingOpen } from './pending-open.js'
 
 interface SnapshotStoreLike<T> {
   /** 返回值允许空：宿主 `getSnapshot()` 在"还没装好"那一拍可能回 null / undefined；
    *  镜像按真实形状声明，`?.` 才是必要的（「缺席不等于没有」）。 */
   getSnapshot(): T | null | undefined
+  /** 快照变化通知；返回退订。旧 store 可能没有——那时 `openWhenListed` 放弃这次等待，不退回轮询。 */
+  subscribe?(listener: () => void): () => void
 }
 
 /** `uiWorkspace` 服务里用到的字段（构造函数原文：`selection = createSnapshotStore({}, …)`、
@@ -44,19 +47,26 @@ type ReadyUiWorkspace = UiWorkspaceLike & Required<Pick<UiWorkspaceLike, 'clearM
 let client: ClientContextLike | undefined
 /** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开；面板恢复用 `forgetMainView` 清掉。 */
 let closedByUs = new Set<string>()
-/** 重开排队的最新票：后一次删除/恢复（或重开）签发新票，前一次的等待随之作废（只开最新那条）。 */
-const reopen = createLatestWins()
+/** 在等的重开：票、订阅、放弃 timer 与 cleanup 都归这个句柄（`src/client/pending-open.ts`）。 */
+const pendingOpen = createPendingOpen()
 
 /** 入口激活时绑一次；之后每次调用再读服务（客户端插件激活顺序早于 `uiWorkspace` 也没关系）。 */
 export function bindMainView(ctx: ClientContextLike): void {
   client = ctx
+  // 插件卸载时把在等的重开与记忆一起收掉；测试的窄 ctx 没有 effect 时安静跳过。
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => {
+      pendingOpen.cancel()
+      closedByUs = new Set()
+    }, 'session-delete: main-view')
+  }
 }
 
 /** 测试专用：模块级现场归零（记忆清空、在等的重开作废），用例之间互不串味。 */
 export function resetMainView(): void {
+  pendingOpen.cancel()
   client = undefined
   closedByUs = new Set()
-  reopen.invalidate()
 }
 
 /** 宿主服务是否可用：把检查写成类型谓词，调用点拿到的就是 `ReadyUiWorkspace`。
@@ -92,7 +102,7 @@ function currentSessionOf(ui: UiWorkspaceLike): string | undefined {
 export function afterDelete(sessionIds: readonly string[]): void {
   if (sessionIds.length === 0) return
   // 新的删除也是新动作：旧的撤销重开等待让位，哪怕删的不是当前会话。
-  reopen.invalidate()
+  pendingOpen.cancel()
   const ui = uiWorkspaceOf()
   if (ui === undefined) return
   const current = currentSessionOf(ui)
@@ -115,7 +125,7 @@ export function afterDelete(sessionIds: readonly string[]): void {
 export function afterRestore(sessionIds: readonly string[]): void {
   if (sessionIds.length === 0) return
   // 新的恢复也是新动作：先作废旧的等待；命中自己关过的会话时再开一个新的等待。
-  reopen.invalidate()
+  pendingOpen.cancel()
   const targets = sessionIds.filter((id) => closedByUs.has(id))
   if (targets.length === 0) return
   for (const id of targets) closedByUs.delete(id)
@@ -134,19 +144,23 @@ export function forgetMainView(sessionIds: readonly string[]): void {
 
 /**
  * 把会话重新打开：`api-session/added` 从宿主发出到客户端摘要表落地有一拍（WS 与 HTTP 响应各走
- * 各的），`openSession` 的目标必须先出现在清单里才不会抛「unknown session」——所以先等它出现，
- * 最多 2 秒；期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
+ * 各的），`openSession` 的目标必须先出现在清单里才不会抛「unknown session」——先查一次快照，没有就
+ * **订阅**宿主快照 store；出现且票仍是当前、焦点没被抢走时打开。最多等 2 秒，一个放弃 timer，不轮询。
+ * 期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
  *
- * **最新票守卫**（`reopen`）：开始等待时签一张票，立即开与每次 tick 都核对；后一次删除/
- * 恢复（或 `resetMainView`）签发新票或作废当前票，前一次的等待就不再打开、也不再续时。
+ * 这段状态机住 `src/client/pending-open.ts` 的 `createPendingOpen`：这里只把「查什么、能不能开、
+ * 怎么开」交进去；取消也只剩 `pendingOpen.cancel()` 一次。没有 `subscribe` 的旧 store 直接放弃
+ * 等待，不退回轮询（ADR-0036）。
  */
 function openWhenListed(sessionId: string): void {
   const ui = uiWorkspaceOf()
   if (ui === undefined) return
-  const ticket = reopen.issue()
+  const store = ui.sessions?.list
+  if (store === undefined) return
+  const subscribe = typeof store.subscribe === 'function' ? store.subscribe.bind(store) : undefined
   const listReady = (): boolean => {
     try {
-      return ui.sessions?.list?.getSnapshot()?.byId?.[sessionId] !== undefined
+      return store.getSnapshot()?.byId?.[sessionId] !== undefined
     } catch {
       return false
     }
@@ -155,28 +169,16 @@ function openWhenListed(sessionId: string): void {
     const current = currentSessionOf(ui)
     return current === undefined || current === sessionId
   }
-  const open = (): void => {
-    if (!ticket.current) return
-    if (!canTakeFocus()) return
-    try {
-      ui.openSession(sessionId)
-    } catch {
-      // 主视图服务换代：放弃重开，行仍在清单里。
-    }
-  }
-  if (listReady()) {
-    open()
-    return
-  }
-  let attempts = 0
-  const tick = (): void => {
-    if (!ticket.current) return
-    attempts += 1
-    if (listReady()) {
-      open()
-      return
-    }
-    if (attempts < 20) setTimeout(tick, 100)
-  }
-  setTimeout(tick, 100)
+  pendingOpen.schedule({
+    subscribe,
+    isReady: listReady,
+    canOpen: canTakeFocus,
+    open: () => {
+      try {
+        ui.openSession(sessionId)
+      } catch {
+        // 主视图服务换代：放弃重开，行仍在清单里。
+      }
+    },
+  })
 }

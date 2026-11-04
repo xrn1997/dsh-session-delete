@@ -1,7 +1,8 @@
-// 宿主会话行适配（2026-10-20）：可见行解析、全选判定、模式内整行点击守卫。
+// 宿主会话行适配（2026-10-20；2026-11-03 改 slot 登记，ADR-0034）：可见行登记住 `host-rows`，
+// 全选判定与模式内整行点击守卫住 `batch-pick`；两组公开面在本文件一起驱动。
 //
-// 从 `batch-bar.test.tsx` 迁来的守卫/全选用例住这里，改用 `host-rows` 的公开面直接驱动；
-// 浮条那边只留一条集成，证明守卫确实挂在常驻宿主上（见 batch-bar.test.tsx）。
+// 从 `batch-bar.test.tsx` 迁来的守卫/全选用例住这里；浮条那边只留一条集成，证明守卫确实挂在
+// 常驻宿主上（见 batch-bar.test.tsx）。
 //
 // 文件是 `.ts`（不是 `.tsx`）：守卫的 React 行替身用 `createElement` 造，省得为一个测试文件
 // 多开一种扩展名——扩展名跟着任务单的指名走。
@@ -9,16 +10,19 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react'
 import { createElement, Fragment, type ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  areAllVisibleRowsSelected,
   getVisibleSelectableRowsSnapshot,
   readVisibleSelectableRows,
   registerHostRowInfo,
   resetHostRows,
-  selectAllVisible,
   unregisterHostRowInfo,
-  useSelectionRowClickGuard,
+  updateHostRowInfo,
   useVisibleSelectableRows,
 } from '../../src/client/host-rows.js'
+import {
+  areAllVisibleRowsSelected,
+  selectAllVisible,
+  useSelectionRowClickGuard,
+} from '../../src/client/batch-pick.js'
 import {
   enterSelection,
   exitSelection,
@@ -83,35 +87,28 @@ function fakeRow(sessionId: string, titleText = 'A'): {
 
 const ids = (): string[] => getPicks().map((item) => item.sessionId)
 
-/** 渲染侧只读快照：行列表由订阅驱动重渲染，DOM 观察留在适配器里。 */
+/** 渲染侧只读快照：行列表由槽位登记与订阅驱动重渲染。 */
 function RowsHarness({ enabled = true }: { enabled?: boolean }): ReactElement {
   const rows = useVisibleSelectableRows(enabled)
   return createElement('div', { 'data-testid': 'rows' }, rows.map((item) => item.sessionId).join(','))
 }
 
 describe('useVisibleSelectableRows', () => {
-  it('DOM 里长出一行后重渲染；没有变化时快照引用稳定', async () => {
+  it('登记的行立刻可见；注销后离开；没有变化时快照引用稳定', async () => {
     registerHostRowInfo('a', { title: 'A', live: false })
     const { getByTestId } = render(createElement(RowsHarness))
-    await waitFor(() => expect(getByTestId('rows').textContent).toBe(''))
-
-    fakeRow('a')
     await waitFor(() => expect(getByTestId('rows').textContent).toBe('a'))
+
+    unregisterHostRowInfo('a')
+    await waitFor(() => expect(getByTestId('rows').textContent).toBe(''))
 
     const first = getVisibleSelectableRowsSnapshot()
     expect(getVisibleSelectableRowsSnapshot()).toBe(first)
   })
 
-  it('未启用时不订阅也不读 DOM；启用后立刻补上当前快照', async () => {
+  it('未启用时不订阅也不读登记；启用后立刻补上当前快照', async () => {
     registerHostRowInfo('a', { title: 'A', live: false })
     const { getByTestId, rerender } = render(createElement(RowsHarness, { enabled: false }))
-    expect(getByTestId('rows').textContent).toBe('')
-
-    fakeRow('a')
-    // MutationObserver 的回调是微任务：等过一轮宏任务，证明没有订阅把浮条叫醒
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
     expect(getByTestId('rows').textContent).toBe('')
 
     rerender(createElement(RowsHarness, { enabled: true }))
@@ -120,17 +117,10 @@ describe('useVisibleSelectableRows', () => {
 })
 
 describe('readVisibleSelectableRows', () => {
-  it('按 DOM 序返回已登记、非在跑的行；空 id / 重复 / 未登记 / 在跑都跳过；标题取登记值', () => {
+  it('按登记序返回已登记、非在跑的行；重复按一份；在跑跳过；标题取登记值', () => {
     registerHostRowInfo('b', { title: 'B', live: false })
     registerHostRowInfo('a', { title: 'A', live: false })
     registerHostRowInfo('run', { title: 'Running', live: true })
-    // 侧栏可见顺序 b → a → run；未登记行与重复行也在 DOM 里
-    fakeRow('b', 'DOM 文本不算标题')
-    fakeRow('a', 'A')
-    fakeRow('run', 'Running')
-    fakeRow('ghost', 'Ghost')
-    fakeRow('b', 'B 的重复行')
-    fakeRow('', '空 id')
 
     expect(readVisibleSelectableRows()).toEqual([
       { sessionId: 'b', title: 'B' },
@@ -141,8 +131,6 @@ describe('readVisibleSelectableRows', () => {
   it('重复行：一颗行尾开关卸载，另一颗还在用的登记要留着', () => {
     registerHostRowInfo('a', { title: 'A', live: false })
     registerHostRowInfo('a', { title: 'A', live: false })
-    fakeRow('a')
-    fakeRow('a')
     expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
 
     // 其中一行离开渲染树：另一行还挂着，登记不能被一起摘掉。
@@ -153,14 +141,29 @@ describe('readVisibleSelectableRows', () => {
     expect(readVisibleSelectableRows()).toEqual([])
   })
 
-  it('没有被渲染出来的行（折叠/过滤）不出现；DOM 里没有行时回空表', () => {
-    registerHostRowInfo('hidden', { title: 'Hidden', live: false })
+  it('没有挂载的行没有登记，不出现；空登记回空表', () => {
     expect(readVisibleSelectableRows()).toEqual([])
+  })
+
+  it('标题/运行态更新就地生效，登记顺序仍是首次挂载的顺序', () => {
+    registerHostRowInfo('a', { title: 'A', live: false })
+    registerHostRowInfo('b', { title: 'B', live: false })
+
+    updateHostRowInfo('a', { title: 'A2', live: false })
+    expect(readVisibleSelectableRows()).toEqual([
+      { sessionId: 'a', title: 'A2' },
+      { sessionId: 'b', title: 'B' },
+    ])
+  })
+
+  it('同一行的两颗槽位开关：空标题不抹掉另一颗已登记的名字', () => {
+    registerHostRowInfo('a', { title: 'A', live: false })
+    updateHostRowInfo('a', { title: '', live: false })
+    expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
   })
 
   it('注销登记后不再用旧标题选中这一行（行尾开关卸载 = 这一行离开渲染树）', () => {
     registerHostRowInfo('a', { title: 'A', live: false })
-    fakeRow('a')
     expect(readVisibleSelectableRows()).toEqual([{ sessionId: 'a', title: 'A' }])
 
     unregisterHostRowInfo('a')
@@ -172,11 +175,9 @@ describe('readVisibleSelectableRows', () => {
 })
 
 describe('selectAllVisible', () => {
-  it('把可见行按 DOM 序追加到原有选中之后；再全选一次没有新条目（同一份快照 = 不发通告）', () => {
+  it('把可见行按登记序追加到原有选中之后；再全选一次没有新条目（同一份快照 = 不发通告）', () => {
     registerHostRowInfo('b', { title: 'B', live: false })
     registerHostRowInfo('a', { title: 'A', live: false })
-    fakeRow('b', 'B')
-    fakeRow('a', 'A')
 
     togglePick({ sessionId: 'c', title: 'C' })
     selectAllVisible()
@@ -190,7 +191,6 @@ describe('selectAllVisible', () => {
 
   it('已在名单里的可见行不重复追加；名单已经覆盖全部可见行时不动', () => {
     registerHostRowInfo('a', { title: 'A', live: false })
-    fakeRow('a', 'A')
     togglePick({ sessionId: 'a', title: 'A' })
     const snapshot = getPicks()
     selectAllVisible()
@@ -210,21 +210,20 @@ describe('areAllVisibleRowsSelected', () => {
 
   it('四态：0 条 → false；可见行全选 → true；漏一条 → false；没有可见行且名单非空 → true', () => {
     registerHostRowInfo('a', { title: 'A', live: false })
-    fakeRow('a', 'A')
     expect(allVisibleSelected()).toBe(false)
 
     togglePick({ sessionId: 'a', title: 'A' })
     expect(allVisibleSelected()).toBe(true)
 
     registerHostRowInfo('b', { title: 'B', live: false })
-    fakeRow('b', 'A')
     expect(allVisibleSelected()).toBe(false)
 
     togglePick({ sessionId: 'b', title: 'B' })
     expect(allVisibleSelected()).toBe(true)
 
-    // 全折叠/过滤掉：只剩名单（同一个切换口显示「取消全选」，点它只能清空）
-    document.body.replaceChildren()
+    // 全折叠/过滤掉：登记全注销，只剩名单（同一个切换口显示「取消全选」，点它只能清空）
+    unregisterHostRowInfo('a')
+    unregisterHostRowInfo('b')
     expect(allVisibleSelected()).toBe(true)
   })
 })
@@ -254,6 +253,7 @@ describe('useSelectionRowClickGuard', () => {
   })
 
   it('模式在挂载之后才打开：监听从那一刻起生效（守卫订的是同一份快照）', () => {
+    registerHostRowInfo('s1', { title: 'A', live: false })
     render(createElement(GuardHarness))
     const { title } = fakeRow('s1')
     fireEvent.click(title)
@@ -267,6 +267,7 @@ describe('useSelectionRowClickGuard', () => {
   })
 
   it('退出多选后守卫卸掉：点行交还宿主的 onClick，也不再往选中集里塞', () => {
+    registerHostRowInfo('s1', { title: 'A', live: false })
     const onOpen = vi.fn()
     const container = renderGuardWith(createElement(ReactRow, { sessionId: 's1', onOpen }))
     act(() => {
@@ -323,12 +324,12 @@ describe('useSelectionRowClickGuard', () => {
     expect(opened()).toBe(0)
   })
 
-  it('未登记的行也能选：标题按空串（守卫不拿 DOM 文本冒充标题）', () => {
+  it('未登记的行不选中：守卫只认槽位登记，不拿 DOM 文本冒充标题', () => {
     enterSelection()
     render(createElement(GuardHarness))
     const { title } = fakeRow('s1', 'DOM 里的标题')
     fireEvent.click(title)
-    expect(getPicks()).toEqual([{ sessionId: 's1', title: '' }])
+    expect(getPicks()).toEqual([])
   })
 
   it('点行内没有 data-row-key 的区域不动选中集', () => {

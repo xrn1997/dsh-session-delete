@@ -39,21 +39,27 @@ Status: accepted
 5. `api-session/removed` 仍由 `member-presence` 统一发；完整摘除后宿主列表确实不含它，
    通告仍是如实的。
 
+## 受约束偏离
+
+宿主没有公开的「按会话摘活体 / 按会话 dispose agent」面，插件只能读三处内部形状。这是本 ADR 的核心受约束偏离，逐条登记：
+
+1. **`ctx.agents` 没有 `dispose(sessionId)` 或 evict**：`AgentService.resume` / `create` 返回的 `AgentHandle` 带 per-agent teardown，但服务没有按会话 id 的 dispose。插件在 `src/ports/agent-handles.ts` 的 `captureAgentHandles` 里包住 `resume` / `create`，按 id 留 handle，删除时 `await handle.dispose()`——这是目前公开面上唯一能完整摘掉 agent 的路。证据：`tests/assembly.test.ts` 用「读回是新代理」的形状钉住 `resume` / `create` 都装上；2026-10-21 在隔离宿主真机复测。上游请求：给 `agents` 一个按 `sessionId` 的 dispose/evict，或稳定的 handle 读取口。
+2. **`ctx.sessions.liveEntryFor` 是内部面**：宿主没有公开的「摘 live session」API；`evictLive` 读 `liveEntryFor(session).detach()`。形状随宿主代次变，`engines.dsh` 是窗口；`tests/assembly.test.ts` 钉住注入口。上游请求：公开 detach/evict。
+3. **`AgentHandle` 的 `agent.id` + `dispose` 是返回形状**：不是 `agents` 的公开类型；升级代次先核形状。上面两处（`captureAgentHandles`、`evictLive`）是仅有的内部适配，不再扩张。
+
+## 已知残留（不是受约束偏离）
+
+- **捕获不到 handle 的 agent**（插件激活前已启动的配置 agent，或 `ctx.agents` 形状变化）：只摘 session，旧 agent 仍可能拦住恢复；不拿归档当兜底。用户会话在插件激活后 `resume/create`，会被捕获。
+- **删除期间有一小段「账本已摘、活体未摘」的窗口**（2026-10-21 评审登记）：`memberGone`（摘活体）必须在搬目录与写清册之后，所以 `detach` 与 `evictLive` 之间活体会短暂无主，客户端可能把它派生成「未分组」。旧实现用归档挡住这段窗口；去掉归档后它仍在。当前按"先保证失败可回滚"接受这个窗口；若要消除，需要另行设计（客户端在删除开始时乐观隐藏，或重排 `detach` / `evictLive` 并重做回滚序）。
+
 ## 边界
 
 - 不改组语义（`src/trash/groups.ts`）、批量（`src/verbs/batch.ts`）、线上形状与段名
   （`src/shared/wire.ts`）。`TrashEntry.wasArchived` 字段继续存在，含义是**删除前的事实**。
-- **捕获不到 handle 的 agent**（插件激活前已启动的配置 agent，或 `ctx.agents` 形状变化）：
-  只摘 session，旧 agent 仍可能拦住恢复；这是已知的残留限制，不拿归档当兜底。用户会话在
-  插件激活后 `resume/create`，会被捕获。
 - 永久的 `purge` / `orphan-clean` 仍走 `evictLive`，因此同样受益于 agent handle 的完整 teardown；
   没有恢复路径。
 - `evictLive` 的 `unknown`（live store 缺失 / 形状不符 / detach 抛）仍不通告；宿主代次由
   `engines.dsh` 约束，支持的宿主有 live store。没有归档兜底。
-- **删除期间有一小段「账本已摘、活体未摘」的窗口**（2026-10-21 评审登记）：`memberGone`（摘活体）必须在
-  搬目录与写清册之后，所以 `detach` 与 `evictLive` 之间活体会短暂无主，客户端可能把它派生成「未分组」。
-  旧实现用归档挡住这段窗口；去掉归档后它仍在。当前按"先保证失败可回滚"接受这个窗口；若要消除，需要另行
-  设计（客户端在删除开始时乐观隐藏，或重排 `detach` / `evictLive` 并重做回滚序）。
 
 ## 客户端主视图：宿主 `removed` 是粘性的（2026-10-21 真机补充）
 
@@ -74,7 +80,8 @@ Status: accepted
    `clearMain()`。`clearMain()` 释放 `mainReference`，常驻 `Session` 的引用计数归零后由客户端
    `drop` 掉——不再有粘住的 `removed`。
 2. **撤销恢复成功后重新打开它**：等客户端摘要表出现该会话（最多 2 秒）再 `openSession`，
-   新实例的 `removed` 从 false 开始；期间用户选了别的会话就不抢焦点。
+   新实例的 `removed` 从 false 开始；期间用户选了别的会话就不抢焦点（等摘要的方式见 ADR-0036：订阅
+   snapshot store，不轮询）。
 3. 通过浏览器半的 `ctx.get('uiWorkspace')` **可选读**服务（不 import 宿主客户端包，不进 `inject`；
    缺席/形状不符都安静退回）。形状依据住 `src/client/main-view.ts` 的头注。
 
@@ -99,8 +106,7 @@ Status: accepted
   （`createShadowMethod`），读回永远不等于刚写进去的函数。2026-10-21 的首版修复就在这条假警报上
   中止了安装（`resume` 已包上、`create` 从未包上），新建会话因此仍会在恢复后不可用；回归用例
   `tests/assembly.test.ts` 用同一个“读回是新代理”的形状钉住两条路都必须捕获。
-- 依赖 `ctx.agents.resume/create` 的返回形状（`AgentHandle.agent.id` + `dispose`）；
-  这是内部适配，和 `liveEntryFor` 一样属于偏离公开面的内部适配（不数处数），升级宿主代次时先核形状。
+- 依赖 `ctx.agents.resume/create` 的返回形状（`AgentHandle.agent.id` + `dispose`）；两处内部适配（`captureAgentHandles`、`evictLive`）见「受约束偏离」，升级宿主代次时先核形状。
 
 ## 被否掉的替代
 

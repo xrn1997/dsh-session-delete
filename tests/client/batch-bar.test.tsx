@@ -85,7 +85,7 @@ describe('浮条', () => {
     enterSelection()
     fakeRow('s1')
     fakeRow('s2')
-    // 不手动 registerHostRowInfo：标题与"可不可选"只能来自 BatchPickButton 的登记 effect。
+    // 不手动 registerHostRowInfo：标题与"可不可选"只能来自槽位组件的登记 effect。
     render(
       <>
         <BatchBar deps={createFakeRemote({ applyOutcomes: vi.fn() })} />

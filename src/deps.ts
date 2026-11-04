@@ -1,17 +1,20 @@
 import type { CoreFsPort, FsPort } from './ports/fs-port.js'
 import type { HostCorePort } from './ports/host-port.js'
+import type { AttachmentsPort } from './ports/attachments-port.js'
 import type { PresenceCapability } from './ports/presence-port.js'
+import type { SessionDeleteConfig } from './config.js'
 import type { TrashLedger } from './trash/ledger.js'
 
 /** Node 半的基础依赖面：组合根只装配这一颗；动词之间不互相 import 依赖面 interface。
  *  `fs` 不含 `removeDir` / `removeFile`，`host` 不含在场三件——两条危险能力各走 {@link RemovalDeps} 与
- *  {@link CoreDeps.presence}。 */
+ *  {@link CoreDeps.presence}。`config` 是 `apply` 归一后的只读快照：读方从 deps 读，不 import 模块级单例。 */
 export interface CoreDeps {
   fs: CoreFsPort
   host: HostCorePort
   ledger: TrashLedger
   home: string
   presence: PresenceCapability
+  config: SessionDeleteConfig
 }
 
 /** 会话删除动词的依赖面：只多读时钟；它不删目录（回滚只把搬走的搬回）。 */
@@ -21,5 +24,5 @@ export type DeleteSessionDeps = CoreDeps & { now(): number }
 export type RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort, 'removeDir' | 'removeFile'> }
 
 /** 组合根装出的全量面：`/apply` 的分发同时够到删除的时钟与永久删除的 `removeDir` / `removeFile`
- *  （后者也供孤儿附件清理段使用）。 */
-export type DeleteDeps = DeleteSessionDeps & RemovalDeps
+ *  （后者也供孤儿附件清理段使用）。`attachments` 只给 `attachment` 读段（ADR-0035）；动词不拿它。 */
+export type DeleteDeps = DeleteSessionDeps & RemovalDeps & { readonly attachments: AttachmentsPort }

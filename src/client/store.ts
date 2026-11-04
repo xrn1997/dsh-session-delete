@@ -8,8 +8,8 @@
  * 在这之前每个文件各写一遍「`let` 现场 + 监听集合 + `notify` + `useSyncExternalStore`」，
  * 各自的 seq / revision 也在分头维护。现在订阅/通告只住这一处。
  *
- * 另有一个**懒读快照**变体（`createLazyStore`）：值由组件树之外的事实源（宿主 DOM）现读，
- * 脏了才重读；订阅脚手架仍住这里，观察者生命周期由调用方挂 `onFirstSubscribe` / `onLastUnsubscribe`。
+ * 另有一个**懒读快照**变体（`createLazyStore`）：值由组件树之外的事实源（如宿主行槽位登记）现读，
+ * 脏了才重读；订阅脚手架仍住这里。
  *
  * 还有一个**最新票句柄**（`createLatestWins`）：并发的异步读里"只有最新那次可以落地"原先在每个
  * 调用方各写一遍自增序号，现在只住这一处。它只拥有 compare-and-set——防抖、轮询、焦点策略仍是
@@ -102,18 +102,7 @@ export interface LazyStore<T> {
   subscribe: (listener: () => void) => () => void
 }
 
-export interface LazyStoreLifecycle {
-  /** 第一个订阅者到来时跑（观察者在这里接上）。 */
-  onFirstSubscribe?(): void
-  /** 最后一个订阅者退订时跑（观察者在这里断开）。 */
-  onLastUnsubscribe?(): void
-}
-
-export function createLazyStore<T>(
-  initial: T,
-  read: () => T,
-  lifecycle: LazyStoreLifecycle = {},
-): LazyStore<T> {
+export function createLazyStore<T>(initial: T, read: () => T): LazyStore<T> {
   let cached = initial
   let dirty = true
   const listeners = new Set<() => void>()
@@ -134,20 +123,14 @@ export function createLazyStore<T>(
       notify()
     },
     subscribe(listener: () => void): () => void {
-      // 只在从「无人订阅」重新挂上来时标脏：有观察者在场时外部变更已由 `invalidate` 通告过，
+      // 只在从「无人订阅」重新挂上来时标脏：有订阅者在场时外部变更已由 `invalidate` 通告过，
       // 每次订阅都标脏会让 React 订阅后的快照复查拿到一个新引用，白多一次重读与重渲染。
-      const reattaching = listeners.size === 0
+      if (listeners.size === 0) dirty = true
       listeners.add(listener)
-      if (reattaching) {
-        dirty = true
-        lifecycle.onFirstSubscribe?.()
-      }
       return () => {
         listeners.delete(listener)
-        if (listeners.size > 0) return
-        lifecycle.onLastUnsubscribe?.()
-        // 没人订阅时缓存不再自证新鲜（外部源可能在无观察期间变过）：下次挂载首帧先重读。
-        dirty = true
+        // 没人订阅时缓存不再自证新鲜（外部源可能在无订阅期间变过）：下次挂载首帧先重读。
+        if (listeners.size === 0) dirty = true
       }
     },
   }

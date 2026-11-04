@@ -33,6 +33,9 @@ import { createTrashLedger, type TrashLedger } from '../../src/trash/ledger.js'
 import type { ManifestPort } from '../../src/trash/manifest.js'
 import { createMemoryManifest } from './memory-manifest.js'
 import type { DeleteDeps } from '../../src/deps.js'
+import { DEFAULT_CONFIG, type SessionDeleteConfig } from '../../src/config.js'
+import type { AttachmentsPort } from '../../src/ports/attachments-port.js'
+import { AttachmentsUnavailableError } from '../../src/ports/attachments-port.js'
 import { createMemberPresence } from '../../src/verbs/member-presence.js'
 import { TRASH_DIR_NAME } from '../../src/shared/wire.js'
 import type { Mocked } from './mocked.js'
@@ -295,6 +298,21 @@ export interface FakeDepsOptions extends Omit<FakeHostOptions, 'log' | 'logMetho
   format?: ((method: string, args: readonly unknown[]) => string) | undefined
   /** `FsPort` 的缺省；给了就整个换掉（少数用例要自带一个）。 */
   fs?: FakeFsOptions | undefined
+  /** 宿主 `attachments` 读面；缺省是 `available() === false` 的替身，附件段走直接 fs fallback。 */
+  attachments?: AttachmentsPort | undefined
+  /** 归一后的可调项；缺省是 `DEFAULT_CONFIG`。用例按值覆盖，不再改进程级现场。 */
+  config?: SessionDeleteConfig | undefined
+}
+
+/** 缺省附件读面：服务不在，读调用直接按"不可用"抛——调用方应退回直接 fs，而不是把读取判成 io。 */
+const unavailableAttachments: AttachmentsPort = {
+  available: () => false,
+  readImage: async () => { throw new AttachmentsUnavailableError() },
+  readFileStream: async function* () {
+    // 生成器必须有 yield；先给一个空块再抛，读调用方（`available()` 为假时不会走到这里）会看到不可用。
+    yield new Uint8Array()
+    throw new AttachmentsUnavailableError()
+  },
 }
 
 /**
@@ -365,6 +383,8 @@ export function createFakeDeps(over: FakeDepsOptions = {}): {
       ledger,
       home,
       presence: createMemberPresence(host),
+      config: over.config ?? DEFAULT_CONFIG,
+      attachments: over.attachments ?? unavailableAttachments,
       now: typeof now === 'function' ? now : () => now ?? 0,
     },
     host,

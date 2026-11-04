@@ -1,7 +1,8 @@
-import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
-import { createApiHandler } from './api/dispatch.js'
-import { createConnectionPort } from './ports/connection-port.js'
+import { createDispatcher } from './api/dispatch.js'
+import { registerConnectionRoutes, type ConnectionFetchServiceLike } from './api/connection-route.js'
+import { Config, normalizeConfig } from './config.js'
+import { createAttachmentsPort } from './ports/attachments-port.js'
 import { createFsPort } from './ports/fs-port.js'
 import { createHostPort } from './ports/host-port.js'
 import { resolveHome } from './ports/home.js'
@@ -9,9 +10,11 @@ import { createTrashLedger } from './trash/ledger.js'
 import { createHostStorageManifest } from './trash/storage-manifest.js'
 import type { DeleteDeps } from './deps.js'
 import { createMemberPresence } from './verbs/member-presence.js'
-import { SESSION_DELETE_API_PREFIX } from './shared/wire.js'
 
 export const name = '@xrn1997/dsh-session-delete'
+
+/** 可调项的 Config（Standard Schema）；为什么不用宿主 schema 库见 ADR-0037。 */
+export { Config }
 
 /**
  * 插件依赖：**只写字符串数组**（隔离数据根上实测：写成 `{ required, optional }` 会让插件停在
@@ -27,44 +30,32 @@ export const name = '@xrn1997/dsh-session-delete'
  * - `agents`：只给 handle 捕获用（`ctx.get('agents')`；缺席时 `ctx.inject(['agents'])` 等服务就绪再装）。
  *   它同样可能晚于本插件激活，写进插件 inject 只会让整个插件 pending。
  *
- * `webServer` 是**浏览器半取数通道的承载者**（那条薄线）：插件用它注册 `/dsh-session-delete-api`
- * 前缀路由，浏览器半同源 fetch 那九个段名。它是宿主 web 组成里的硬依赖（`dsh-host-webserver` 的
- * `super(ctx, "webServer")`），服务名与 `register({kind:'prefix', path, handler})` 的形状按
- * `dsh-host-webserver/lib/index.js` 与 `README.md` 原文读实，不是猜的。
- *
- * `connection` 只喂请求栅栏的远程支（`src/api/request-trust.ts` ②），按 `ctx.get` 可选读：
- * 服务缺席时插件照常激活，远程客户端 fail-closed。它不进 `inject`——写进去会让没有 web 组成的
- * profile 整个停在 pending。
+ * `connection` 是浏览器半取数通道的唯一承载者：九段注册到 `connection.fetch.register` 的
+ * `/api/dsh-session-delete-api/*`，Host/Origin/浏览器认证由宿主 `/api` bridge 完成（ADR-0033）。
+ * 支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`；服务缺席时插件停在 pending
+ * ——可见的激活失败，而不是静默地没有入口。`webServer` 不再直接使用：exact route 仍由宿主的
+ * `connection` 挂在其 `/api` 前缀上，插件不需要自己碰物理服务器。
  *
  * 清册的三层各有各的家：raw 绑定 `src/trash/storage-manifest.ts`、读面（对账 + 读）`src/trash/ledger.ts`、
  * 数据根 `src/ports/home.ts`。这里只把它们接起来，任何一层都不在组合根里长判据。
  */
-export const inject = ['workspaceRegistry', 'storageDomain', 'webServer']
+export const inject = ['workspaceRegistry', 'storageDomain', 'connection']
 
 /* ------------------------------------------------------------------ *
  * 装配
  * ------------------------------------------------------------------ */
 
-/** 宿主 web server 的窄镜像（只声明用到的成员 + 一次强转；不装宿主类型包）。
- *  `host` 是监听器绑定的那个具体接口 IP 字面量（宿主拒绝 wildcard 绑定）——请求栅栏拿它判
- *  「Host 属于本次部署」；老代次没有这个 getter 时按缺席处理。 */
-interface WebServerLike {
-  readonly host?: string
-  register(route: {
-    kind: 'prefix'
-    path: string
-    handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
-  }): () => void
-}
-
 /**
- * 装配顺序：**清单 → 端口 → 在场能力 → 动词依赖 → 前缀路由**（`DeleteDeps` 把这些依赖面合成一颗）。
+ * 装配顺序：**配置归一 → 清单 → 端口 → 在场能力 → 动词依赖 → 分发器 → exact Fetch 路由**
+ * （`DeleteDeps` 把这些依赖面合成一颗；`config` 是归一后的只读快照）。
  *
  * 路由用 `ctx.effect` 挂、disposer 归装载它的那根 fiber：插件卸载即摘路由（`register` 返回的
- * disposer 是官方契约）。**同一进程里只注册一次**这件事由宿主把住：重复的 `(kind, path)`
- * 在 `register` 里直接抛（`webserver: duplicate prefix route "…"`），响亮失败而不是悄悄覆盖。
+ * disposer 是官方契约）。**同一进程里只注册一次**这件事由宿主把住：重复的 `(path, method)`
+ * 在 `connection.fetch.register` 里直接抛，响亮失败而不是悄悄覆盖。
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, rawConfig?: unknown): void {
+  // 归一放在装配第一步：坏配置在碰宿主之前就响亮失败，不拿半套配置启动。
+  const config = normalizeConfig(rawConfig)
   const fs = createFsPort()
   const home = resolveHome()
   const rawManifest = createHostStorageManifest(ctx)
@@ -75,16 +66,17 @@ export function apply(ctx: Context): void {
     ledger: createTrashLedger(rawManifest, fs, home),
     home,
     presence: createMemberPresence(host),
+    config,
+    attachments: createAttachmentsPort(ctx),
     now: () => Date.now(),
   }
-  const webServer = (ctx as unknown as { webServer: WebServerLike }).webServer
-  const connection = createConnectionPort(ctx)
+  const connection = ctx.get('connection') as ConnectionFetchServiceLike | undefined
+  // `inject` 保证 apply 只在 connection 就绪后跑；这里仍判一次，把"服务被摘走"变成响亮错误，
+  // 而不是静默注册零条路由（插件看起来在、所有动作 404）。
+  if (connection === undefined) throw new Error('session-delete: connection 服务缺席')
+  const dispatch = createDispatcher(deps)
   ctx.effect(() => {
-    const dispose = webServer.register({
-      kind: 'prefix',
-      path: SESSION_DELETE_API_PREFIX,
-      handler: createApiHandler(deps, { bindHost: webServer.host, connection }),
-    })
-    return () => { dispose() }
-  }, 'session-delete: /dsh-session-delete-api routes')
+    const dispose = registerConnectionRoutes(connection, dispatch)
+    return () => dispose()
+  }, 'session-delete: /api exact Fetch routes')
 }

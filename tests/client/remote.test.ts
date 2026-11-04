@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   PARAMS,
   ROUTES,
-  SESSION_DELETE_API_PREFIX,
+  OFFICIAL_SESSION_DELETE_API_PREFIX,
   isDSHRemoteError,
   type ApplyOutcome,
   type RemoteFailure,
@@ -106,7 +106,7 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
     })
     await expect(createHttpRemote().detail('e1')).resolves.toMatchObject({ ok: true })
     await expect(createHttpRemote().detail('e1', 12)).resolves.toMatchObject({ ok: true })
-    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.detail.path}`)
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.detail.path}`)
     expect(pick(calls, 0).init?.method).toBe('POST')
     // 本仓只以 string 体调 fetch（remote.ts 里 body 一律 JSON.stringify）；用 typeof 证明收窄而不是
     // String()，免得对象经 String 折成 '[object Object]' 还蒙着解析下一步。
@@ -131,15 +131,52 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
     vi.unstubAllGlobals()
   })
 
-  it('探测走最便宜的 GET /ping：不再拿一次全表对账当健康检查', async () => {
+})
+
+describe('probeChannel · 唯一 /api 通道', () => {
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+  const failureEnvelope = () =>
+    new Response(JSON.stringify({ ok: false, error: { code: 'host/unknown', message: 'no such route' } }), {
+      headers: { 'content-type': 'application/json' },
+    })
+
+  it('ping 回 pong ⇒ 通道在，且只打官方 /api 路径', async () => {
     const paths: string[] = []
     vi.stubGlobal('fetch', async (path: string) => {
       paths.push(path)
       return envelope('pong')
     })
     await expect(probeChannel(createHttpRemote())).resolves.toBe(true)
-    expect(paths).toEqual([`${SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`])
-    vi.unstubAllGlobals()
+    expect(paths).toEqual([`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`])
+  })
+
+  // 判据是 `ping` 的读数，不是 `ok` 布尔：`/api` 网关对未命中的路径也可能回 `ok:true` 形状的 JSON。
+  it('回 ok:true 但不是 pong ⇒ 不是本插件的路由', async () => {
+    vi.stubGlobal('fetch', async () => envelope('ok'))
+    await expect(probeChannel(createHttpRemote())).resolves.toBe(false)
+  })
+
+  it('401 是身份缺失 ⇒ 入口不出现', async () => {
+    vi.stubGlobal('fetch', async () => new Response('unauthorized', { status: 401 }))
+    await expect(probeChannel(createHttpRemote())).resolves.toBe(false)
+  })
+
+  it('失败信封（可能是 /api 网关自己的错误形状）⇒ 入口不出现', async () => {
+    vi.stubGlobal('fetch', async () => failureEnvelope())
+    await expect(probeChannel(createHttpRemote())).resolves.toBe(false)
+  })
+
+  it('非信封 / 404 ⇒ 入口不出现', async () => {
+    vi.stubGlobal('fetch', async () => new Response('not found', { status: 404 }))
+    await expect(probeChannel(createHttpRemote())).resolves.toBe(false)
+  })
+
+  it('401/403 纯文本翻成两条固定原文，不冒充「回的不是信封」', async () => {
+    vi.stubGlobal('fetch', async () => new Response('unauthorized', { status: 401 }))
+    await expect(createHttpRemote().list()).rejects.toThrow(/宿主的 Web 身份/)
+    vi.stubGlobal('fetch', async () => new Response('forbidden', { status: 403 }))
+    await expect(createHttpRemote().list()).rejects.toThrow('非受信来源')
   })
 })
 
@@ -186,7 +223,7 @@ describe('createHttpRemote · orphans 那一趟（九段里的 `GET /orphans`）
       return envelope(report)
     })
     await expect(createHttpRemote().orphans()).resolves.toEqual({ ok: true, value: report })
-    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`)
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`)
     expect(pick(calls, 0).init?.method).toBe('GET')
     expect(pick(calls, 0).init?.body).toBeUndefined()
     vi.unstubAllGlobals()
@@ -219,7 +256,7 @@ describe('createHttpRemote · 孤儿附件两段（九段里的 `GET /attachment
       return envelope(report)
     })
     await expect(createHttpRemote().attachmentOrphans()).resolves.toEqual({ ok: true, value: report })
-    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`)
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`)
     expect(pick(calls, 0).init?.method).toBe('GET')
     expect(pick(calls, 0).init?.body).toBeUndefined()
     vi.unstubAllGlobals()
@@ -233,7 +270,7 @@ describe('createHttpRemote · 孤儿附件两段（九段里的 `GET /attachment
       return envelope(cleanup)
     })
     await expect(createHttpRemote().attachmentClean()).resolves.toEqual({ ok: true, value: cleanup })
-    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`)
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`)
     expect(pick(calls, 0).init?.method).toBe('POST')
     const cleanBody = pick(calls, 0).init?.body
     if (typeof cleanBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof cleanBody}`)
@@ -280,7 +317,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
     })
     await expect(createHttpRemote().apply('restore', ['e1', 'e2'])).resolves.toMatchObject({ ok: true })
     expect(calls).toHaveLength(1)
-    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`)
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`)
     expect(pick(calls, 0).init?.method).toBe('POST')
     const applyBody = pick(calls, 0).init?.body
     if (typeof applyBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof applyBody}`)
@@ -295,7 +332,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
       return envelope({ removed: 3, freedBytes: 1 })
     })
     await expect(createHttpRemote().empty()).resolves.toMatchObject({ ok: true, value: { removed: 3 } })
-    expect(pick(calls, 0).path).toBe(`${SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`)
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`)
     vi.unstubAllGlobals()
   })
 

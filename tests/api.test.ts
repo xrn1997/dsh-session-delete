@@ -1,7 +1,8 @@
-// Node 半路由层（`/dsh-session-delete-api`）——**薄线**的那一半
+// Node 半路由层（`/api/dsh-session-delete-api`）——exact Fetch 适配器的那一半
 //
-// 照本机既有插件的做法：分发器是**纯构造器**（`createApiHandler(deps, trust)`），不依赖 Cordis，
-// 用**真 `node:http` server** 承载（Node 原生 req/res 语义不替身），所以这一层可以单测到位。
+// 分发器是**纯构造器**（`createDispatcher(deps)`），传输适配器只有 `registerConnectionRoutes` 一个。
+// 这里用**真 `node:http` server + 一条极薄的测试桥**承载：`node:http` 的 req/res 语义不替身，
+// 请求仍被装成 `Request` 交给注册的 exact Fetch 路由，响应原样写回。
 //
 // 钉住的是**契约**，不是实现细节：
 //  ① 九个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
@@ -9,19 +10,25 @@
 //    GET attachment-orphans＝孤儿附件报告、POST attachment-clean＝孤儿附件清理）；
 //  ② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）；③ 码只从那五个里出、且失败的
-//  **原文**进 `error.message`；④ 路由层自检（未知路径 / 方法不对 / body 不对）不静默吞；
-//  ⑤ **请求栅栏**：归属不对与远程缺身份都回 403，且拒之前一个副作用都不发生。
+//  **原文**进 `error.message`；④ 请求体不对回 400 + 信封；路径 / 方法不匹配由宿主 exact route
+//  在 handler 之前回 404（测试桥按同一口径转发），插件分发器里的 405 / 404 只是适配器直调时的防御。
+//  鉴权不在这一层：宿主 `/api` bridge 在 exact route 之前完成 Host/Origin/浏览器认证（ADR-0033）。
 import http from 'node:http'
 import zlib from 'node:zlib'
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createApiHandler } from '../src/api/dispatch.js'
-import type { RequestTrustFacts } from '../src/api/request-trust.js'
-import { ABSENT_CONNECTION, ALLOWED_CONNECTION, UNAUTHENTICATED_CONNECTION } from './support/connection-stub.js'
-import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type ApplyOutcome } from '../src/shared/wire.js'
+import { createDispatcher } from '../src/api/dispatch.js'
+import {
+  registerConnectionRoutes,
+  type ConnectionFetchRouteLike,
+  type ConnectionFetchServiceLike,
+} from '../src/api/connection-route.js'
+import { DEFAULT_CONFIG, type SessionDeleteConfig } from '../src/config.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, PARAMS, ROUTES, type ApplyOutcome } from '../src/shared/wire.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import type { DeleteDeps } from '../src/deps.js'
+import { AttachmentsUnavailableError, type AttachmentsPort, type ImageAttachmentRefLike } from '../src/ports/attachments-port.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
 import { createFakeDeps } from './support/fake-deps.js'
 import { pick } from './support/fixture.js'
@@ -55,16 +62,22 @@ function makeDeps(over: {
   /** 按**完整路径**给盘上目录的实测字节；给了就以此为唯一来源（没列到的目录是 0），
    *  不再用缺省的 224 KiB——"清册记的"与"盘上实测的"要在同一个世界里对得出来。 */
   sizes?: Record<string, number>
+  /** 宿主 `attachments` 读面；缺省不可用，附件段走直接 fs fallback。 */
+  attachments?: AttachmentsPort
+  /** 归一后的可调项；缺省是 `DEFAULT_CONFIG`。 */
+  config?: SessionDeleteConfig
 } = {}) {
   const seed = over.seed ?? []
   const made = createFakeDeps({
     seed,
     now: NOW,
+    config: over.config,
     live: over.live ?? false,
     // 计数与"盘上后代"两个口共用 `members`：给了 `subagents` 就按它构造等长成员，否则按成员数推（与宿主同口径）。
     counts: over.subagents,
     members: over.members ?? {},
     workspaceExists: over.workspaceExists ?? true,
+    attachments: over.attachments,
     fs: {
       exists: true,
       size: 224 * 1024,
@@ -92,22 +105,50 @@ const servers: Array<() => Promise<void>> = []
 afterEach(async () => {
   while (servers.length > 0) await (servers.pop() as () => Promise<void>)()
 })
-
-/** 栅栏事实缺省成「监听回环、身份层缺席」= 改动前那条只有本机的口径；要测远程支的用例自己传
- *  `bindHost` / `connection`。 */
-async function start(
-  deps: DeleteDeps,
-  mountPrefix = true,
-  trust: Partial<RequestTrustFacts> = {},
-): Promise<string> {
-  const handler = createApiHandler(deps, { bindHost: '127.0.0.1', connection: ABSENT_CONNECTION, ...trust })
+/**
+ * 测试桥：把注册的 exact Fetch 路由接到真 `node:http` server 上，保持用例的 HTTP 形状不变。
+ * **按宿主 `createSharedFetchHandler` 的口径**：路径与方法都命中才进 handler，否则 404 纯文本。
+ * 插件分发器里的 405 / 未知路由 404 只是适配器直调时的防御分支，在 `tests/connection-route.test.ts` 钉。
+ */
+async function start(deps: DeleteDeps): Promise<string> {
+  const routes = new Map<string, ConnectionFetchRouteLike>()
+  const service: ConnectionFetchServiceLike = {
+    fetch: {
+      register: (route) => {
+        routes.set(route.path, route)
+        return async () => { routes.delete(route.path) }
+      },
+    },
+  }
+  registerConnectionRoutes(service, createDispatcher(deps))
   const server = http.createServer((req, res) => {
-    void handler(req, res).catch(() => { /* 分发器内部已写错误信封，这里只兜底 */ })
+    void (async () => {
+      const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+      const route = routes.get(url.pathname)
+      const method = req.method ?? 'GET'
+      if (route === undefined || !route.methods.some((declared) => declared === method)) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+        res.end('not found')
+        return
+      }
+      const chunks: Buffer[] = []
+      for await (const chunk of req) chunks.push(chunk as Buffer)
+      const headers = Object.fromEntries(
+        Object.entries(req.headers).filter(([, value]) => typeof value === 'string') as [string, string][],
+      )
+      const response = await route.fetch(new Request(url, {
+        method: req.method ?? 'GET',
+        headers,
+        ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
+      }))
+      res.writeHead(response.status, Object.fromEntries(response.headers.entries()))
+      res.end(Buffer.from(await response.arrayBuffer()))
+    })().catch(() => { /* 路由内部已写错误响应，测试桥只兜底 */ })
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   servers.push(() => new Promise((resolve) => server.close(() => resolve())))
   const { port } = server.address() as AddressInfo
-  return `http://127.0.0.1:${port}${mountPrefix ? SESSION_DELETE_API_PREFIX : ''}`
+  return `http://127.0.0.1:${port}${OFFICIAL_SESSION_DELETE_API_PREFIX}`
 }
 
 interface CallInit { method?: string; body?: unknown; headers?: Record<string, string> }
@@ -155,35 +196,6 @@ async function failureOfOutcome(
   const error = pick(outcomes, 0).error as { code: string; message: string }
   expect(error.code.startsWith('sessiondelete/')).toBe(true)
   return { code: error.code, message: error.message }
-}
-
-/**
- * 原生 `http.request` 形态的一次调用。**栅栏用例必须用它**：`Origin` / `Referer` 在 Fetch 规范里
- * 是 forbidden header name，`fetch()` 传了也会被丢掉——那样测出来的就是"没有 Origin"那条放行支。
- */
-/** 一次 `POST /apply` 的 body：动作 + 一组 id。 */
-function applyBody(action: string, ids: string[]) {
-  return JSON.stringify({ [PARAMS.action]: action, [PARAMS.ids]: ids })
-}
-
-function rawCall(
-  base: string, path: string, method: string, headers: Record<string, string>, body?: string,
-): Promise<{ status: number; text: string }> {
-  const url = new URL(`${base}${path}`)
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      { hostname: url.hostname, port: url.port, path: url.pathname + url.search, method, headers },
-      (res) => {
-        let text = ''
-        res.setEncoding('utf8')
-        res.on('data', (chunk: string) => { text += chunk })
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, text }))
-      },
-    )
-    req.on('error', reject)
-    if (body !== undefined) req.write(body)
-    req.end()
-  })
 }
 
 describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17）', () => {
@@ -742,35 +754,7 @@ describe('路由层 · 失败路径（码来自 map-error，原文不吞）', ()
   })
 })
 
-describe('路由层 · 自检（不静默吞）', () => {
-  it('路由自检有自己的 HTTP 状态：方法不对 405、未知路径 404，信封照带原文（2026-10-17 错误面对齐）', async () => {
-    const { deps } = makeDeps()
-    const base = await start(deps)
-    const wrongMethod = await call(base, ROUTES.apply.path)
-    expect(wrongMethod.status).toBe(405)
-    expect(wrongMethod.body.ok).toBe(false)
-    const unknown = await call(base, '/nope')
-    expect(unknown.status).toBe(404)
-    expect((unknown.body.error as { message: string }).message).toMatch(/未知路由/)
-  })
-
-  it('方法不对：GET /apply 不在 list 那条道上', async () => {
-    const { deps } = makeDeps()
-    const base = await start(deps)
-    const { message } = await failureOf(base, ROUTES.apply.path)
-    expect(message).toMatch(/方法不允许/)
-  })
-
-  it('未知路径：前缀本身、未知段、前缀外的请求都回错误信封，绝不假装成功', async () => {
-    const { deps } = makeDeps()
-    const base = await start(deps)
-    expect((await failureOf(base, '')).message).toMatch(/未知路由/)
-    expect((await failureOf(base, '/nope')).message).toMatch(/未知路由/)
-    // 卸载前缀（宿主之外直接打到 handler 的路径）同样按未知路由处理
-    const bare = await start(deps, false)
-    expect((await failureOf(bare, '/outside')).message).toMatch(/未知路由/)
-  })
-
+describe('路由层 · 请求体自检（不静默吞）', () => {
   it('body 不对：缺动作 / ids 不是串数组 / 非法 JSON，一律 400 + 信封（不崩成空响应，也不伪装成 200）', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
@@ -797,129 +781,8 @@ describe('路由层 · 自检（不静默吞）', () => {
   })
 })
 
-describe('路由层 · 请求栅栏', () => {
-  // 栅栏不认段名也不认动作：这里钉的是 `/apply` 那**一段**（写口），形状与退役前的四条一段一致。
-  const body = applyBody('delete', ['session-abc'])
-  const json = { 'content-type': 'application/json' }
-
-  it('跨源的 Origin（无 Referer 也会带）被挡在门外：403，且一个副作用都不发生', async () => {
-    const { deps, manifest, fs } = makeDeps()
-    const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, origin: 'https://evil.example' }, body)
-    expect(res.status).toBe(403)
-    expect(fs.rename).not.toHaveBeenCalled()
-    expect(await manifest.list()).toEqual([])
-  })
-
-  it('跨源的 Referer 同样被挡', async () => {
-    const { deps } = makeDeps()
-    const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, referer: 'https://evil.example/x' }, body)
-    expect(res.status).toBe(403)
-  })
-
-  it('同源（Origin / Referer 与 Host 同源）放行；两者都缺席（curl 形态）也放行', async () => {
-    const { deps, manifest } = makeDeps()
-    const base = await start(deps)
-    const host = new URL(base).host
-    const sameOrigin = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, origin: `http://${host}`, referer: `http://${host}/` }, body)
-    expect(sameOrigin.status).toBe(200)
-    expect(JSON.parse(sameOrigin.text)).toMatchObject({ ok: true })
-    expect((await manifest.list()).length).toBe(1)
-
-    const bare = await rawCall(base, ROUTES.apply.path, 'POST', json, applyBody('delete', ['session-xyz']))
-    expect(bare.status).toBe(200)
-    expect((await manifest.list()).length).toBe(2)
-  })
-
-  // 桌面壳那条路（asar `/lib/main.js`）：渲染进程从 `dsh-app://app/` 加载，页面里对非静态路径的
-  // 请求由 `protocol.handle("dsh-app")` 转给宿主，转之前它**摘掉 `origin`**（并换成宿主 cookie）。
-  // 所以桌面版的请求到了我们这里既没有 Origin、Referer 也不是 http 同源——栅栏必须认得这个形状，
-  // 否则真机上探测永远 403、所有入口一个都不出现（而 headless Edge 直连 http 的过门读数看不出来）。
-  it('桌面壳转发的形态（Origin 被摘掉、Referer 是 dsh-app://app/）放行', async () => {
-    const { deps, manifest } = makeDeps()
-    const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, referer: 'dsh-app://app/' }, body)
-    expect(res.status).toBe(200)
-    expect(JSON.parse(res.text)).toMatchObject({ ok: true })
-    expect((await manifest.list()).length).toBe(1)
-  })
-
-  it('挂着 dsh-app 前缀但不是桌面壳那个 origin 的 Referer 照样挡（别把它写成前缀匹配）', async () => {
-    const { deps, manifest } = makeDeps()
-    const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, referer: 'dsh-app://app.evil/' }, body)
-    expect(res.status).toBe(403)
-    expect(await manifest.list()).toEqual([])
-  })
-
-  // DNS rebinding 的形状：攻击页把域名重绑到本机，浏览器照发回环源地址，Origin 与 Host 同写攻击域名。
-  // 比「Origin === Host」会放行；判据必须是 Host 属于本次部署（回环名 / bind 字面量），见 ADR-0023。
-  it('重绑形态（Host 与 Origin 同写外来域名、源地址回环）被挡：403，且一个副作用都不发生', async () => {
-    const { deps, manifest, fs } = makeDeps()
-    const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply.path, 'POST',
-      { ...json, host: 'evil.example:3080', origin: 'http://evil.example:3080' },
-      body)
-    expect(res.status).toBe(403)
-    expect(fs.rename).not.toHaveBeenCalled()
-    expect(await manifest.list()).toEqual([])
-  })
-
-  it('`sec-fetch-site: cross-site` 一律挡（按名字伪造不了，浏览器自己带）', async () => {
-    const { deps, manifest } = makeDeps()
-    const base = await start(deps)
-    const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, 'sec-fetch-site': 'cross-site' }, body)
-    expect(res.status).toBe(403)
-    expect(await manifest.list()).toEqual([])
-  })
-
-  // 远程支：Host 是「本次部署的 Host 白名单」之外还得过宿主身份。Host 用反代常见形态
-  // `dsh.internal`——它既不回环也不是 bind 字面量，本机支不接它，只能走 connection。
-  describe('远程支：身份承宿主 connection 服务', () => {
-    const remoteHeaders = { ...json, host: 'dsh.internal:3080' }
-
-    it('宿主认可（requestRejection 回 undefined）⇒ 放行', async () => {
-      const { deps, manifest } = makeDeps()
-      const base = await start(deps, true, { connection: ALLOWED_CONNECTION })
-      const res = await rawCall(base, ROUTES.apply.path, 'POST', remoteHeaders, body)
-      expect(res.status).toBe(200)
-      expect(JSON.parse(res.text)).toMatchObject({ ok: true })
-      expect((await manifest.list()).length).toBe(1)
-    })
-
-    it('宿主拒（缺身份）⇒ 403，原文说清需要宿主 Web 身份', async () => {
-      const { deps, manifest } = makeDeps()
-      const base = await start(deps, true, { connection: UNAUTHENTICATED_CONNECTION })
-      const res = await rawCall(base, ROUTES.apply.path, 'POST', remoteHeaders, body)
-      expect(res.status).toBe(403)
-      expect(JSON.parse(res.text)).toMatchObject({ ok: false })
-      expect((JSON.parse(res.text) as { error: { message: string } }).error.message).toMatch(/宿主的 Web 身份/)
-      expect(await manifest.list()).toEqual([])
-    })
-
-    it('connection 服务缺席 ⇒ 远程一律拒，且原文按非受信来源（不提示去换不存在的身份）', async () => {
-      const { deps, manifest } = makeDeps()
-      const base = await start(deps)
-      const res = await rawCall(base, ROUTES.apply.path, 'POST', remoteHeaders, body)
-      expect(res.status).toBe(403)
-      expect((JSON.parse(res.text) as { error: { message: string } }).error.message).toBe('非受信来源')
-      expect(await manifest.list()).toEqual([])
-    })
-
-    it('本机用 LAN IP 自访（Host 是 bind 字面量、源地址回环）走本机支放行，不需要 connection', async () => {
-      const { deps, manifest } = makeDeps()
-      const base = await start(deps, true, { bindHost: '192.168.50.199' })
-      const res = await rawCall(base, ROUTES.apply.path, 'POST', { ...json, host: '192.168.50.199:3080' }, body)
-      expect(res.status).toBe(200)
-      expect((await manifest.list()).length).toBe(1)
-    })
-  })
-})
-
 describe('POST /detail（回收站单条详情，2026-10-15）', () => {
   const seed = [entry('session-a', { title: '有标题', sizeBytes: 4096 })]
-  const json = { 'content-type': 'application/json' }
 
   it('清册里有这一条 ⇒ 成功信封，值就是 detail 的形状（不回灌清册字段）', async () => {
     const { deps } = makeDeps({ seed })
@@ -1022,58 +885,27 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     expect(message).toMatch(/没有会话日志/)
   })
 
-  it('路由层自检同表：GET 被拒说的是"需 POST"，body 缺/空/非串都落 io 并点名字段', async () => {
+  it('body 缺 / 空 / 非串都落 io 并点名字段（方法不对由宿主 exact route 先回 404）', async () => {
     const { deps } = makeDeps({ seed })
     const base = await start(deps)
-    const wrongMethod = await failureOf(base, ROUTES.detail.path, { method: 'GET' })
-    expect(wrongMethod.message).toMatch(/需 POST/)
     for (const bad of [{}, { [PARAMS.entryId]: '' }, { [PARAMS.entryId]: 42 }]) {
       const failure = await failureOf(base, ROUTES.detail.path, { method: 'POST', body: bad })
       expect(failure.code).toBe('sessiondelete/io')
       expect(failure.message).toMatch(PARAMS.entryId)
     }
   })
-
-  it('栅栏对九个段名一视同仁（这里打的是 POST /detail）：跨源 Origin 拒 403，桌面壳的 Referer 放行', async () => {
-    const { deps, fs } = makeDeps({ seed })
-    const base = await start(deps)
-    const payload = JSON.stringify({ [PARAMS.entryId]: entryIdOf('session-a') })
-    const evil = await rawCall(base, ROUTES.detail.path, 'POST', { ...json, origin: 'https://evil.example' }, payload)
-    expect(evil.status).toBe(403)
-    expect(fs.readFile).not.toHaveBeenCalled()
-    const shell = await rawCall(base, ROUTES.detail.path, 'POST', { ...json, referer: 'dsh-app://app/' }, payload)
-    expect(shell.status).toBe(200)
-    expect(JSON.parse(shell.text)).toMatchObject({ ok: true })
-  })
 })
 
 /** 一次 `POST /apply`：body 自己带动作与 ids。 */
-describe('路由层 · POST /apply 的自检与栅栏（一组 id 一个动作，2026-10-17）', () => {
-  const json = { 'content-type': 'application/json' }
-  const payload = applyBody('count', ['session-parent'])
-
-  it('GET 被拒说的是"需 POST"，body 缺动作 / ids 不成形都落 io 并点名字段', async () => {
+describe('路由层 · POST /apply 的自检（一组 id 一个动作，2026-10-17）', () => {
+  it('body 缺动作 / ids 不成形都落 io 并点名字段（方法不对由宿主 exact route 先回 404）', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const wrongMethod = await failureOf(base, ROUTES.apply.path, { method: 'GET' })
-    expect(wrongMethod.message).toMatch(/需 POST/)
     for (const bad of [{}, { [PARAMS.action]: 'count' }, { [PARAMS.action]: 'count', [PARAMS.ids]: '' }]) {
       const failure = await failureOf(base, ROUTES.apply.path, { method: 'POST', body: bad })
       expect(failure.code).toBe('sessiondelete/io')
       expect(failure.message).toMatch(/动作|ids/)
     }
-  })
-
-  it('跨源 Origin 拒 403 且一次宿主调用都不发；桌面壳的 Referer 照常放行', async () => {
-    const { deps, host } = makeDeps({ subagents: { 'session-parent': 1 } })
-    const base = await start(deps)
-    const hostHeader = { ...json, host: new URL(base).host }
-    const evil = await rawCall(base, ROUTES.apply.path, 'POST', { ...hostHeader, origin: 'https://evil.example' }, payload)
-    expect(evil.status).toBe(403)
-    expect(host.subagentMembersOf).not.toHaveBeenCalled()
-    const shell = await rawCall(base, ROUTES.apply.path, 'POST', { ...hostHeader, referer: 'dsh-app://app/' }, payload)
-    expect(shell.status).toBe(200)
-    expect(JSON.parse(shell.text)).toMatchObject({ ok: true, value: [{ id: 'session-parent', action: 'count', ok: true, value: 1 }] })
   })
 })
 
@@ -1313,12 +1145,13 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     expect(failure.code).toBe('sessiondelete/io')
   })
 
-  // `/orphans` 是**读**段：不留第二条写路径——清理只有 `POST /apply` 的 `orphan-clean` 这一条路。
-  it('POST /orphans 不是写动作 ⇒ 405', async () => {
+  // `/orphans` 是**读**段：只注册 GET；POST 在宿主 exact route 的 handler 之前就回 404，不留写路径。
+  it('POST /orphans 不是写动作 ⇒ 宿主 exact route 回 404', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const { status } = await call(base, ROUTES.orphans.path, { method: 'POST', body: {} })
-    expect(status).toBe(405)
+    const res = await fetch(`${base}${ROUTES.orphans.path}`, { method: 'POST', body: '{}' })
+    expect(res.status).toBe(404)
+    expect(await res.text()).toBe('not found')
   })
 
   it('POST /apply orphan-clean：按根清闭包，回逐根字节与条数', async () => {
@@ -1532,6 +1365,21 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
     `${ROUTES.attachment.path}?${PARAMS.attachmentId}=${encodeURIComponent(id)}&${PARAMS.attachmentKind}=${kind}`
     + (name === undefined ? '' : `&${PARAMS.attachmentName}=${encodeURIComponent(name)}`)
 
+  /** 带引用元数据的 query：服务路径用它；缺字段就只带存在的那几格。 */
+  const withMeta = (
+    id: string,
+    kind: string,
+    meta: { mediaType?: string; bytes?: number; width?: number; height?: number; name?: string },
+  ): string => {
+    const params = new URLSearchParams({ [PARAMS.attachmentId]: id, [PARAMS.attachmentKind]: kind })
+    if (meta.mediaType !== undefined) params.set(PARAMS.attachmentMediaType, meta.mediaType)
+    if (meta.bytes !== undefined) params.set(PARAMS.attachmentBytes, String(meta.bytes))
+    if (meta.width !== undefined) params.set(PARAMS.attachmentWidth, String(meta.width))
+    if (meta.height !== undefined) params.set(PARAMS.attachmentHeight, String(meta.height))
+    if (meta.name !== undefined) params.set(PARAMS.attachmentName, meta.name)
+    return `${ROUTES.attachment.path}?${params.toString()}`
+  }
+
   it('GET /attachment 回原始图片字节与安全头', async () => {
     const made = makeDeps()
     made.fs.statFile.mockImplementation(async (p: string) =>
@@ -1548,6 +1396,28 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
     expect(res.headers.get('cache-control')).toBe('private, no-store')
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
     expect(Buffer.from(await res.arrayBuffer())).toEqual(png)
+  })
+
+  // 同源闸依赖宿主 bridge 保留原始 Host（它只改写 request.url）：这条走真 node:http 桥，
+  // 钉住「浏览器带的同源 Referer 与 Host 对得上」与「异 authority 被插件拒」。
+  it('经真 node:http 桥：同源 Referer 放行，异 authority 的 Referer 回 403 信封', async () => {
+    const made = makeDeps()
+    made.fs.statFile.mockResolvedValue({ size: png.length })
+    made.fs.readFile.mockResolvedValue(png)
+    const base = await start(made.deps)
+    const origin = new URL(base).origin
+
+    const res = await fetch(`${base}${query(imageId, 'image')}`, {
+      headers: { referer: `${origin}/index.html` },
+    })
+    expect(res.status).toBe(200)
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(png)
+
+    const blocked = await fetch(`${base}${query(imageId, 'image')}`, {
+      headers: { referer: 'http://192.168.1.5:9999/page' },
+    })
+    expect(blocked.status).toBe(403)
+    expect(((await blocked.json()) as { ok: boolean }).ok).toBe(false)
   })
 
   it('GET /attachment 的 id/kind 闸：非法一律 400 信封，且不读盘', async () => {
@@ -1606,15 +1476,6 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
     expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes)
   })
 
-  it('GET /attachment 也过请求栅栏：跨源 Origin 403，且不读盘', async () => {
-    const made = makeDeps()
-    const base = await start(made.deps)
-    const res = await rawCall(base, query(imageId, 'image'), 'GET', { origin: 'https://evil.example' })
-    expect(res.status).toBe(403)
-    expect(made.fs.statFile).not.toHaveBeenCalled()
-    expect(made.fs.readFile).not.toHaveBeenCalled()
-  })
-
   it('图片魔数认不出 ⇒ 按下载处理（octet-stream + attachment），不猜类型', async () => {
     const bytes = Buffer.from('not an image')
     const made = makeDeps()
@@ -1626,6 +1487,177 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
     expect(res.headers.get('content-type')).toBe('application/octet-stream')
     expect(res.headers.get('content-disposition')).toMatch(/^attachment; filename\*=UTF-8''/)
     expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes)
+  })
+
+  it('attachments 服务优先：readImage 的归一化 ref 决定类型，不读 fs', async () => {
+    const readImage = vi.fn(async (ref: ImageAttachmentRefLike) => ({ ref, data: new Uint8Array(png) }))
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage,
+      readFileStream: async function* () { yield new Uint8Array() },
+    }
+    const made = makeDeps({ attachments: service })
+    const base = await start(made.deps)
+    const res = await callRaw(base, withMeta(imageId, 'image', {
+      mediaType: 'image/png', bytes: png.length, width: 1, height: 1,
+    }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/png')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(png)
+    expect(readImage).toHaveBeenCalledWith(expect.objectContaining({
+      attachmentId: imageId, mediaType: 'image/png', bytes: png.length, width: 1, height: 1,
+    }))
+    expect(made.fs.statFile).not.toHaveBeenCalled()
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('attachments 服务优先：readFileStream 分块拼回，不读 fs', async () => {
+    const chunks = [Buffer.from('hello '), Buffer.from('attachment')]
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage: async () => { throw new Error('readImage 不该被调用') },
+      readFileStream: async function* () { for (const chunk of chunks) yield chunk },
+    }
+    const made = makeDeps({ attachments: service })
+    const base = await start(made.deps)
+    const res = await callRaw(base, withMeta(fileId, 'file', {
+      bytes: chunks.reduce((sum, chunk) => sum + chunk.length, 0), name: 'secret name.txt',
+    }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/octet-stream')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(Buffer.concat(chunks))
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('文件引用缺 name ⇒ 视为元数据不够，退回直接 fs（宿主把空名判无效引用）', async () => {
+    const bytes = Buffer.from('hello attachment')
+    const readFileStream = vi.fn(async function* () { yield new Uint8Array() })
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage: async () => { throw new Error('不该调用') },
+      readFileStream,
+    }
+    const made = makeDeps({ attachments: service })
+    made.fs.statFile.mockResolvedValue({ size: bytes.length })
+    made.fs.readFile.mockResolvedValue(bytes)
+    const base = await start(made.deps)
+    const res = await callRaw(base, withMeta(fileId, 'file', { bytes: bytes.length }))
+    expect(res.status).toBe(200)
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(bytes)
+    expect(readFileStream).not.toHaveBeenCalled()
+    expect(made.fs.readFile).toHaveBeenCalled()
+  })
+
+  it('文件引用里声明的字节超限 ⇒ 不调用 readFileStream，直接回 io', async () => {
+    const readFileStream = vi.fn(async function* () { yield new Uint8Array() })
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage: async () => { throw new Error('不该调用') },
+      readFileStream,
+    }
+    const made = makeDeps({ config: { ...DEFAULT_CONFIG, maxAttachmentBytes: 16 }, attachments: service })
+    const base = await start(made.deps)
+    const { status, body } = await call(base, withMeta(fileId, 'file', { bytes: 17, name: 'a.bin' }))
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { message: string }).message).toContain('上限')
+    expect(readFileStream).not.toHaveBeenCalled()
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('服务在场但引用元数据不够 ⇒ 退回直接 fs，不拿半截 ref 去猜', async () => {
+    const readImage = vi.fn(async () => { throw new Error('不该调用') })
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage,
+      readFileStream: async function* () { yield new Uint8Array() },
+    }
+    const made = makeDeps({ attachments: service })
+    made.fs.statFile.mockResolvedValue({ size: png.length })
+    made.fs.readFile.mockResolvedValue(png)
+    const base = await start(made.deps)
+    const res = await callRaw(base, query(imageId, 'image'))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/png')
+    expect(readImage).not.toHaveBeenCalled()
+    expect(made.fs.readFile).toHaveBeenCalled()
+  })
+
+  it('available() 为真但服务中途消失 ⇒ 退回直接 fs，不把这次读取判成 io', async () => {
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage: async () => { throw new AttachmentsUnavailableError() },
+      readFileStream: async function* () {
+        yield new Uint8Array()
+        throw new AttachmentsUnavailableError()
+      },
+    }
+    const made = makeDeps({ attachments: service })
+    made.fs.statFile.mockResolvedValue({ size: png.length })
+    made.fs.readFile.mockResolvedValue(png)
+    const base = await start(made.deps)
+    const res = await callRaw(base, withMeta(imageId, 'image', {
+      mediaType: 'image/png', bytes: png.length, width: 1, height: 1,
+    }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/png')
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(png)
+    expect(made.fs.readFile).toHaveBeenCalled()
+  })
+
+  it('引用里声明的字节超限 ⇒ 不调用 readImage，直接回 io（也不回退 fs）', async () => {
+    const readImage = vi.fn(async () => { throw new Error('不该调用') })
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage,
+      readFileStream: async function* () { yield new Uint8Array() },
+    }
+    const made = makeDeps({ config: { ...DEFAULT_CONFIG, maxAttachmentBytes: 16 }, attachments: service })
+    const base = await start(made.deps)
+    const { status, body } = await call(base, withMeta(imageId, 'image', {
+      mediaType: 'image/png', bytes: 17, width: 1, height: 1,
+    }))
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { message: string }).message).toContain('上限')
+    expect(readImage).not.toHaveBeenCalled()
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('attachments 服务路径也受上限闸：图片超限回 200 + io，不读 fs', async () => {
+    const readImage = vi.fn(async (ref: ImageAttachmentRefLike) => ({ ref, data: new Uint8Array(17) }))
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage,
+      readFileStream: async function* () { yield new Uint8Array() },
+    }
+    const made = makeDeps({ config: { ...DEFAULT_CONFIG, maxAttachmentBytes: 16 }, attachments: service })
+    const base = await start(made.deps)
+    // 声明值在闸内、服务实际回超限字节：考的是读后按实际字节再判一次。
+    const { status, body } = await call(base, withMeta(imageId, 'image', {
+      mediaType: 'image/png', bytes: 1, width: 1, height: 1,
+    }))
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { message: string }).message).toContain('上限')
+    expect(readImage).toHaveBeenCalled()
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('attachments 服务路径也受上限闸：文件流超限在累计处停下，不回退 fs', async () => {
+    const service: AttachmentsPort = {
+      available: () => true,
+      readImage: async () => { throw new Error('不该调用') },
+      readFileStream: async function* () { yield new Uint8Array(20) },
+    }
+    const made = makeDeps({ config: { ...DEFAULT_CONFIG, maxAttachmentBytes: 16 }, attachments: service })
+    const base = await start(made.deps)
+    // 声明值在闸内、服务实际流超限：考的是累计处停下，而不是声明的预检。
+    const { status, body } = await call(base, withMeta(fileId, 'file', { bytes: 1, name: 'a.bin' }))
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { message: string }).message).toContain('上限')
+    expect(made.fs.readFile).not.toHaveBeenCalled()
   })
 })
 
@@ -1711,7 +1743,7 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
-  it('GET /attachment-orphans：预览清单最多 200 条，数量与字节按全量', async () => {
+  it('GET /attachment-orphans：预览清单默认最多 200 条，数量与字节按全量', async () => {
     const names = Array.from({ length: 205 }, (_, i) => i.toString(16).padStart(64, '0'))
     const made = makeDeps()
     made.fs.listDirs.mockImplementation(async (p: string) => {
@@ -1728,6 +1760,21 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
     expect(value.count).toBe(205)
     expect(value.totalBytes).toBe(205)
     expect(value.items).toHaveLength(200)
+  })
+
+  it('GET /attachment-orphans：预览条数取配置（ADR-0037）', async () => {
+    const names = Array.from({ length: 5 }, (_, i) => i.toString(16).padStart(64, '0'))
+    const made = makeDeps({ config: { ...DEFAULT_CONFIG, orphanPreviewLimit: 2 } })
+    made.fs.listDirs.mockImplementation(async (p: string) => (p === OBJECTS ? ['00'] : []))
+    made.fs.listFiles.mockImplementation(async (p: string) => (p === `${OBJECTS}/00` ? names : []))
+    made.fs.statFile.mockResolvedValue({ size: 1 })
+    const base = await start(made.deps)
+    const { status, body } = await call(base, ROUTES.attachmentOrphans.path)
+    expect(status).toBe(200)
+    const value = body.value as { count: number; totalBytes: number; items: unknown[] }
+    expect(value.count).toBe(5)
+    expect(value.totalBytes).toBe(5)
+    expect(value.items).toHaveLength(2)
   })
 
   it('GET /attachment-orphans：引用源读不出 ⇒ 200 + sessiondelete/io（不冒充空报告）', async () => {

@@ -1,6 +1,6 @@
 # 宿主可见行的渲染读数走快照订阅，DOM 观察留在适配器
 
-Status: accepted
+Status: superseded by 0034
 
 多选浮条要显示「当前可见、可勾选的会话行」，而这个事实源在组件树之外（宿主的 DOM）：组件各自在渲染期查一遍，同一帧看到什么就取决于副作用顺序，而且 DOM 变了也不会触发重渲染。`src/client/host-rows.ts` 把这条读面收成 `useSyncExternalStore` 的快照订阅——`MutationObserver` 与行登记都留在适配器里，只标脏并通告订阅者；渲染侧读缓存快照，事件侧仍当场读。
 

@@ -18,6 +18,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_CONFIG } from '../src/config.js'
 import { collectFiles } from './support/corpus.js'
 import { pick } from './support/fixture.js'
 
@@ -79,6 +80,9 @@ const ALLOWED: Record<string, string> = {
   'src/verbs/apply.ts': 'ADR-0001 的「当时」表：那一格写的就是改名前的位置，同行已注明改名到 batch.ts',
   'tests/docs.test.ts': 'ADR-0010 / ADR-0011 的「当时」坐标：当时文档门叫 tests/docs.test.ts，已被 ADR-0024 拆成三件套；旧 ADR 正文保留，不改写历史',
   'src/verbs/purge-trash.ts': 'ADR-0001 / ADR-0003 / ADR-0005 的历史面（「当时」表与背景问题表）：purge 的 glue 已被清册作用域（src/verbs/trash-scope.ts）吸收，旧 ADR 正文保留，不改写历史',
+  'src/api/request-trust.ts': 'ADR-0009 / ADR-0022 / ADR-0023 的历史坐标与 ADR-0033 的删除记录：旧前缀 + 请求栅栏已随单通道改造删除，旧 ADR 正文保留，不改写历史',
+  'src/ports/connection-port.ts': 'ADR-0022 / ADR-0023 的历史坐标与 ADR-0033 的删除记录：connection 端口已随单通道改造删除，旧 ADR 正文保留，不改写历史',
+  'tests/request-trust.test.ts': 'ADR-0022 / ADR-0023 的历史坐标：请求栅栏测试已随 ADR-0033 的单通道改造删除，旧 ADR 正文保留，不改写历史',
 }
 
 /** 已废的称呼：批次号、已改名的开发手册、以及它们的「复核候选」编号——都没有可查的坐标了。 */
@@ -541,6 +545,35 @@ describe('文档门 · 兼容性事实单源', () => {
     const agents = read('AGENTS.md')
     expect(agents).toContain('事实源是 `package.json`')
     expect(agents).not.toContain('以 `package.json`、`README.md` 和 `tests/skeleton.test.ts` 为准')
+  })
+})
+
+describe('文档门 · 可调项事实单源', () => {
+  // 三只旋钮的事实源是 `src/config.ts` 的 `DEFAULT_CONFIG`；README 的「可调项」表与 profile 的
+  // `cordis.patch.yml` 示例都只投影它（ADR-0037 后果）。默认值一改，这两处跟着红。
+  const entries = Object.entries(DEFAULT_CONFIG) as Array<[string, number]>
+
+  const readmeDrift = (readme: string): string[] =>
+    entries.filter(([key, value]) => !readme.includes(`| \`${key}\` | \`${String(value)}`)).map(([key]) => key)
+
+  const patchDrift = (patch: string): string[] =>
+    entries.filter(([key, value]) => !patch.includes(`${key}: ${String(value)}`)).map(([key]) => key)
+
+  it('README「可调项」的默认值从 DEFAULT_CONFIG 投影', () => {
+    const drift = readmeDrift(read('README.md'))
+    expect(drift, `README 与 src/config.ts 不一致：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('cordis.patch.yml 示例的默认值从 DEFAULT_CONFIG 投影', () => {
+    const drift = patchDrift(read('cordis.patch.yml'))
+    expect(drift, `cordis.patch.yml 与 src/config.ts 不一致：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出表值与示例值各自漂移（正控）', () => {
+    const drifted = read('README.md').replace('| `orphanPreviewLimit` | `200`', '| `orphanPreviewLimit` | `201`')
+    expect(readmeDrift(drifted)).toEqual(['orphanPreviewLimit'])
+    expect(patchDrift(read('cordis.patch.yml').replace('maxJsonRefBytes: 10485760', 'maxJsonRefBytes: 1')))
+      .toEqual(['maxJsonRefBytes'])
   })
 })
 

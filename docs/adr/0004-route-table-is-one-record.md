@@ -26,8 +26,9 @@ Status: accepted
    每个段名一行，字段以 `RouteSpec` 为准。其中 `method` 的字面量家在 `wire.ts` 的
    结构化段名表（`ROUTES` 每项恰有 `{ path, method }` 两键），路由记录只投影（`method: ROUTES.x.method`）——
    一条 wire 事实（某段用什么方法）只住一处，两半各从同一格取。
-2. `dispatch()` 读这一条记录：方法、纯度、读面、body 预读、响应形态**只有一处定义**
-   （原先分居 `dispatch()` 与 `purityOf()` 两处的判断已并进这张表）；deps 切片见 ADR-0032。
+2. `dispatch()` 读这一条记录：方法、纯度、读面、body 声明、响应形态**只有一处定义**
+   （原先分居 `dispatch()` 与 `purityOf()` 两处的判断已并进这张表）；响应形态同时决定 run 的形
+   （JSON 段拿 body / read，二进制段拿 query），两者仍在同一条记录里；deps 切片见 ADR-0032。
 3. `APPLY_ACTIONS` 由 `ApplyAction` **派生**（`Record<ApplyAction, …>` + `satisfies`）：
    少一个动作就编译不过，多一个动作也是。
 4. `/apply` 的「动作 → 纯度」（`count` 是纯读、其余进链）是 `route-table.ts` 里**唯一一张表**
@@ -39,7 +40,7 @@ Status: accepted
 
 - **不给段名做动态发现**：九个段名是硬契约，`wire.ts` 仍是它们的家；`route-table.ts` 只负责「怎么处理」。
   线上方法是线上形状的一部分，按 ADR-0003 归 wire（`ROUTES` 每项 `{ path, method }`），路由记录与浏览器半都只投影。
-- **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这几处：请求栅栏在 `src/api/request-trust.ts`，状态在 `src/api/dispatch.ts`，失败信封在 `src/remote/map-error.ts`。
+- **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这几处：鉴权归宿主 `/api` bridge（ADR-0033），状态与失败信封的落地在 `src/api/connection-route.ts`（`dispatch` 只抛带 `httpStatus` 的请求错误），错误映射在 `src/remote/map-error.ts`。
 
 ## 后果
 
@@ -55,4 +56,4 @@ Status: accepted
   bundle，正好撞上 `tsdown` 的纯度门。
 - **只把 `APPLY_ACTIONS` 从类型派生**：三处判断仍分居两处，最危险的那条（纯度）继续靠注释。
 
-锚点：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`；`src/api/dispatch.ts`（`createApiHandler`）；`tests/route-table.test.ts`；ADR-0032。
+锚点：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`；`src/api/dispatch.ts`（`createDispatcher`）；`tests/route-table.test.ts`；ADR-0032。

@@ -64,11 +64,21 @@ describe('插件入口形状', () => {
     expect(typeof plugin.apply).toBe('function')
   })
 
-  // 那条薄线：四个动词经宿主 web server 上的插件专属前缀路由暴露给浏览器半，
-  // 所以 Node 半必须注入 webServer（宿主 `dsh-host-webserver` 的服务名逐字如此）。
-  // 写错服务名不会报错——插件会永远停在 `pending (waiting for service: …)`，所以钉在这里。
-  it('Node 半的 inject 含 webServer（前缀路由的承载者）', () => {
-    expect(plugin.inject).toContain('webServer')
+  // exact Fetch 路由注册在宿主 `connection` 上（`/api` bridge 做鉴权），所以 Node 半必须注入
+  // `connection`（`client-connection` 的服务名逐字如此）。写错服务名不会报错——插件会永远停在
+  // `pending (waiting for service: …)`，所以钉在这里。
+  it('Node 半的 inject 含 connection（exact Fetch 路由的承载者）', () => {
+    expect(plugin.inject).toContain('connection')
+  })
+
+  // 宿主从模块面拿 Config 在激活前校验可调项（ADR-0037）；删掉这一出口不会让任何行为测试红，
+  // 只会让坏配置在运行期才炸——所以在这里钉形状。
+  it('导出 Config（本地 Standard Schema），validate 交回归一值或 issues', () => {
+    const schema = plugin.Config['~standard']
+    expect(schema.version).toBe(1)
+    expect(typeof schema.validate).toBe('function')
+    expect(schema.validate({ orphanPreviewLimit: 1 })).toHaveProperty('value')
+    expect('issues' in schema.validate({ unknownKnob: 1 })).toBe(true)
   })
 })
 

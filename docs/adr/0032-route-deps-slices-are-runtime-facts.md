@@ -6,8 +6,8 @@ ADR-0004 把段名、纯度、读面与 body 收进一条路由记录；但 deps
 
 ## 决定
 
-1. 每行声明 `slice: 'core' | 'removal' | 'full'`，`dispatch` 只按这一格注入。
-2. `slicesOf` 在 handler 构造期建好三格：`core` 是新建的 `CoreFsPort` 面（没有 `removeDir` / `removeFile`），且没有 `now`；`removal` 有删除能力但没有 `now`；`full` 是组合根原对象，只给 `/apply`。
+1. 每行声明 `slice: 'core' | 'removal' | 'attachment' | 'full'`，`dispatch` 只按这一格注入。
+2. `slicesOf` 在 handler 构造期建好四格：`core` 是新建的 `CoreFsPort` 面（没有 `removeDir` / `removeFile`），且没有 `now`；`removal` 有删除能力但没有 `now`；`attachment` 是 `core` 加宿主 `attachments` 读面（ADR-0035）；`full` 是组合根原对象，只给 `/apply`。
 3. `run` 必须写成函数属性而不是方法签名：方法参数按双变校验，宽 deps 能绕过切片；属性按逆变校验，`slice` 与 deps 面对不上就编译不过。
 4. 编译期闸落在表字面量（每行由自己的 `slice` 字面量定型），运行期闸落在 `depsFor` / `slicesOf` 一处；源码护栏继续钉组合根与执行器。
 

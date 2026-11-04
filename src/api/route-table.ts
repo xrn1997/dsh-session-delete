@@ -13,6 +13,7 @@
  */
 import { PARAMS, ROUTES, type ApplyAction, type RouteName } from '../shared/wire.js'
 import type { CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
+import type { AttachmentsPort } from '../ports/attachments-port.js'
 import type { TrashEntry } from '../trash/entry.js'
 import { applyActions } from '../verbs/batch.js'
 import { routeError } from '../verbs/errors.js'
@@ -46,27 +47,46 @@ export interface RouteRead {
   rows(): Promise<readonly TrashEntry[]>
 }
 
-/** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测六段拿基础面，两个删盘段多删除能力，
- *  `/apply` 是唯一拿全量面的行——段的 run 里长出超面调用就是编译错，dispatch 也只按这一格注入
- *  （运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
-export type RouteSlice = 'core' | 'removal' | 'full'
+/** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测五段拿基础面，`attachment` 段另多一条
+ *  宿主 `attachments` 读面，两个删盘段多删除能力，`/apply` 是唯一拿全量面的行——段的 run 里长出超面
+ *  调用就是编译错，dispatch 也只按这一格注入（运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
+export type RouteSlice = 'core' | 'removal' | 'full' | 'attachment'
 /** 切片名 → 依赖面：{@link RouteSpec.run} 的 deps 参数类型与 `depsFor` 的返回类型都从这一格取。 */
-export type SliceDeps = { core: CoreDeps; removal: RemovalDeps; full: DeleteDeps }
+export type SliceDeps = {
+  core: CoreDeps
+  removal: RemovalDeps
+  full: DeleteDeps
+  attachment: CoreDeps & { readonly attachments: AttachmentsPort }
+}
 
-export interface RouteSpec<S extends RouteSlice = RouteSlice> {
+interface BaseRouteSpec<S extends RouteSlice> {
   /** 这一行吃哪一格 deps：dispatch 按它注入，`run` 的 deps 参数类型也跟着它走。 */
   readonly slice: S
   readonly method: 'GET' | 'POST'
   readonly body: BodyKind
   readonly purity: Purity
   readonly read: ReadKind
-  /** 响应形态：`json` 走信封（`{ok:true,value}`）；`binary` 直接把处理函数的 `BinaryResponse` 写出去。 */
-  readonly response: 'json' | 'binary'
-  /** 声明成函数属性而不是方法：方法签名是双变的，显式标注更宽的 deps 能绕过切片闸；属性按逆变校验。 */
-  readonly run: (deps: SliceDeps[S], body: JsonBody, read: RouteRead, query: URLSearchParams) => Promise<unknown>
+  /** 同源取数闸（ADR-0033）：只有能被别的页面渲染消费的段需要；判据住 `src/api/connection-route.ts`。
+   *  缺省不设闸——JSON 响应跨源读不到（没有 CORS），不需要它。 */
+  readonly fetchGate?: 'same-origin'
 }
 
-/** 九行的并集（表的值类型）：每行由自己的 `slice` 字面量定型，`run` 的 deps 面随之收窄。 */
+/** JSON 段：处理函数拿请求体与读面；`query` 不在这里（九行里只有二进制段需要查询串）。 */
+export interface JsonRouteSpec<S extends RouteSlice = RouteSlice> extends BaseRouteSpec<S> {
+  readonly response: 'json'
+  /** 声明成函数属性而不是方法：方法签名是双变的，显式标注更宽的 deps 能绕过切片闸；属性按逆变校验。 */
+  readonly run: (deps: SliceDeps[S], body: JsonBody, read: RouteRead) => Promise<unknown>
+}
+
+/** 二进制段：只有 `/attachment`；处理函数直接拿查询串，交回字节与安全头。 */
+export interface BinaryRouteSpec<S extends RouteSlice = RouteSlice> extends BaseRouteSpec<S> {
+  readonly response: 'binary'
+  readonly run: (deps: SliceDeps[S], query: URLSearchParams) => Promise<BinaryResponse>
+}
+
+export type RouteSpec<S extends RouteSlice = RouteSlice> = JsonRouteSpec<S> | BinaryRouteSpec<S>
+
+/** 九行的并集（表的值类型）：每行由自己的 `slice` 与 `response` 字面量定型，`run` 的 deps 面随之收窄。 */
 export type AnyRouteSpec = { [S in RouteSlice]: RouteSpec<S> }[RouteSlice]
 
 /** 必填的非空字符串字段（缺、空串、类型不对都是**同一句话**：说清是哪个字段）。 */
@@ -161,15 +181,18 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
     run: async () => 'pong',
   },
   [ROUTES.attachment.path]: {
-    slice: 'core',
+    slice: 'attachment',
     method: ROUTES.attachment.method,
     body: 'none',
     purity: 'pure',
     read: 'none',
     response: 'binary',
+    // 唯一能被别的页面当 <img> 渲染的段：同站不同端口的页面仍带宿主 cookie，字节 oracle 要在这里收口。
+    fetchGate: 'same-origin',
     // 全仓唯一的二进制段：读宿主附件库里的一个文件（图片 / 普通文件），不碰清册、不排队。
-    // 闸（id / kind / 20 MiB / 魔数）都住 `src/api/attachment.ts`；这里只声明"它怎么被处理"。
-    run: async (deps, _body, _read, query) => readAttachmentResponse(deps, query),
+    // 闸（id / kind / 可配置上限 / 宿主引用校验与服务缺席时的魔数 fallback）都住 `src/api/attachment.ts`；
+    // 这里只声明"它怎么被处理"。
+    run: async (deps, query) => readAttachmentResponse(deps, query),
   },
   [ROUTES.attachmentOrphans.path]: {
     slice: 'core',

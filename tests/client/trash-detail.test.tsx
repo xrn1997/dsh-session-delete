@@ -4,13 +4,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
 import { TrashDetail, type DetailPager, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
-import type {
-  TrashDetailAttachmentWire,
-  TrashDetailBlockWire,
-  TrashDetailInjectionBlockWire,
-  TrashDetailTextBlockWire,
-  TrashDetailToolBlockWire,
-  TrashEntryWire,
+import {
+  OFFICIAL_SESSION_DELETE_API_PREFIX,
+  type TrashDetailAttachmentWire,
+  type TrashDetailBlockWire,
+  type TrashDetailInjectionBlockWire,
+  type TrashDetailTextBlockWire,
+  type TrashDetailToolBlockWire,
+  type TrashEntryWire,
 } from '../../src/shared/wire.js'
 import { pick, must } from '../support/fixture.js'
 
@@ -495,8 +496,14 @@ describe('回收站详情块 · 附件', () => {
   it('用户消息里的图片渲染为可点开的缩略图；点开出现放大框', () => {
     withBlocks([userBlock('u1', 1, '看图', [attachment])])
     const img = screen.getByAltText<HTMLImageElement>('shot.png')
-    expect(img.getAttribute('src')).toContain('/dsh-session-delete-api/attachment?')
-    expect(img.getAttribute('src')).toContain(encodeURIComponent(attachment.attachmentId))
+    const src = img.getAttribute('src') ?? ''
+    expect(src).toContain(`${OFFICIAL_SESSION_DELETE_API_PREFIX}/attachment?`)
+    expect(src).toContain(encodeURIComponent(attachment.attachmentId))
+    // 引用元数据只给宿主 `attachments.readImage` 做校验（ADR-0035），不参与寻址。
+    expect(src).toContain('mediaType=image%2Fpng')
+    expect(src).toContain(`bytes=${String(attachment.bytes)}`)
+    expect(src).toContain(`width=${String(attachment.width)}`)
+    expect(src).toContain(`height=${String(attachment.height)}`)
     fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
     expect(screen.getByRole('dialog')).toHaveTextContent('shot.png')
   })
@@ -546,7 +553,7 @@ describe('回收站详情块 · 附件', () => {
       fireEvent.click(screen.getByRole('button', { name: '打开图片「shot.png」' }))
       fireEvent.click(screen.getByRole('button', { name: '另存为' }))
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
-      expect(pick(fetchMock.mock.calls, 0)[0]).toContain('/dsh-session-delete-api/attachment?')
+      expect(pick(fetchMock.mock.calls, 0)[0]).toContain(`${OFFICIAL_SESSION_DELETE_API_PREFIX}/attachment?`)
       expect(createObjectURL).toHaveBeenCalledTimes(1)
       expect(click).toHaveBeenCalled()
     } finally {
@@ -591,7 +598,7 @@ describe('回收站详情块 · 附件', () => {
     withBlocks([userBlock('u1', 1, '', [{ attachmentId: fileId, kind: 'file', name: 'a.pdf', bytes: 12 }])])
     const link = screen.getByRole<HTMLAnchorElement>('link', { name: /a.pdf/ })
     expect(link.getAttribute('href')).toContain(encodeURIComponent(fileId))
-    expect(link.getAttribute('href')).toContain('/dsh-session-delete-api/attachment?')
+    expect(link.getAttribute('href')).toContain(`${OFFICIAL_SESSION_DELETE_API_PREFIX}/attachment?`)
     expect(link.getAttribute('download')).toBe('a.pdf')
     // 长文件名要能折行，别把消息条撑破。
     expect(link.style.maxWidth).toBe('100%')
@@ -607,7 +614,7 @@ describe('回收站详情块 · 附件', () => {
     const href = link.getAttribute('href') ?? ''
     const [path, query = ''] = href.split('?')
     // 路径段是端点常量，name 不参与拼路径：`../` 换不掉它。
-    expect(path).toBe('/dsh-session-delete-api/attachment')
+    expect(path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}/attachment`)
     expect(href.split('?')).toHaveLength(2) // name 里的 `?` 没造出第二个问号
     expect(query).not.toContain('../x')
     expect(query).not.toContain('&c') // name 里的 `&` 没造出第四个参数

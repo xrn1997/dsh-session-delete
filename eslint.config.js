@@ -19,7 +19,20 @@ import reactHooks from 'eslint-plugin-react-hooks'
  * 不写格式类规则：仓内没有格式化工具，ESLint 代替它立规只会和既有排版打架。
  */
 export default tseslint.config(
-  { ignores: ['lib/**', 'node_modules/**', '.qoder/**', 'compat/**', 'docs/**'] },
+  { ignores: [
+    'lib/**',
+    'node_modules/**',
+    '.qoder/**',
+    'compat/**',
+    'docs/**',
+    // 本机过程工件与隔离工作区（见 .gitignore）：不是仓库事实，也不是类型感知语料的输入。
+    // 少了这几条，按 CONTRIBUTING 把采样脚本放进 .superpowers/.task-scratch 会让 `eslint .` 在
+    // 规则加载阶段直接崩，`pnpm gates` 红；.worktrees/ 则会把整棵第二工作树当源码扫。
+    '.superpowers/**',
+    '.task-scratch/**',
+    '.worktrees/**',
+    '.dsh-vision-toolkit/**',
+  ] },
 
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,

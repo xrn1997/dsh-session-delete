@@ -14,13 +14,18 @@
 宿主运行时数据根：显式配置 > `$DSH_HOME`（空白视为未设）> `~/.dsh`。插件只镜像后两级；解析住 `src/ports/home.ts`。
 _唯一实现_: `src/ports/home.ts` 的 `resolveHome`。
 
+**通道（channel）**:
+浏览器半到 Node 半的取数路径：同源 fetch 宿主 `connection.fetch.register` 的 exact Fetch 路由（`/api` + 插件前缀）。Host/Origin/浏览器认证归宿主 `/api` bridge；支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`，没有旧前缀 fallback。段名前缀与唯一基础路径住 `src/shared/wire.ts`；客户端探测与附件 URL 住 `src/client/remote.ts` / `src/client/attachment-view.tsx`。
+_唯一实现_: `src/api/connection-route.ts` 的 `registerConnectionRoutes`；`src/client/remote.ts` 的 `createHttpRemote` / `probeChannel`。
+_Avoid_: 接口、API（太泛；通道专指这条双半取数线）；fallback / 旧前缀（已随单通道收掉）。
+
 **会话（session）**:
 宿主持久化的一条对话。落盘为 `sessions/<项目目录>/<会话目录>/session.vN.jsonl.zstd`——zstd **多帧**，第一行是 header（含 `id` 与 `cwd`）；一个目录里可以并存多代日志，只读版本号最大的那代（`src/log/session-log.ts`）。
 _Avoid_: 对话、聊天记录（那是用户视角的内容，不是持久化单位）。
 
 **附件（attachment）**:
-会话消息里的 `image` / `file` block，指向宿主附件库里的一个内容寻址对象；不是用户磁盘上的原图。
-_唯一实现_: `src/trash/attachments.ts` 的 `attachmentsInContent`。
+会话消息里的 `image` / `file` block，指向宿主附件库里的一个内容寻址对象；不是用户磁盘上的原图。读取优先走宿主 `attachments` 服务的 `readImage` / `readFileStream`（ADR-0035）；服务缺席或引用元数据不够才直接 fs。
+_唯一实现_: `src/trash/attachments.ts` 的 `attachmentsInContent`；读取面 `src/ports/attachments-port.ts` 的 `createAttachmentsPort` 与 `src/api/attachment.ts` 的 `readAttachmentResponse`。
 
 **附件库（attachment store）**:
 `$DSH_HOME/attachments/v1`：图片在 `objects/`，普通文件在 `file-objects/` + `files/`。宿主所有、没有删除接口。
@@ -29,6 +34,16 @@ _Avoid_: 缓存（它是宿主持久副本；派生请求缓存在 `cache/attach
 **附件引用（attachment reference）**:
 会话消息 `content[]` 里指向附件库对象的 `image` / `file` block；`attachmentId` 是唯一寻址依据，`name` 只做下载名。
 _唯一实现_: `src/trash/attachments.ts` 的 `attachmentsInContent`。
+
+**同源取数闸（same-origin fetch gate）**:
+只挂附件字节段的浏览器取数约束：拒 `Sec-Fetch-Site` 为 same-site / cross-site 的请求，以及与 Host 头不同 authority 的 http(s) Origin / Referer；桌面壳的 `dsh-app:` 来源与三头全缺的非浏览器客户端放行。拒绝回 403 + 失败信封。只挂这一段是因为只有它的响应能被别的页面当 `<img>` 渲染（字节 oracle）；其余八段是 JSON，跨源读不到。
+_唯一实现_: `src/api/connection-route.ts` 的 `isSameOriginFetch`；声明住 `src/api/route-table.ts` 的 `fetchGate`。
+_Avoid_: 请求栅栏（旧概念已随 ADR-0033 删除；这里只收字节 oracle，不做身份 / 归属判定）。
+
+**可调项（config）**:
+宿主 profile 的 patch 层里给本插件的三只旋钮（孤儿预览条数 / 附件响应上限 / JSON 扫描上限）；不是界面设置，也不跨到浏览器半。
+_唯一实现_: `src/config.ts` 的 `DEFAULT_CONFIG` / `normalizeConfig` / `Config`（Standard Schema）；`apply` 归一一次后作为 `CoreDeps.config` 注入，读方从 deps 读。
+_Avoid_: 设置（界面设置页）、环境变量（配置只走宿主的 patch 层，ADR-0037）。
 
 **引用扫描（reference scan）**:
 判断图片对象是否仍被引用：读全部会话日志、全部 `session-trash` 目录与 `storages` / `cache` JSON；任一读不出就按"不可知"处理，删除整体跳过（fail closed）。
@@ -80,11 +95,6 @@ _Avoid_: 账本（本仓「账本」指宿主工作区注册表；清册读面�
 路由记录上的一格：`none` / `list`（真相读，先对账）/ `raw`（索引快照，不对账）。读段与 `/empty` 的处理函数只消费路由交来的 `RouteRead`，不自己挑 `ledger.list()` / `raw()`；`/apply` 的写动词读面归动词自己（谁写谁读）。
 _唯一实现_: `src/api/route-table.ts` 的 `RouteSpec.read` 与 `RouteRead`（由 `src/api/dispatch.ts` 交出去）。
 _Avoid_: 纯度（纯度管是否进到达序链；`count` 是 pure/不读，`detail` 是 pure/raw）。
-
-**请求栅栏（request trust fence）**:
-打到 `/dsh-session-delete-api` 的请求归不归本插件办，两件事分开说：**归属**（Host 是否属于本次部署——回环名 / 监听 bind 字面量）与**身份**（远程客户端是否带宿主已认证的 Web 身份，承宿主 `connection` 服务）。裁决三词：`allowed` / `untrusted`（归属不对）/ `unauthenticated`（归属对、缺身份），两条 403 原文按裁决各回各的。Origin / Referer 只是附加约束，与 Host 同名不构成归属证明。
-_唯一实现_: `src/api/request-trust.ts` 的 `judgeRequest`（身份面住 `src/ports/connection-port.ts` 的 `ConnectionPort`）。裁决见 ADR-0022 / ADR-0023。
-_Avoid_: 同源栅栏（归属不看 Origin 同不同名；DNS rebinding 下同名照样是外人）；认证 / 登录（身份承宿主，插件不建立也不校验凭据）。
 
 **清册作用域（trash scope）**:
 一份调用方选好读面的清册快照上的收缩视图——purge 这条写路径的「拿目标」owner。写入口 = 真相读；报告入口不经作用域（`/orphans` 直接把 raw 快照交 `loadOrphanGroups`）。**选哪一格由调用方（路由行 / 批量层）定好交进来**（ADR-0012 的边界）；组与收缩视图归它且**不外露**（三态与按组收缩的判据是内部闭包，读「组」的 `claimOf` / `withoutGroup`）：`purge(id)` 只收一个 id（选组、同批带走的幂等、`trash-empty` 的原文点名都在它里面），`purgeAll()` 清全部行，`orphanGroups(roots?)` 把当前视图原样交给「无主子会话」的扫描。
@@ -143,9 +153,19 @@ _Avoid_: 隐藏、回收站（归档不是删除，回收站也不是归档）�
 _Avoid_: 通知、事件（太泛；通告专指这两条成对的客户端事件）。
 
 **渲染侧快照（visible-rows snapshot）**:
-宿主 DOM 这个组件树之外的事实源，在渲染期交出的读数：脏了才重读，干净时回同一个引用；变化由适配器里的观察者通告，不靠定时重读。判据与裁决见 ADR-0015。
-_Avoid_: 缓存（这里只讲「同一引用」这条 snapshot 契约，不是通用缓存）；轮询（没有定时器在重读 DOM）。
+宿主行槽位登记这份行列表在渲染期交出的读数：脏了才重读，干净时回同一个引用；变化由槽位组件的挂载 / 注销与登记值更新通告，不靠定时重读，也不观察 DOM。判据与裁决见 ADR-0034。
+_Avoid_: 缓存（这里只讲「同一引用」这条 snapshot 契约，不是通用缓存）；轮询（没有定时器在重读登记）；DOM 扫描（可见行不再从 DOM 反查）。
 _唯一实现_: `src/client/host-rows.ts` 的 `useVisibleSelectableRows`（订阅骨架住 `src/client/store.ts` 的 `createLazyStore`）。
+
+**批量选择动作（batch pick）**:
+可见行之上的一组选择动作：全选、全选判定与模式内整行点击守卫；可见行的事实源仍是槽位登记，选中集仍住选择 store。
+_唯一实现_: `src/client/batch-pick.ts` 的 `selectAllVisible` / `areAllVisibleRowsSelected` / `useSelectionRowClickGuard`。
+_Avoid_: 选择面（选中集与多选态住 `src/client/batch-selection-store.ts`；这里说的是动作）；DOM 行枚举（可见行来自槽位登记，ADR-0034）。
+
+**重开等待（pending reopen）**:
+撤销恢复后等客户端摘要表出现目标会话、再 `openSession` 的那一段；订阅驱动，最多等一个放弃边界，不轮询。
+_唯一实现_: `src/client/pending-open.ts` 的 `createPendingOpen`。
+_Avoid_: 轮询、定时重开（等待由 store 通知驱动；ADR-0036）。
 
 **顶层浮层（top layer）**:
 挂在文档上的模态对话框与菜单的总称，也是「谁在最上层收 Escape」的判据：名单按文档序，最后一个就是最上层。`Modal` 的关闭键与清单的 Esc 退下钻都问它，不各写一份选择器。

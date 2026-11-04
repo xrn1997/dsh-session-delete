@@ -7,13 +7,19 @@
  */
 
 /**
- * 插件专属前缀。
+ * 插件专属前缀（九段相对它命名）。
  *
- * 为什么必须带插件名：宿主 web server 的 `register({kind:'prefix', path})` 对**重复的 (kind, path)
- * 直接抛错**（`dsh-host-webserver` 原文 `webserver: duplicate ${route.kind} route "${route.path}"`），
- * 撞了就是整棵插件树 boot 失败——所以这条路径是与生态的硬边界，不是显示好不好看的问题。
+ * 为什么必须带插件名：宿主 `connection.fetch.register` 对**重复的精确路径**直接抛错
+ * （`connection: exact Fetch route "…" is already registered`），撞了就是整棵插件树 boot 失败——
+ * 所以这条路径是与生态的硬边界，不是显示好不好看的问题。
  */
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
+
+/**
+ * 唯一的取数基础路径：宿主 `/api` + 插件前缀。九段 exact Fetch 路由、客户端探测与附件 URL
+ * 都从它起；`SESSION_DELETE_API_PREFIX` 只作为段名的相对前缀与错误原文。
+ */
+export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREFIX}`
 
 /** 九个段名（相对前缀）。**每项 `{ path, method }` 两键**：某段用什么方法也是线上形状的一部分
  *  （ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影（`ROUTES.x.method`），
@@ -236,7 +242,8 @@ export interface AttachmentOrphanItemWire {
 }
 
 /** 孤儿附件报告（`GET /attachment-orphans`）：数量、总字节与对象清单。
- *  清单只带 id/bytes（不含路径/文件名），供设置页预览缩略图，最多 200 条；数量与字节按全量算。
+ *  清单只带 id/bytes（不含路径/文件名），供设置页预览缩略图；条数由 Node 半配置
+ *  （`src/config.ts` 的 `orphanPreviewLimit`，默认 200），数量与字节按全量算。
  *  读不出任何一处引用源时**不返回这一形状**，而是 `io` 失败——不拿 0 冒充"没有孤儿"。 */
 export interface AttachmentOrphanReportWire {
   count: number
@@ -287,6 +294,13 @@ export const PARAMS = {
   attachmentId: 'id',
   attachmentKind: 'kind',
   attachmentName: 'name',
+  /** 图片引用的媒体类型 / 宽高：只给宿主 `attachments.readImage` 做引用校验，不参与路径拼接。 */
+  attachmentMediaType: 'mediaType',
+  /** 字节数：图片支与文件支都带——它是宿主读面的引用一部分，并先过 `maxAttachmentBytes` 闸
+   *  （别为一张已知超限的图让宿主整份读出来）。 */
+  attachmentBytes: 'bytes',
+  attachmentWidth: 'width',
+  attachmentHeight: 'height',
 } as const
 
 /**

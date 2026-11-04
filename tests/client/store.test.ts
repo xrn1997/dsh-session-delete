@@ -165,24 +165,21 @@ describe('createLazyStore', () => {
     expect(read).toHaveBeenCalledTimes(2)
   })
 
-  it('首个订阅者接上观察者，最后一个退订时断开；退订后下一次 get 重读', () => {
+  it('退订后下一次 get 重读；重新订阅时也先重读', () => {
     const read = vi.fn((): readonly string[] => ['a'])
-    const onFirstSubscribe = vi.fn()
-    const onLastUnsubscribe = vi.fn()
-    const store = createLazyStore<readonly string[]>([], read, { onFirstSubscribe, onLastUnsubscribe })
+    const store = createLazyStore<readonly string[]>([], read)
 
     const offOne = store.subscribe(() => {})
-    const offTwo = store.subscribe(() => {})
-    expect(onFirstSubscribe).toHaveBeenCalledTimes(1)
     store.get()
     expect(read).toHaveBeenCalledTimes(1)
 
     offOne()
-    expect(onLastUnsubscribe).not.toHaveBeenCalled()
-    offTwo()
-    expect(onLastUnsubscribe).toHaveBeenCalledTimes(1)
     store.get()
     expect(read).toHaveBeenCalledTimes(2)
+
+    store.subscribe(() => {})
+    store.get()
+    expect(read).toHaveBeenCalledTimes(3)
   })
 })
 

@@ -18,10 +18,12 @@ Status: accepted
 2. **分页是游标，不是总量闸**：一次只回尾部一页（块数上限住 `src/trash/detail.ts` 的 `PAGE_BLOCK_LIMIT`，正文总量上限住 `PAGE_CHAR_LIMIT`；单块超字符闸时仍保留一块，游标才能前进），`olderCursor` 指页首；`POST /detail` 的 body 多一格可选 `before`，客户端把游标原样回传取更早一页。每块另有单块字符闸（`PER_BLOCK_CHAR_CAP`，正文与工具参数/结果各自算），超了标 `truncated`。计数是整条日志的，不受分页影响。
 3. **块构建只留当前页**：走日志时用有界缓冲只保留当前页的块（块数与正文字符双闸），不把整条日志的正文堆在内存里；工具结果可能落在游标之后，仍会回填到页内那个调用块——不能把“已完成”误报成“未完成”。
 4. **界面按宿主 Chat 的折叠语法画**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给标签 + 首行摘要（工具另给状态与工具名）；可逐块开合，也可「全部展开 / 全部折叠」。有更早页时顶部出「加载更早」，prepend 后按滚动高度差补偿位置。
-5. **注入不再只报“未显示”**：它成为可折叠的 injection 块，`sourceKind` 原样过线、界面映射来源标签；条数进元信息表。这是对宿主 Chat 的**有意偏离**——宿主隐藏普通注入，而这里的目标是“删之前看全”。
+5. **注入不再只报“未显示”**：它成为可折叠的 injection 块，`sourceKind` 原样过线、界面映射来源标签；条数进元信息表。这是对宿主 Chat 的**产品选择**（不是受约束偏离）——宿主隐藏普通注入，而这里的目标是“删之前看全”。
 
 ## 边界
 
+- **受约束偏离：详情自己读盘、自己画**：宿主的聊天视图是 `@deepseek-ai/dsh-client-ui-chat`，浏览器半禁止 import 任何 `@deepseek-ai/*` 客户端包；槽位表没有「给一个会话 id、只读渲染」的官方座位；已删会话不在 `sessionQuery`（`traceSession` 报 `SESSION_QUERY_SESSION_NOT_FOUND`）。所以正文只能由插件读 `session-trash` 的日志、按块投影并自绘。这是受约束偏离，不是偏好；证据见「背景」与 `tests/trash-detail.test.ts`。上游请求：一个只读的会话渲染槽位，或让 `sessionQuery` 能读 `session-trash`。
+- **产品选择，不是受约束偏离**：注入块常显/可折叠与「不做 Trajectory 全量表」是产品取舍（宿主 Chat 隐藏普通注入，这里的目标是删前看全），不是宿主面缺失逼出来的。
 - **不做 Trajectory 全量表**：turn/step、job、request、permission、sandbox、approval、goal、workspace changes、重试与 compaction 的 start/end 都不铺进正文；要逐事件全量是另一个视图，另行设计。
 - **子会话详情另篇裁决**：这篇只定单条详情的正文形状；孩子的查看入口与导航见 ADR-0029（issue #7）。
 - **不做“查看完整单块”的第二条请求**：单块超过上限只标「已截断」；要一字不差就看恢复后的宿主。

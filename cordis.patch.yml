@@ -1,3 +1,7 @@
 - insert:
     - id: session-delete
       name: '@xrn1997/dsh-session-delete'
+      config:
+        orphanPreviewLimit: 200
+        maxAttachmentBytes: 20971520
+        maxJsonRefBytes: 10485760

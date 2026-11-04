@@ -24,7 +24,7 @@
 ```
       浏览器（宿主前端）                     Node（宿主进程）
   ┌────────────────────────┐            ┌──────────────────────────┐
-  │ src/client  槽位界面    │  HTTP/JSON │  src/api    前缀路由      │
+  │ src/client  槽位界面    │  HTTP/JSON │  src/api    路由         │
   │  回收站面板 · 详情 ·    │ ─────────▶ │  src/verbs  删除/恢复/    │
   │  宿主批量删除 · 维护卡  │            │  彻底删除/清理             │
   │  只有视图与可丢弃投影    │            │  src/trash  清册与附件    │
@@ -33,10 +33,10 @@
            │  值形状、段名、失败码：src/shared/wire.ts（两半 import 同一份）
 ```
 
-- **通道是自建薄线，不是官方 `remote.<namespace>`**：官方 remote 只能由生成的 Typert 描述符经 `ctx.remote.$mount(...)` 挂上，第三方没有动态发现这一步（裁决与被否掉的替代见 ADR-0009）。所以走宿主 web server 上的插件专属前缀路由 `/dsh-session-delete-api`——`src/api/dispatch.ts` ↔ `src/client/remote.ts` 同源 fetch，信封与官方 unary 面同形（`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）。
+- **通道只有一条：宿主 `connection` 的 exact Fetch 路由**：九段注册到 `connection.fetch.register` 的 `/api/dsh-session-delete-api/*`，Host/Origin/浏览器认证由宿主 `/api` bridge 完成（ADR-0033）。支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`；没有自建前缀、没有插件请求栅栏、没有旧前缀 fallback。官方 `remote.<namespace>` 仍不可用（生成的 Typert 描述符没有第三方动态发现）。两半仍从 `src/shared/wire.ts` 取段名与基础路径，`src/api/dispatch.ts` ↔ `src/client/remote.ts` 同源 fetch，信封与官方 unary 面同形（`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）。
 - **段名只有九个**（`src/shared/wire.ts` 的结构化段名表 `ROUTES`：每个段名恰有 `{ path, method }` 两键，那是唯一的**定义**处——两半的代码只从这张表投影，文档与注释里再写段名是给读者指路，不另立一份映射）。五个动作全部走 `/apply`（`delete` / `restore` / `purge` / `count` / `orphan-clean`），其中 `count` 是纯读、其余四个是写动作。`/attachment` 是唯一的二进制段：只发附件字节，失败仍回 JSON 信封；`/attachment-orphans` 是孤儿附件报告（纯读），`/attachment-clean` 是它的聚合清理（写动作）。一组 id 进、逐条结果出，**单条就是长度为 1 的批量，不留第二条执行路径**。
-- **状态语义**：请求本身不对用它自己的 4xx（400 请求体 / 405 方法 / 404 未知路由，栅栏拒 403）；**操作失败**回 200 + 信封——浏览器半先解信封再看状态，别把这两类混成一个 200。
-- **请求栅栏分「归属」与「身份」两件事**：归属看 Host 是否属于本次部署（回环名 / 监听 bind 字面量），头栅栏另外否决 `sec-fetch-site: cross-site`、要求 Origin / Referer 与 Host 同 authority（桌面壳的 `dsh-app://app/` 是唯一例外）；远程客户端再要过宿主 `connection.requestRejection`（宿主的 Host 白名单 + 已认证 live peer），服务缺席时远程一律拒。绑定策略归宿主 webserver 配置（只接受具体接口 IP、拒绝 wildcard），栅栏不替它决定可达性，也不建立身份。判据住 `src/api/request-trust.ts`，裁决见 ADR-0022 / ADR-0023。
+- **状态语义**：**请求体不对**由插件分发器回 400 + 信封；**方法或路径不在 exact route 声明内**时宿主在 handler 之前回纯文本 404（插件的 405 / 404 只是适配器直调时的防御分支）；**401/403**：宿主 `/api` 的 401/403 是纯文本鉴权/归属失败，客户端映射固定原文；附件同源闸回的是 **403 + 失败信封**（走插件错误面）；**操作失败**回 200 + 信封——浏览器半先解信封再看状态，别把这几类混成一个 200。
+- **鉴权归宿主 `/api`**：exact Fetch 路由由宿主 `/api` bridge 做 Host/Origin/浏览器认证（ADR-0033）；插件不重建身份，也没有回环免身份分支。唯一的插件侧闸是附件字节段的**同源取数闸**（路由记录声明 `fetchGate`）：拒 `Sec-Fetch-Site: same-site / cross-site` 与 authority 和 `Host` 不符的 http(s) `Origin` / `Referer`（ADR-0033 边界）。绑定策略归宿主 webserver 配置（只接受具体接口 IP、拒绝 wildcard），插件不替它决定可达性，也不建立身份。
 - 改动生效分两条路：浏览器半靠宿主 HMR 热推；Node 半必须重启宿主。
 - **浏览器半一条 `@deepseek-ai/*` 的 import 都不许有**（type-only 也不留）：宿主客户端包随宿主换代而变、不过类型检查，一个抛错的组件会把整个槽位条目打空。要用的控件/图标按官方处方抄进 `src/client/ui/*`（类名 `sd-` 前缀、`@keyframes` 改名、只留 `--dsw-*` token），来源表在 `src/client/ui/ui.css` 文件头。
 
@@ -53,26 +53,28 @@ verbs/     动词：delete / restore / purge（清册作用域）/ orphan-clean 
    ▲
 api/       两个投影面里的那个 Node 面：路由表 + dispatch + 行投影
    ▲
-index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——只导出插件模块面（name / inject / apply）
+index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）——只导出插件模块面（name / Config / inject / apply）
 ```
 
 - **`domain/` 是零依赖纯部件**：不 import 任何仓内模块，端口与动词都可依赖它；会话闭包与 bare 归一住这里（见 CONTEXT.md「会话闭包」）——端口不再反向 import `trash/`。
-- deps.ts 的 CoreDeps 是动词与 API 共享的五项基础（fs / host / ledger / home / presence）；`fs` 是 `CoreFsPort`（不含 `removeDir` / `removeFile`），`host` 是 `HostCorePort`（不含在场三件）。`DeleteSessionDeps = CoreDeps & { now }` 只给会话删除；`RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort,'removeDir' | 'removeFile'> }` 只给永久删除的执行与分发（`executeRemoval` 及把能力交给它的 purge / orphan-clean）；`DeleteDeps = DeleteSessionDeps & RemovalDeps` 是组合根装出的全量面（`/apply` 分发同时够到两者）。装配只在 index.ts 一处；动词之间不再互相 import 依赖面 interface。路由行按 `slice` 只取自己声明的那一格，运行期收窄见 ADR-0032。
-- **宿主端口按角色切三片**：身份与归属（`HostIdentityPort`）、在场通告（`HostPresencePort`）、会话语料（`HostCorpusPort`），同住 `src/ports/host-port.ts`；`HostPort` 是三者相交的复合别名，这三片的适配只由 `createHostPort` 提供。**动词只拿 `HostCorePort`**（不含在场三件）；在场能力由 `CoreDeps.presence` 提供，端口形状住 `src/ports/presence-port.ts`、实现住 `src/verbs/member-presence.ts`。宿主服务的另外两个窄镜像各按用处分家：agent handle 捕获住 `src/ports/agent-handles.ts`（adapter 内部，不进端口类型），请求栅栏用的 Web 身份面住 `src/ports/connection-port.ts`（ADR-0022）。裁决见 ADR-0019（角色切分与在场协议一个家承 ADR-0007 / ADR-0005）。
+- deps.ts 的 CoreDeps 是动词与 API 共享的六项基础（fs / host / ledger / home / presence / config）；`fs` 是 `CoreFsPort`（不含 `removeDir` / `removeFile`），`host` 是 `HostCorePort`（不含在场三件）；`config` 是 `apply` 归一后的只读快照，读方从 deps 读，不 import 模块级单例。`DeleteSessionDeps = CoreDeps & { now }` 只给会话删除；`RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort,'removeDir' | 'removeFile'> }` 只给永久删除的执行与分发（`executeRemoval` 及把能力交给它的 purge / orphan-clean）；`DeleteDeps = DeleteSessionDeps & RemovalDeps & { attachments }` 是组合根装出的全量面（`/apply` 分发同时够到删除的时钟与永久删除能力；`attachment` 读段另走第四片 `SliceDeps['attachment']` = `CoreDeps & { attachments }`，不把附件读面塞进动词的 `CoreDeps`，ADR-0035）。装配只在 index.ts 一处；动词之间不再互相 import 依赖面 interface。路由行按 `slice` 只取自己声明的那一格，运行期收窄见 ADR-0032。
+- **宿主端口按角色切三片**：身份与归属（`HostIdentityPort`）、在场通告（`HostPresencePort`）、会话语料（`HostCorpusPort`），同住 `src/ports/host-port.ts`；`HostPort` 是三者相交的复合别名，这三片的适配只由 `createHostPort` 提供。**动词只拿 `HostCorePort`**（不含在场三件）；在场能力由 `CoreDeps.presence` 提供，端口形状住 `src/ports/presence-port.ts`、实现住 `src/verbs/member-presence.ts`。宿主服务的另外两个窄镜像各按用处分家：agent handle 捕获住 `src/ports/agent-handles.ts`（adapter 内部，不进端口类型），附件读取面住 `src/ports/attachments-port.ts`（ADR-0035）；exact Fetch 注册面住 `src/api/connection-route.ts`。裁决见 ADR-0019（角色切分与在场协议一个家承 ADR-0007 / ADR-0005）。
 - **语料缺席是显式的**：两个语料读面都交 `CorpusRead<T>` = `{ available: true, value }` | `{ available: false }`，不带原因串；形状住 `src/ports/host-port.ts`。**缺席之后怎么办归调用方**：删除只删父、count 报 0、`/list` 与 purge 静默降级、`/orphans` 与经 `loadOrphanGroups` 的 `orphan-clean` 响亮失败。裁决见 ADR-0019（语料面承 ADR-0007，未翻）。
 - **读面是路由记录的一格**：`read` 与 `RouteRead` 的词义与读法见 `CONTEXT.md`「路由读面」，段名归属见 `docs/architecture.md` §4；裁决见 ADR-0004 / ADR-0012。
 - **`verbs` 不 import `api`**：路由层只搬运，业务判据全在动词与部件。
 - **活体准入的判据住 `src/verbs/live-admission.ts` 的 `assertNoLive`**：逐个问、任一在跑就整组拒绝、短路；**什么时候查、查哪些 id 归调用方**——永久删除的时机住 `docs/architecture.md` §4 的「永久删除的计划与执行」行（ADR-0027），删除与孤儿清理各自交自己的名单。
 - **宿主类型面用本地窄镜像**（`src/ports/host-port.ts` 与 `src/ports/agent-handles.ts` 各只声明用到的成员 + 一次强转）：不装宿主类型包、不做 `declare module` 增强——npm 上的宿主包与运行中的宿主不同代，引包等于拿错了契约。
 - **跨插件一律 `import type`**，值 import 是与生态的红线。
+- **配置只有一个家**：`src/config.ts` 只放默认值、归一与本地 Standard Schema；`index.ts` 在 `apply` 第一步归一，结果作为 `CoreDeps.config` 注入，`api/` 与 `trash/` 的读方从 deps 读；浏览器半不读（ADR-0037）。
 
 ## 3. 浏览器半：槽位贡献与可丢弃投影
 
 - 注册处只有一处：`src/client/index.tsx`（菜单行、行首勾选、行尾兜底、overlay 浮条/确认框、面板行 + 中央面板、插件设置页的维护卡）。**槽位只挂官方已声明的**——向未声明槽位注册在插件激活时响亮失败。
-- **通道探测决定入口出现与否**：注册任何贡献之前先探 `/ping`；探测不过 ⇒ 一个入口都不注册（"不可用"以入口不出现表达，不新造禁用态 UI——半吊子 UI 比没有 UI 更糟）。探测**过了**（哪怕回的是失败信封）就照常注册。
+- **通道探测决定入口出现与否**：注册任何贡献之前先探 `/ping`；只有成功信封（`pong`）才算通道在。打不通 / 回的不是信封 / 401·403（页面没有宿主身份）/ 失败信封都按探测不过处理，一个入口都不注册（"不可用"以入口不出现表达，不新造禁用态 UI——半吊子 UI 比没有 UI 更糟），也不回退旧前缀（ADR-0033）。
 - **客户端条目 pending = 宿主进程死**：可选服务（locale）走 `ctx.get` 而不是 `inject`。
 - 文案住 `src/client/copy.ts` 的命名空间字典（zh 真源 + en 逐键镜像），经宿主 locale 服务可选读，缺席降级内置 zh。**渠道错误原文除外**：`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale；它们是协议诊断原文，不是界面标签。
-- **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与整行点击守卫住 `src/client/host-rows.ts`）。
+- **跨槽位现场**：浏览器半挂在互不相邻的座位上（`shell.overlay`、`main`、会话行菜单），模块级快照跨组件卸载存活；脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与脏标记）住 `src/client/store.ts`，各现场语义住调用方（多选与勾选集合住 `src/client/batch-selection-store.ts`，宿主行登记与快照住 `src/client/host-rows.ts`，全选 / 判定 / 整行点击守卫住 `src/client/batch-pick.ts`）。
+- **重开等待住一个可取消句柄**：`src/client/main-view.ts` 只决定关谁、开谁；票、订阅、放弃 timer 与 settle 住 `src/client/pending-open.ts` 的 `createPendingOpen`（ADR-0036）。
 - **写入座位、busy 闸、清单导航、确认框关框与残留维护各有自己的 module**：`src/client/write-seats.ts` 把每个调用点的呈现材质、闸与重读通道绑在一处，`src/client/busy-gate.ts` 只拥有「这一趟还算忙」的生命周期，`src/client/confirm-close.ts` 拥有各张确认框共用的 busy 关框规则，`src/client/trash-nav.ts` 拥有清单的键盘契约与焦点意图，`src/client/ui/top-layer.ts` 拥有 Modal 与清单共用的顶层浮层名单与 Escape 判据，`src/client/use-maintenance-section.ts` 拥有两段共用的维护状态机（检查 / 清理 / 确认框 / 最新票 / 清完必重查）、`src/client/orphan-maintenance.tsx` 拥有无主子会话维护块的呈现、`src/client/maintenance-settings.tsx` 拥有设置页的维护卡；回收站面板只留页面骨架、清单行与确认框开合。
 - **撤销通知台与 Toast 组件分家**：现场、seq、发布与熄灭住 `src/client/undo-notices.ts`；`src/client/undo-toast.tsx` 只做组件，组合通知台与恢复座位（`restoreFromUndo`）。因此 `undo-toast ↔ write-seats` 的 import 环不再存在；裁决与被否掉的替代见 ADR-0018。
 - 浏览器半**不持任何真相**：线上失败码与数据根目录名从 `wire.ts` 取常量（自己的未分类诊断码住 `receipt.ts`），"这次会释放多少"念服务端算好的 `releaseBytes`——它只做呈现。
@@ -85,11 +87,14 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 
 | 语义 | 唯一主人 | 它不回答什么 |
 | --- | --- | --- |
-| 段名 / 线上形状 / 线上失败码与它的读法（前缀判定 `isSessionDeleteCodeError`、取动词词 `verbCodeOf`）/ 信封的运行期判形 `isRemoteResult` / 回收站目录名 | `src/shared/wire.ts` | 业务判据 |
+| 段名 / 线上形状 / 线上失败码与它的读法（前缀判定 `isSessionDeleteCodeError`、取动词词 `verbCodeOf`）/ 信封的运行期判形 `isRemoteResult` / 回收站目录名 / 唯一取数基础路径常量 | `src/shared/wire.ts` | 业务判据 |
+| 客户端探测（成功信封才算通道在，401/403 不注册入口）与八段 fetch | `src/client/remote.ts` | 段名 / 形状（`src/shared/wire.ts`）；鉴权（宿主 `/api`） |
 | 写 `/apply` 回执的读法与**摘要**（缺 id / null 幂等 / 单条 null 的协议错 / 逐条失败 / orphan-clean 的 not-found 中性；成功 / 中性 / 失败 / 部分计数与**按动作取**的落地 id 一次派生） | `src/client/receipt.ts` | 各写入面的呈现；线上形状归 `src/shared/wire.ts` |
 | 附件清理读数在回执里的聚合（跨 `ok` 相加、`skipped` 取第一条）与「跳过半句」的拼装判据（面板与维护卡共用） | `src/client/receipt.ts`；面板后半句在 `src/client/use-trash-query.ts`、维护卡后半句在 `src/client/use-maintenance.ts` | 独占判定（归 `src/trash/attachments.ts`）；服务端算的字节 |
-| 纯度 / **读面** / body 预读 / deps 切片 / 处理（run 接线） | `src/api/route-table.ts` | 业务判据（归 verbs 与部件）；段名的方法——它的家是 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`，路由记录只投影） |
-| 附件二进制读取（id / kind 闸、20 MiB 上限、魔数、下载头） | `src/api/attachment.ts` | 什么算独占（归 `src/trash/attachments.ts`）、什么时候清（归 `src/verbs/permanent-removal.ts` 与设置页维护卡）；非附件的读面 |
+| 纯度 / **读面** / body 声明 / 同源取数闸声明（`fetchGate`）/ deps 切片 / 处理（run 接线；JSON 与 binary 两种 run 形） | `src/api/route-table.ts` | 业务判据（归 verbs 与部件）；wire 机制与 body 预读（归 `src/api/connection-route.ts`）；段名的方法——它的家是 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`，路由记录只投影） |
+| 九段到宿主 `connection.fetch.register` 的 exact Fetch 投影、`Request` / `Response` 适配与 wire 机制（body 字节闸 / JSON 解析 / 二进制头 / 失败信封 / `fetchGate` 的判据 `isSameOriginFetch`） | `src/api/connection-route.ts` | 路由记录的纯度 / 读面 / body / `fetchGate` 声明（归 `src/api/route-table.ts`）；鉴权（归宿主 `/api` bridge） |
+| 附件二进制读取（query 一次解析成 typed request、id / kind 闸；有宿主 `attachments` 时走 `readImage` / `readFileStream`，缺服务或引用元数据不够统一成一次 miss 才直接 fs + 魔数；所有路径共用一道上限（`deps.config.maxAttachmentBytes`，ADR-0037）、下载头） | `src/api/attachment.ts` | 什么算独占（归 `src/trash/attachments.ts`）、什么时候清（归 `src/verbs/permanent-removal.ts` 与设置页维护卡）；非附件的读面；宿主服务的字节校验（归 `src/ports/attachments-port.ts`，ADR-0035） |
+| 宿主 `attachments` 服务的窄镜像（`available` / `readImage` / `readFileStream`，每次调用惰性解析） | `src/ports/attachments-port.ts` | 什么算独占（`src/trash/attachments.ts`）；什么时候删；孤儿扫描（`src/trash/attachments.ts`） |
 | 清册行 → 线上行的投影 | `src/api/trash-rows.ts` 的 `toWire`（显式字面量，不 `...row`） | 组语义 |
 | 组语义（谁能接住孩子、这一组有谁、`claimOf` 三态、按组收缩 `withoutGroup`） | `src/trash/groups.ts` | 步骤与回滚；同批已带走集（`src/verbs/batch-carried.ts`）**持有**哪份视图、什么时候收缩 |
 | 「这一批」（去重保序 / 写动作共用一个循环与逐条信封 / 一批一次通告） | `src/verbs/batch.ts` | 单条动词的步骤；同批已带走集归 `src/verbs/batch-carried.ts`，三态谓词归 `src/trash/groups.ts`；`count` 是纯读、没有逐条失败，不走那个循环 |
@@ -100,15 +105,15 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 一次成员移动的步骤、反向动作与逐步 undo 结果（`restored(key)`） | `src/verbs/member-journal.ts` | 哪些成员算一组；失败句子的措辞与合并（那是 `src/verbs/errors.ts`） |
 | 组级成员移动的顺序、组根结果与整组回滚。调用方直接拿根结果，不索引数组；跟随者按序拿根结果。 | `src/verbs/move-group.ts` | 单成员步骤（`src/verbs/member-journal.ts`）；谁算一组（`src/trash/groups.ts`） |
 | 永久删除的计划与执行（成员 / 目录 / 字节 / 部分回执；成功回执的字节念计划、执行期只记进度） | `src/verbs/permanent-removal.ts` | 活体准入的判据归 `src/verbs/live-admission.ts`（这里只决定时机与名单：计划期查 targets 与枚举到的盘上后代，执行器第一笔写前用 `plan.unarchive` 再查一次）；组语义归 `src/trash/groups.ts`；purge 的拿目标（读面 / 选组 / 收缩视图）归 `src/verbs/trash-scope.ts`；通告归 `src/verbs/member-presence.ts`；批量归 `src/verbs/batch.ts` |
-| 附件内容块提取 / ID 与路径闸 / 剩余引用扫描 / 独占计划与执行 | `src/trash/attachments.ts` | 什么时候删（归 `src/verbs/permanent-removal.ts`）；源文件与普通文件的删除（目前不删） |
+| 附件内容块提取 / ID 与路径闸 / 剩余引用扫描 / 独占计划与执行 | `src/trash/attachments.ts` | 什么时候删（归 `src/verbs/permanent-removal.ts`）；附件读取（归 `src/api/attachment.ts` 与宿主 `attachments` 服务，ADR-0035）；源文件与普通文件的删除（目前不删） |
 | 活体准入的判据与那句原文（逐个问、任一在跑整组拒绝、短路） | `src/verbs/live-admission.ts` 的 `assertNoLive` | 什么时候查、查哪些 id（调用方给：永久删除见「永久删除的计划与执行」行，删除与孤儿清理各交名单） |
 | 条目 id 的形状与路径闸（单段校验） | `src/trash/entry.ts` | 对账 |
 | 清册读的两个读面（`list()` = 对账 + 读，供 `/list`、`/empty` 与写动词；`raw()` = 不对账、不写行，供 pure 的 `/orphans` 与 `/detail`） | `src/trash/ledger.ts` | 存储域绑定、对账的具体目录判据；哪一段拿哪一面归 `src/api/route-table.ts` |
 | 清册与 `session-trash/` 目录的对账 | `src/trash/reconcile.ts` | 目录里读哪一代日志 |
 | 会话日志的选代与走帧（多帧 zstd） | `src/log/session-log.ts` + `src/log/zstd-frames.ts` | 正文该显示什么 |
-| 详情给谁看、给多少（块投影：user/assistant/reasoning/tool/injection/system/compaction；`source.kind` 分 user/injection；工具 call/result 按 `callId` 配对；单块字符闸、每页块数 + 页级字符闸 + `olderCursor` 游标；附件每块/每页两道闸；计数不过闸；子会话摘要=折进这一条的孩子按清册原序过线，超 `SUBAGENT_SUMMARY_LIMIT` 只列前 N 条并给总数） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`）；折叠怎么画（`src/client/trash-detail.tsx`）；「谁露面、折进谁」（`src/trash/groups.ts`，详情不折） |
+| 详情给谁看、给多少（块投影：user/assistant/reasoning/tool/injection/system/compaction；`source.kind` 分 user/injection；工具 call/result 按 `callId` 配对；单块字符闸、每页块数 + 页级字符闸 + `olderCursor` 游标；附件每块/每页两道闸；计数不过闸；子会话摘要=折进这一条的孩子按清册原序过线，超 `SUBAGENT_SUMMARY_LIMIT` 只列前 N 条并给总数） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`）；折叠怎么画（`src/client/trash-detail.tsx`）；「谁露面、折进谁」（`src/trash/groups.ts`，详情不折）；自绘/读盘是受约束偏离（宿主无只读渲染口，ADR-0026） |
 | 正文怎么排版成 DOM（裸 HTML、链接与图片的收口） | `src/client/markdown.tsx` + `src/client/ui/markdown.css` | 抄来的宿主消息行样式 |
-| 详情块的折叠呈现（默认折叠、摘要、工具状态、全部展开/折叠、加载更早、prepend 后滚动补偿）与子会话段、那颗返回父会话的头部按钮 | `src/client/trash-detail.tsx` | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存、孩子视图的开合（`src/client/use-trash-panel-controller.ts`） |
+| 详情块的折叠呈现（默认折叠、摘要、工具状态、全部展开/折叠、加载更早、prepend 后滚动补偿）与子会话段、那颗返回父会话的头部按钮 | `src/client/trash-detail.tsx` | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存、孩子视图的开合（`src/client/use-trash-panel-controller.ts`）；受约束偏离见 ADR-0026 |
 | 详情与维护卡预览的附件渲染 / 放大 / 失败占位 / 清理提示的呈现 | `src/client/attachment-view.tsx` | 什么时候出清理提示（面板归 `src/client/use-trash-query.ts`、维护卡归 `src/client/use-maintenance.ts`）；附件二进制怎么读（归 `src/api/attachment.ts`） |
 | 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
 | 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/reconcile.ts`） |
@@ -117,11 +122,13 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 恢复时「挂不挂账本」与那句「归入未分组」 | `src/verbs/restore-session.ts` 的 `attachableWorkspaceId` / `isWorkspaceMissing` | 工作区还在时的挂接失败 |
 | 宿主身份与归属（会话是谁、落哪个项目/工作区、活不活/归档没有、账本与归档的写面） | `src/ports/host-port.ts` 的 `HostIdentityPort` | 通告（`api-session/*`，归 `HostPresencePort`） |
 | 宿主在场通告（摘 session + agent 三态、`api-session/*` 如实通告） | `src/ports/host-port.ts` 的 `HostPresencePort` | 什么时候算「已离开 / 已回来」（归 `src/verbs/member-presence.ts`） |
-| agent handle 捕获（安装时机 / symbol 表 / 按会话 dispose） | `src/ports/agent-handles.ts` | 摘活体三态（host-port.ts）与通告（member-presence） |
+| agent handle 捕获（安装时机 / symbol 表 / 按会话 dispose） | `src/ports/agent-handles.ts` | 摘活体三态（host-port.ts）与通告（member-presence）；受约束偏离：`agents` 无按会话 dispose（ADR-0008） |
 | 会话语料读（整表身份 `listSessions`、子会话闭包 `subagentMembersOf`） | `src/ports/host-port.ts` 的 `HostCorpusPort` | 看不见语料时怎么办（**缺席策略归调用方**；形状见本文 §2 的「语料缺席」） |
 | 宿主能力的生产 adapter（一颗对象同时满足三个角色） | `src/ports/host-port.ts` 的 `createHostPort` | 各动词的调用顺序 |
-| Node 半的依赖面（CoreDeps 五项 / DeleteSessionDeps / RemovalDeps / DeleteDeps 全量面；`CoreFsPort` 不含 `removeDir` / `removeFile`，`HostCorePort` 不含在场三件，`presence` 是能力面） | `src/deps.ts` | 各动词的调用顺序 |
-| 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开、面板恢复后忘掉） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量） |
+| 可调项（Config 默认值 / 归一 / 本地 Standard Schema；孤儿预览条数、附件响应上限、JSON 扫描上限）；归一结果由 `index.ts` 注入 `CoreDeps.config`，读方从 deps 读 | `src/config.ts` | 业务判据（附件独占、孤儿判定、删除）；宿主怎样读 profile 配置（归宿主 plugin manager 与 `cordis.patch.yml`） |
+| Node 半的依赖面（CoreDeps 六项 fs / host / ledger / home / presence / config；DeleteSessionDeps / RemovalDeps / DeleteDeps 全量面 + `attachments`；`attachment` 段走 `CoreDeps & { attachments }` 切片；`CoreFsPort` 不含 `removeDir` / `removeFile`，`HostCorePort` 不含在场三件，`presence` 是能力面） | `src/deps.ts` | 各动词的调用顺序 |
+| 删除/恢复时宿主**主视图**的收尾（删除当前会话关视图、撤销后重开、面板恢复后忘掉；重开等摘要用 snapshot subscribe，等待状态机住 `src/client/pending-open.ts`，ADR-0036） | `src/client/main-view.ts` | 什么时候该删/该恢复（动词与批量）；重开等待的票 / 订阅 / 放弃边界（`src/client/pending-open.ts`） |
+| 重开等待（票 / 订阅 / 放弃边界 / settle 与 cleanup；订阅优先、不轮询） | `src/client/pending-open.ts` 的 `createPendingOpen` | 什么时候该重开、重开哪一条（`src/client/main-view.ts`）；宿主服务形状（`src/client/main-view.ts` 的窄镜像） |
 | 撤销横幅的现场、seq、停留时长、按条目熄灭与整条清空（`clearUndoNotice`） | `src/client/undo-notices.ts` | 何时发布（发布决定归 `src/client/write-settlement.ts`；`anySuccess` 与落地名单由 `src/client/receipt.ts` 的摘要给出）、发布的形与标题（归 `src/client/write-seats.ts`）；Toast 呈现归 `src/client/undo-toast.tsx` |
 | 撤销横幅的呈现（Toast 宿主与撤销动作的组合；每条通知以 seq 为 key 各持一枚闸，旧撤销在飞不按灰新横幅；闸包整趟、座位不再传闸，双套会让外层 busy 提前落下） | `src/client/undo-toast.tsx` | 现场 / seq / 发布与熄灭（归 `src/client/undo-notices.ts`）；恢复座位（归 `src/client/write-seats.ts`）；busy 的生命周期与同实例防重（归 `src/client/busy-gate.ts`） |
 | 逐条 `/apply` 的写入座位（每个界面位置的呈现材质、闸与重读通道：菜单单删 / 批量删除 / 外部撤销恢复 / 面板恢复 / 面板永久删除） | `src/client/write-seats.ts` | 收尾顺序（`src/client/write-settlement.ts`）、重读策略（`src/client/use-trash-query.ts`）、各面的本地状态；孤儿清理不走座位（归设置页维护卡，ADR-0021） |
@@ -130,7 +137,6 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 逐条 `/apply` 写入的收尾顺序与 `WritePresentation` 的按 action 判别形状（main-view 收尾 → 失效回收站（delete / restore）→ 撤销通告 / 详情缓存，按 action 各一条，含 `anySuccess` 门与恢复的两个座位） | `src/client/write-settlement.ts` | 关/开/忘主视图怎么算（`src/client/main-view.ts`）、谁重读（`src/client/trash-store.ts`）、什么时机跑（`src/client/write.ts`） |
 | 无主子会话的扫描与分组（谁算孤儿：known 的口径 = 语料里的父 + 清册里的父） | `src/verbs/orphan-subagents.ts` | 传递闭包、防环与 bare 去重的核心（归 `src/domain/closure.ts` 的 `orphanRootsOf`，见 CONTEXT.md 的「会话闭包」）；删哪些目录、报多少字节、谁挡活体（归 `src/verbs/live-admission.ts`）；回收站里的组 |
 | 失败码的措辞与映射、回滚失败的措辞与合并（`details.rollbackFailures`；码本身住 `wire.ts`） | `src/verbs/errors.ts` + `src/remote/map-error.ts` | 上屏文案 |
-| 请求栅栏（归属：Host / Origin / Referer 与桌面壳那条只留 Referer 的路；身份：远程客户端过宿主 `connection`） | `src/api/request-trust.ts` | 操作失败的信封（那是 `map-error`）；绑定与 TLS（宿主 webserver 配置）；身份凭据本身（宿主 `dsh-client-connection`） |
 | 客户端可见文案 | `src/client/copy.ts` | 服务端错误原文；渠道错误原文除外（`src/client/receipt.ts` 的 missing-id 与单条幂等空值、`src/client/remote.ts` 的取数通道错误是固定中文，不随 locale） |
 | 清册的取数编排与清空的聚合回执（清单状态的词义见 `CONTEXT.md`「清单状态」；对外只有 `reload` 一个重读意图（挂载、显式重试、写后与失效同一条读），`reload` 的清单读失败把清单置为 `unknown`；最新票（`createLatestWins`，词表见 `CONTEXT.md`）、在飞的旧响应不许盖新态、输给后发读的读不清场；清空失败同样落 `unknown`、作废在飞读并收掉旧附件提示；清空的附件读数上屏归本模块，行为见 `docs/ui-spec.md` §3；写动作与清空走调用方传入的同一枚 `gate`，不另造第二枚闸；清空成功顺带调用撤销通知台的整条清空（落点全没了；现场归 `src/client/undo-notices.ts`）） | `src/client/use-trash-query.ts` | 服务端算的那个数；busy 的生命周期（`src/client/busy-gate.ts`）；孤儿检查/清理（归 `src/client/use-maintenance.ts`，ADR-0021） |
 | 回收站清单的选择面（多选态、勾选集合、组头三态派生、`ordered` 的可见顺序） | `src/client/use-trash-selection.ts` | 谁能接住孩子（`src/trash/groups.ts`）；键盘与焦点（`src/client/trash-nav.ts`） |
@@ -140,12 +146,13 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 设置页维护卡两段的状态机（报告 / 失败 / 中性提示 / 确认框开合 / 在飞档位 / 最新票 / 清完必重查；两段各实例化一次，`busy` 由段自己给） | `src/client/use-maintenance-section.ts` 的 `useMaintenanceSection` | 各段的远程调用、判据与回执拼句（`src/client/use-maintenance.ts`）；呈现（`src/client/maintenance-settings.tsx` / `src/client/orphan-maintenance.tsx`） |
 | 设置页维护卡两段的 glue：各段的远程调用、「没活可干」判据与回执拼句（含附件回执句子与孤儿段的第二回执） | `src/client/use-maintenance.ts` | 状态机与不变量（`src/client/use-maintenance-section.ts`）；呈现（`src/client/maintenance-settings.tsx`）；段名与线上形状（`src/shared/wire.ts`）；什么算孤儿（`src/verbs/orphan-subagents.ts` / `src/trash/attachments.ts`） |
 | 设置页维护卡的呈现（卡片外壳、两个 section、状态行的固定优先级、孤儿附件横幅/失败/确认框） | `src/client/maintenance-settings.tsx` | 段视图与动作（`src/client/use-maintenance-section.ts`）；各段 glue 与拼句（`src/client/use-maintenance.ts`）；无主子会话块的呈现（`src/client/orphan-maintenance.tsx`） |
-| 孤儿附件的报告段（报告把扫描折成数量/字节 + 对象清单 `id`/`bytes`，清单最多 200 条供设置页预览、读不出就抛 `io`） | `src/api/attachment-orphans.ts` | 什么算孤儿、删哪些对象（`src/trash/attachments.ts`）；什么时候清（设置页维护卡手动触发，ADR-0021）；清理段直接由路由接 `src/trash/attachments.ts` |
+| 孤儿附件的报告段（报告把扫描折成数量/字节 + 对象清单 `id`/`bytes`，清单上限读 `deps.config.orphanPreviewLimit`（ADR-0037）供设置页预览、读不出就抛 `io`） | `src/api/attachment-orphans.ts` | 什么算孤儿、删哪些对象（`src/trash/attachments.ts`）；什么时候清（设置页维护卡手动触发，ADR-0021）；清理段直接由路由接 `src/trash/attachments.ts` |
 | 孤儿附件的扫描与聚合清理（只认 `attachments/v1/objects` 下 `<2 hex>/<64 hex>`；引用源读不出就整份跳过） | `src/trash/attachments.ts` 的 `scanOrphanImageAttachments` / `cleanOrphanImageAttachments` | 什么时候清（归设置页维护卡，ADR-0021）；普通文件与缓存的处置（不碰，见 ADR-0020） |
 | 动过回收站之后谁重读（失效通告台，只有一个修订号） | `src/client/trash-store.ts` | 动了什么、谁动的（清单本体永远问宿主） |
-| 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与首个 / 末个订阅者生命周期；latest-wins 句柄 `createLatestWins` 的 compare-and-set；输入引用归一 `useLatest`） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
-| 宿主会话列表的批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行、点行算不算选中（那是 `src/client/host-rows.ts`）；不读 DOM |
-| 宿主行快照订阅（DOM 观察 + 行登记；渲染侧只读快照）与整行点击守卫 | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；不拥有选择变更 |
+| 跨槽位现场脚手架（值 store 的快照 / 订阅 / 每实例 seq / `reset`；懒读快照的订阅骨架与脏标记；latest-wins 句柄 `createLatestWins` 的 compare-and-set；输入引用归一 `useLatest`） | `src/client/store.ts` | 选择面语义（那是 `src/client/batch-selection-store.ts`）；各现场自己的初值、不变量与读法；防抖 / 轮询 / 定时器 / 焦点策略（latest-wins 只做 CAS，策略仍是调用方的现场） |
+| 宿主会话列表的批量选择面（多选模式 / 勾选集合 / 追加与收缩） | `src/client/batch-selection-store.ts` | 页面上有哪些行（归 `src/client/host-rows.ts`）、点行算不算选中（归 `src/client/batch-pick.ts`）；不读 DOM |
+| 宿主行可见集（**slot 组件挂载登记**，渲染侧只读快照）与按 id 的可选行查找（`pickableRowOf`；ADR-0034） | `src/client/host-rows.ts` | 选中集怎么变（归 `src/client/batch-selection-store.ts`）；全选 / 判定 / 整行点击守卫（归 `src/client/batch-pick.ts`）；DOM 行枚举（已删，见 ADR-0034） |
+| 批量的全选 / 全选判定 / 模式内整行点击守卫（DOM 只把指针映射成 sessionId，再查登记） | `src/client/batch-pick.ts` | 可见行的事实源（`src/client/host-rows.ts`）；选中集本身（`src/client/batch-selection-store.ts`） |
 | 回收站面板状态机（选中 / 孩子视图（离清单单级导航）/ 详情缓存 / 详情分页（`olderCursor`、在飞、晚到不落屏）/ 行失败 / 待确认动作与 request 意图 / 自动选中 / 窄档下钻状态与返回） | `src/client/use-trash-panel-controller.ts` | 布局（`src/client/trash-panel.tsx`）、取数（`src/client/use-trash-query.ts`）、选择面（`src/client/use-trash-selection.ts`）、清单的键盘与焦点（`src/client/trash-nav.ts`）、写入生命周期与收尾顺序（`src/client/write.ts`、`src/client/write-settlement.ts`）、面板恢复的呈现材质（`src/client/write-seats.ts`） |
 | 各张确认框的 busy 关框规则 | `src/client/confirm-close.ts` 的 `useIdleClose` | 各框的按钮文案与禁用呈现 |
 | 槽位贡献与注册（含设置页按 bundle 包名寻址的 keyed 槽位） | `src/client/index.tsx` | 各贡献自己的渲染 |
@@ -154,12 +161,13 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 
 ## 5. seam：可测性怎么落
 
-- **路由层是纯构造器**：`src/api/dispatch.ts` 的 `createApiHandler(deps, trust)` 不依赖 Cordis，用真 `node:http` server 承载——`tests/api.test.ts` 钉每一段的 method / 形状 / 信封 / 失败码原文。
+- **路由层是纯构造器**：`src/api/dispatch.ts` 的 `createDispatcher(deps)` 与 `src/api/connection-route.ts` 的 `registerConnectionRoutes(service, dispatch)` 不依赖 Cordis，用真 `node:http` server + 测试桥承载——`tests/api.test.ts` 钉每一段的 method / 形状 / 信封 / 失败码原文，`tests/connection-route.test.ts` 钉 exact 注册与 `Request` / `Response` 适配。
 - **动词层走记录型世界**：`tests/support/world.ts` 的 `createLogWorld` 用声明式读数描述盘与宿主，并按**发生顺序**记 fs / host 两端调用——删除的「摘账本 → 搬目录 → 摘活体 → 通告」是一条顺序断言，不是散点断言。
 - **领域纯函数直接喂结构**：`src/trash/groups.ts`、`src/trash/reconcile.ts`、`src/trash/entry.ts`、`src/shared/wire.ts` 的判据各有一条不起服务、不碰盘的钉子。
 - **宿主端口用本地窄镜像 + 假 adapter**：`tests/ports.test.ts` / `tests/host-roles.test.ts` 钉角色切分，`tests/support/fake-deps.ts` 是动词用例共用的一份内存 adapter。
-- **装配只在 `index.ts`，由 `tests/assembly.test.ts` 端到端钉**：插件模块面、前缀路由、槽位与 effect 的注册形状。
+- **装配只在 `index.ts`，由 `tests/assembly.test.ts` 端到端钉**：插件模块面、exact Fetch 路由、槽位与 effect 的注册形状。
 - **客户端是假 adapter 驱动真实组件**：`tests/client/index.test.tsx` 用假 `ctx` 与假 `fetch` 跑真 `apply`，其余客户端用例按读者分的依赖束注入；不是渲染快照。
+- **重开等待句柄直接喂树**：`tests/client/pending-open.test.ts` 用假 store 与假 timer 钉订阅 / 放弃 / 取消；`tests/client/main-view.test.ts` 仍钉主视图收尾判据。
 - **日志读面用真 zstd 帧**：`tests/session-log.test.ts` 与 `tests/zstd-frames.test.ts` 直接造多帧数据，不替身编解码。
 - **门的分工**见 `AGENTS.md` 的「必须过的门」；真机验证的走法见 `docs/development.md` 的「真机验证」。
 
@@ -175,7 +183,7 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 - **工作区账本缺席不是恢复失败**：宿主「删除工作区」只删注册、保留目录与每一份会话日志；恢复照常回盘、跳过 `attach`、归入未分组。`sessions/<projectDir>` 不在仍是硬拒绝，绝不静默建目录。判据住 `src/verbs/restore-session.ts`。
 - **无主子会话维护只走官方面、只由插件设置页的维护卡手动触发**：扫描用 `/orphans`，清理是 `/apply` 的 `orphan-clean`；永久删除、不自动跑——回收站面板的挂载、写后重读与清空都不发这一问（ADR-0021），只清会话目录与会话独占的图片附件副本（共享副本保留，判据见 ADR-0020）。`sessionQuery` 缺席时 `/orphans` 响亮失败，purge 只清清册里的那部分。判据住 `src/verbs/orphan-subagents.ts` 与 `src/verbs/permanent-removal.ts`。
 - 会话日志是**多帧 zstd**：只读版本号最大的那代，绝不拼代（判据与用例住 `src/log/session-log.ts`、`src/log/zstd-frames.ts` 与 `tests/session-log.test.ts`、`tests/zstd-frames.test.ts`）。
-- **附件库在 `$DSH_HOME/attachments/v1`**：图片在 `objects/`，普通文件在 `file-objects/` + `files/`，宿主所有、没有删除接口。永久删除只清**独占图片副本**——被删会话引用、且剩余任何会话/派生存储都不再引用；共享副本保留，`$DSH_HOME` 之外的源文件不受影响；普通文件只渲染、不代删。剩余引用源读不出就整体跳过（宁可留孤儿也不删共享）。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。
+- **附件库在 `$DSH_HOME/attachments/v1`**：图片在 `objects/`，普通文件在 `file-objects/` + `files/`，宿主所有、没有删除接口。永久删除只清**独占图片副本**——被删会话引用、且剩余任何会话/派生存储都不再引用；共享副本保留，`$DSH_HOME` 之外的源文件不受影响；普通文件只渲染、不代删。剩余引用源读不出就整体跳过（宁可留孤儿也不删共享）。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。**读取优先走宿主 `attachments` 的 `readImage` / `readFileStream`（ADR-0035）**，直接 fs 只留没有服务/引用元数据时的 fallback 与孤儿扫描/删除。
 - **孤儿附件也只有手动这一条路**：`/attachment-orphans` 报告、`/attachment-clean` 聚合清理，都由设置页维护卡在用户点「检查 / 清理」时发起；没有自动检测、没有定时器，面板挂载不读它。报告与清理共用同一套引用扫描（全部会话日志 + 全部 `session-trash` 目录 + `storages` / `cache` JSON），但每次调用各自现扫：任一读不出就报告失败、清理零删，不折成 0。判据住 `src/trash/attachments.ts`，裁决见 ADR-0021。
 
 ## 7. 改动面 → 先读什么
@@ -185,14 +193,15 @@ index.ts   组合根：装配、注册（前缀路由 / 槽位 / effect）——
 | 改动面 | 先读 |
 | --- | --- |
 | 段名 / 线上形状 / 失败码 | 本文 §4 的 `src/shared/wire.ts` 行；ADR-0003；`src/api/route-table.ts` |
-| 路由 / 请求栅栏 / 远程身份 | 本文 §1、§4；`src/api/request-trust.ts`；ADR-0009、ADR-0022、ADR-0023 |
+| 路由 / 鉴权 / 远程身份 | 本文 §1、§4；`src/api/connection-route.ts`；ADR-0033（取代 ADR-0009、ADR-0022、ADR-0023） |
 | 删除 / 恢复 / 归档语义 | 本文 §6；`src/verbs/delete-session.ts`、`src/verbs/restore-session.ts`；ADR-0008 |
-| 批量与逐步撤销 | 本文 §4 的 `batch` / `member-journal` / `batch-carried` 行；ADR-0002 |
+| 批量与逐步撤销 | 本文 §4 的 `batch` / `member-journal` / `batch-carried` 行；ADR-0002；可见行来源见 ADR-0034 |
 | 永久删除 / 活体准入 | 本文 §4 的 `permanent-removal` / `live-admission` 行；ADR-0027 |
-| 附件与孤儿清理 | 本文 §6；`src/trash/attachments.ts`；ADR-0020、ADR-0021 |
+| 附件与孤儿清理 | 本文 §6；`src/api/attachment.ts`、`src/ports/attachments-port.ts`、`src/trash/attachments.ts`；ADR-0020、ADR-0021、ADR-0035；上限/条数默认值见 `src/config.ts`（ADR-0037） |
 | 清册 / 对账 | `src/trash/ledger.ts`、`src/trash/reconcile.ts`；ADR-0012 |
 | 会话日志读取 | `src/log/session-log.ts`、`src/log/zstd-frames.ts` |
 | 面板 / 交互 / 写入座位 | 本文 §3；`docs/ui-spec.md`；`src/client/write-seats.ts`、`src/client/write-settlement.ts` |
+| 回收站详情 / 对话全量 | 本文 §4 的 `detail` / `trash-detail` 行；`docs/ui-spec.md` ⑥；ADR-0026；`src/trash/detail.ts`、`src/client/trash-detail.tsx` |
 | 插件页维护卡 | 本文 §3；`docs/ui-spec.md` §5；ADR-0021 |
 | 宿主接入 / 打包 / 发版 | 本文 §1；`docs/development.md`；ADR-0025 |
 | 文档 / ADR / 发布流程 | `docs/AGENTS.md`；`docs/adr/README.md`、`docs/adr/ADR-FORMAT.md`；`CONTRIBUTING.md`、`CHANGELOG.md` |

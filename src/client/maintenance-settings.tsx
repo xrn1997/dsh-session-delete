@@ -163,7 +163,7 @@ function AttachmentMaintenance({ section, t }: AttachmentMaintenanceProps): Reac
 }
 
 /** 预览 + 确认：先摆出这些图片（点开可放大），再决定清不清；只清 `.dsh` 内无引用的图片副本。
- *  `items` 只是预览清单（服务端最多给 200 条），`count` 才是这次要清理的总数。 */
+ *  `items` 只是预览清单（服务端按配置给条数，默认最多 200 条），`count` 才是这次要清理的总数。 */
 function AttachmentConfirm({
   count,
   items,

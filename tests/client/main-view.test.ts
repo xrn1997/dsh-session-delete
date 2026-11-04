@@ -18,9 +18,23 @@ function uiWith(over: {
 } = {}) {
   return {
     selection: { getSnapshot: () => ({ ...(over.sessionId === undefined ? {} : { sessionId: over.sessionId }) }) },
-    sessions: { list: { getSnapshot: () => ({ byId: over.byId ?? {} }) } },
+    sessions: { list: { getSnapshot: () => ({ byId: over.byId ?? {} }), subscribe: () => () => {} } },
     clearMain: over.clearMain ?? (() => {}),
     openSession: over.openSession ?? (() => {}),
+  }
+}
+
+/** 假 snapshot store：测试用 `notify()` 表达“摘要落地”，不再推进 100ms 轮询。 */
+function listStore(getById: () => Record<string, unknown>) {
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => ({ byId: getById() }),
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    notify: () => { for (const listener of [...listeners]) listener() },
+    listenerCount: () => listeners.size,
   }
 }
 
@@ -62,10 +76,11 @@ describe('删除/恢复时主视图的收尾', () => {
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
       let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
       const openSession = vi.fn()
       bindMainView(ctxWith({
         selection: { getSnapshot: () => selected },
-        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        sessions: { list },
         clearMain: () => { selected = {} },
         openSession,
       }))
@@ -76,7 +91,7 @@ describe('删除/恢复时主视图的收尾', () => {
       afterRestore(['session-a'])
       afterRestore(['session-b'])
       byId = { 'session-a': {}, 'session-b': {} }
-      vi.advanceTimersByTime(150)
+      list.notify()
       expect(openSession).toHaveBeenCalledTimes(1)
       expect(openSession).toHaveBeenCalledWith('session-b')
     } finally {
@@ -89,10 +104,11 @@ describe('删除/恢复时主视图的收尾', () => {
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
       let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
       const openSession = vi.fn()
       bindMainView(ctxWith({
         selection: { getSnapshot: () => selected },
-        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        sessions: { list },
         clearMain: () => { selected = {} },
         openSession,
       }))
@@ -100,7 +116,7 @@ describe('删除/恢复时主视图的收尾', () => {
       afterRestore(['session-a'])
       afterDelete(['session-b'])
       byId = { 'session-a': {} }
-      vi.advanceTimersByTime(150)
+      list.notify()
       expect(openSession).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
@@ -112,10 +128,11 @@ describe('删除/恢复时主视图的收尾', () => {
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
       let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
       const openSession = vi.fn()
       bindMainView(ctxWith({
         selection: { getSnapshot: () => selected },
-        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        sessions: { list },
         clearMain: () => { selected = {} },
         openSession,
       }))
@@ -123,7 +140,7 @@ describe('删除/恢复时主视图的收尾', () => {
       afterRestore(['session-a'])
       afterRestore(['session-c'])
       byId = { 'session-a': {}, 'session-c': {} }
-      vi.advanceTimersByTime(150)
+      list.notify()
       expect(openSession).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
@@ -135,10 +152,11 @@ describe('删除/恢复时主视图的收尾', () => {
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
       let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
       const openSession = vi.fn()
       bindMainView(ctxWith({
         selection: { getSnapshot: () => selected },
-        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        sessions: { list },
         clearMain: () => { selected = {} },
         openSession,
       }))
@@ -146,7 +164,7 @@ describe('删除/恢复时主视图的收尾', () => {
       afterRestore(['session-a'])
       afterDelete([])
       byId = { 'session-a': {} }
-      vi.advanceTimersByTime(150)
+      list.notify()
       expect(openSession).toHaveBeenCalledWith('session-a')
     } finally {
       vi.useRealTimers()
@@ -159,9 +177,10 @@ describe('删除/恢复时主视图的收尾', () => {
       const openSession = vi.fn()
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
       let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
       bindMainView(ctxWith({
         selection: { getSnapshot: () => selected },
-        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        sessions: { list },
         clearMain: () => { selected = {} },
         openSession,
       }))
@@ -170,7 +189,7 @@ describe('删除/恢复时主视图的收尾', () => {
       vi.advanceTimersByTime(50)
       expect(openSession).not.toHaveBeenCalled()
       byId = { 'session-a': {} }
-      vi.advanceTimersByTime(100)
+      list.notify()
       expect(openSession).toHaveBeenCalledWith('session-a')
     } finally {
       vi.useRealTimers()
@@ -206,10 +225,11 @@ describe('删除/恢复时主视图的收尾', () => {
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
       let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
       const openSession = vi.fn()
       bindMainView(ctxWith({
         selection: { getSnapshot: () => selected },
-        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        sessions: { list },
         clearMain: () => { selected = {} },
         openSession,
       }))
@@ -217,7 +237,7 @@ describe('删除/恢复时主视图的收尾', () => {
       afterRestore(['session-a'])
       forgetMainView(['session-b'])
       byId = { 'session-a': {} }
-      vi.advanceTimersByTime(150)
+      list.notify()
       expect(openSession).toHaveBeenCalledWith('session-a')
     } finally {
       vi.useRealTimers()
@@ -309,5 +329,118 @@ describe('删除/恢复时主视图的收尾', () => {
     })))
     afterDelete(['session-a'])
     expect(() => afterRestore(['session-a'])).not.toThrow()
+  })
+
+  it('2 秒内摘要没出现 ⇒ 放弃并退订；之后落地也不开', () => {
+    vi.useFakeTimers()
+    try {
+      let byId: Record<string, unknown> = {}
+      const list = listStore(() => byId)
+      const openSession = vi.fn()
+      bindMainView(ctxWith({
+        selection: { getSnapshot: () => ({ sessionId: 'session-a' }) },
+        sessions: { list },
+        clearMain: () => {},
+        openSession,
+      }))
+      afterDelete(['session-a'])
+      afterRestore(['session-a'])
+      expect(list.listenerCount()).toBe(1)
+      vi.advanceTimersByTime(2000)
+      expect(list.listenerCount()).toBe(0)
+      byId = { 'session-a': {} }
+      list.notify()
+      expect(openSession).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('store.subscribe 抛错 ⇒ 这次等待作废，但不把恢复收尾染红', () => {
+    const openSession = vi.fn()
+    bindMainView(ctxWith({
+      selection: { getSnapshot: () => ({ sessionId: 'session-a' }) },
+      sessions: { list: { getSnapshot: () => ({ byId: {} }), subscribe: () => { throw new Error('store gone') } } },
+      clearMain: () => {},
+      openSession,
+    }))
+    afterDelete(['session-a'])
+    expect(() => afterRestore(['session-a'])).not.toThrow()
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('退订抛错同样不染红：取消等待与重置都安静收场', () => {
+    const listeners = new Set<() => void>()
+    const openSession = vi.fn()
+    bindMainView(ctxWith({
+      selection: { getSnapshot: () => ({ sessionId: 'session-a' }) },
+      sessions: {
+        list: {
+          getSnapshot: () => ({ byId: {} }),
+          subscribe: (listener: () => void) => {
+            listeners.add(listener)
+            return () => { throw new Error('store gone') }
+          },
+        },
+      },
+      clearMain: () => {},
+      openSession,
+    }))
+    afterDelete(['session-a'])
+    afterRestore(['session-a'])
+    expect(listeners.size).toBe(1)
+    expect(() => resetMainView()).not.toThrow()
+    for (const listener of [...listeners]) listener()
+    expect(openSession).not.toHaveBeenCalled()
+  })
+
+  it('旧 store 没有 subscribe ⇒ 不轮询，直接放弃这次重开', () => {
+    vi.useFakeTimers()
+    try {
+      let byId: Record<string, unknown> = {}
+      const openSession = vi.fn()
+      bindMainView(ctxWith({
+        selection: { getSnapshot: () => ({ sessionId: 'session-a' }) },
+        sessions: { list: { getSnapshot: () => ({ byId }) } },
+        clearMain: () => {},
+        openSession,
+      }))
+      afterDelete(['session-a'])
+      afterRestore(['session-a'])
+      byId = { 'session-a': {} }
+      vi.advanceTimersByTime(2000)
+      expect(openSession).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('插件卸载的 effect 取消在等的重开（退订 + 之后落地也不开）', () => {
+    let byId: Record<string, unknown> = {}
+    const list = listStore(() => byId)
+    const openSession = vi.fn()
+    const cleanups: Array<() => void> = []
+    const base = ctxWith({
+      selection: { getSnapshot: () => ({ sessionId: 'session-a' }) },
+      sessions: { list },
+      clearMain: () => {},
+      openSession,
+    })
+    bindMainView({
+      ...base,
+      effect: (execute: () => unknown) => {
+        const cleanup = execute()
+        if (typeof cleanup === 'function') cleanups.push(cleanup as () => void)
+      },
+    })
+    afterDelete(['session-a'])
+    afterRestore(['session-a'])
+    expect(list.listenerCount()).toBe(1)
+    cleanups[0]?.()
+    expect(list.listenerCount()).toBe(0)
+    byId = { 'session-a': {} }
+    list.notify()
+    expect(openSession).not.toHaveBeenCalled()
   })
 })

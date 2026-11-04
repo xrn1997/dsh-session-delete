@@ -4,18 +4,18 @@
  *
  * 入口在每行的「⋯」菜单里（`batch-menu-item.tsx`）：**按下才进入多选模式**，模式内才渲染勾选框、
  * 才把整行点击变成"勾/取消"；退出模式清空名单。选中集只住 `batch-selection-store.ts`（模式 + 名单一份
- * 合并快照）；"哪些行现在可见、点行算不算选中"只住 `host-rows.ts`。四处隔着槽位边界，只有模块级
- * store 能让他们看见同一份名单；本文件不再持有任何现场。
+ * 合并快照）；"哪些行现在可见"住 `host-rows.ts`，"点行算不算选中"住 `batch-pick.ts`。四处隔着
+ * 槽位边界，只有模块级 store 能让他们看见同一份名单；本文件不持有任何现场。
  *
  * **为什么主勾选在行首**：宿主对行尾 `.rowActions` 是 `display:none`，只有 `row:hover` / 菜单打开
  * 才出现（app.asar 0.2.0-rc.2 的 Rows 渲染）；行首 16px 格在无状态点时是空的，模式内可见。
  * 宿主在「有状态点（运行中/待确认/未读完成）」与归档行不渲染行首格 ⇒ 这些行走行尾悬停兜底，
- * 但模式内**点整行**也能选（`host-rows.ts` 的 `useSelectionRowClickGuard`），所以不依赖那颗小框。
+ * 但模式内**点整行**也能选（`batch-pick.ts` 的 `useSelectionRowClickGuard`），所以不依赖那颗小框。
  * 两条勾选不会同时出现（`ui.css` 的 `:has` 兜底隐藏规则，靠宿主行的 `data-row-key`）。
  */
-import { useEffect, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
-import { registerHostRowInfo, unregisterHostRowInfo } from './host-rows.js'
+import { useHostRowRegistration } from './host-rows.js'
 import { callRemote, type SessionDeleteRemote } from './remote.js'
 import { readReceipt } from './receipt.js'
 import { togglePick, useSelection } from './batch-selection-store.js'
@@ -47,6 +47,8 @@ export interface BatchPickCheckboxProps {
   sessionId: string
   /** 槽位只投 `sessionId`；标题由宿主侧的 root hook 读出来再传进来（见 `index.tsx` 的 `PickLeadingRow`）。 */
   title: string
+  /** 运行态同样由 root hook 读：登记表里的 `live` 与行尾兜底保持同一口径。 */
+  live?: boolean
   /** 文案（缺省 = 内置 zh，见 `copy.ts`）。 */
   t?: Translate
 }
@@ -61,9 +63,12 @@ export interface BatchPickCheckboxProps {
 export function BatchPickCheckbox({
   sessionId,
   title,
+  live = false,
   t = zhTranslate,
 }: BatchPickCheckboxProps): ReactElement | null {
   const { selecting, picks } = useSelection()
+  // 行首槽也登记：只有行首槽渲染的宿主代次也不必单独兜底（ADR-0034 决定 1）。
+  useHostRowRegistration(sessionId, { title, live })
   const on = picks.some((candidate) => candidate.sessionId === sessionId)
   if (!selecting) return null
   const name = title === '' ? t('common.untitled') : title
@@ -106,11 +111,8 @@ export function BatchPickButton({
   const { selecting, picks } = useSelection()
   const on = picks.some((candidate) => candidate.sessionId === sessionId)
   // 模式内与模式外都登记：守卫在进入模式的那一帧就要有标题，不能等这一行重挂载。
-  // 卸载即注销：宿主的行被删/被过滤掉之后，登记表不该替它继续记着（同一行有多颗时按计数减）。
-  useEffect(() => {
-    registerHostRowInfo(sessionId, { title, live })
-    return () => { unregisterHostRowInfo(sessionId) }
-  }, [sessionId, title, live])
+  // 卸载即注销；标题/运行态变化走更新口，不重排（`host-rows.ts` 的 `useHostRowRegistration`）。
+  useHostRowRegistration(sessionId, { title, live })
   if (!selecting) return null
   const name = title === '' ? t('common.untitled') : title
   // Tooltip 注入 ref，普通函数组件接不住 ⇒ 套一层 span（`delete-menu-item.tsx` 同款）。

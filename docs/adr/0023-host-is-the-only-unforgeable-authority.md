@@ -1,6 +1,6 @@
 # Host 是唯一不可伪造的归属头：回环 socket 不构成豁免
 
-Status: accepted
+Status: superseded by 0033
 
 旧栅栏判「Origin 与 Host 同名」就放行，对 DNS rebinding 没有判别力——重绑后两个头同写攻击域名，连接还落在回环。决定：请求归属只由 **Host 是否属于本次部署**决定（回环名 / 监听 bind 字面量 / 宿主声明的可信 authority），归属判定先于任何本机 / 远程分支，回环源地址不跳过它。
 

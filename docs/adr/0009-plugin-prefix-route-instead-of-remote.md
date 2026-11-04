@@ -1,6 +1,6 @@
 # ADR-0009 — 通道走插件专属前缀路由，不挂官方 `remote.<namespace>`
 
-Status: accepted
+Status: superseded by 0033
 
 ## 背景
 

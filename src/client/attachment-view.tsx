@@ -2,8 +2,10 @@
  * 回收站详情与设置页维护卡预览里的一条附件：图片给缩略图 + 放大框，普通文件给下载 chip。
  *
  * 三条口径：
- * - **地址只由 `attachmentId` + `kind` 拼**：`/attachment` 段只认这两个参数寻址（`name` 只做下载名建议，
- *   不参与路径推导，见 `src/api/attachment.ts`）。空串与缺席同义——空串不是一个名字，不写进查询串。
+ * - **地址只由 `attachmentId` + `kind` 寻址**：`/attachment` 段以这两个参数找对象；媒体元数据
+ *   （`mediaType` / `bytes` / `width` / `height`）只给宿主 `attachments` 服务做引用校验，`name` 只做
+ *   下载名建议，均不参与路径推导（见 `src/api/attachment.ts`）。空串与缺席同义——空串不是一个名字，
+ *   不写进查询串。
  * - **图裂了就换占位**：缩略图与放大框共用同一份 `failed` 集合，`onError` 之后这一格改成「附件不可用」，
  *   不把破图留在屏上（放大框里裂了也换）。普通文件走 `<a download>`，没有页面内失败面：服务端失败回
  *   200 + JSON 信封，浏览器可能把这份错误响应存成文件。
@@ -14,7 +16,7 @@
  * （气泡那一侧），助手行左对齐（正文那一侧）。条本身不自认角色，对齐由调用面给。
  */
 import { useState, type CSSProperties } from 'react'
-import { PARAMS, ROUTES, SESSION_DELETE_API_PREFIX, type TrashDetailAttachmentWire } from '../shared/wire.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, PARAMS, ROUTES, type TrashDetailAttachmentWire } from '../shared/wire.js'
 import type { Translate } from './copy.js'
 import { Button } from './ui/Button.js'
 import { CARD } from './trash-view.js'
@@ -30,11 +32,17 @@ export function attachmentUrl(a: TrashDetailAttachmentWire): string {
   const query = new URLSearchParams({
     [PARAMS.attachmentId]: a.attachmentId,
     [PARAMS.attachmentKind]: a.kind,
+    [PARAMS.attachmentBytes]: String(a.bytes),
   })
+  if (a.kind === 'image') {
+    if (a.mediaType !== undefined) query.set(PARAMS.attachmentMediaType, a.mediaType)
+    if (a.width !== undefined) query.set(PARAMS.attachmentWidth, String(a.width))
+    if (a.height !== undefined) query.set(PARAMS.attachmentHeight, String(a.height))
+  }
   if (a.kind === 'file' && a.name !== undefined && a.name !== '') {
     query.set(PARAMS.attachmentName, a.name)
   }
-  return `${SESSION_DELETE_API_PREFIX}${ROUTES.attachment.path}?${query.toString()}`
+  return `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachment.path}?${query.toString()}`
 }
 
 /** 空串与缺席同义：宿主侧的 `name` 是可选建议名，空串不是名字（兜底文案与"不带 name 查询"都看它）。 */

@@ -7,19 +7,19 @@ import { createMemberPresence, type MemberPresenceHost } from '../src/verbs/memb
 import { createFakeDeps } from './support/fake-deps.js'
 
 /** 少一个键就编译失败：`Record<keyof CoreDeps, true>` 的初值不允许缺格。 */
-const coreKeys: Record<keyof CoreDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true }
-/** 多一个键也编译失败：CoreDeps 的键集必须被这五个字面量盖住。 */
-const coreIsExhaustive: Exclude<keyof CoreDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence'> extends never ? true : false = true
+const coreKeys: Record<keyof CoreDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, config: true }
+/** 多一个键也编译失败：CoreDeps 的键集必须被这六个字面量盖住。 */
+const coreIsExhaustive: Exclude<keyof CoreDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'config'> extends never ? true : false = true
 
 /** 会话删除只多一个 now；它是唯一读时钟的动词。 */
-const deleteSessionKeys: Record<keyof DeleteSessionDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, now: true }
-const deleteSessionIsExhaustive: Exclude<keyof DeleteSessionDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'now'> extends never ? true : false = true
+const deleteSessionKeys: Record<keyof DeleteSessionDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, config: true, now: true }
+const deleteSessionIsExhaustive: Exclude<keyof DeleteSessionDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'config' | 'now'> extends never ? true : false = true
 const deleteSessionHasNow: 'now' extends keyof DeleteSessionDeps ? true : false = true
 const coreHasNow: 'now' extends keyof CoreDeps ? true : false = false
 
-/** 组合根的全量面 = 会话删除的时钟 + 永久删除的能力；键集与 DeleteSessionDeps 相同。 */
-const deleteKeys: Record<keyof DeleteDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, now: true }
-const deleteIsExhaustive: Exclude<keyof DeleteDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'now'> extends never ? true : false = true
+/** 组合根的全量面 = 会话删除的时钟 + 永久删除的能力 + 附件读面；比 DeleteSessionDeps 多 attachments。 */
+const deleteKeys: Record<keyof DeleteDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, config: true, now: true, attachments: true }
+const deleteIsExhaustive: Exclude<keyof DeleteDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'config' | 'now' | 'attachments'> extends never ? true : false = true
 
 /** 能力闸：removeDir 只在永久删除的执行面；动词的 host 面不含在场三件（它们经 PresenceCapability）。 */
 type CoreFsRemoveDir = 'removeDir' extends keyof CoreDeps['fs'] ? true : false
@@ -61,14 +61,14 @@ const onlyMemberPresence: OnlyMemberPresence = true
 
 /** 上面这些常量由 `tsc` 在编译期求值：真正的闸是 `pnpm typecheck`。下面的 expect 把当前形状钉成
  *  可读的运行期证据；常量本身受 `noUnusedLocals` 约束，删 expect 时要连常量一起删。 */
-it('CoreDeps 是五项基础；会话删除加时钟，组合根再加永久删除能力', () => {
-  expect(Object.keys(coreKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence'])
+it('CoreDeps 是六项基础；会话删除加时钟，组合根再加永久删除能力与附件读面', () => {
+  expect(Object.keys(coreKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'config'])
   expect(coreIsExhaustive).toBe(true)
-  expect(Object.keys(deleteSessionKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'now'])
+  expect(Object.keys(deleteSessionKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'config', 'now'])
   expect(deleteSessionIsExhaustive).toBe(true)
   expect(deleteSessionHasNow).toBe(true)
   expect(coreHasNow).toBe(false)
-  expect(Object.keys(deleteKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'now'])
+  expect(Object.keys(deleteKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'config', 'now', 'attachments'])
   expect(deleteIsExhaustive).toBe(true)
   expect(coreFsRemoveDir).toBe(false)
   expect(deleteSessionFsRemoveDir).toBe(false)
@@ -85,8 +85,11 @@ it('deps 切片的收窄是运行期事实：core 没有删除能力与时钟', 
   const { deps } = createFakeDeps()
   const slices = slicesOf(deps)
   expect(slices.core).not.toHaveProperty('now')
+  expect(slices.core).not.toHaveProperty('attachments')
   expect(slices.core.fs).not.toHaveProperty('removeDir')
   expect(slices.core.fs).not.toHaveProperty('removeFile')
+  expect(slices.core.config).toBe(deps.config)
+  expect(slices.attachment.attachments).toBe(deps.attachments)
   expect(slices.removal).not.toHaveProperty('now')
   expect(slices.removal.fs).toHaveProperty('removeDir')
   expect(slices.removal.fs).toHaveProperty('removeFile')

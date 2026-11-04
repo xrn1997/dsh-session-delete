@@ -2,7 +2,7 @@
  * 批量删除的浮条：**多选模式内常驻**（0 条也渲染，既显示模式又给退出入口），
  * 汇总「已选 N 条」+（读得到时）「含 K 个子会话」；「查看已选」展开限高可滚动的标题清单
  * （逐条可移除），回答"到底选了哪些"——清单默认收起，不把底部输入区盖住。
- * 模式内的整行点击守卫也挂在这棵常驻宿主上（见 `host-rows.ts` 的 `useSelectionRowClickGuard`）。
+ * 模式内的整行点击守卫也挂在这棵常驻宿主上（见 `batch-pick.ts` 的 `useSelectionRowClickGuard`）。
  *
  * 为什么单独一个文件而不是并进 `batch-select.tsx`：那份是"行开关控件"，而浮条要点开确认框
  * （要 import 它的现场）——两个方向合到一个文件上就是一圈。浮条住在
@@ -18,12 +18,8 @@ import { useEffect, useState, type ReactElement } from 'react'
 import { fetchCounts } from './batch-select.js'
 import { requestDeleteBatch } from './batch-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
-import {
-  areAllVisibleRowsSelected,
-  selectAllVisible,
-  useSelectionRowClickGuard,
-  useVisibleSelectableRows,
-} from './host-rows.js'
+import { areAllVisibleRowsSelected, selectAllVisible, useSelectionRowClickGuard } from './batch-pick.js'
+import { useVisibleSelectableRows } from './host-rows.js'
 import type { SessionDeleteRemote } from './remote.js'
 import { clearPicks, exitSelection, getPicks, togglePick, useSelection } from './batch-selection-store.js'
 import { createLatestWins } from './store.js'
@@ -46,8 +42,8 @@ export function BatchBar({
   const { selecting, picks } = useSelection()
   // 模式内的整行点击（勾/取消、拦会话切换）挂在浮条这棵常驻宿主上：浮条是模式的可见形态。
   useSelectionRowClickGuard()
-  // 渲染期只读快照：DOM 观察与行登记留在适配器（host-rows.ts），这里不查 DOM。
-  // 浮条常驻，但行快照只在多选态订阅：模式外 body 的每次变更都不该把它叫醒。
+  // 渲染期只读快照：可见行登记住 host-rows.ts、点击守卫住 batch-pick.ts，这里不读 DOM。
+  // 浮条常驻，但行快照只在多选态订阅：模式外每次行登记都不该把它叫醒。
   const visibleRows = useVisibleSelectableRows(selecting)
   const [counts, setCounts] = useState<Map<string, number> | null>(null)
   const [expanded, setExpanded] = useState(false)
