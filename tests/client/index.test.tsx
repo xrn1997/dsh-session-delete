@@ -256,7 +256,7 @@ function Scene({
   onMenuClose?: (open: boolean) => void
 }) {
   const [open, setOpen] = useState(true)
-  // 真宿主的菜单槽是 list：官方四行 + 我们的两行**全部**渲染（不是只渲染第一条），并且按 order 排。
+  // 真宿主的菜单槽是 list：官方菜单行 + 我们的两行**全部**渲染（不是只渲染第一条），并且按 order 排。
   const menus = registered
     .filter((row) => row.name === MENU_SLOT)
     .sort((left, right) => (left.order ?? 0) - (right.order ?? 0))
@@ -370,7 +370,7 @@ describe('apply 的装配面', () => {
     const label = panelRow?.label
     expect(typeof label).toBe('function')
     expect(typeof label === 'function' ? label() : label).toBe('回收站')
-    // 菜单行落在官方四行（pin 100 / rename 200 / fork 300 / archive 400）之后：多选 850 在删除 900
+    // 菜单行落在官方菜单行（pin 100 / rename 200 / fork 300 / archive 400 / session-id 450）之后：多选 850 在删除 900
     // 之前；行首那一格由状态点优先占用（无状态点才轮到我们），行尾那颗落在宿主自己的
     // archive(100) / pin(200) 之后；面板行落在官方两个面板行（plugins 0 / schedules）与第三方
     // 「小说」（20）之后。
@@ -734,5 +734,19 @@ describe('插件设置页（`plugins.bundle.config` 的占用者）', () => {
     expect(fetchCalls.map((call) => call.path)).toEqual([
       `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`,
     ])
+  })
+
+  // 宿主真实传的是 `{ view: 'page' }`；summary 是插件列表行的摘要位，维护卡不能顶掉它。
+  // 组件单测直传 view 只能证明组件分支，这里证明**槽位装配**把宿主 props 原样带进组件。
+  it('宿主按 view 派发：page 渲染卡片，summary 返回空', async () => {
+    const { seat } = await bootstrap()
+    const { Component, props } = seat(SETTINGS_SLOT)
+
+    const page = render(<Component {...props} view="page" />)
+    expect(screen.getByText('维护')).toBeInTheDocument()
+    page.unmount()
+
+    const summary = render(<Component {...props} view="summary" />)
+    expect(summary.container.firstChild).toBeNull()
   })
 })

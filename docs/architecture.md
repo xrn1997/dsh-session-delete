@@ -38,7 +38,7 @@
 - **状态语义**：**请求体不对**由插件分发器回 400 + 信封；**方法或路径不在 exact route 声明内**时宿主在 handler 之前回纯文本 404（插件的 405 / 404 只是适配器直调时的防御分支）；**401/403**：宿主 `/api` 的 401/403 是纯文本鉴权/归属失败，客户端映射固定原文；附件同源闸回的是 **403 + 失败信封**（走插件错误面）；**操作失败**回 200 + 信封——浏览器半先解信封再看状态，别把这几类混成一个 200。
 - **鉴权归宿主 `/api`**：exact Fetch 路由由宿主 `/api` bridge 做 Host/Origin/浏览器认证（ADR-0033）；插件不重建身份，也没有回环免身份分支。唯一的插件侧闸是附件字节段的**同源取数闸**（路由记录声明 `fetchGate`）：拒 `Sec-Fetch-Site: same-site / cross-site` 与 authority 和 `Host` 不符的 http(s) `Origin` / `Referer`（ADR-0033 边界）。绑定策略归宿主 webserver 配置（只接受具体接口 IP、拒绝 wildcard），插件不替它决定可达性，也不建立身份。
 - 改动生效分两条路：浏览器半靠宿主 HMR 热推；Node 半必须重启宿主。
-- **浏览器半一条 `@deepseek-ai/*` 的 import 都不许有**（type-only 也不留）：宿主客户端包随宿主换代而变、不过类型检查，一个抛错的组件会把整个槽位条目打空。要用的控件/图标按官方处方抄进 `src/client/ui/*`（类名 `sd-` 前缀、`@keyframes` 改名、只留 `--dsw-*` token），来源表在 `src/client/ui/ui.css` 文件头。
+- **浏览器半一条 `@deepseek-ai/*` 的 import 都不许有**（type-only 也不留）：宿主客户端包随宿主换代而变、不过类型检查，一个抛错的组件会把整个槽位条目打空。要用的控件/图标按官方处方抄进 `src/client/ui/*`（类名 `sd-` 前缀、`@keyframes` 改名、配色与几何只走 token——宿主私有的那批经本插件的 `--sd-*` 别名层带公开兜底），来源表在 `src/client/ui/ui.css` 文件头。
 
 ## 2. Node 半的分层与依赖方向
 
@@ -88,11 +88,12 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 语义 | 唯一主人 | 它不回答什么 |
 | --- | --- | --- |
 | 段名 / 线上形状 / 线上失败码与它的读法（前缀判定 `isSessionDeleteCodeError`、取动词词 `verbCodeOf`）/ 信封的运行期判形 `isRemoteResult` / 回收站目录名 / 唯一取数基础路径常量 | `src/shared/wire.ts` | 业务判据 |
-| 客户端探测（成功信封才算通道在，401/403 不注册入口）与八段 fetch | `src/client/remote.ts` | 段名 / 形状（`src/shared/wire.ts`）；鉴权（宿主 `/api`） |
+| 客户端探测（成功信封才算通道在，401/403 不注册入口）与八段 fetch | `src/client/remote.ts` | 段名 / 形状（`src/shared/wire.ts`）；鉴权（宿主 `/api`）；地址的挂载点（`src/client/api-base.ts`） |
+| 取数地址的挂载点投影（官方 `/api` 前缀 + 当前文档所在目录；根部署下与旧版逐字相同） | `src/client/api-base.ts` | 前缀常量与段名（`src/shared/wire.ts`）；鉴权（宿主 `/api` bridge）；段名表的方法归属 |
 | 写 `/apply` 回执的读法与**摘要**（缺 id / null 幂等 / 单条 null 的协议错 / 逐条失败 / orphan-clean 的 not-found 中性；成功 / 中性 / 失败 / 部分计数与**按动作取**的落地 id 一次派生） | `src/client/receipt.ts` | 各写入面的呈现；线上形状归 `src/shared/wire.ts` |
 | 附件清理读数在回执里的聚合（跨 `ok` 相加、`skipped` 取第一条）与「跳过半句」的拼装判据（面板与维护卡共用） | `src/client/receipt.ts`；面板后半句在 `src/client/use-trash-query.ts`、维护卡后半句在 `src/client/use-maintenance.ts` | 独占判定（归 `src/trash/attachments.ts`）；服务端算的字节 |
 | 纯度 / **读面** / body 声明 / 同源取数闸声明（`fetchGate`）/ deps 切片 / 处理（run 接线；JSON 与 binary 两种 run 形） | `src/api/route-table.ts` | 业务判据（归 verbs 与部件）；wire 机制与 body 预读（归 `src/api/connection-route.ts`）；段名的方法——它的家是 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`，路由记录只投影） |
-| 九段到宿主 `connection.fetch.register` 的 exact Fetch 投影、`Request` / `Response` 适配与 wire 机制（body 字节闸 / JSON 解析 / 二进制头 / 失败信封 / `fetchGate` 的判据 `isSameOriginFetch`） | `src/api/connection-route.ts` | 路由记录的纯度 / 读面 / body / `fetchGate` 声明（归 `src/api/route-table.ts`）；鉴权（归宿主 `/api` bridge） |
+| 九段到宿主 `connection.fetch.register` 的 exact Fetch 投影、`Request` / `Response` 适配与 wire 机制（body 字节闸 / JSON 解析 / 二进制头 / JSON 响应统一 `private, no-store` / 失败信封 / `fetchGate` 的判据 `isSameOriginFetch`） | `src/api/connection-route.ts` | 路由记录的纯度 / 读面 / body / `fetchGate` 声明（归 `src/api/route-table.ts`）；鉴权（归宿主 `/api` bridge） |
 | 附件二进制读取（query 一次解析成 typed request、id / kind 闸；有宿主 `attachments` 时走 `readImage` / `readFileStream`，缺服务或引用元数据不够统一成一次 miss 才直接 fs + 魔数；所有路径共用一道上限（`deps.config.maxAttachmentBytes`，ADR-0037）、下载头） | `src/api/attachment.ts` | 什么算独占（归 `src/trash/attachments.ts`）、什么时候清（归 `src/verbs/permanent-removal.ts` 与设置页维护卡）；非附件的读面；宿主服务的字节校验（归 `src/ports/attachments-port.ts`，ADR-0035） |
 | 宿主 `attachments` 服务的窄镜像（`available` / `readImage` / `readFileStream`，每次调用惰性解析） | `src/ports/attachments-port.ts` | 什么算独占（`src/trash/attachments.ts`）；什么时候删；孤儿扫描（`src/trash/attachments.ts`） |
 | 清册行 → 线上行的投影 | `src/api/trash-rows.ts` 的 `toWire`（显式字面量，不 `...row`） | 组语义 |
@@ -157,7 +158,7 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 各张确认框的 busy 关框规则 | `src/client/confirm-close.ts` 的 `useIdleClose` | 各框的按钮文案与禁用呈现 |
 | 槽位贡献与注册（含设置页按 bundle 包名寻址的 keyed 槽位） | `src/client/index.tsx` | 各贡献自己的渲染 |
 | 现行界面规格（状态、布局、危险层级） | `docs/ui-spec.md`；像素/断点/文案键的唯一定义在 `src/client/` 与 `tests/client/` | 各状态的实现细节 |
-| 抄来的官方控件样式（`sd-` 前缀）与点名的自造差异 | `src/client/ui/ui.css` 文件头那张来源表 | token 的取值 |
+| 抄来的官方控件样式（`sd-` 前缀）与点名的自造差异（含 `--sd-*` 别名层） | `src/client/ui/ui.css` 文件头那张来源表 | token 的取值 |
 
 ## 5. seam：可测性怎么落
 

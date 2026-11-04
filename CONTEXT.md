@@ -15,8 +15,8 @@
 _唯一实现_: `src/ports/home.ts` 的 `resolveHome`。
 
 **通道（channel）**:
-浏览器半到 Node 半的取数路径：同源 fetch 宿主 `connection.fetch.register` 的 exact Fetch 路由（`/api` + 插件前缀）。Host/Origin/浏览器认证归宿主 `/api` bridge；支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`，没有旧前缀 fallback。段名前缀与唯一基础路径住 `src/shared/wire.ts`；客户端探测与附件 URL 住 `src/client/remote.ts` / `src/client/attachment-view.tsx`。
-_唯一实现_: `src/api/connection-route.ts` 的 `registerConnectionRoutes`；`src/client/remote.ts` 的 `createHttpRemote` / `probeChannel`。
+浏览器半到 Node 半的取数路径：同源 fetch 宿主 `connection.fetch.register` 的 exact Fetch 路由（`/api` + 插件前缀）。Host/Origin/浏览器认证归宿主 `/api` bridge；支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`，没有旧前缀 fallback。段名前缀与唯一基础路径住 `src/shared/wire.ts`；浏览器半的取数地址再由 `src/client/api-base.ts` 叠一层文档挂载点（`document.baseURI` 的目录；根部署下为空串），客户端探测住 `src/client/remote.ts`、附件 URL 住 `src/client/attachment-view.tsx`。
+_唯一实现_: `src/api/connection-route.ts` 的 `registerConnectionRoutes`；`src/client/remote.ts` 的 `createHttpRemote` / `probeChannel`；`src/client/api-base.ts` 的 `apiPath`。
 _Avoid_: 接口、API（太泛；通道专指这条双半取数线）；fallback / 旧前缀（已随单通道收掉）。
 
 **会话（session）**:

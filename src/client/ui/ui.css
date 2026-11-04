@@ -33,7 +33,7 @@
  * div，我们这一行是 `role="row"` 且要吃 ↑↓，而这一代 `--dsw-focus-ring-color` 是 `transparent`；
  * ③ `.sd-rowaction-button` 的 `[aria-pressed='true']` 与 `:disabled` 两档（2026-10-17）——
  * 官方那颗 `iconButton` 只有常态与 hover，勾选开关要有"按下"和"这条删不动"两档，token 与回收站
- * 选中行同源（`--dsw-alias-button-ghost-active-*`）；④ `.sd-batch-bar`（同日）——宿主没有"浮条"
+ * 选中行同源（`--sd-button-ghost-active-*`，别名到 `--dsw-alias-button-ghost-active-*`）；④ `.sd-batch-bar`（同日）——宿主没有"浮条"
  * 这件控件，四件 token 自拼；⑤ 宿主行的批量选中底色与兜底隐藏（同日改版）——宿主的行选中态不归
  * 第三方，整行可见性靠 `data-row-key` + `:has`，token 与回收站选中行同源；行首格在场时行尾兜底退场；
  * ⑥ `.sd-batch-pick-leading`（同日）——宿主行首那格只给 16×20，勾选框要一层 inline-flex 包装才压得回
@@ -43,6 +43,10 @@
  * 整张表里就这七条是我们自造的，标在这里，
  * 下次做「与官方逐条比对」时它属于**已知差异**，不是漂移。
  *
+ * **还有一处系统性改写不算抄本差异**：抄来的每条规则里，配色与几何的 token 引用都走下面那层
+ * `--sd-*` 别名（本插件新增的一层间接）。逐属性比对时按「别名 → 它引用/兜底的那枚 `--dsw-*`」还原
+ * 之后再比；这一层不新造颜色、只加兜底，也不重复计入上面七条。
+ *
  * **另有一处已知差异不住在本文件**：回收站组头那颗按钮的整套 UA reset。宿主 `DisclosureRow` 那份是
  * `div`，没有这个坑；我们这行要做成可点的 `<button>`，UA 样式表会把背景、边框、内距、字体、居中与
  * flex 基线一起渗进来（真机上就是项目名整条居中，2026-10-15 截图）。它写在
@@ -50,6 +54,79 @@
  * `tests/skeleton.test.ts` 逐条钉住**（不在这里再抄一份名单）——所以「与官方逐条比对」时本表仍然只数
  * 上面那些，这条不算进抄本差异。
  */
+
+/* ──────────────── 主题 token 兜底（本插件的别名层） ────────────────
+ * 宿主 `Theme.listTokens` 的公开面只有 14 个 `--dsw-*`（13 个 `--dsw-alias-*` +
+ * `--dsw-specific-sidebar-fill`）；这张抄本表还用了一批宿主内部 token
+ * （`label-tertiary` / `border-l3`·`l4` / `markdown-code-*` / `scrollbar-*` …）。它们在同代宿主上
+ * 都存在，但换代改名时 `var()` 会整条失效、颜色退回继承值。这里给**有公开等价物的语义 token**
+ * 建一层 `--sd-*` 别名：私有 token 在场时逐字等价；不在时退到最接近的公开 token —— 最差是难看，
+ * 不会没有颜色。
+ *
+ * **为什么挂 `body` 而不是 `:root`**（2026-11-04 当代宿主产物实测）：`--dsw-alias-*` 那套主题
+ * palette 写在 `body` / `body[data-ds-dark-theme]` 两条规则上，主题服务还把当前快照逐条 inline
+ * 写到 `document.body.style`；`:root` 那份 base.css 只有字体、圆角与动效。别名层若挂 `:root`，
+ * 引用就在 `html` 上求值——私有 token 与公开兜底都还没定义，整条 `var()` 链在计算值阶段失效，
+ * 别名拿到的是**保证无效值**，用到它的声明（字色、边框、底色）会被整条丢弃；连 `--dsw-mask-blur`
+ * 都会拿到兜底 `blur(2px)`，而宿主这一代给的是 `none`。挂 `body` 时：palette 与别名在同一元素上
+ * （暗色切换一并跟着），base.css 的几何 token 从 `html` 继承下来，两边都取得到；宿主哪天把 palette
+ * 挪回 `:root` 也仍然可见（自定义属性本来就继承），只有挪到更深的包裹元素才会再次失效——那时先
+ * 复核这段的落点。
+ *
+ * 不在这一层的是：`--dsw-font-markdown-*`（整条 `font` 简写，没有等价公开 token，失效退回继承字体）、
+ * `--dsw-static-*`（固定色：tooltip 文字、toast 动作等，允许自带颜色）、`--dsw-focus-ring-color`（原处已带 fallback）。
+ * 新增私有 token 时先在这张表里找等价公开 token；找不到就别进别名层，并在头注记一笔。
+ */
+body {
+  --sd-label-tertiary: var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary));
+  --sd-label-caption: var(--dsw-alias-label-caption, var(--dsw-alias-label-secondary));
+  --sd-label-primary-foreground: var(--dsw-alias-label-primary-foreground, var(--dsw-alias-bg-base));
+  --sd-border-l3: var(--dsw-alias-border-l3, var(--dsw-alias-border-l2));
+  --sd-border-l4: var(--dsw-alias-border-l4, var(--dsw-alias-border-l2));
+  --sd-menu-icon: var(--dsw-alias-menu-icon, var(--dsw-alias-label-secondary));
+  --sd-link: var(--dsw-alias-link, var(--dsw-alias-brand-primary));
+  --sd-interactive-bg-hover: var(--dsw-alias-interactive-bg-hover, var(--dsw-alias-bg-layer-2));
+  --sd-interactive-bg-active: var(--dsw-alias-interactive-bg-active, var(--dsw-alias-bg-layer-2));
+  --sd-interactive-bg-hover-danger: var(
+    --dsw-alias-interactive-bg-hover-danger,
+    color-mix(in srgb, var(--dsw-alias-state-error-primary) 12%, transparent)
+  );
+  --sd-button-primary-fill: var(--dsw-alias-button-primary-fill, var(--dsw-alias-brand-primary));
+  --sd-button-primary-hover: var(--dsw-alias-button-primary-hover, var(--dsw-alias-brand-primary));
+  --sd-button-ghost-active-fill: var(--dsw-alias-button-ghost-active-fill, var(--dsw-alias-bg-layer-2));
+  --sd-button-ghost-active-border: var(--dsw-alias-button-ghost-active-border, var(--dsw-alias-border-l2));
+  --sd-markdown-code-block: var(--dsw-alias-markdown-code-block, var(--dsw-alias-bg-layer-2));
+  --sd-markdown-inline-code: var(--dsw-alias-markdown-inline-code, var(--dsw-alias-bg-layer-2));
+  --sd-state-business-primary: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary));
+  --sd-state-warn-label: var(--dsw-alias-state-warn-label, var(--dsw-alias-state-warn-primary));
+  --sd-toast-bg: var(--dsw-alias-toast-bg, var(--dsw-alias-bg-overlay));
+  --sd-toast-label: var(--dsw-alias-toast-label, var(--dsw-alias-label-primary));
+  --sd-tooltip-bg: var(--dsw-alias-tooltip-bg, var(--dsw-alias-bg-overlay));
+  --sd-specific-bubble: var(--dsw-specific-bubble, var(--dsw-alias-bg-layer-2));
+  --sd-bg-mask-1: var(
+    --dsw-alias-bg-mask-1,
+    color-mix(in srgb, var(--dsw-alias-label-primary) 35%, transparent)
+  );
+  --sd-scrollbar-bg-l1: var(--dsw-alias-scrollbar-bg-l1, var(--dsw-alias-border-l1));
+  --sd-scrollbar-bg-l2: var(--dsw-alias-scrollbar-bg-l2, var(--dsw-alias-border-l1));
+  --sd-scrollbar-hover-l2: var(--dsw-alias-scrollbar-hover-l2, var(--dsw-alias-border-l2));
+  --sd-elevation-prominent: var(
+    --dsw-elevation-prominent,
+    0 8px 24px color-mix(in srgb, var(--dsw-alias-label-primary) 18%, transparent)
+  );
+  --sd-shadow-lv3: var(
+    --dsw-shadow-lv3,
+    0 1px 3px color-mix(in srgb, var(--dsw-alias-label-primary) 12%, transparent)
+  );
+  --sd-radius-xs: var(--dsw-radius-xs, 2px);
+  --sd-radius-sm: var(--dsw-radius-sm, 4px);
+  --sd-radius-md: var(--dsw-radius-md, 6px);
+  --sd-radius-lg: var(--dsw-radius-lg, 8px);
+  --sd-radius-xl: var(--dsw-radius-xl, 12px);
+  --sd-radius-panel: var(--dsw-radius-panel, 12px);
+  --sd-mask-blur: var(--dsw-mask-blur, blur(2px));
+  --sd-focus-ring-width: var(--dsw-focus-ring-width, 2px);
+}
 
 /* ────────────────────────── Button ────────────────────────── */
 
@@ -60,7 +137,7 @@
   justify-content: center;
   gap: 4px;
   border: none;
-  border-radius: var(--dsw-radius-md);
+  border-radius: var(--sd-radius-md);
   cursor: pointer;
   font-size: 14px;
   line-height: 22px;
@@ -84,33 +161,33 @@
   font-size: 12px;
   line-height: 18px;
   padding: 0 10px;
-  border-radius: var(--dsw-radius-sm);
+  border-radius: var(--sd-radius-sm);
 }
 
 .sd-button-primary {
-  background: var(--dsw-alias-button-primary-fill);
-  color: var(--dsw-alias-label-primary-foreground);
+  background: var(--sd-button-primary-fill);
+  color: var(--sd-label-primary-foreground);
 }
 
 .sd-button-primary:hover:not(:disabled) {
-  background: var(--dsw-alias-button-primary-hover);
+  background: var(--sd-button-primary-hover);
 }
 
 .sd-button-ghost:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--sd-interactive-bg-hover);
 }
 
 .sd-button-ghost:active:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-active);
+  background: var(--sd-interactive-bg-active);
 }
 
 .sd-button-outline {
-  border: 0.5px solid var(--dsw-alias-border-l3);
+  border: 0.5px solid var(--sd-border-l3);
   background: transparent;
 }
 
 .sd-button-outline:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--sd-interactive-bg-hover);
 }
 
 .sd-button-icon {
@@ -161,14 +238,14 @@
 .sd-modal-mask {
   position: absolute;
   inset: var(--dsh-frame-chrome-top, 0px) 0 0;
-  backdrop-filter: var(--dsw-mask-blur);
+  backdrop-filter: var(--sd-mask-blur);
 }
 
 .sd-modal-mask::after {
   content: '';
   position: absolute;
   inset: 0;
-  background: var(--dsw-alias-bg-mask-1);
+  background: var(--sd-bg-mask-1);
   animation: sd-modal-enter var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
@@ -183,9 +260,9 @@
   padding: 0 0 24px;
   overflow: hidden;
   border: 0;
-  border-radius: var(--dsw-radius-panel);
+  border-radius: var(--sd-radius-panel);
   background: var(--dsw-alias-bg-layer-2);
-  box-shadow: var(--dsw-elevation-prominent);
+  box-shadow: var(--sd-elevation-prominent);
   animation: sd-modal-enter var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
@@ -234,14 +311,14 @@
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: var(--dsw-radius-sm);
+  border-radius: var(--sd-radius-sm);
   background: transparent;
   cursor: pointer;
   color: var(--dsw-alias-label-secondary);
 }
 
 .sd-modal-close:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--sd-interactive-bg-hover);
 }
 
 .sd-modal-body {
@@ -273,8 +350,8 @@
   width: max-content;
   max-width: 50vw;
   padding: 3px 7px;
-  border-radius: var(--dsw-radius-sm);
-  background: var(--dsw-alias-tooltip-bg);
+  border-radius: var(--sd-radius-sm);
+  background: var(--sd-tooltip-bg);
   color: var(--dsw-static-neutral-bluish-00);
   font-size: 13px;
   line-height: 20px;
@@ -330,14 +407,14 @@
   width: max-content;
   max-width: min(640px, calc(100vw - 48px));
   padding: 12px 16px;
-  border-radius: var(--dsw-radius-lg);
+  border-radius: var(--sd-radius-lg);
   /* 设计平台的 toast 表面在**两套主题下都是深的**（浅色 bluish-800 / 深色 bluish-750），
      所以这里的字色与动作色是固定值，不随主题翻转。 */
-  background: var(--dsw-alias-toast-bg);
-  color: var(--dsw-alias-toast-label);
+  background: var(--sd-toast-bg);
+  color: var(--sd-toast-label);
   font-size: 14px;
   line-height: 22px;
-  box-shadow: var(--dsw-shadow-lv3);
+  box-shadow: var(--sd-shadow-lv3);
   transform: translateX(-50%);
   animation:
     sd-toast-in 160ms ease-out,
@@ -348,7 +425,7 @@
   display: grid;
   place-items: center;
   flex: none;
-  color: var(--dsw-alias-state-warn-label);
+  color: var(--sd-state-warn-label);
 }
 
 .sd-toast-icon-success {
@@ -427,7 +504,7 @@
   min-height: 34px;
   padding: 6px 8px;
   border: none;
-  border-radius: var(--dsw-radius-md);
+  border-radius: var(--sd-radius-md);
   background: transparent;
   cursor: pointer;
   font-size: 13px;
@@ -437,13 +514,13 @@
 }
 
 .sd-menu-item:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--sd-interactive-bg-hover);
 }
 
 /* 方向键移动的是真焦点 ⇒ 键盘所在的那一行拿指针同款填充；填充就是这一行的焦点呈现，
    浏览器默认的 ring 再叠一层就重了。 */
 .sd-menu-item:focus-visible:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--sd-interactive-bg-hover);
   outline: none;
 }
 
@@ -459,7 +536,7 @@
   height: 14px;
   align-items: center;
   justify-content: center;
-  color: var(--dsw-alias-menu-icon);
+  color: var(--sd-menu-icon);
 }
 
 .sd-menu-item-icon svg {
@@ -485,11 +562,11 @@
 }
 
 .sd-menu-item-danger:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-danger);
+  background: var(--sd-interactive-bg-hover-danger);
 }
 
 .sd-menu-item-danger:focus-visible:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover-danger);
+  background: var(--sd-interactive-bg-hover-danger);
   outline: none;
 }
 
@@ -524,7 +601,7 @@
 }
 
 .sd-checkbox input:focus-visible {
-  outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary));
+  outline: var(--sd-focus-ring-width) solid var(--dsw-focus-ring-color, var(--sd-state-business-primary));
   outline-offset: 2px;
 }
 
@@ -553,7 +630,7 @@
   align-items: center;
   height: calc(24px + var(--dsh-content-font-delta, 0px));
   min-width: 0;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
   transition: color 100ms ease;
 }
 
@@ -627,8 +704,8 @@ button.sd-disclosure-leading {
   background: linear-gradient(
     to bottom,
     transparent calc(var(--dsh-width-handle-pointer-y, 50%) - 36px),
-    var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y, 50%) - 8px),
-    var(--dsw-alias-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y, 50%) + 8px),
+    var(--sd-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y, 50%) - 8px),
+    var(--sd-scrollbar-bg-l1) calc(var(--dsh-width-handle-pointer-y, 50%) + 8px),
     transparent calc(var(--dsh-width-handle-pointer-y, 50%) + 36px)
   );
   opacity: 0;
@@ -665,7 +742,7 @@ button.sd-disclosure-leading {
    ↑↓ 选会话时就没有任何焦点可见性。描边**复用选中态那枚** `ghost-active-border`，不新造颜色；
    0.5px 与 `outline-offset: 1px` 是行的描边宽度与一档外移，不动布局（outline 不进滚动区）。 */
 [data-dsh-session-delete="trash-row"]:focus-visible {
-  outline: 0.5px solid var(--dsw-alias-button-ghost-active-border);
+  outline: 0.5px solid var(--sd-button-ghost-active-border);
   outline-offset: 1px;
 }
 
@@ -673,11 +750,11 @@ button.sd-disclosure-leading {
    基底**逐字抄** `dsh-client-ui-workspace` 的 `Rows.module.css` 的 `.iconButton` / `.iconButton:hover`，
    只改类名——兜底开关要跟同排宿主自己的归档/置顶同形，尺寸与色档都不自己发明。 */
 .sd-rowaction-button {
-  border-radius: var(--dsw-radius-xs);
+  border-radius: var(--sd-radius-xs);
   cursor: pointer;
   width: 16px;
   height: 16px;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
   background: 0 0;
   border: none;
   flex: none;
@@ -694,8 +771,8 @@ button.sd-disclosure-leading {
    「已按下」与「这条删不动」两档。按下档**复用回收站选中行那两枚** `ghost-active-*`，不新造颜色；
    禁用档走 opacity。 */
 .sd-rowaction-button[aria-pressed='true'] {
-  background: var(--dsw-alias-button-ghost-active-fill);
-  box-shadow: inset 0 0 0 1px var(--dsw-alias-button-ghost-active-border);
+  background: var(--sd-button-ghost-active-fill);
+  box-shadow: inset 0 0 0 1px var(--sd-button-ghost-active-border);
   color: var(--dsw-alias-label-primary);
 }
 .sd-rowaction-button:disabled {
@@ -716,8 +793,8 @@ button.sd-disclosure-leading {
    底色；行首格在场时行尾兜底要退场（两条入口不许同屏）。两条都只认宿主行已有的
    `data-row-key`；将来这个属性改名，最差是底色不亮 / 兜底多露一颗，勾选本身仍在。 */
 [data-row-key^="session:"]:has([data-dsh-session-delete="batch-pick"][data-checked="true"]) {
-  background: var(--dsw-alias-button-ghost-active-fill);
-  box-shadow: inset 0 0 0 0.5px var(--dsw-alias-button-ghost-active-border);
+  background: var(--sd-button-ghost-active-fill);
+  box-shadow: inset 0 0 0 0.5px var(--sd-button-ghost-active-border);
 }
 [data-row-key^="session:"]:has([data-dsh-session-delete="batch-pick"][data-seat="leading"]) .sd-batch-pick-action {
   display: none;
@@ -744,9 +821,9 @@ button.sd-disclosure-leading {
   gap: 8px;
   padding: 8px 12px;
   background: var(--dsw-alias-bg-layer-2);
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: var(--dsw-radius-lg);
-  box-shadow: var(--dsw-elevation-prominent);
+  border: 0.5px solid var(--sd-border-l4);
+  border-radius: var(--sd-radius-lg);
+  box-shadow: var(--sd-elevation-prominent);
   font-size: 12px;
   line-height: 18px;
 }
@@ -759,7 +836,7 @@ button.sd-disclosure-leading {
 }
 
 .sd-batch-bar-hint {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
 }
 
 .sd-batch-bar-list-head {
@@ -771,7 +848,7 @@ button.sd-disclosure-leading {
 
 /* 汇总的第二句（含 K 个子会话）比条数轻一档，和列表行里的 chip 同级。 */
 .sd-batch-bar-list-head span + span {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
 }
 
 .sd-batch-bar-list {
@@ -782,7 +859,7 @@ button.sd-disclosure-leading {
   overflow: auto;
   margin: 0;
   padding: 0 0 8px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l4);
+  border-bottom: 0.5px solid var(--sd-border-l4);
   list-style: none;
 }
 
@@ -804,7 +881,7 @@ button.sd-disclosure-leading {
 
 .sd-batch-bar-meta {
   flex: none;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
 }
 
 .sd-batch-bar-remove {
@@ -816,13 +893,13 @@ button.sd-disclosure-leading {
   height: 16px;
   padding: 0;
   border: none;
-  border-radius: var(--dsw-radius-xs);
+  border-radius: var(--sd-radius-xs);
   background: 0 0;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
   cursor: pointer;
 }
 
 .sd-batch-bar-remove:hover {
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--sd-interactive-bg-hover);
 }

@@ -39,7 +39,7 @@ Status: accepted
 ## 后果
 
 - 删除 `src/api/request-trust.ts`、`src/ports/connection-port.ts`、`createApiHandler` 的 Node 适配器、客户端旧前缀探测与 `activeBase`；`src/index.ts` 的 `inject` 从 `webServer` 换成 `connection`。
-- 客户端只保留一个基础路径 `OFFICIAL_SESSION_DELETE_API_PREFIX`；附件 URL 与八段 fetch 都从它起。
+- 客户端只保留一个基础路径常量 `OFFICIAL_SESSION_DELETE_API_PREFIX`；附件 URL 与八段 fetch 都从它起。浏览器半在它前面只再叠一层**文档挂载点**（`src/client/api-base.ts`：根部署下与旧版逐字相同，反代到 `/dsh/` 时得 `/dsh/api/…`），不另写段名或 `/api`。
 - 本机 `curl` 便利消失（要出示宿主签发的 Web 身份）；README 的 LAN / 本机 FAQ 同步。
 - 发版时在 `CHANGELOG.md` 的升级注意写明：自定义 `webServer`-only profile 不再支持，必须装 `client-connection`；这是 URL 面与依赖面的破坏性变化。
 - `tests/connection-route.test.ts` 钉注册 / `Request`·`Response` 适配 / body 闸 / 附件段的同源取数闸；`tests/api.test.ts` 用真 `node:http` + 测试桥钉路由契约；`tests/assembly.test.ts` 钉组合根的 `connection` 接线与响亮失败。
@@ -53,4 +53,4 @@ Status: accepted
 - **只在 raw 路由上补 `requestRejection`**：仍保留自建路由与双基础路径；收益不抵复杂度。
 - **官方 `remote.<namespace>`**：第三方仍无动态发现挂载点。
 
-锚点：`src/api/connection-route.ts`；`src/api/dispatch.ts`；`src/api/route-table.ts`（`fetchGate`）；`src/shared/wire.ts`；`src/index.ts`；`src/client/remote.ts`；`src/client/index.tsx`；`tests/connection-route.test.ts`；`tests/api.test.ts`；`tests/assembly.test.ts`；`docs/architecture.md` §1 / §4；ADR-0009；ADR-0022；ADR-0023。
+锚点：`src/api/connection-route.ts`；`src/api/dispatch.ts`；`src/api/route-table.ts`（`fetchGate`）；`src/shared/wire.ts`；`src/index.ts`；`src/client/remote.ts`；`src/client/api-base.ts`；`src/client/index.tsx`；`tests/connection-route.test.ts`；`tests/api.test.ts`；`tests/assembly.test.ts`；`docs/architecture.md` §1 / §4；ADR-0009；ADR-0022；ADR-0023。

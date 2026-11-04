@@ -62,7 +62,7 @@ function MaintenanceSection({ slot, title, hint, count, countKey, section, onSca
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, minWidth: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: '1 1 auto', minWidth: 0 }}>
           <div style={{ fontSize: 13.5, lineHeight: '19px', fontWeight: 500 }}>{title}</div>
-          <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>{hint}</div>
+          <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>{hint}</div>
         </div>
         <span
           data-dsh-session-delete="maintenance-status"
@@ -71,7 +71,7 @@ function MaintenanceSection({ slot, title, hint, count, countKey, section, onSca
             paddingTop: 1,
             fontSize: 12,
             lineHeight: '17px',
-            color: 'var(--dsw-alias-label-tertiary)',
+            color: 'var(--sd-label-tertiary)',
             whiteSpace: 'nowrap',
           }}
         >
@@ -207,11 +207,11 @@ function AttachmentConfirm({
         <AttachmentStrip attachments={attachments} t={t} align="start" />
       </div>
       {items.length < count ? (
-        <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>
+        <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
           {t('maintenance.attachments.previewTruncated', { shown: items.length, total: count })}
         </p>
       ) : null}
-      <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>
+      <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
         {t('maintenance.attachments.previewHint')}
       </p>
     </Modal>
@@ -222,11 +222,17 @@ export interface MaintenanceSettingsProps {
   deps: MaintenanceDeps
   /** 文案（缺省 = 内置 zh；宿主 locale 服务缺席时也是它，见 `copy.ts`）。 */
   t?: Translate
+  /** 宿主 `plugins.bundle.config` 的视图：`summary` 是插件行的一行摘要，本卡只属于详情页。 */
+  view?: 'summary' | 'page'
 }
 
-export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettingsProps): ReactElement {
+export function MaintenanceSettings({ deps, t = zhTranslate, view }: MaintenanceSettingsProps): ReactElement | null {
   // 两个段各自一台状态机（busy / 报告 / 提示都从段对象取）；这个 hook 不自动扫描。
   const maintenance = useMaintenance({ deps, t })
+  // 槽位契约给 occupant 两个视图：`page` 是插件详情页，`summary` 是插件列表行的一行摘要。
+  // 维护卡是整页卡片，放摘要位会顶掉那一行、还会把两个手动扫描按钮带进列表；所以只认 `page`。
+  // 当前宿主只以 `page` 派发这个 key（ADR-0021），这条守卫是对契约的防线，不是死代码。
+  if (view === 'summary') return null
   return (
     <div data-dsh-session-delete="maintenance-card" style={CARD_SHELL}>
       <div style={{ fontSize: 16, fontWeight: 600, lineHeight: '24px' }}>{t('maintenance.title')}</div>

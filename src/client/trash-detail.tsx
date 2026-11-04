@@ -104,7 +104,7 @@ const META: CSSProperties = {
   lineHeight: '17px',
 }
 
-const META_LABEL = { color: 'var(--dsw-alias-label-tertiary)', whiteSpace: 'nowrap' } as CSSProperties
+const META_LABEL = { color: 'var(--sd-label-tertiary)', whiteSpace: 'nowrap' } as CSSProperties
 
 const META_VALUE = { margin: 0, minWidth: 0, wordBreak: 'break-word' } as CSSProperties
 
@@ -130,8 +130,8 @@ const ASSISTANT_ROW: CSSProperties = { display: 'flex', flexDirection: 'column',
  * 我们一行只有一个气泡，直接把上限挂在气泡上（同一父宽下百分比与 `min()` 的结果一致，少一层）。
  */
 const BUBBLE: CSSProperties = {
-  background: 'var(--dsw-specific-bubble)',
-  borderRadius: 'var(--dsw-radius-xl)',
+  background: 'var(--sd-specific-bubble)',
+  borderRadius: 'var(--sd-radius-xl)',
   maxWidth: 'min(calc(var(--dsh-chat-content-width, 748px) * .702), 82%)',
   fontSize: 'var(--dsh-content-font-size, 14px)',
   lineHeight: 'calc(22px + var(--dsh-content-font-delta, 0px))',
@@ -146,7 +146,7 @@ const BUBBLE: CSSProperties = {
 const META_LINE: CSSProperties = {
   fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
   lineHeight: 'calc(18px + var(--dsh-content-font-delta-secondary, 0px))',
-  color: 'var(--dsw-alias-label-tertiary)',
+  color: 'var(--sd-label-tertiary)',
 }
 
 /** 读失败与写失败共用的那块（`role="status"`；播报口径与其未验证的边界见 docs/ui-spec.md）。 */
@@ -156,8 +156,8 @@ const STATUS_BLOCK: CSSProperties = {
   gap: 10,
   padding: '12px 14px',
   background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--dsw-alias-border-l4)',
-  borderRadius: 'var(--dsw-radius-lg)',
+  border: '0.5px solid var(--sd-border-l4)',
+  borderRadius: 'var(--sd-radius-lg)',
 }
 
 /* ── 块与折叠头 ───────────────────────────────────────────── */
@@ -191,14 +191,14 @@ const BLOCK_SUMMARY: CSSProperties = {
   minWidth: 0,
   fontSize: 12,
   lineHeight: '18px',
-  color: 'var(--dsw-alias-label-tertiary)',
+  color: 'var(--sd-label-tertiary)',
 }
 
 const BLOCK_META: CSSProperties = {
   flex: 'none',
   fontSize: 11.5,
   lineHeight: '18px',
-  color: 'var(--dsw-alias-label-tertiary)',
+  color: 'var(--sd-label-tertiary)',
   whiteSpace: 'nowrap',
 }
 
@@ -223,8 +223,8 @@ const CODE_BLOCK: CSSProperties = {
   margin: 0,
   padding: '8px 10px',
   background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--dsw-alias-border-l4)',
-  borderRadius: 'var(--dsw-radius-md)',
+  border: '0.5px solid var(--sd-border-l4)',
+  borderRadius: 'var(--sd-radius-md)',
   fontFamily: 'var(--ds-font-family-code)',
   fontSize: 12,
   lineHeight: '18px',
@@ -237,7 +237,7 @@ const CODE_BLOCK: CSSProperties = {
 const SECTION_LABEL: CSSProperties = {
   fontSize: 11.5,
   lineHeight: '16px',
-  color: 'var(--dsw-alias-label-tertiary)',
+  color: 'var(--sd-label-tertiary)',
 }
 
 /**
@@ -252,8 +252,8 @@ const SUBAGENT_ROW: CSSProperties = {
   height: 'auto',
   cursor: 'pointer',
   background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--dsw-alias-border-l4)',
-  borderRadius: 'var(--dsw-radius-md)',
+  border: '0.5px solid var(--sd-border-l4)',
+  borderRadius: 'var(--sd-radius-md)',
 }
 
 const TOOLBAR: CSSProperties = {
@@ -267,7 +267,7 @@ const TOOLBAR: CSSProperties = {
 const TRUNCATED: CSSProperties = {
   fontSize: 11.5,
   lineHeight: '16px',
-  color: 'var(--dsw-alias-label-tertiary)',
+  color: 'var(--sd-label-tertiary)',
 }
 
 const ERROR_TEXT: CSSProperties = { color: 'var(--dsw-alias-state-error-primary)' }
@@ -538,7 +538,7 @@ export function TrashDetail({
           textAlign: 'center',
           fontSize: 12.5,
           lineHeight: '18px',
-          color: 'var(--dsw-alias-label-tertiary)',
+          color: 'var(--sd-label-tertiary)',
         }}
       >
         {t('detail.notSelected')}
@@ -588,7 +588,7 @@ export function TrashDetail({
           </span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 auto', minWidth: 0 }}>
             <div style={{ fontSize: 13, lineHeight: '19px' }}>{t('detail.readFailed')}</div>
-            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-word' }}>
+            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)', wordBreak: 'break-word' }}>
               {state.message}
             </div>
           </div>
@@ -616,7 +616,7 @@ export function TrashDetail({
 function LoadingBody({ t }: { t: Translate }) {
   return (
     <>
-      <div style={{ fontSize: 12.5, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }}>
+      <div style={{ fontSize: 12.5, lineHeight: '18px', color: 'var(--sd-label-tertiary)' }}>
         {t('detail.loading')}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

@@ -161,4 +161,4 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 ## 许可
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE)。分发包内联的 npm 依赖（`react-markdown` / `remark-gfm` 及其传递依赖）与逐字抄写的宿主控件样式、组件代码、图标，各自的版权与许可全文见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

@@ -6,11 +6,13 @@
  * （类名前缀、`@keyframes` 改名，外加它点名的自造与已声明的差别）；条数不钉在这里，钉了就会漂成假基线。这一份抄的是
  * **另一个来源**（宿主 markdown 那一张表），混进去就把那份核对弄脏了。
  *
- * **来源（逐字抄，只改选择器与下面点名的三处）**：
+ * **来源（逐字抄，只改选择器、下面点名的三处，以及 token 引用走 `--sd-*` 别名层）**：
  * `app.asar` 里 `@deepseek-ai/dsh-client-ui-primitives/lib/markdown/MarkdownText.module.css`
  * （`.markdown` 那一支；`.compact` 一支我们不用）+ `lib/markdown/CodeBlock.module.css` 的 `pre`。
- * token 名一个没换：`--dsw-font-markdown-*` / `--dsw-alias-markdown-*` / `--dsh-content-font-*`
- * 全是宿主会话区自己吃的那组，所以宿主调内容字号时，这里跟着一起动。
+ * 字体简写 `--dsw-font-markdown-*` 与内容字号 `--dsh-content-font-*` 逐字保留：它们是宿主会话区
+ * 自己吃的那组，宿主调内容字号时这里跟着一起动。配色/几何的 `--dsw-alias-*` / `--dsw-radius-*`
+ * 走 `ui.css` 头注那层 `--sd-*` 别名（私有 token 带公开兜底）；逐属性复核时按别名还原成它引用的
+ * `--dsw-*` 再比，不把别名层算成抄本差异。
  *
  * 三处**有意**的差异，每条都是因为我们的 DOM 长不出宿主那个节点：
  * ① 宿主给表包一层 `.tableScroll`（div）再横向滚动；react-markdown 不产这层 ⇒ 滚动挂在 `table`
@@ -79,7 +81,7 @@
 
 /* 见文件头差异③：颜色与字重照抄，hover 的 dotted 下划线不抄——这里没有可点的东西。 */
 .sd-md-link {
-  color: var(--dsw-alias-link);
+  color: var(--sd-link);
   font-weight: 500;
 }
 
@@ -132,7 +134,7 @@
 }
 
 .sd-md blockquote {
-  border-left: 2px solid var(--dsw-alias-label-caption);
+  border-left: 2px solid var(--sd-label-caption);
   margin: 16px 0 0;
   padding-left: 14px;
 }
@@ -144,8 +146,8 @@
   margin: 16px 0;
   padding: 16px;
   color: var(--dsw-alias-label-primary);
-  background: var(--dsw-alias-markdown-code-block);
-  border-radius: var(--dsw-radius-lg);
+  background: var(--sd-markdown-code-block);
+  border-radius: var(--sd-radius-lg);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
@@ -164,9 +166,9 @@
   font: var(--dsw-font-markdown-code);
   font-family: var(--ds-font-family-code);
   font-size: 0.875em !important;
-  background-color: var(--dsw-alias-markdown-inline-code);
+  background-color: var(--sd-markdown-inline-code);
   border: 0.5px solid var(--dsw-alias-border-l1);
-  border-radius: var(--dsw-radius-sm);
+  border-radius: var(--sd-radius-sm);
   padding: 0 5px;
 }
 
@@ -194,7 +196,7 @@
 .sd-md th {
   text-align: start;
   padding: 10px 16px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  border-bottom: 0.5px solid var(--sd-border-l3);
   border-top: none;
   font: var(--dsw-font-markdown-table-head);
   max-width: 320px;
@@ -236,6 +238,6 @@
 
 /* 图片在回收站里读不到（路径属于会话当时的 cwd），渲成一句说明，字色用宿主的 tertiary。 */
 .sd-md-image {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--sd-label-tertiary);
   font-style: italic;
 }

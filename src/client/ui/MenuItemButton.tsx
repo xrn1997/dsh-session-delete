@@ -2,7 +2,7 @@
  * `MenuItemButton`（**照抄** `@deepseek-ai/dsh-client-ui-primitives@0.2.0-rc.2` 的同名组件，出处与三条
  * 改写规则见 `ui.css` 头注）：菜单里的一行，宿主菜单容器渲染它、键盘巡游也认它。
  *
- * **形状必须与宿主自己那四行（pin/rename/fork/archive）逐字同构**：`<div class=itemWrap>` 里先是可选
+ * **形状必须与宿主自己的官方菜单行（pin/rename/fork/archive/session-id）逐字同构**：`<div class=itemWrap>` 里先是可选
  * 的发丝线（`role="separator"`），再是 `<button type="button" role="menuitem">`，按钮内是
  * 图标位 + 标签位（+ 官方的快捷键位）。少一层、换个标签，这一行就会在键盘顺序、hover 底色或
  * `.itemLabel` 的省略号上跟邻行错开。

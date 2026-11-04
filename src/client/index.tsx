@@ -3,11 +3,11 @@
  *
  * 槽位贡献的注册面见 docs/architecture.md §3，语义归属见 §4 的主人清单；
  * 本文件只做注册与槽位接线。
- * 两行菜单项的 order 与分隔线由下方注册调用和行包装拥有，均排在宿主官方四行之后。
+ * 两行菜单项的 order 与分隔线由下方注册调用和行包装拥有，均排在宿主官方菜单行之后。
  *
  * 槽位出处（宿主产物，不是猜的；换代先复核）：
  * - sidebar.workspaces.session.menu.item：声明 asar @46391872；数据面投影 @46271806；
- *   menuOpenState hook 工厂 @46195835；宿主四行 @46392466 起。
+ *   menuOpenState hook 工厂 @46195835；宿主官方菜单行 @46392466 起（pin/rename/fork/archive/session-id）。
  * - shell.overlay：声明 asar @21206189。
  * - sidebar.panellist：声明 @44796980；行渲染 @44783481；label 解析 @44795361（thunk 随 locale）。
  * - main：渲染 @21185725；id 与 panellist 同字，selectPanel 只校验已注册 @21199710。
@@ -210,7 +210,7 @@ async function activate(client: ClientContextLike): Promise<void> {
     ),
   )
 
-  // ①' 多选入口：官方四行之后、删除之前（order 850，带发丝线）；按下进入/退出多选模式并收菜单。
+  // ①' 多选入口：官方菜单行之后、删除之前（order 850，带发丝线）；按下进入/退出多选模式并收菜单。
   client.slots.inject(MENU_SLOT, () =>
     client.slots.register(
       { name: MENU_SLOT, id: `${PLUGIN_ID}.batch-select`, order: 850, inject: () => ({ t }) },

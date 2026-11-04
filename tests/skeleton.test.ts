@@ -19,6 +19,8 @@ const manifest = JSON.parse(
   icon: string
   engines: Record<string, string>
   peerDependencies: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
+  dependencies?: Record<string, string>
   devDependencies: Record<string, string>
   publishConfig: { access?: string }
   repository: { url?: string }
@@ -177,6 +179,23 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(manifest.files).toContain('lib/index.js')
     expect(manifest.files).toContain('lib/client.js')
     expect(manifest.files).toContain('lib/types/**/*.d.ts')
+    // README 的许可段直接链到它；漏掉这一行，npm 包里就没有那份随附的第三方声明。
+    expect(manifest.files).toContain('THIRD_PARTY_NOTICES.md')
+  })
+
+  // 两半产物都是**自包含**的：`lib/client.js` 的外部 require 只有平台表（react / react-dom /
+  // react/jsx-runtime），`lib/index.js` 只有 node 内建；npm 依赖（markdown 那套）在构建期 inline。
+  // 所以生产依赖必须为空——否则 `dsh plugin add` 会把整套构建期依赖装进用户的 profile，
+  // 运行时一个都解析不到。构建期那份归属由 devDependencies 说，产物侧的 require 面由构建纯度门
+  // 与 `tests/client/*` 把守。
+  it('生产依赖为空：npm 依赖全部在构建期内联，装包不多带运行时包', () => {
+    expect(manifest.dependencies ?? {}).toEqual({})
+  })
+
+  // 宿主提供 React（浏览器半的冻结平台表），它不是运行期 npm 依赖：peer 标成可选，
+  // 免得包装器按 peer 解析再往 profile 里装一份用不到的 React。
+  it('react peer 是可选 peer（宿主平台表提供，不从 profile 解析）', () => {
+    expect(manifest.peerDependenciesMeta?.react?.optional).toBe(true)
   })
 
   // 官方那条"peer 与 dev **同范围**、每条 dsh 对等依赖都在 devDependencies 里镜像"要防的是这一件事：
@@ -274,10 +293,99 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
   })
 
   it('行那条描边复用选中态那枚 token，不新造颜色（2026-10-15 实测）', () => {
-    // 不按字面多行比：仓库里 CSS 是 CRLF，钉"选择器 + 那条 outline 用的 token"这一件事就够
+    // 不按字面多行比：仓库里 CSS 是 CRLF，钉"选择器 + 那条 outline 用的 token"这一件事就够。
+    // 选中态 token 走本插件的别名层（`--sd-*`），别名解析到的仍是宿主那枚
+    // `--dsw-alias-button-ghost-active-border`（见 ui.css 头注：私有 token 带公开兜底）。
     expect(css).toMatch(
-      /\[data-dsh-session-delete="trash-row"\]:focus-visible\s*\{\s*outline:\s*0\.5px solid var\(--dsw-alias-button-ghost-active-border\)/,
+      /\[data-dsh-session-delete="trash-row"\]:focus-visible\s*\{\s*outline:\s*0\.5px solid var\(--sd-button-ghost-active-border\)/,
     )
+  })
+})
+
+describe('主题别名层的落点（`--sd-*`）', () => {
+  const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
+
+  // 宿主把 `--dsw-alias-*` palette 写在 `body` / `body[data-ds-dark-theme]` 上，主题服务还把快照
+  // 逐条 inline 到 `document.body.style`；别名层若挂 `:root`，引用就在 `html` 上求值——私有 token
+  // 与兜底都还没定义，整条 `var()` 链失效，用到它的字色/边框/底色会被整条丢弃。jsdom 不做层叠，
+  // 单测抓不到，只能钉源码形态（为什么与实测证据见 ui.css 头注）。
+  it('与宿主 palette 同元素：挂 body，不挂 :root', () => {
+    expect(css).toMatch(/(?:^|\n)body\s*\{[^}]*--sd-label-tertiary:/)
+    expect(css).not.toMatch(/:root\s*\{[^}]*--sd-label-tertiary:/)
+  })
+})
+
+describe('主题别名层的完整性（`--sd-*`）', () => {
+  const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
+  const blockStart = css.indexOf('/* ──────────────── 主题 token 兜底')
+  const blockEnd = css.indexOf('/* ────────────────────────── Button')
+  const aliasBlock = css.slice(blockStart, blockEnd)
+
+  /** 宿主 `ui-theme` 的 `BUILTIN_INSPECT_TOKENS`（14 项；换代先复核，别当成永久名单）。 */
+  const PUBLIC_DSW_TOKENS = new Set([
+    '--dsw-alias-bg-base',
+    '--dsw-alias-bg-layer-1',
+    '--dsw-alias-bg-layer-2',
+    '--dsw-alias-bg-overlay',
+    '--dsw-alias-border-l1',
+    '--dsw-alias-border-l2',
+    '--dsw-alias-brand-primary',
+    '--dsw-alias-label-primary',
+    '--dsw-alias-label-secondary',
+    '--dsw-alias-state-error-primary',
+    '--dsw-alias-state-idle-primary',
+    '--dsw-alias-state-success-primary',
+    '--dsw-alias-state-warn-primary',
+    '--dsw-specific-sidebar-fill',
+  ])
+
+  function clientFiles(dir: string): string[] {
+    return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) return clientFiles(full)
+      return /\.(?:tsx?|css)$/.test(entry.name) ? [full] : []
+    })
+  }
+
+  /** 正则捕获组在类型上是可选的；这里的模式都必中，取不到就是测试写法坏了。 */
+  function captured(match: RegExpMatchArray, index: number): string {
+    const value = match[index]
+    if (value === undefined) throw new Error('正则捕获组缺失')
+    return value
+  }
+
+  /** 按 `--sd-*` 键切块；值里可能跨行、含嵌套 `var()` 与 `color-mix()`。 */
+  function aliasDefinitions(): Array<{ name: string; value: string }> {
+    const body = aliasBlock.slice(aliasBlock.indexOf('{') + 1, aliasBlock.lastIndexOf('}'))
+    const starts = [...body.matchAll(/(--sd-[a-z0-9-]+)\s*:\s*/g)]
+    return starts.map((start, index) => {
+      const from = start.index + start[0].length
+      const to = starts[index + 1]?.index ?? body.length
+      return { name: captured(start, 1), value: body.slice(from, to).replace(/;\s*$/, '').trim() }
+    })
+  }
+
+  // 这一层最该防的失效模式是拼错名字：声明整条被丢弃，颜色退回继承值，jsdom 里看不出来。
+  it('每个 var(--sd-*) 都有定义，且没有只在定义里躺着的别名', () => {
+    const definitions = new Set(aliasDefinitions().map((definition) => definition.name))
+    const usages = new Set<string>()
+    for (const file of clientFiles(fileURLToPath(new URL('../src/client', import.meta.url)))) {
+      for (const match of readFileSync(file, 'utf8').matchAll(/var\(\s*(--sd-[a-z0-9-]+)/g)) usages.add(captured(match, 1))
+    }
+    expect(definitions.size).toBeGreaterThan(0)
+    expect([...usages].filter((name) => !definitions.has(name))).toEqual([])
+    expect([...definitions].filter((name) => !usages.has(name))).toEqual([])
+  })
+
+  // fallback 里再拿一枚私有 token 兜底，换代时两条一起失效——等于没加这层。
+  it('别名 fallback 只引用宿主公开 token', () => {
+    for (const { name, value } of aliasDefinitions()) {
+      const refs = [...value.matchAll(/var\(\s*(--dsw-[a-z0-9-]+)/g)].map((match) => captured(match, 1))
+      expect(refs.length, `${name} 没有引用私有 token`).toBeGreaterThan(0)
+      for (const fallback of refs.slice(1)) {
+        expect(PUBLIC_DSW_TOKENS.has(fallback), `${name} 的 fallback ${fallback} 不是宿主公开 token`).toBe(true)
+      }
+    }
   })
 })
 

@@ -53,7 +53,7 @@ export function OrphanMaintenance({ section, t }: OrphanMaintenanceProps): React
           <div style={{ fontSize: 13, lineHeight: '19px' }}>
             {t('trash.orphans.banner', { count: report.totalSessions })}
           </div>
-          <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+          <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
             {t('trash.orphans.meta', {
               size: fileSizeText(report.totalBytes),
               parents: report.missingParents,
@@ -81,7 +81,7 @@ export function OrphanMaintenance({ section, t }: OrphanMaintenanceProps): React
           role="status"
           style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}
         >
-          <span style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--dsw-alias-label-tertiary)' }} aria-hidden="true">
+          <span style={{ display: 'inline-flex', flex: 'none', paddingTop: 2, color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
             <IconWarningOutlineRegular size={15} />
           </span>
           <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-secondary)' }}>

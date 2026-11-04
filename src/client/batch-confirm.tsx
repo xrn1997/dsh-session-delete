@@ -93,7 +93,7 @@ const TARGET_TITLE = {
   whiteSpace: 'nowrap',
 } as const
 
-const TARGET_META = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' } as const
+const TARGET_META = { fontSize: 12, lineHeight: '18px', color: 'var(--sd-label-tertiary)' } as const
 
 /**
  * 目标卡要能装几十条：选中很多条时卡片不能把弹框撑出视口，标题与底部按钮必须保持可见。

@@ -6,10 +6,12 @@
  *   没有旧前缀 fallback——支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`。
  *   官方 remote.<namespace> 仍不可用（第三方拿不到 Typert 描述符的动态发现挂载点）。
  * - 九段的**段名与方法**住 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`），
- *   本文件只投影路径（`prefix + ROUTES.x.path`）与方法（GET 段直接取 `ROUTES.x.method`，写段把它
- *   交给 `post()`）——方法字面量不在本文件出现第二份；
- *   写动作统一走 apply；`attachment` 是唯一二进制段，由 `src/client/attachment-view.tsx` 直接拼地址，
- *   不经过本文件的信封通道；`attachment-orphans`（纯读）与 `attachment-clean`（聚合写）是孤儿附件的两段。
+ *   本文件只投影段名与方法（GET 段直接取 `ROUTES.x.method`，写段把它交给 `post()`）——方法字面量
+ *   不在本文件出现第二份；取数地址（官方 `/api` 前缀 + 文档挂载点）归 `src/client/api-base.ts`
+ *   （根部署下与旧版逐字相同）。
+ *   写动作统一走 apply；`attachment` 是唯一二进制段，由 `src/client/attachment-view.tsx` 经同一投影
+ *   拼地址，不经过本文件的信封通道；`attachment-orphans`（纯读）与 `attachment-clean`（聚合写）是孤儿
+ *   附件的两段。
  * - 信封与官方 unary 面同形：{ok:true,value} / {ok:false,error}。HTTP 往返本身失败才 reject；
  *   业务失败以信封返回，由 unwrapRemoteResult 在注入面抛出。
  * - error 在线上是 {code,message,details?} 普通对象；判别依据 isDSHRemoteError 住在
@@ -18,7 +20,6 @@
 import {
   PARAMS,
   ROUTES,
-  OFFICIAL_SESSION_DELETE_API_PREFIX,
   isDSHRemoteError,
   isRemoteResult,
   type ApplyAction,
@@ -33,6 +34,7 @@ import {
   type TrashDetailWire,
   type TrashRowWire,
 } from '../shared/wire.js'
+import { apiPath } from './api-base.js'
 import { CLIENT_UNKNOWN_CODE, missingOutcomeMessage, readSingleReceipt } from './receipt.js'
 
 /**
@@ -145,8 +147,9 @@ export interface RawSessionDeleteRemote {
   empty(): Promise<RemoteResult<PurgeResultLike>>
 }
 
-/* ── 通道实现：同源 fetch，单一 /api 基础路径 ───────────── */
-/* `OFFICIAL_SESSION_DELETE_API_PREFIX` 只从 `wire.ts` 投影；本文件不另写 `/api`、段名或基础路径。 */
+/* ── 通道实现：同源 fetch，基础路径由 `api-base.ts` 投影 ───────────── */
+/* 段名与方法只从 `wire.ts` 的 `ROUTES` 投影；地址的 `/api` 前缀与文档挂载点归 `api-base.ts`。
+   本文件不另写 `/api`、段名、方法或挂载点。 */
 
 /** 宿主 `/api` 的 401/403 是纯文本，不是本插件信封：固定中文原文只住这里（浏览器半唯一消费者）。 */
 const UNTRUSTED_MESSAGE = '非受信来源'
@@ -184,9 +187,11 @@ async function requestEnvelope<T>(path: string, init: RequestInit): Promise<Remo
 }
 
 /**
- * exact Fetch 路由的 fetch 实现。**相对路径**：不拼 host、不认 origin——页面本身就是从宿主页面
- * 加载的，同源是这条通道的全部前提；鉴权归宿主 `/api` bridge（ADR-0033）。所以这条通道**只对**
- * 宿主页面打开过、带宿主身份的客户端成立（凭据是那次访问换来的 cookie，不是插件自己的秘密）。
+ * exact Fetch 路由的 fetch 实现。**同源、带挂载点前缀**：不拼 host、不认 origin——页面本身就是从
+ * 宿主页面加载的，同源是这条通道的全部前提；路径只由 `api-base.ts` 从 `document.baseURI` 的目录
+ * 与官方 `/api` 前缀拼出（根部署下与旧版逐字相同，反代到 `/dsh/` 时得到 `/dsh/api/...`）。
+ * 鉴权归宿主 `/api` bridge（ADR-0033）。所以这条通道**只对**宿主页面打开过、带宿主身份的客户端
+ * 成立（凭据是那次访问换来的 cookie，不是插件自己的秘密）。
  */
 export function createHttpRemote(): RawSessionDeleteRemote {
   const post = (route: { readonly method: 'GET' | 'POST' }, body: Record<string, unknown>): RequestInit => ({
@@ -196,30 +201,31 @@ export function createHttpRemote(): RawSessionDeleteRemote {
   })
   return {
     // 每段的方法都从段名表投影：GET 段直接取，写段交给 `post()` 带上同一格。
-    list: () => requestEnvelope<TrashEntryLike[]>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.list.path, { method: ROUTES.list.method }),
-    ping: () => requestEnvelope<string>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.ping.path, { method: ROUTES.ping.method }),
+    // 路径由 `api-base.ts` 投影：官方 `/api` 前缀 + 当前文档挂载点（根部署下就是 `/api/...`）。
+    list: () => requestEnvelope<TrashEntryLike[]>(apiPath(ROUTES.list.path), { method: ROUTES.list.method }),
+    ping: () => requestEnvelope<string>(apiPath(ROUTES.ping.path), { method: ROUTES.ping.method }),
     orphans: () =>
-      requestEnvelope<OrphanReportWire>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.orphans.path, { method: ROUTES.orphans.method }),
+      requestEnvelope<OrphanReportWire>(apiPath(ROUTES.orphans.path), { method: ROUTES.orphans.method }),
     attachmentOrphans: () =>
-      requestEnvelope<AttachmentOrphanReportWire>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.attachmentOrphans.path, {
+      requestEnvelope<AttachmentOrphanReportWire>(apiPath(ROUTES.attachmentOrphans.path), {
         method: ROUTES.attachmentOrphans.method,
       }),
     // 这一段没有入参；空 JSON 体只是让 POST 与其余写段同一形状（路由表声明 body: none，不读它）。
     attachmentClean: () => requestEnvelope<AttachmentCleanupWire>(
-      OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.attachmentClean.path,
+      apiPath(ROUTES.attachmentClean.path),
       post(ROUTES.attachmentClean, {}),
     ),
     detail: (entryId, before) =>
-      requestEnvelope<TrashDetailLike>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.detail.path, post(ROUTES.detail, {
+      requestEnvelope<TrashDetailLike>(apiPath(ROUTES.detail.path), post(ROUTES.detail, {
         [PARAMS.entryId]: entryId,
         ...(before === undefined ? {} : { [PARAMS.before]: before }),
       })),
     apply: (action, ids) =>
-      requestEnvelope<ApplyOutcome[]>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.apply.path, post(ROUTES.apply, {
+      requestEnvelope<ApplyOutcome[]>(apiPath(ROUTES.apply.path), post(ROUTES.apply, {
         [PARAMS.action]: action,
         [PARAMS.ids]: [...ids],
       })),
-    empty: () => requestEnvelope<PurgeResultLike>(OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.empty.path, post(ROUTES.empty, {})),
+    empty: () => requestEnvelope<PurgeResultLike>(apiPath(ROUTES.empty.path), post(ROUTES.empty, {})),
   }
 }
 

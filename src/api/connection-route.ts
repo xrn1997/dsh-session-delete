@@ -175,7 +175,12 @@ function toResponse(result: ApiResult): Response {
   }
   return new Response(JSON.stringify(result.body), {
     status: result.status,
-    headers: { 'content-type': 'application/json; charset=utf-8' },
+    // 与附件段同一道缓存闸：回收站清单/详情是**当下读数**，代理或浏览器的启发式缓存会把
+    // 「刚删的那条」留在屏上。八段 JSON 都不该被任何中间层留存。
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'private, no-store',
+    },
   })
 }
 

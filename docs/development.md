@@ -49,8 +49,8 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 
 ### 复核门（改过那一层就要过）
 
-- **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
-- **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；非宿主的 npm 依赖落 `dependencies`（不是 `peerDependencies`）、不进 `PLATFORM_MODULES`，可以 inline，但带 `imports` 分流的依赖走同文件的 `resolveBrowserBranchImport`——只认那类 `#` 请求，且同级真有 `.browser.js` 才接，否则返回 `null` 让纯度门重新响（`unified → vfile` 的 `#minpath` 分流就是实例）。为什么这么收，见 `docs/architecture.md` §1 与 §2。
+- **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**（token 引用按 `--sd-*` 别名层还原成它引用的 `--dsw-*` 再比，见 `src/client/ui/ui.css` 文件头的别名层说明）；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
+- **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；非宿主的 npm 依赖落 `devDependencies`（构建期内联，生产依赖必须为空——否则 `dsh plugin add` 会把构建期依赖装进用户 profile）、不进 `PLATFORM_MODULES`，可以 inline，但带 `imports` 分流的依赖走同文件的 `resolveBrowserBranchImport`——只认那类 `#` 请求，且同级真有 `.browser.js` 才接，否则返回 `null` 让纯度门重新响（`unified → vfile` 的 `#minpath` 分流就是实例）。为什么这么收，见 `docs/architecture.md` §1 与 §2。
 
 ## 真机验证（硬约束，别跳）
 

@@ -20,24 +20,27 @@ export const CARD: CSSProperties = {
   minWidth: 0,
   padding: '9px 14px',
   background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--dsw-alias-border-l4)',
-  borderRadius: 'var(--dsw-radius-lg)',
+  border: '0.5px solid var(--sd-border-l4)',
+  borderRadius: 'var(--sd-radius-lg)',
 }
 
 /** 选中行：底色与描边都换成宿主"选中"那一档（`trash-panel.tsx` 头注里有这两枚 token 的实测取值）。 */
 export const CARD_SELECTED: CSSProperties = {
   ...CARD,
-  background: 'var(--dsw-alias-button-ghost-active-fill)',
-  border: '0.5px solid var(--dsw-alias-button-ghost-active-border)',
+  background: 'var(--sd-button-ghost-active-fill)',
+  border: '0.5px solid var(--sd-button-ghost-active-border)',
 }
 
 /**
  * **整页唯一那块实心红**的写法：`variant="primary"` + 在元素上覆盖 primary 那对填充 token。
  * 宿主插件管理页的 danger 按钮就是这个写法（asar @21658274），所以 hover 仍走 `.primary:hover` 类。
+ *
+ * 覆盖的是**本插件别名层**（`--sd-*`，见 `ui.css` 头注）而不是宿主私有 token：别名在 `body` 上
+ * 就把 `var(--dsw-…, 兜底)` 算完并继承下来了，元素上再覆盖底层私有 token 已经传不进继承值。
  */
 export const BULK_DANGER = {
-  '--dsw-alias-button-primary-fill': 'var(--dsw-alias-state-error-primary)',
-  '--dsw-alias-button-primary-hover': 'var(--dsw-alias-state-error-primary)',
+  '--sd-button-primary-fill': 'var(--dsw-alias-state-error-primary)',
+  '--sd-button-primary-hover': 'var(--dsw-alias-state-error-primary)',
 } as CSSProperties
 
 /**

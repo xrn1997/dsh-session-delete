@@ -134,8 +134,8 @@ const LIST_COLUMN = {
   paddingRight: 10,
   paddingBottom: 8,
   // 自定义属性不在 csstype 的属性表里，走断言（与 `BULK_DANGER` 同一处写法）
-  '--dsh-scrollbar-thumb': 'var(--dsw-alias-scrollbar-bg-l2)',
-  '--dsh-scrollbar-thumb-hover': 'var(--dsw-alias-scrollbar-hover-l2)',
+  '--dsh-scrollbar-thumb': 'var(--sd-scrollbar-bg-l2)',
+  '--dsh-scrollbar-thumb-hover': 'var(--sd-scrollbar-hover-l2)',
 } as CSSProperties
 
 /** 详情那一栏的外壳（滚动归它自己，正文限宽在内部）。 */
@@ -147,8 +147,8 @@ const DETAIL_COLUMN = {
   overflow: 'auto',
   paddingRight: 10,
   paddingBottom: 8,
-  '--dsh-scrollbar-thumb': 'var(--dsw-alias-scrollbar-bg-l2)',
-  '--dsh-scrollbar-thumb-hover': 'var(--dsw-alias-scrollbar-hover-l2)',
+  '--dsh-scrollbar-thumb': 'var(--sd-scrollbar-bg-l2)',
+  '--dsh-scrollbar-thumb-hover': 'var(--sd-scrollbar-hover-l2)',
 } as CSSProperties
 
 const DETAIL_INNER: CSSProperties = { minWidth: 0, maxWidth: DETAIL_TEXT_MAX_WIDTH, width: '100%' }
@@ -329,7 +329,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           </span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3, flex: '1 1 auto', minWidth: 0 }}>
             <div style={{ fontSize: 13, lineHeight: '19px' }}>{t('trash.readFailed')}</div>
-            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)', wordBreak: 'break-word' }}>
+            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)', wordBreak: 'break-word' }}>
               {view.failure}
             </div>
           </div>
@@ -338,7 +338,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           </Button>
         </div>
       ) : view.loading ? (
-        <div style={{ padding: '20px 2px', fontSize: 12.5, color: 'var(--dsw-alias-label-tertiary)' }}>{t('trash.loading')}</div>
+        <div style={{ padding: '20px 2px', fontSize: 12.5, color: 'var(--sd-label-tertiary)' }}>{t('trash.loading')}</div>
       ) : view.empty ? (
         <div
           style={{
@@ -362,14 +362,14 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
               flex: 'none',
               borderRadius: 999,
               background: 'var(--dsw-alias-bg-layer-2)',
-              color: 'var(--dsw-alias-label-tertiary)',
+              color: 'var(--sd-label-tertiary)',
             }}
             aria-hidden="true"
           >
             <IconTrashOutlineRegular size={20} />
           </span>
           <div style={{ fontSize: 13.5, color: 'var(--dsw-alias-label-secondary)' }}>{t('trash.empty.title')}</div>
-          <div style={{ maxWidth: 340, fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }}>
+          <div style={{ maxWidth: 340, fontSize: 12, lineHeight: '18px', color: 'var(--sd-label-tertiary)' }}>
             {t('trash.empty.hint')}
           </div>
         </div>
@@ -430,7 +430,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       ? <IconChevronRightOutlineRegular size={14} />
                       : <IconChevronDownOutlineRegular size={14} />}
                   </span>
-                  <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-label-tertiary)' }} aria-hidden="true">
+                  <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
                     <IconFolderOpenOutlineRegular size={13} />
                   </span>
                   <span
@@ -440,7 +440,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   >
                     {group.label}
                   </span>
-                  <span style={{ marginLeft: 'auto', flex: 'none', fontSize: 11.5, color: 'var(--dsw-alias-label-tertiary)' }}>
+                  <span style={{ marginLeft: 'auto', flex: 'none', fontSize: 11.5, color: 'var(--sd-label-tertiary)' }}>
                     {t('trash.group.count', { count: group.entries.length })}
                   </span>
                 </button>
@@ -490,7 +490,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       {title}
                     </div>
                     <div
-                      style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}
+                      style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}
                       title={absoluteText(entry.deletedAt)}
                     >
                       {[
@@ -507,7 +507,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                     {entry.workspaceMissing === true ? (
                       <div
                         data-dsh-session-delete="trash-row-workspace-gone"
-                        style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}
+                        style={{ fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}
                       >
                         {t('trash.row.workspaceGone')}
                       </div>
@@ -640,11 +640,11 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           <div style={{ fontSize: 16, fontWeight: 600, lineHeight: '24px' }}>{t('trash.title')}</div>
           {selectMode ? (
             // 多选态下头部这一行说的是"勾了几条"——共可释放那句这时候不是主角，勾选数才是。
-            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>
+            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
               {t('trash.select.count', { count: checkedIds.length })}
             </div>
           ) : hasEntries ? (
-            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>
+            <div style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
               {t('trash.summary', { count: entries.length, size: fileSizeText(totalBytes) })}
             </div>
           ) : null}
@@ -685,7 +685,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           {/* 「不自动过期」必须完整可见，所以这一处不用 ELLIPSIS；句子整体一个 key，
               渲染时按 {dir} 切一刀把目录包成 code，避免两种语言各钉一次语序。
               多选态共用这一份；动作专属警告归各自的确认框。 */}
-          <span style={{ minWidth: 0, fontSize: 11.5, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+          <span style={{ minWidth: 0, fontSize: 11.5, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
             {noteParts[0]}
             <span style={{ fontFamily: 'var(--ds-font-family-code)', fontSize: 11 }}>{noteParts[1]}</span>
             {noteParts[2]}

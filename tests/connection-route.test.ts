@@ -140,6 +140,8 @@ describe('connection exact Fetch 路由 · 响应', () => {
     const response = await routeAt(harness, '/list').fetch(new Request(urlOf('/list')))
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ ok: true, value: [] })
+    // 回收站清单是当下读数：与附件段同一道 no-store 闸，代理/浏览器的启发式缓存不许留住它。
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
     await dispose()
   })
 
@@ -153,6 +155,7 @@ describe('connection exact Fetch 路由 · 响应', () => {
       headers: { 'content-type': 'application/json' },
     }))
     expect(response.status).toBe(400)
+    expect(response.headers.get('cache-control')).toBe('private, no-store')
     const body = await response.json() as { ok: boolean; error: { message: string } }
     expect(body.ok).toBe(false)
     expect(body.error.message).toContain('ids')

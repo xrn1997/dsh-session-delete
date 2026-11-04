@@ -25,8 +25,8 @@ import { deleteSessionFromMenu } from './write-seats.js'
 export const TARGET_CARD = {
   padding: '10px 12px',
   background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--dsw-alias-border-l4)',
-  borderRadius: 'var(--dsw-radius-lg)',
+  border: '0.5px solid var(--sd-border-l4)',
+  borderRadius: 'var(--sd-radius-lg)',
 } as const
 
 /** 菜单行写进现场的一条删除请求（槽位投影原样带过来，浏览器半不自己拼 id）。 */

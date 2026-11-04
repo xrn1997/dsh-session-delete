@@ -30,6 +30,7 @@ import { pick } from '../support/fixture.js'
 afterEach(() => {
   // 断言失败时也把 fetch 还原；否则下一条用例会拿着上一条的 stub 跑（新增用例不再依赖 finally）。
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 const FAILURE: RemoteFailure = { code: 'sessiondelete/live', message: '会话正在运行' }
@@ -91,6 +92,40 @@ describe('注入面的展开', () => {
     // 展开后抛出来的东西仍是「远程失败」——下游 `failureOf` 靠标记位而不是鸭子类型认出它。
     expect(isDSHRemoteError(thrown)).toBe(true)
     expect(failureOf(thrown)).toEqual(FAILURE)
+  })
+})
+
+describe('createHttpRemote · 文档挂载点', () => {
+  it('八段 fetch 都保留 document.baseURI 的挂载点', async () => {
+    vi.spyOn(document, 'baseURI', 'get').mockReturnValue('http://host/dsh/')
+    const paths: string[] = []
+    vi.stubGlobal('fetch', async (path: string) => {
+      paths.push(path)
+      return new Response(JSON.stringify({ ok: true, value: [] }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+
+    const remote = createHttpRemote()
+    await remote.list()
+    await remote.ping()
+    await remote.orphans()
+    await remote.attachmentOrphans()
+    await remote.attachmentClean()
+    await remote.detail('e1')
+    await remote.apply('purge', ['e1'])
+    await remote.empty()
+
+    expect(paths).toEqual([
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.list.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.detail.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`,
+    ])
   })
 })
 

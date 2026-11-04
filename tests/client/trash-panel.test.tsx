@@ -716,7 +716,9 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
     const bulk = screen.getByRole('button', { name: '清空回收站…' })
     expect(bulk.classList.contains('sd-button-primary')).toBe(true)
-    expect(bulk.style.getPropertyValue('--dsw-alias-button-primary-fill')).toBe(
+    // 覆盖的是本插件别名层：别名在 `body` 上已把 `var(--dsw-…, 兜底)` 算完，元素上覆盖底层 token
+    // 传不进继承值（见 `trash-view.ts` 的 `BULK_DANGER`）。
+    expect(bulk.style.getPropertyValue('--sd-button-primary-fill')).toBe(
       'var(--dsw-alias-state-error-primary)',
     )
   })
@@ -728,8 +730,8 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     ]
     const { container } = renderWide(makeDeps({ list: vi.fn(async () => twoRows) }))
     const row = await screen.findByRole('row', { name: /code-review/ })
-    expect(row.style.background).toBe('var(--dsw-alias-button-ghost-active-fill)')
-    expect(row.style.border).toContain('var(--dsw-alias-button-ghost-active-border)')
+    expect(row.style.background).toBe('var(--sd-button-ghost-active-fill)')
+    expect(row.style.border).toContain('var(--sd-button-ghost-active-border)')
     // 两行才谈得上"未选中"：只渲一行时宽档必然把那唯一一行自动选中，未选中那一侧无从断言。
     const unselected = container.querySelectorAll('[aria-selected="false"]')
     expect(unselected).toHaveLength(1)

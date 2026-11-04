@@ -16,7 +16,8 @@
  * （气泡那一侧），助手行左对齐（正文那一侧）。条本身不自认角色，对齐由调用面给。
  */
 import { useState, type CSSProperties } from 'react'
-import { OFFICIAL_SESSION_DELETE_API_PREFIX, PARAMS, ROUTES, type TrashDetailAttachmentWire } from '../shared/wire.js'
+import { PARAMS, ROUTES, type TrashDetailAttachmentWire } from '../shared/wire.js'
+import { apiPath } from './api-base.js'
 import type { Translate } from './copy.js'
 import { Button } from './ui/Button.js'
 import { CARD } from './trash-view.js'
@@ -42,7 +43,7 @@ export function attachmentUrl(a: TrashDetailAttachmentWire): string {
   if (a.kind === 'file' && a.name !== undefined && a.name !== '') {
     query.set(PARAMS.attachmentName, a.name)
   }
-  return `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachment.path}?${query.toString()}`
+  return apiPath(`${ROUTES.attachment.path}?${query.toString()}`)
 }
 
 /** 空串与缺席同义：宿主侧的 `name` 是可选建议名，空串不是名字（兜底文案与"不带 name 查询"都看它）。 */
@@ -65,7 +66,7 @@ const THUMB: CSSProperties = {
   maxHeight: 260,
   // 缩略图框有上限，画面按 contain 收进去而不是被裁掉一角：缩略图用来认出这张图，不是裁切预览。
   objectFit: 'contain',
-  borderRadius: 'var(--dsw-radius-lg)',
+  borderRadius: 'var(--sd-radius-lg)',
   background: 'var(--dsw-alias-bg-layer-2)',
 }
 
@@ -84,7 +85,7 @@ const UNAVAILABLE: CSSProperties = {
   alignItems: 'center',
   gap: 6,
   fontSize: 12,
-  color: 'var(--dsw-alias-label-tertiary)',
+  color: 'var(--sd-label-tertiary)',
 }
 
 /**

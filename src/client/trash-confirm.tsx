@@ -87,12 +87,12 @@ export function TrashConfirm({
                 <div style={{ ...ELLIPSIS, fontSize: 13.5, lineHeight: '19px' }}>
                   {entry.title === '' ? t('common.untitled') : entry.title}
                 </div>
-                <div style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+                <div style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
                   {projectLabel(entry.projectDir, t)}
                 </div>
                 {/* 逐条说清去向：这一条的原工作区不存在，回去后会在「未分组」（与行上同一句）。 */}
                 {entry.workspaceMissing === true ? (
-                  <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}>
+                  <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
                     {t('trash.row.workspaceGone')}
                   </div>
                 ) : null}
@@ -143,7 +143,7 @@ export function TrashConfirm({
             {pending.entry.title === '' ? t('common.untitled') : pending.entry.title}
           </div>
           <div
-            style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--dsw-alias-label-tertiary)' }}
+            style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}
           >
             {t('trash.confirm.one.meta', {
               project: projectLabel(pending.entry.projectDir, t),
@@ -214,7 +214,7 @@ export function OrphanConfirm({
         </div>
       )}
       <p>{t('trash.orphans.body')}</p>
-      <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--dsw-alias-label-tertiary)' }}>
+      <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
         {t('trash.orphans.cacheNote')}
       </p>
     </Modal>
