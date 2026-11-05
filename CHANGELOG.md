@@ -8,7 +8,7 @@
 
 - DSH 0.2.2 起，会话菜单的两行（多选、删除）改由宿主 `contextMenus` 数据动作提供，顺序恢复成「归档 → 多选 → 删除」；运行中的会话删除置灰，行名显示「删除（运行中）」。旧宿主没有这个服务时仍走 legacy 槽位行，两套注册互斥，不会出现重复行。`dsh.compatibility.dshReleases` 补记 DSH Desktop `0.2.2-rc.1`（真机实测）。
 - 删除 / 恢复读会话 header 改用宿主公开面：live 会话优先，落到持久化时走 `sessionPersistence.stat`，不再依赖工作区账本的私有读方法。
-- 分发包不再声明生产依赖：`react-markdown` / `remark-gfm` 构建期内联，React 标为 optional peer；新增 `THIRD_PARTY_NOTICES.md`，逐项披露内联依赖与抄本的版权 / 许可。
+- 分发包不再声明生产依赖：`react-markdown` / `remark-gfm` 构建期内联，React 标为 optional peer。
 
 ### 修复
 

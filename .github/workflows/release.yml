@@ -67,19 +67,54 @@ jobs:
           # 两条判据：构建产物与随包资源整树进包（少一件 = `files` 忘了加）；`exports` 等挂载面点名的
           # 路径真在包里（挂载面断了就不用等宿主报错）。反向也查：契约没点名的文件不许混进用户机器。
           cat > "$RUNNER_TEMP/verify-tarball.cjs" <<'NODE'
-          const { readdirSync, readFileSync } = require("node:fs");
+          const { existsSync, readdirSync, readFileSync, statSync } = require("node:fs");
           const { execFileSync } = require("node:child_process");
           const { join } = require("node:path");
 
           const tgz = process.argv[2];
           const pkg = JSON.parse(readFileSync("package.json", "utf8"));
 
-          const shippedDirs = ["lib", "locale"];
+          const posix = (p) => p.replaceAll("\\", "/");
           const walk = (dir) =>
-            readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
-              d.isDirectory() ? walk(join(dir, d.name)) : [join(dir, d.name).replaceAll("\\", "/")],
-            );
+            readdirSync(dir, { withFileTypes: true }).flatMap((d) => {
+              if (d.name === "node_modules" || d.name === ".git" || d.name === "dist") return [];
+              return d.isDirectory() ? walk(join(dir, d.name)) : [posix(join(dir, d.name))];
+            });
 
+          const globToRegExp = (glob) => {
+            let re = "";
+            for (let i = 0; i < glob.length; i++) {
+              const c = glob[i];
+              if (c === "*" && glob[i + 1] === "*") {
+                if (glob[i + 2] === "/") { re += "(?:.*/)?"; i += 2; }
+                else { re += ".*"; i += 1; }
+              } else if (c === "*") re += "[^/]*";
+              else if (c === "?") re += "[^/]";
+              else re += /[.+^${}()|[\]\\]/.test(c) ? "\\" + c : c;
+            }
+            return new RegExp("^" + re + "$");
+          };
+
+          // 期望的树只从 `files` 展开（目录整棵、glob 按段、其余单文件），再加 npm 无条件携带的
+          // `package.json`；根文件名不在这里维护第二份——加上 `files` 就自动进期望集。
+          const expected = new Set(["package.json"]);
+          for (const raw of pkg.files ?? []) {
+            const entry = raw.replace(/^\.\//, "");
+            const segs = entry.split("/");
+            const firstGlob = segs.findIndex((s) => /[*?]/.test(s));
+            if (firstGlob === -1) {
+              if (!existsSync(entry)) { expected.add(entry); continue; }
+              if (statSync(entry).isDirectory()) for (const f of walk(entry)) expected.add(f);
+              else expected.add(entry);
+            } else {
+              const base = segs.slice(0, firstGlob).join("/") || ".";
+              if (!existsSync(base)) continue;
+              const re = globToRegExp(entry);
+              for (const f of walk(base)) if (re.test(f)) expected.add(f);
+            }
+          }
+
+          // 挂载面（main/types/icon/exports/patch）再叠一道：出口点名的路径必须真在包里。
           const surface = [];
           const collect = (v) => {
             if (typeof v === "string") {
@@ -89,8 +124,7 @@ jobs:
             }
           };
           [pkg.main, pkg.types, pkg.icon, pkg.exports, pkg.dsh?.bundle?.patch].forEach(collect);
-
-          const expected = new Set([...shippedDirs.flatMap(walk), "package.json", "README.md", "LICENSE", ...surface]);
+          for (const p of surface) expected.add(p);
           const actual = new Set(
             execFileSync("tar", ["-tzf", tgz], { encoding: "utf8" })
               .split("\n")

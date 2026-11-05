@@ -186,8 +186,6 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(manifest.files).toContain('lib/index.js')
     expect(manifest.files).toContain('lib/client.js')
     expect(manifest.files).toContain('lib/types/**/*.d.ts')
-    // README 的许可段直接链到它；漏掉这一行，npm 包里就没有那份随附的第三方声明。
-    expect(manifest.files).toContain('THIRD_PARTY_NOTICES.md')
   })
 
   // 两半产物都是**自包含**的：`lib/client.js` 的外部 require 只有平台表（react / react-dom /
