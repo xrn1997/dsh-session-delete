@@ -873,6 +873,8 @@ describe('清单的 storage domain 绑定', () => {
     expect(env.spec.invalidRecords).toBe('backup-and-skip')
     expect(Object.keys(env.spec.tables)).toEqual(['entries'])
     expect(typeof must(env.spec.tables.entries, 'spec.tables 里的 entries 域').valueSchema.parse).toBe('function')
+    const schema = must(env.spec.tables.entries, 'spec.tables 里的 entries 域').valueSchema
+    expect(Object.keys(schema).sort()).toEqual(['parse'])
   })
 
   it('记录校验器认合法条目、拒残缺条目（域 open 时逐条 parse）', async () => {
@@ -894,6 +896,9 @@ describe('清单的 storage domain 绑定', () => {
     await m.remove('a')
     expect([...env.rows.keys()].sort()).toEqual(['b', 'c'])
     expect(env.calls.filter(c => c === 'table(entries)').length).toBeGreaterThan(0)
+    // adapter 不二次校验、不改字段：域里存的就是清册原对象
+    await m.add(trashEntry('d', { deletedAt: 400 }))
+    expect(env.rows.get('d')).toMatchObject({ id: 'd', deletedAt: 400 })
   })
 
   it('域句柄在插件卸载时被关掉（ctx.effect 的清理），且只开一次域', async () => {

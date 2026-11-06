@@ -44,7 +44,6 @@
     "gates": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm run pack:dry"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.4",
     "react": "^18.3.1"
   },
   "peerDependenciesMeta": {

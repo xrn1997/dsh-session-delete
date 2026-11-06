@@ -74,6 +74,10 @@ function defineDomain<T extends DomainSpecLike>(spec: T): T {
  * 本仓硬约束不许新增依赖，而 `zod` 既不在依赖里、也解析不到（`ERR_MODULE_NOT_FOUND`）⇒ 这里按域要求的**那一个方法**
  * 写一个本地校验器。**这是本插件唯一一处偏离官方配方的地方**：换 zod 只需把这张对象换成 `z.object({...})`，
  * `spec` 其余部分一字不动。
+ *
+ * **本仓的契约面**：只提供 `parse` 一个方法；域 `open()` 对每条记录调用它。测试能钉住我们提供的面
+ * （`Object.keys === ['parse']`），**不能证明宿主换用 `safeParse` / `_def` 时仍成立**；宿主换代先用真实
+ * `storageDomain.open` 做一次冒烟。
  */
 const trashEntrySchema = {
   parse(raw: unknown): TrashEntry {

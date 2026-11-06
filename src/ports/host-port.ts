@@ -177,6 +177,9 @@ interface HostCtxLike {
   ): Promise<readonly unknown[]>
   /** cordis 的可选服务读法（`ctx.get(name)`），官方用它读可选服务。 */
   get(name: string): unknown
+  /** cordis 的卸载钩子：`effect` 当场跑交回的工厂、把返回的清理挂在插件作用域上。
+   *  `agent-handles.ts` 用它登记 wrapper 的恢复；缺席（旧 ctx / 假件）时只是没有恢复。 */
+  effect?(execute: () => () => unknown, label?: string): unknown
   /** cordis 事件发送：首参不是对象/函数时不带 carrier，全量派发到转发器；announce* 依赖这一点。
    *  出处：asar `@deepseek-ai/cordis/lib/index.js` 的 `dispatch`（`const filter = thisArg?.[Context.filter]`）。 */
   emit(name: string, ...args: readonly unknown[]): void

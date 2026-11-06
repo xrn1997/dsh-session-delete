@@ -210,8 +210,18 @@ function TrashPanelIconSlot({ size }: { size?: number }) {
  */
 async function activate(client: ClientContextLike): Promise<void> {
   bindMainView(client)
+  // 探测是一次往返、没有超时；期间宿主可能已经卸载本条目（HMR / 条目销毁）。卸载标记必须
+  // 抢在探测之前登记，回来先看它——续拍再注册就是把贡献写进一个已销毁的注册表。
+  let disposed = false
+  if (typeof client.effect === 'function') {
+    client.effect(() => () => {
+      disposed = true
+    }, 'session-delete: activation')
+  }
   const raw = createHttpRemote()
   if (!(await probeChannel(raw))) return
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `disposed` 由卸载闭包写成 true，TS 看不见闭包写入；删了会让探测回来的续拍注册进已销毁的注册表。
+  if (disposed) return
   const deps = buildDeps(raw)
   // 文案：宿主 locale 服务在就注册字典并绑命名空间，不在就降级到内置 zh（见 `copy.ts` 头注）。
   const t = createTranslate(client)

@@ -21,16 +21,18 @@ DSH 官方实践要求把可调项放进插件 `Config`，而不是散在代码�
 
 ## 边界
 
-- 宿主配置页**不保证**渲染这三项的字段级表单：Standard Schema 没有 Schemastery 的 JSON Schema 投影，`Config` 的展示可能是「有 schema、可校验、不可展开」。以 `cordis.patch.yml` 为事实源，README 写明。
+- 宿主配置页的字段投影只认 native Schemastery；本插件手写的 Standard Schema 不在其列，`Config` 上无字段可展开。判据、实测读数与两条路见下。
 - 不 import 任何宿主 schema 库；Cordis 将来若提供冻结的 schema 构造器，再按 Dependency Rule 评估替换，不在本轮加值依赖。
 - 配置随组合根装配注入：测试给 deps 一份配置，不再有全局 `resetConfig()`；不引入环境变量或第二套配置文件。
 - 不改线上形状：三只旋钮都不进 `wire.ts`；客户端不感知。
+
+> 宿主配置页的字段投影要求 native Schemastery（`isNativeConfigSchema` 只认 `Symbol.for('schemastery') === true`、`type` 是字符串、`meta` 是非空对象）；本插件的 Standard Schema 不满足这三条。**0.2.2-rc.1 实测** `Config.listConfigs` 对本插件回 `status: 'unsupported'`，插件管理器不渲染字段表单；旧代次未逐一复核。配置以 `cordis.patch.yml` 为准。要做字段表单有两条路：在 `plugins.row.config` 自绘表单并新增一条 Host 配置写路由（走 `configEditor.edit`），或值 import `@deepseek-ai/schemastery`（破跨插件 import 红线）；两者当前都不做，若要做，选前者（不破跨插件 import 红线）。
 
 ## 后果
 
 - 三只上限/条数可以按 profile 调，不用改代码或发版；默认值仍与旧行为一致。
 - `src/config.ts` 是唯一家；`CoreDeps` 多 `config` 一格，读方从 deps 拿归一后的只读快照。`docs/architecture.md` §4 有主人行，README「可调项」与 `cordis.patch.yml` 是投影。
-- 宿主配置页的字段渲染是已知的受约束偏离；要完整表单就得引宿主 schema 库，取舍见「被否掉的替代」。
+- 宿主配置页的字段渲染是已知的受约束偏离；做字段表单的两条路与当前取舍见「边界」。
 - 新增 `tests/config.test.ts` 钉默认值、归一、非法值与 Standard Schema 返回值。
 
 ## 被否掉的替代

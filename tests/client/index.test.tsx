@@ -200,6 +200,8 @@ async function bootstrap(
   const fetchCalls = installFetch(raw, channel).calls
   const injected: string[] = []
   const registered: Registration[] = []
+  /** `ctx.effect` 交回的清理函数（真宿主按逆序在卸载时调用）；`disposeAll` 就是卸载那一刻。 */
+  const cleanups: (() => unknown)[] = []
   const ctx = {
     slots: {
       inject(key: string, contribute: () => unknown): unknown {
@@ -217,7 +219,10 @@ async function bootstrap(
       if (name === 'sessions') return services.sessions
       return undefined
     },
-    effect: (execute: () => unknown, _label?: string) => execute(),
+    effect: (execute: () => unknown) => {
+      cleanups.push(execute() as () => unknown)
+      return undefined
+    },
   }
   apply(ctx)
   await settle()
@@ -230,6 +235,10 @@ async function bootstrap(
     injected,
     registered,
     fetchCalls,
+    /** 卸载这一刻：真宿主按登记逆序调用清理函数（`bindMainView` 与激活守卫都挂在这上面）。 */
+    async disposeAll() {
+      for (const cleanup of cleanups.reverse()) await cleanup()
+    },
     /** 取某个槽位贡献的组件与它的注入面 props。 */
     seat: (name: string): { Component: SlotComponent; props: Props } => {
       const found = slot(name)
@@ -599,6 +608,26 @@ describe('apply 的装配面', () => {
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
+  })
+})
+
+// **探测在飞时插件可能已经被卸载**（宿主 HMR、条目销毁）。探测是一次往返、没有超时，
+// 这段窗口可以任意长；续拍再注册就是把贡献写进已销毁的注册表。守卫钉在探测之前登记，
+// 探测回来后先看它——不是靠给探测加超时，也不是拿探测失败冒充卸载。
+describe('探测期间插件被卸载（disposed 守卫）', () => {
+  it('探测期间插件被卸载：后续不再注册任何槽位', async () => {
+    let resolvePing!: (value: unknown) => void
+    const pendingPing = new Promise((resolve) => {
+      resolvePing = resolve
+    })
+    const env = await bootstrap(rawRemote({ ping: () => pendingPing as never }))
+    // 探测还挂着：一条贡献都没有。
+    expect(env.registered).toEqual([])
+    await env.disposeAll()
+    resolvePing({ ok: true, value: 'pong' })
+    await settle()
+    expect(env.registered).toEqual([])
+    expect(env.injected).toEqual([])
   })
 })
 

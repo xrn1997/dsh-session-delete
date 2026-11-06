@@ -116,7 +116,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
         maxJsonRefBytes: 10485760
 ```
 
-配置在插件激活时归一；未知键、非整数或越界会让这一条激活失败（不会用半套配置启动）。宿主的配置页不保证渲染这三个字段（本仓不引宿主 schema 库，ADR-0037），以 `cordis.patch.yml` 为准。
+配置在插件激活时归一；未知键、非整数或越界会让这一条激活失败（不会用半套配置启动）。宿主不渲染这三个字段的表单（0.2.2-rc.1 实测 `Config.listConfigs` 回 `status: unsupported`；本仓不引宿主 schema 库，见 [ADR-0037](docs/adr/0037-options-through-local-standard-schema-config.md)），以 `cordis.patch.yml` 为准。
 
 ## 界面语言
 

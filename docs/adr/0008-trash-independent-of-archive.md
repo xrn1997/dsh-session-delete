@@ -43,7 +43,7 @@ Status: accepted
 
 宿主没有公开的「按会话摘活体 / 按会话 dispose agent」面，插件只能读三处内部形状。这是本 ADR 的核心受约束偏离，逐条登记：
 
-1. **`ctx.agents` 没有 `dispose(sessionId)` 或 evict**：`AgentService.resume` / `create` 返回的 `AgentHandle` 带 per-agent teardown，但服务没有按会话 id 的 dispose。插件在 `src/ports/agent-handles.ts` 的 `captureAgentHandles` 里包住 `resume` / `create`，按 id 留 handle，删除时 `await handle.dispose()`——这是目前公开面上唯一能完整摘掉 agent 的路。证据：`tests/assembly.test.ts` 用「读回是新代理」的形状钉住 `resume` / `create` 都装上；2026-10-21 在隔离宿主真机复测。上游请求：给 `agents` 一个按 `sessionId` 的 dispose/evict，或稳定的 handle 读取口。
+1. **`ctx.agents` 没有 `dispose(sessionId)` 或 evict**：`AgentService.resume` / `create` 返回的 `AgentHandle` 带 per-agent teardown，但服务没有按会话 id 的 dispose。插件在 `src/ports/agent-handles.ts` 的 `captureAgentHandles` 里包住 `resume` / `create`，按 id 留 handle，删除时 `await handle.dispose()`——这是目前公开面上唯一能完整摘掉 agent 的路。证据：`tests/assembly.test.ts` 用「读回是新代理」的形状钉住 `resume` / `create` 都装上；2026-10-21 在隔离宿主真机复测。上游请求：给 `agents` 一个按 `sessionId` 的 dispose/evict，或稳定的 handle 读取口。插件卸载时按 own property descriptor 的身份恢复 `resume` / `create`：只有当前值仍是我们装的 wrapper 才写回原函数；服务上仍归本闭包的句柄表与 wrapper 记录 symbol 才删除。安装者拥有 wrapper；晚到的 `ctx.inject(['agents'])` 安装与晚到的 handle 落地都被 `restored` 标记挡住。
 2. **`ctx.sessions.liveEntryFor` 是内部面**：宿主没有公开的「摘 live session」API；`evictLive` 读 `liveEntryFor(session).detach()`。形状随宿主代次变，`engines.dsh` 是窗口；`tests/assembly.test.ts` 钉住注入口。上游请求：公开 detach/evict。
 3. **`AgentHandle` 的 `agent.id` + `dispose` 是返回形状**：不是 `agents` 的公开类型；升级代次先核形状。上面两处（`captureAgentHandles`、`evictLive`）是仅有的内部适配，不再扩张。
 

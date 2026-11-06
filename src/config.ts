@@ -3,8 +3,9 @@
  *
  * 为什么不用 `@deepseek-ai/schemastery` 写 schema：那是宿主包，值 import 会破本仓「跨插件一律
  * `import type`」的硬约束；Cordis 的 Config 接受 Standard Schema（`@standard-schema/spec`），
- * 手写这一小段即可，不需要把宿主 schema 库搬进插件。代价是宿主配置页拿不到字段级 JSON Schema
- * ——配置以 profile 的 `cordis.patch.yml` 为准（README「可调项」有示例）。
+ * 手写这一小段即可，不需要把宿主 schema 库搬进插件。代价是宿主只为 native Schemastery schema 投影
+ * 字段表单，这枚手写的 Standard Schema 不在其列——配置以 profile 的 `cordis.patch.yml` 为准
+ * （README「可调项」有示例）。
  *
  * 这里只做**默认值、归一与 schema**，不持有运行期现场：`apply` 归一一次，结果作为
  * `CoreDeps.config` 注入；读方从自己的 deps 读，不 import 模块级单例。

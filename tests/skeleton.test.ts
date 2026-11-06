@@ -87,6 +87,25 @@ describe('插件入口形状', () => {
   })
 })
 
+const localeEn = JSON.parse(
+  readFileSync(fileURLToPath(new URL('../locale/en.json', import.meta.url)), 'utf8'),
+) as { meta: { title: string } }
+
+describe('展示元数据与 peer 声明', () => {
+  it('英文标题是 sentence case', () => {
+    expect(localeEn.meta.title).toBe('Session delete')
+  })
+
+  it('cordis 不是 peer，react 是唯一 optional peer', () => {
+    expect(Object.keys(manifest.peerDependencies)).toEqual(['react'])
+    expect(manifest.peerDependenciesMeta?.react?.optional).toBe(true)
+    expect(manifest.devDependencies['@deepseek-ai/cordis']).toBeDefined()
+    expect(
+      Object.keys(manifest.peerDependencies).filter((dep) => dep.startsWith('@deepseek-ai/dsh')),
+    ).toEqual([])
+  })
+})
+
 describe('宿主要求声明与浏览器半声明', () => {
   // 宿主导入插件时的判据（asar 里官方原文）：清单声明了 `engines.dsh` 时**只由该范围决定、
   // peerDependencies 被忽略**；没有它才逐条比对 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 的 peer。

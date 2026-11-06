@@ -1,3 +1,5 @@
+/** 只用于类型面：`@deepseek-ai/cordis` 留在 devDependencies 供本仓与 `lib/types` 解析，
+ *  不是 peer、也不在运行期加载；纯类型消费者在宿主外使用本包时需要自备它。 */
 import type { Context } from '@deepseek-ai/cordis'
 import { createDispatcher } from './api/dispatch.js'
 import { registerConnectionRoutes, type ConnectionFetchServiceLike } from './api/connection-route.js'

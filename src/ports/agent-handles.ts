@@ -10,17 +10,31 @@ interface AgentHandleLike {
 }
 type AgentMethod = (...args: unknown[]) => Promise<unknown>
 const CAPTURED_AGENT_HANDLES = Symbol.for('dsh-session-delete.captured-agent-handles')
+const CAPTURED_AGENT_WRAPPERS = Symbol.for('dsh-session-delete.captured-agent-wrappers')
+
+/** 一次包装的记账：卸载时按它把方法写回原函数（只有当前值仍是我们装的 wrapper 才写）。
+ *  `restoreTo` 是写回的目标——`original` 可能是代理读回时新包的影子，只有目标自有的原函数才该落回服务。 */
+interface WrapperRecord {
+  readonly name: 'resume' | 'create'
+  readonly original: AgentMethod
+  readonly restoreTo: AgentMethod
+  readonly wrapped: AgentMethod
+}
+
 interface AgentServiceLike {
   resume?: AgentMethod
   create?: AgentMethod
   [CAPTURED_AGENT_HANDLES]?: Map<string, () => Promise<void>>
+  [CAPTURED_AGENT_WRAPPERS]?: WrapperRecord[]
 }
 
-/** 捕获所需的 ctx 窄面：可选服务读法（`get`）与按依赖注入的子上下文（`inject`，晚挂载的 `agents` 靠它补装）。
- *  有些 ctx / 假件没有 `inject`——那就只在 apply 时 `get` 一次。 */
+/** 捕获所需的 ctx 窄面：可选服务读法（`get`）、按依赖注入的子上下文（`inject`，晚挂载的 `agents` 靠它补装）
+ *  与卸载钩子（`effect`，wrapper 的恢复挂在这里）。有些 ctx / 假件没有后两者——那就只在 apply 时 `get` 一次，
+ *  且不注册恢复。 */
 export interface AgentCtxLike {
   get(name: string): unknown
   inject?(names: readonly string[], callback: (child: { get(name: string): unknown }) => void): void
+  effect?(execute: () => () => unknown, label?: string): unknown
 }
 
 /** 一次捕获交回的句柄表：按会话 id `dispose`。没捕到 / 已经 dispose 过都是 no-op；
@@ -37,14 +51,53 @@ export interface AgentHandleStore {
  *  **安装时机**：先 `get('agents')`，没装成再 `inject(['agents'])`（两者只装一次，符号表兜住）。
  *  **symbol 表**：句柄表挂在服务实例的 {@link CAPTURED_AGENT_HANDLES} 上；同一个 agents 服务上的第二次
  *  安装（`get` 与 `inject` 各一次，或第二个 `createHostPort`）看见它就直接共用，不把 wrapper 套第二层。
+ *  **安装者拥有 wrapper**：包装记录先在闭包里留一份（`ownWrappers`，建立于 symbol 写入之前），同时挂到
+ *  {@link CAPTURED_AGENT_WRAPPERS}；第一次成功安装时经 `ctx.effect` 注册一条卸载恢复——按 own property
+ *  descriptor 的身份把 `resume` / `create` 写回目标自有的原函数（`restoreTo`；代理读回的影子不写回，
+ *  别人后装的 wrapper 不动），并摘掉仍归本闭包的 symbol 表。恢复是总的：一条写回失败不跳过其余记录。
+ *  恢复一次即锁死：晚到的安装与晚到的 handle 落地都被 `restored` 挡住。没有 `ctx.effect`（假件 / 旧 ctx）
+ *  时包装照装，只是没有恢复。
  *  **读回判据**：cordis 的 traceable 服务代理每次读函数都会新包一层（`get` 里的 `createShadowMethod`），
  *  所以只能看 own property descriptor 的身份；拿 `service[name]` 读回比身份是必然的假警报。
  */
 export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
   let handles = new Map<string, () => Promise<void>>()
+  /** 本闭包装上的包装记录：symbol 写入是 best-effort，恢复不能只靠它。 */
+  let ownWrappers: WrapperRecord[] | undefined
   let installed = false
+  /** 卸载恢复只跑一次；同时是「清理之后不再安装、不再捕获」的闸。 */
+  let restored = false
+  /**
+   * 卸载恢复：按记录倒序把仍是我们装的方法写回 `restoreTo`，再摘掉仍是本闭包那张表的 symbol 并清空
+   * 句柄表。身份判据挡两件事：别人后装的 wrapper 不被覆盖；别人换过的 symbol 表不被误删。
+   * 恢复必须走完：一条写回失败只跳过那一条，摘 symbol 与清表在 `finally` 里照做。
+   */
+  const restore = (service: AgentServiceLike): void => {
+    if (restored) return
+    restored = true
+    // 闭包自留的记录先于 symbol 写入建立，优先它：symbol 没写上时恢复也不至于无记录可写回。
+    const records = ownWrappers ?? service[CAPTURED_AGENT_WRAPPERS] ?? []
+    try {
+      for (const record of [...records].reverse()) {
+        try {
+          if (Object.getOwnPropertyDescriptor(service, record.name)?.value === record.wrapped) {
+            service[record.name] = record.restoreTo
+          }
+        } catch {
+          // 一条写回失败不跳过其余记录：恢复宁可少写一条，也不让后面的全停。
+        }
+      }
+    } finally {
+      try {
+        if (service[CAPTURED_AGENT_HANDLES] === handles) Reflect.deleteProperty(service, CAPTURED_AGENT_HANDLES)
+        if (service[CAPTURED_AGENT_WRAPPERS] === records) Reflect.deleteProperty(service, CAPTURED_AGENT_WRAPPERS)
+      } finally {
+        handles.clear()
+      }
+    }
+  }
   const install = (candidate: unknown): void => {
-    if (installed) return
+    if (installed || restored) return
     const service = candidate as AgentServiceLike | null | undefined
     // 宿主/假件可能回 null 或 undefined：空值判据按真实形状写（镜像钉死≠运行时必有）。
     if (service === undefined || service === null) return
@@ -55,15 +108,21 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
       installed = true
       return
     }
+    const wrappers: WrapperRecord[] = []
     let wrappedCount = 0
     for (const name of ['resume', 'create'] as const) {
       try {
         const original = service[name]
         if (typeof original !== 'function') continue
+        // 写回必须落到目标自有的原函数：代理读到的 `original` 可能只是当次新包的影子。
+        const own: unknown = Object.getOwnPropertyDescriptor(service, name)?.value
+        const restoreTo: AgentMethod = typeof own === 'function' ? (own as AgentMethod) : original
         const wrapped: AgentMethod = function (this: unknown, ...args: unknown[]) {
           // 显式写类型实参：`Reflect.apply` 的返回类型由它们决定，不再需要 `as Promise<unknown>` 断言。
           const result = Reflect.apply<unknown, unknown[], Promise<unknown>>(original, this, args)
           void result.then((value) => {
+            // 卸载后落地的不再进表：表已清空，写进去就是一具没人再 dispose 的 handle。
+            if (restored) return
             const handle = value as AgentHandleLike | null | undefined
             const id = handle?.agent?.id
             const dispose = handle?.dispose
@@ -83,20 +142,30 @@ export function captureAgentHandles(ctx: AgentCtxLike): AgentHandleStore {
         if (Object.getOwnPropertyDescriptor(service, name)?.value !== wrapped) {
           throw new Error(`agents.${name} is not writable`)
         }
+        wrappers.push({ name, original, restoreTo, wrapped })
         wrappedCount += 1
       } catch {
         // 一个方法装不上不该拖死另一个；两个都没装上才是"不捕获"。
       }
     }
     if (wrappedCount === 0) return
+    // 先立闭包记录、再写 best-effort 的 symbol：symbol 写不上时恢复仍有记录可用。
+    ownWrappers = wrappers
     try {
       // 只改类型；运行时仍是同一颗服务对象。标记写在 symbol 上，代理的 symbol 分支直通目标，
       // 第二次安装（get 与 inject 各一次）会看见它，不会把 resume/create 套第二层。
       service[CAPTURED_AGENT_HANDLES] = handles
+      service[CAPTURED_AGENT_WRAPPERS] = wrappers
     } catch {
-      // 标记只是防重复安装；写不上不改变 wrapper 已经装上这一事实。
+      // 标记只服务重复安装的判定；写不上不改变 wrapper 已经装上这一事实（恢复记录另有闭包一份）。
     }
     installed = true
+    try {
+      // 恢复挂在插件自己的 effect 上：卸载时框架跑这条清理。注册不上只是少一条恢复，包装照旧生效。
+      ctx.effect?.(() => () => restore(service), 'session-delete.agent-handles')
+    } catch {
+      // 同上：effect 注册失败不影响已装上的捕获。
+    }
   }
   const service = ctx.get('agents')
   if (service !== undefined && service !== null) install(service)

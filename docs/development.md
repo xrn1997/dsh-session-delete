@@ -51,6 +51,15 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 
 - **界面保真复核门**（改动 `src/client/ui/*` 之后）：与官方明文**逐属性比对零差异**（token 引用按 `--sd-*` 别名层还原成它引用的 `--dsw-*` 再比，见 `src/client/ui/ui.css` 文件头的别名层说明）；来源表与已知差异（含条目与条数）只住 `src/client/ui/ui.css` 文件头那一处，`tests/skeleton.test.ts` 钉那张表点名的自造差异与浮层层级——差异只许文件头点名的那几类，别处不抄条目也不抄条数。
 - **纯度门**（浏览器半的 import 面）：白名单是 `tsdown.config.ts` 的 `PLATFORM_MODULES`，只列真正在用的宿主冻结模块；非宿主的 npm 依赖落 `devDependencies`（构建期内联，生产依赖必须为空——否则 `dsh plugin add` 会把构建期依赖装进用户 profile）、不进 `PLATFORM_MODULES`，可以 inline，但带 `imports` 分流的依赖走同文件的 `resolveBrowserBranchImport`——只认那类 `#` 请求，且同级真有 `.browser.js` 才接，否则返回 `null` 让纯度门重新响（`unified → vfile` 的 `#minpath` 分流就是实例）。为什么这么收，见 `docs/architecture.md` §1 与 §2。
+- **宿主换代**：先跑 storage domain 的真实 `open` 冒烟；记录 schema 只依赖 `valueSchema.parse` 的契约见 `src/trash/storage-manifest.ts` 头注与 `tests/assembly.test.ts` 的 storage 用例。
+
+### 宿主换代复核（升级前逐条看）
+
+- **通道**：`ConnectionFetchRoute`（本仓窄镜像 `ConnectionFetchRouteLike`）的形状与宿主 `/api` 的 owner/鉴权行为；锚点 `src/api/connection-route.ts`、ADR-0033。
+- **主题**：用 `Theme.listTokens` 对照公开 token 面；新 token 的落法与已知差异见 `src/client/ui/ui.css` 头注，`tests/skeleton.test.ts` 钉别名层。
+- **行归属**：`data-row-key` 仍以 `session:` 前缀命名；锚点 `src/client/batch-pick.ts`、ADR-0034。
+- **清册 schema**：沿用「复核门」的「宿主换代」条，不在此复述。
+- **维护卡**：`plugins.bundle.config` 仍是宿主提供的 bundle 配置槽；理由住 ADR-0021。
 
 ## 真机验证（硬约束，别跳）
 
@@ -71,7 +80,7 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 1. **门**：`pnpm gates`，退出码看过；它覆盖 typecheck / lint / test / build / pack（dry-run）。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写，逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
-4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。**先发 npm 再推 tag**：npm 失败时不会留下一个只有 GitHub 侧到位的版本。
+4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。**先发 npm 再推 tag**：npm 失败时不会留下一个只有 GitHub 侧到位的版本。`lib/types/**/*.d.ts` 对 `@deepseek-ai/cordis` 只有 type-only 引用：它在 `devDependencies` 里供本仓与声明文件解析，不是 peer、也不在运行期加载；纯类型消费者若不在宿主环境里使用本包，需要自备它。
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。
    - 根目录 `screenshots.json` 列的是 README 那些真机图的清单；文档门会钉住 README、清单与本地文件三方一致，换图时同批更新。
 5. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 按 `package.json` 断言包内的树（构建产物与随包资源整树进包、挂载面点名的路径都在包里、契约没点名的文件进不去；清单的家仍是 `files`，workflow 不抄第二份）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-session-delete-<版本>.tgz` 与稳定别名 `dsh-session-delete.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。
