@@ -1,12 +1,12 @@
 /**
- * 插件设置页的「维护」卡（`plugins.bundle.config` 的占用者）。
+ * 插件设置页的「维护」卡（ADR-0021）：那张槽位上的两张卡里，本文件只拥有下面这一张。
  *
- * 两张段都是**手动**的：检查 → 预览 → 清理，没有挂载即扫、没有定时器。卡片的职责只有呈现：
+ * 两段都是**手动**的：检查 → 预览 → 清理，没有挂载即扫、没有定时器。卡片的职责只有呈现：
  * 状态那一行、检查按钮、以及各段自己的横幅 / 失败 / 提示 / 确认框；读数与动作全归
- * `src/client/use-maintenance.ts`。
+ * `src/client/use-maintenance.ts`。两张卡的先后与 `summary` 守卫在 `src/client/settings-cards.tsx`。
  *
  * 与回收站面板的区别：这里没有面板高度、没有清单与详情两栏、没有全局闸。控件只用
- * `CARD` / `Button` / `Modal` / `fileSizeText`，所以同一张卡放在插件详情页的任意宽度下都成立。
+ * `settingsCardShell` / `Button` / `Modal` / `fileSizeText`，所以同一张卡放在插件详情页的任意宽度下都成立。
  *
  * 孤儿会话段直接复用 `OrphanMaintenance`（警告条 / 失败 / 中性提示 / 预览确认的既有呈现）；
  * 孤儿附件段是本文件里的 `AttachmentMaintenance`（横幅 + 失败 + 回执 + 缩略图预览与清理确认）。
@@ -18,23 +18,16 @@ import { zhTranslate, type Translate } from './copy.js'
 import type { AttachmentOrphanItemWire, AttachmentOrphanReportWire } from '../shared/wire.js'
 import { MaintenanceBanner, MaintenanceFailure } from './maintenance-parts.js'
 import { OrphanMaintenance } from './orphan-maintenance.js'
+import { settingsCardShell } from './settings-view.js'
 import { fileSizeText } from './ui/format.js'
 import { Button } from './ui/Button.js'
 import { Modal } from './ui/Modal.js'
-import { BULK_DANGER, CARD } from './trash-view.js'
+import { BULK_DANGER } from './trash-view.js'
 import { useMaintenance, type MaintenanceDeps } from './use-maintenance.js'
 import type { MaintenanceSectionView, MaintenancePhase } from './use-maintenance-section.js'
 
-/** 卡片外壳：按内容高、铺满宿主给的宽度；不假设自己住在中央面板里（没有 `height:100%`）。 */
-const CARD_SHELL = {
-  ...CARD,
-  flexDirection: 'column' as const,
-  alignItems: 'stretch' as const,
-  gap: 18,
-  width: '100%',
-  boxSizing: 'border-box' as const,
-  padding: '14px 16px',
-}
+/** 卡片外壳：与「可调项」卡同款，只差本卡的内容节奏。 */
+const CARD_SHELL = settingsCardShell(18)
 
 interface MaintenanceSectionProps {
   /** 给测试与界面规格一个稳定的段名；也方便宿主页调试时看出是哪一段。 */
@@ -219,20 +212,15 @@ function AttachmentConfirm({
 }
 
 export interface MaintenanceSettingsProps {
+  /** 维护四件（读数与动作）；可调项两件由占用者另发给「可调项」卡。 */
   deps: MaintenanceDeps
   /** 文案（缺省 = 内置 zh；宿主 locale 服务缺席时也是它，见 `copy.ts`）。 */
   t?: Translate
-  /** 宿主 `plugins.bundle.config` 的视图：`summary` 是插件行的一行摘要，本卡只属于详情页。 */
-  view?: 'summary' | 'page'
 }
 
-export function MaintenanceSettings({ deps, t = zhTranslate, view }: MaintenanceSettingsProps): ReactElement | null {
+export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettingsProps): ReactElement {
   // 两个段各自一台状态机（busy / 报告 / 提示都从段对象取）；这个 hook 不自动扫描。
   const maintenance = useMaintenance({ deps, t })
-  // 槽位契约给 occupant 两个视图：`page` 是插件详情页，`summary` 是插件列表行的一行摘要。
-  // 维护卡是整页卡片，放摘要位会顶掉那一行、还会把两个手动扫描按钮带进列表；所以只认 `page`。
-  // 当前宿主只以 `page` 派发这个 key（ADR-0021），这条守卫是对契约的防线，不是死代码。
-  if (view === 'summary') return null
   return (
     <div data-dsh-session-delete="maintenance-card" style={CARD_SHELL}>
       <div style={{ fontSize: 16, fontWeight: 600, lineHeight: '24px' }}>{t('maintenance.title')}</div>

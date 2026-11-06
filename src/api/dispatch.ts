@@ -1,7 +1,7 @@
 /**
  * /dsh-session-delete-api 的分发核心：只负责路由记录的执行。
  *
- * 传输适配器只有 `src/api/connection-route.ts` 一个：九段注册到宿主 `connection.fetch.register`
+ * 传输适配器只有 `src/api/connection-route.ts` 一个：十段注册到宿主 `connection.fetch.register`
  * 的 exact Fetch 路由（`Request` / `Response`），Host/Origin/浏览器认证由宿主 `/api` bridge 完成
  * （ADR-0033）。`Request` 的字节闸 / JSON 解析、`Response` 的头与失败信封都归适配器；
  * 这里只收已经解析好的请求，做查表 → 按段注入窄面 → 跑处理 → 回结果。
@@ -95,7 +95,7 @@ function removalOf(full: DeleteDeps): SliceDeps['removal'] {
   }
 }
 
-/** 四格只建一次：收窄对象在 dispatcher 构造期固定，请求路径只做引用选择。 */
+/** 五格只建一次：收窄对象在 dispatcher 构造期固定，请求路径只做引用选择。 */
 export function slicesOf(full: DeleteDeps): SliceDeps {
   const core = coreOf(full)
   return {
@@ -103,6 +103,12 @@ export function slicesOf(full: DeleteDeps): SliceDeps {
     removal: removalOf(full),
     full,
     attachment: { ...core, attachments: full.attachments },
+    // `/config` 只多这两件；`exactOptionalPropertyTypes` 下用条件展开，不把 undefined 写进可选键。
+    config: {
+      ...core,
+      ...(full.configEditor === undefined ? {} : { configEditor: full.configEditor }),
+      ...(full.entry === undefined ? {} : { entry: full.entry }),
+    },
   }
 }
 

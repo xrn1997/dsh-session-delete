@@ -67,26 +67,27 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 
 1. **改动 `src/client/` 后**，先在**有可见浏览器的隔离 home**（临时 `DSH_HOME`，镜像目标 profile 的插件组成）上验「页面加载 + 槽位注册 + 控制台零 error/warn」，再装进任何 live profile。台架走法：`DSH_HOME=<临时目录> dsh --profile <名> --from-default-profile web --no-open --port 0`，浏览器看控制台；指针驱动的交互在没有可视视口的环境里测不了，那部分交真机目视。0.2.2+ 的菜单数据动作还要目视确认「归档 → 多选 → 删除」顺序、没有 legacy 重复行、运行中显示「删除（运行中）」；≤0.2.1 的 legacy 路径（tooltip + order 850/900）由单测覆盖，有旧宿主时再补一次真机。
 2. **改动 Node 半后**必须重启宿主。
-3. **`dshReleases` 只列桌面真机跑过的代次**（`tests/skeleton.test.ts` 双向钉）；CLI 台架读数只用于定 `engines.dsh` 地板，不进那份名单。
+3. **`xrn1997.dshReleases` 只列桌面真机跑过的代次**（`tests/skeleton.test.ts` 双向钉）；CLI 台架读数只用于定 `engines.dsh` 地板，不进那份名单。
 4. 真机验收清单随对应 issue/PR 或提交说明走（本仓不再存批次日志）——**代签不了**：构建绿与单测绿只证形状与逻辑，不证激活。
 5. **删除 → 恢复后的对话门（2026-10-21 真机事故）**：删除一个**打开过**的会话 → 从回收站恢复 → 直接发一条消息。**已触发**的信号是消息出现在对话里、会话日志增长并得到回复；只有重启宿主后才恢复 = 旧 agent 没被完整摘掉（ADR-0008）。恢复后若仍停在「会话不可用」，那是宿主常驻 `Session` 的 `removed` 粘性状态——当前实现会在删除当前视图时关掉它、撤销后重开（`src/client/main-view.ts`，ADR-0008）。单测覆盖插件侧的收尾判据（handle 捕获、主视图收尾）；宿主 `ctx.agents` 的生命周期与宿主客户端常驻 `Session` 的 `removed` 粘性仍只能真机走。
 6. **附件门**：造一条带图片（和普通文件）的会话 → 删除进回收站 → 打开详情确认图片可见、可放大、文件可下载 → 恢复 → 再删 → 彻底删除 → 确认 `.dsh/attachments/v1/objects` 里该对象消失、源文件仍在；另一条会话共享同一张图时，删掉一条后另一条仍能看图。
 7. **设置页维护卡门**：重启宿主 → 打开插件详情页 → 「维护」卡出现，两段都在「尚未检查」（挂载不发请求）→ 点「检查」孤儿附件：报告应显示当前本机已有的无引用对象数与体积（应与盘上当下真实孤儿一致；清完重查归零）→ 「查看并清理」先列图片缩略图（点开可放大、关闭不删），正文说清只清 `.dsh` 内无引用图片副本、源文件不受影响、共享引用保留 → 清理后重查为 0，`.dsh/attachments/v1/objects` 里这些对象消失、你磁盘上的源文件仍在。孤儿会话段同样走「检查 → 预览 → 清理」。最后看一眼回收站面板：没有孤儿横幅、也没有孤儿提示，挂载与写后重读都不发 `GET /orphans`（单测已钉，真机这一步是目视确认）。
 8. **LAN / 反代门（改动 `src/api/connection-route.ts` 之后）**：宿主绑到具体 LAN IP（宿主拒绝 `0.0.0.0`），用另一台机器打开 `dsh web` 打印的 URL → 入口出现，删除 / 恢复 / 回收站全通；同一地址在**未带**宿主 cookie 的形态下打 exact 路由（`GET /api/dsh-session-delete-api/ping`）应被宿主 `/api` 拒（**401** 纯文本；个别代次可能是 403）；再从**同 IP 不同端口**的页面拿 `<img>` 打附件段（或带 `Sec-Fetch-Site: same-site` 复用 cookie 打 `/attachment`），应回 **403 + 失败信封**（插件的同源取数闸，ADR-0033）。桌面壳与 localhost 两条路照旧放行（都带宿主 cookie）。
 9. **Release 资产装机门（改动 `.github/workflows/release.yml` 或 README「安装」的 Release 那条之后）**：拿一个真实 tag 的资产从干净 profile 装一次。第一件要验的是宿主收不收 URL 形态的 `add` 参数——本仓没有任何真机读数支持这句，没跑过就当没跑过；不通就退回「先下 `.tgz`、再按离线分发那条 `add ./….tgz`」，并同批改回 README。装完重启宿主，按本节第 1、2 条验激活与日志，别把「拿到的是完整包」当成「宿主挂上了」。
+10. **可调项卡门（改动 `src/client/config-settings.tsx` 或 `/config` 段之后）**：打开插件详情页 → 「可调项」卡读出三只当前值 → 改一个值保存 → Node 半这一行重启、卡片显示保存回执里的值；离开再回到插件详情页，卡片重新读取并显示落盘值；**重启宿主后仍生效**（写进了 profile 的 patch 层）。再验两条失败面：输入 0 / 小数 / 超上限时保存禁用、那一行报「需为 min–max 的整数」，不调 `/config`；用一个没有 `configEditor` 的 profile 保存，应回 `io` 原文（`这一代宿主不能保存配置；请直接改 profile 的 cordis.patch.yml`），不假装成功。
 
 ## 发版流程
 
 1. **门**：`pnpm gates`，退出码看过；它覆盖 typecheck / lint / test / build / pack（dry-run）。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写，逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
-4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `dshReleases` 是否已落到产物上。**先发 npm 再推 tag**：npm 失败时不会留下一个只有 GitHub 侧到位的版本。`lib/types/**/*.d.ts` 对 `@deepseek-ai/cordis` 只有 type-only 引用：它在 `devDependencies` 里供本仓与声明文件解析，不是 peer、也不在运行期加载；纯类型消费者若不在宿主环境里使用本包，需要自备它。
+4. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap（`tsdown.config.ts` 两份配置都显式 `sourcemap: false`），因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `xrn1997.dshReleases` 是否已落到产物上。**先发 npm 再推 tag**：npm 失败时不会留下一个只有 GitHub 侧到位的版本。`lib/types/**/*.d.ts` 对 `@deepseek-ai/cordis` 只有 type-only 引用：它在 `devDependencies` 里供本仓与声明文件解析，不是 peer、也不在运行期加载；纯类型消费者若不在宿主环境里使用本包，需要自备它。
    - 清单里的 `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。
    - 根目录 `screenshots.json` 列的是 README 那些真机图的清单；文档门会钉住 README、清单与本地文件三方一致，换图时同批更新。
 5. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 按 `package.json` 断言包内的树（构建产物与随包资源整树进包、挂载面点名的路径都在包里、契约没点名的文件进不去；清单的家仍是 `files`，workflow 不抄第二份）→ 挂到 Release。每个 Release 两份资产：版本名 `xrn1997-dsh-session-delete-<版本>.tgz` 与稳定别名 `dsh-session-delete.tgz`；tag 带 `-` 的按 prerelease 处理（新建时直接标，已存在时补标），不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。
 6. **README 徽章**与「真跑过」名单按当次实测代次更新（徽章读 npm `latest` 清单，工作树改了不会变）。
 
-   商店牌子读 npm `latest` 清单（`engines.dsh`；超过 256 字符的范围串会被整条丢弃）；`dsh.compatibility.dshReleases` 只是真机账本，宿主与市场都不读它。发版后现查 npm `latest`，别把某次读数写死。
+   商店牌子读 npm `latest` 清单（`engines.dsh`；超过 256 字符的范围串会被整条丢弃）；`xrn1997.dshReleases` 只是真机账本，宿主与市场都不读它。发版后现查 npm `latest`，别把某次读数写死。
 
 ## 已知的环境坑
 

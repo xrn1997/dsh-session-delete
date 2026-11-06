@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约：前缀、九个端点、请求/响应形状与失败码。
+ * 跨半 wire 契约：前缀、十个端点、请求/响应形状与失败码。
  * Node 半（src/api/dispatch.ts）与浏览器半（src/client/remote.ts）共用这一份，不各写字面量。
  *
  * 构建约束：本文件零运行时依赖、无 import；浏览器半把整个文件 inline 进 bundle。
@@ -7,7 +7,7 @@
  */
 
 /**
- * 插件专属前缀（九段相对它命名）。
+ * 插件专属前缀（十段相对它命名）。
  *
  * 为什么必须带插件名：宿主 `connection.fetch.register` 对**重复的精确路径**直接抛错
  * （`connection: exact Fetch route "…" is already registered`），撞了就是整棵插件树 boot 失败——
@@ -16,12 +16,12 @@
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
 /**
- * 唯一的取数基础路径：宿主 `/api` + 插件前缀。九段 exact Fetch 路由、客户端探测与附件 URL
+ * 唯一的取数基础路径：宿主 `/api` + 插件前缀。十段 exact Fetch 路由、客户端探测与附件 URL
  * 都从它起；`SESSION_DELETE_API_PREFIX` 只作为段名的相对前缀与错误原文。
  */
 export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREFIX}`
 
-/** 九个段名（相对前缀）。**每项 `{ path, method }` 两键**：某段用什么方法也是线上形状的一部分
+/** 十段段名（相对前缀）。**每项 `{ path, method }` 两键**：某段用什么方法也是线上形状的一部分
  *  （ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影（`ROUTES.x.method`），
  *  浏览器半的 GET 段同样投影、写段把 `ROUTES.x.method` 交给 `src/client/remote.ts` 的 `post()`，
  *  两半都不逐段手写一份。
@@ -36,11 +36,14 @@ export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREF
  *    这一段只负责"有多少、在哪、多大"。
  *  - `attachment`：附件原始字节（全仓唯一的二进制响应段；失败仍回 JSON 信封）。
  *  - `attachmentOrphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。
- *  - `attachmentClean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。 */
+ *  - `attachmentClean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。
+ *  - `config`：三只可调项的读/写共用一段——空体读当前值，带字段写回 profile 的 patch 层。 */
 export const ROUTES = {
   list: { path: '/list', method: 'GET' },
   /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
   ping: { path: '/ping', method: 'GET' },
+  /** 可调项：空体读（与 `/detail` 同法，用 POST 表达一个读）；带字段写，写必须进到达序链。 */
+  config: { path: '/config', method: 'POST' },
   /** 单条详情（读回收站目录里那条会话自己的日志）。 */
   detail: { path: '/detail', method: 'POST' },
   /** 一组 id 上的同一个动作；删除确认框那句「含 N 个子会话」也走这里（`action: 'count'`，纯读语义）。 */
@@ -60,6 +63,25 @@ export const ROUTES = {
 /** 段名 → 那一段的路径。从结构化段名表派生：加一段只在上面加一项，`Record<RouteName, …>` 类型闸
  *  （`src/api/route-table.ts`）与运行期键集比对（`tests/route-table.test.ts`）都跟着这一格走。 */
 export type RouteName = (typeof ROUTES)[keyof typeof ROUTES]['path']
+
+/** 三只可调项的线上形状。Node 半的 `SessionDeleteConfig`（`src/config.ts`）是它的别名：
+ *  这一格固定线上字段名与接受范围（{@link CONFIG_LIMITS}），默认值与归一在 `src/config.ts`。 */
+export interface SessionDeleteConfigWire {
+  /** 设置页「孤儿附件」预览清单最多列多少条（数量与字节仍按全量报告）。 */
+  orphanPreviewLimit: number
+  /** `GET /attachment` 单次响应字节上限（服务路径与直接 fs fallback 共用）。 */
+  maxAttachmentBytes: number
+  /** 附件引用扫描里单个 JSON 引用源的字节上限；超过就按「读不出」fail closed。 */
+  maxJsonRefBytes: number
+}
+
+/** 三只可调项的接受范围（闭区间整数）。Node 半的归一与浏览器半的表单共用这一格：
+ *  两处各写一份范围就会「表单说能存、宿主激活时说越界」。 */
+export const CONFIG_LIMITS = {
+  orphanPreviewLimit: { min: 1, max: 10_000 },
+  maxAttachmentBytes: { min: 1, max: 200 * 1024 * 1024 },
+  maxJsonRefBytes: { min: 1, max: 100 * 1024 * 1024 },
+} as const satisfies Record<keyof SessionDeleteConfigWire, { readonly min: number; readonly max: number }>
 
 /** `/apply` 的五个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean` 是**宿主会话 id**
  *  （前两个还没进回收站，第三个压根没有回收站行），`restore`/`purge` 是**回收站条目 id**。

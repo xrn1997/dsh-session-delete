@@ -103,6 +103,25 @@ const ZH = {
   'trash.attachments.skippedPartial': '部分附件未清理：{reason}（已清理 {removed} 个）',
   'trash.attachments.alsoFailed': '；另有 {count} 个附件删除失败',
 
+  // 插件设置页的「可调项」卡：读是空体 POST，写走宿主 configEditor（这一行会重启）。
+  'config.title': '可调项',
+  'config.hint':
+    '保存后插件会重启；本页用保存回执回填，重开本页会重新读取。也可以直接改 profile 的 cordis.patch.yml。',
+  'config.orphanPreviewLimit': '孤儿附件预览条数',
+  'config.maxAttachmentBytes': '附件单次响应上限',
+  'config.maxJsonRefBytes': '附件引用扫描的单 JSON 上限',
+  'config.unit.items': '条',
+  'config.unit.bytes': '字节',
+  'config.loading': '正在读当前值…',
+  'config.loadFailed': '读取失败：{message}',
+  'config.save': '保存',
+  'config.saving': '保存中…',
+  'config.saved': '已保存；插件正在重启。',
+  'config.saveFailed': '保存失败：{message}',
+  'config.retry': '重试',
+  'config.invalid': '需为 {min}–{max} 的整数',
+  'config.unchanged': '没有改动',
+
   // 插件设置页的「维护」卡：两段都是手动触发（检查 → 预览 → 清理），没有自动扫描也没有定时器。
   // 状态行六档：尚未检查 / 检查中 / 清理中 / 检查失败 / 没有发现 / N——在飞的动作优先于一切，
   // 检查/清理失败优先于「尚未检查」（失败不是"还没查"）。孤儿会话段复用 `trash.orphans.*` 的呈现文案，
@@ -318,6 +337,24 @@ const EN: Record<CopyKey, string> = {
   'trash.attachments.skipped': 'Attachments were not cleaned: {reason}',
   'trash.attachments.skippedPartial': 'Some attachments were not cleaned: {reason} ({removed} cleaned)',
   'trash.attachments.alsoFailed': '; also {count} attachment deletions failed',
+
+  'config.title': 'Options',
+  'config.hint':
+    'Saving restarts the plugin. This card fills in from the save receipt; reopening this page reads the values again. You can also edit the profile cordis.patch.yml.',
+  'config.orphanPreviewLimit': 'Orphan attachment preview limit',
+  'config.maxAttachmentBytes': 'Attachment response limit',
+  'config.maxJsonRefBytes': 'Per-JSON reference scan limit',
+  'config.unit.items': 'items',
+  'config.unit.bytes': 'bytes',
+  'config.loading': 'Reading current values…',
+  'config.loadFailed': 'Could not read: {message}',
+  'config.save': 'Save',
+  'config.saving': 'Saving…',
+  'config.saved': 'Saved; the plugin is restarting.',
+  'config.saveFailed': 'Could not save: {message}',
+  'config.retry': 'Retry',
+  'config.invalid': 'Must be an integer from {min} to {max}',
+  'config.unchanged': 'No changes',
 
   'maintenance.title': 'Maintenance',
   'maintenance.orphans.title': 'Orphan sessions',

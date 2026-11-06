@@ -288,20 +288,3 @@ describe('维护卡 · 孤儿附件', () => {
     expect(within(attachments).queryByText('尚未检查')).not.toBeInTheDocument()
   })
 })
-
-describe('维护卡 · 槽位视图', () => {
-  // 槽位契约给 occupant 两个视图：详情页 `page` 与插件列表行的 `summary`。维护卡是整页卡片，
-  // 只认 `page`；`summary` 必须什么都不画，否则列表行会被整张卡顶掉。
-  it('summary 视图不渲染任何东西', () => {
-    const { container } = render(<MaintenanceSettings deps={deps()} view="summary" />)
-    expect(container.firstChild).toBeNull()
-  })
-
-  it('page 视图照常渲染；不传 view 的调用方（更早的代次 / 直挂组件）也照常渲染', () => {
-    const page = render(<MaintenanceSettings deps={deps()} view="page" />)
-    expect(screen.getByText('维护')).toBeInTheDocument()
-    page.unmount()
-    render(<MaintenanceSettings deps={deps()} />)
-    expect(screen.getByText('维护')).toBeInTheDocument()
-  })
-})

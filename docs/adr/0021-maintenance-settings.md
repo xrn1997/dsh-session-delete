@@ -29,7 +29,7 @@ Status: accepted
 
 ## 后果
 
-- 线上契约多两段（九段），浏览器半多一个 keyed 槽位贡献（`src/client/index.tsx`），并新增 `src/client/maintenance-settings.tsx`、`src/client/use-maintenance.ts` 与 `src/api/attachment-orphans.ts`。
+- 线上契约多两段，浏览器半多一个 keyed 槽位贡献（`src/client/index.tsx`），并新增 `src/client/maintenance-settings.tsx`、`src/client/use-maintenance.ts` 与 `src/api/attachment-orphans.ts`。
 - `src/client/write-seats.ts` 不再有孤儿清理座位；`src/client/use-trash-query.ts` 少掉整条孤儿扫描路径与写后重扫判据。
 - 界面规格的维护面从回收站面板搬到设置页（`docs/ui-spec.md` §5）；面板只保留附件清理 warning。
 

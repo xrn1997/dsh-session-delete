@@ -9,7 +9,7 @@ import { APPLY_ACTIONS, ROUTE_TABLE, routeOf, type JsonRouteSpec, type SliceDeps
 import { ROUTES } from '../src/shared/wire.js'
 import type { ApplyAction } from '../src/shared/wire.js'
 
-/** 段名表的九个路径（`ROUTES` 每项 `{ path, method }`，键集比对只认 path 这一格）。 */
+/** 段名表的十个路径（`ROUTES` 每项 `{ path, method }`，键集比对只认 path 这一格）。 */
 const SEGMENTS = Object.values(ROUTES).map((seg) => seg.path)
 
 /**
@@ -30,12 +30,12 @@ async function runApply(body: Record<string, unknown>): Promise<unknown> {
   }
 }
 
-describe('路由表 · 九个段名各一行', () => {
+describe('路由表 · 十个段名各一行', () => {
   it('段名表与路由表逐键对齐（`wire.ts` 加了段名而这里没加 ⇒ 编译不过，这条是运行期的同一件事）', () => {
     expect(Object.keys(ROUTE_TABLE).sort()).toEqual([...SEGMENTS].sort())
   })
 
-  it('方法：九段的 method 逐条投影自 `wire.ts` 的段名表（方法字面量只住那一处，路由记录不再自写）', () => {
+  it('方法：十段的 method 逐条投影自 `wire.ts` 的段名表（方法字面量只住那一处，路由记录不再自写）', () => {
     for (const [name, seg] of Object.entries(ROUTES)) {
       const method = routeOf(seg.path)?.method
       // 先钉「这一段有路由行、方法在场」：段名表未结构化时 `seg.path` 掉成 undefined，
@@ -69,16 +69,16 @@ describe('路由表 · 九个段名各一行', () => {
     expect(clean?.response).toBe('json')
   })
 
-  it('response：只有附件段是 binary，其余八段都是 json', () => {
+  it('response：只有附件段是 binary，其余九段都是 json', () => {
     for (const segment of SEGMENTS) {
       expect(`${segment}:${routeOf(segment)?.response}`)
         .toBe(`${segment}:${segment === ROUTES.attachment.path ? 'binary' : 'json'}`)
     }
   })
 
-  it('body：只有 POST 里的 apply / detail 需要 JSON 体，GET 一律不读（流只能消费一次）', () => {
+  it('body：POST 里的 apply / detail / config 需要 JSON 体，GET 一律不读（流只能消费一次）', () => {
     for (const segment of SEGMENTS) {
-      const expectsBody = segment === ROUTES.apply.path || segment === ROUTES.detail.path
+      const expectsBody = segment === ROUTES.apply.path || segment === ROUTES.detail.path || segment === ROUTES.config.path
       expect(`${segment}:${routeOf(segment)?.body}`).toBe(`${segment}:${expectsBody ? 'json' : 'none'}`)
     }
   })
@@ -110,12 +110,22 @@ describe('路由表 · 九个段名各一行', () => {
     expect(of({ action: 'nope' })).toBe('chained')
   })
 
+  it('纯度：`/config` 空体是读、带字段是写——写进链（configEditor.edit 会重启这一行）', () => {
+    const purity = routeOf(ROUTES.config.path)?.purity
+    expect(typeof purity).toBe('function')
+    const of = purity as (body: Record<string, unknown> | null) => string
+    expect(of(null)).toBe('pure')
+    expect(of({})).toBe('pure')
+    expect(of({ orphanPreviewLimit: 1 })).toBe('chained')
+  })
+
   it('读面：每一段声明自己该拿到的清册读面', () => {
     expect(routeOf(ROUTES.list.path)?.read).toBe('list')
     expect(routeOf(ROUTES.empty.path)?.read).toBe('list')
     expect(routeOf(ROUTES.orphans.path)?.read).toBe('raw')
     expect(routeOf(ROUTES.detail.path)?.read).toBe('raw')
     expect(routeOf(ROUTES.ping.path)?.read).toBe('none')
+    expect(routeOf(ROUTES.config.path)?.read).toBe('none')
     expect(routeOf(ROUTES.apply.path)?.read).toBe('none')
     // 孤儿附件两段读的是引用源与附件库，不读回收站清册。
     expect(routeOf(ROUTES.attachmentOrphans.path)?.read).toBe('none')
@@ -190,6 +200,10 @@ describe('路由表 · 按段声明 deps 切片', () => {
     expect(routeOf(ROUTES.apply.path)?.slice).toBe('full')
   })
 
+  it('config 声明 config：只多 configEditor + entry，不拿删除能力与清册读面', () => {
+    expect(routeOf(ROUTES.config.path)?.slice).toBe('config')
+  })
+
   /** 切片闸的类型面：删目录 / 删单文件是永久删除的执行能力，只许出现在 removal / full 两格上。 */
   const coreSliceHasNoRemoveDir: 'removeDir' extends keyof SliceDeps['core']['fs'] ? false : true = true
   const removalSliceHasRemoveDir: 'removeDir' extends keyof SliceDeps['removal']['fs'] ? true : false = true
@@ -197,7 +211,7 @@ describe('路由表 · 按段声明 deps 切片', () => {
   it('core 切片不含删除能力；core 段的 run 传不进比它更宽的面', () => {
     expect(coreSliceHasNoRemoveDir).toBe(true)
     expect(removalSliceHasRemoveDir).toBe(true)
-    // core 段的 run 只吃自己那一格：`{}` 连 fs / host 都没有，九格里没有一格满足得了。
+    // core 段的 run 只吃自己那一格：`{}` 连 fs / host 都没有，十格里没有一格满足得了。
     // 闭包只作类型证据、不真跑（真跑要一组假端口，那归 `tests/api.test.ts`）。
     const callWithEmptyDeps = (): unknown =>
       // @ts-expect-error core 段的 run 只吃自己那一格：空 deps 必须编译不过

@@ -36,16 +36,20 @@
 | `0029` | 子会话的查看入口为什么住详情不住清单：孩子身份随 `TrashDetailWire.subagents` 过线、孩子视图是离清单的单级导航（被否：清单行展开子行、双入口、摘要放 `TrashRowWire`、新开 `/children` 段） |
 | `0031` | 只读清单为什么不吃账本归属：字节口径仍同源，`workspaceOf` 只由删除计划付（接住 ADR-0027 的测量决定） |
 | `0032` | 路由行为什么声明 deps 切片：读段运行期拿不到删除能力与时钟，宽 deps 为什么编译不过（ADR-0004 的路由记录之上） |
-| `0033` | 通道为什么只走宿主 `connection` 的 exact Fetch 路由：九段注册在 `/api`、鉴权归宿主；旧前缀 + 请求栅栏已删，支持面是 web UI 与桌面端（附件段另设同源取数闸收字节 oracle） |
+| `0033` | 通道为什么只走宿主 `connection` 的 exact Fetch 路由：十段注册在 `/api`、鉴权归宿主；旧前缀 + 请求栅栏已删，支持面是 web UI 与桌面端（附件段另设同源取数闸收字节 oracle） |
 | `0034` | 批量可见行为什么从 slot 注册读、DOM 只留整行点击守卫（ADR-0015 的 DOM 观察被推翻；点击守卫是受约束偏离） |
 | `0035` | 附件读取为什么走宿主 `attachments` 的 `readImage` / `readFileStream`、直接 fs 只留 fallback（宿主已公开字节校验与归一化） |
 | `0036` | 主视图重开为什么用 snapshot `subscribe` 等摘要、不再轮询（一个 2 秒放弃 timer，pending 归 cleanup 与 `ctx.effect`） |
-| `0037` | 可调项为什么走本地 Standard Schema 的 `Config`、不引宿主 schema 库（三只旋钮 + `cordis.patch.yml`；字段表单是已知偏离） |
+| `0037` | 可调项为什么走本地 Standard Schema 的 `Config`、不引宿主 schema 库（三只旋钮 + `cordis.patch.yml`；字段表单由 `0043` 的自绘卡提供） |
 | `0038` | 组员判据为什么只看 `origin:'subagent'`、`parentSession` 为什么不是分类器（`0.2.1-rc.5` 及更早的 fork 也写它；被否：按宿主版本分支、改写 header） |
 | `0039` | 路径缺席为什么只认 ENOENT / ENOTDIR：`FsPort.exists` 不再把读错误折成「没有」，删除计划、孩子筛选与附件引用扫描据此 fail closed（被否：保留 `existsSync` 另加 `tryExists`、把读错误折成空结果、换 `lstat`） |
 | `0040` | 失败的永久删除为什么要把归档态放回去、目录为什么仍不回滚：先读 `isArchived`，只回滚还没删掉的会话（被否：把 `unarchive` 挪到删目录之后、只按 `wasArchived` 回滚、不回滚让用户自己再归档） |
 | `0041` | 附件计划为什么在执行期再复核一次：删对象前重扫剩余引用，只删这一刻仍无引用的对象；读不出仍整体跳过（被否：计划完就删、逐对象复查、把附件删除提前、接受窗口） |
 | `0042` | 清册记录 schema 为什么只承诺 `valueSchema.parse`、不引 zod（宿主存储域官方配方是 zod；本仓生产依赖为空，契约测试只钉我们的面）（被否：加 zod 内联、改用宿主 Schemastery、只留注释与测试） |
+| `0043` | 可调项的字段表单为什么走自绘「可调项」卡 + `/config` 读/写段（不引 Schemastery、不住宿主字段投影；写只走 `configEditor.edit`，保存会让这一行重启）（被否：值 import Schemastery、`plugins.row.config`、另开 GET、先回包再异步写） |
+| `0044` | 第三方许可声明与 README 截图为什么随包发布（头注不在产物里，npm 上的副本拿不到 MIT 声明；被否：只留源码头注、截图放外链、只发声明不发图）（翻 0.6.1 的移除） |
+| `0045` | patch 行 id 为什么带插件专属前缀、改名代价为什么接受（行 id 是宿主寻址这一行的键；被否：保持裸名等宿主分区、只提醒用户、id 写成包名全写） |
+| `0046` | 真机代次账本为什么从 `dsh.compatibility` 搬进 `xrn1997.dshReleases`、并补官方 optional 的 `dsh.manifestVersion`（公开面只放官方字段；被否：留在原位、删账本、README 当事实源） |
 
 ## 文档与真相
 

@@ -26,10 +26,11 @@ const manifest = JSON.parse(
   repository: { url?: string }
   scripts: Record<string, string>
   dsh: {
+    manifestVersion: 1
     bundle: { patch: string }
     client: { inject: string[]; platform: string }
-    compatibility: { dshReleases: Record<string, string> }
   }
+  xrn1997: { dshReleases: Record<string, string> }
 }
 
 /** 本插件真跑过的宿主代次（桌面版实测）。新增一代先在这里落账，再同步 dshReleases。 */
@@ -96,9 +97,10 @@ describe('展示元数据与 peer 声明', () => {
     expect(localeEn.meta.title).toBe('Session delete')
   })
 
-  it('cordis 不是 peer，react 是唯一 optional peer', () => {
-    expect(Object.keys(manifest.peerDependencies)).toEqual(['react'])
+  it('cordis 不是 peer，react / react-dom 都是 optional peer', () => {
+    expect(Object.keys(manifest.peerDependencies)).toEqual(['react', 'react-dom'])
     expect(manifest.peerDependenciesMeta?.react?.optional).toBe(true)
+    expect(manifest.peerDependenciesMeta?.['react-dom']?.optional).toBe(true)
     expect(manifest.devDependencies['@deepseek-ai/cordis']).toBeDefined()
     expect(
       Object.keys(manifest.peerDependencies).filter((dep) => dep.startsWith('@deepseek-ai/dsh')),
@@ -170,8 +172,11 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(JSON.stringify(manifest)).not.toContain('dsh-client-connection')
   })
 
-  it('dshReleases 只写状态词 compatible，且名单与实测代次**双向**一致', () => {
-    const releases = manifest.dsh.compatibility.dshReleases
+  it('真机账本住私有 xrn1997.dshReleases，只写 compatible，且名单与实测代次**双向**一致', () => {
+    // 公开 `dsh` 字段只留官方声明；真机账本宿主与市场都不读，放 `dsh.*` 会被误读成平台契约。
+    expect(manifest.dsh.manifestVersion).toBe(1)
+    expect(manifest.dsh).not.toHaveProperty('compatibility')
+    const releases = manifest.xrn1997.dshReleases
     for (const generation of TESTED_HOST_GENERATIONS) {
       expect(releases[generation]).toBe('compatible')
     }
@@ -216,10 +221,11 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(manifest.dependencies ?? {}).toEqual({})
   })
 
-  // 宿主提供 React（浏览器半的冻结平台表），它不是运行期 npm 依赖：peer 标成可选，
-  // 免得包装器按 peer 解析再往 profile 里装一份用不到的 React。
-  it('react peer 是可选 peer（宿主平台表提供，不从 profile 解析）', () => {
+  // 宿主提供 React / React DOM（浏览器半的冻结平台表），它们不是运行期 npm 依赖：peer 标成可选，
+  // 免得包装器按 peer 解析再往 profile 里装一份用不到的副本。
+  it('react / react-dom 都是可选 peer（宿主平台表提供，不从 profile 解析）', () => {
     expect(manifest.peerDependenciesMeta?.react?.optional).toBe(true)
+    expect(manifest.peerDependenciesMeta?.['react-dom']?.optional).toBe(true)
   })
 
   // 官方那条"peer 与 dev **同范围**、每条 dsh 对等依赖都在 devDependencies 里镜像"要防的是这一件事：
@@ -232,6 +238,13 @@ describe('宿主要求声明与浏览器半声明', () => {
 
   it('两条半产物的入口在 manifest 里声明齐全', () => {
     expect(manifest.dsh.bundle.patch).toBe('./cordis.patch.yml')
+  })
+
+  // 行 id 是宿主寻址这一行的键：`configEditor` 只编辑唯一寻址的行，行配置卡的 key 也带它。
+  // 裸名 `session-delete` 是通用词，可能被同一个 profile 里别的包占走；判据与改名代价见 ADR-0045。
+  it('bundle 的 patch 行 id 带插件前缀', () => {
+    const patch = readFileSync(fileURLToPath(new URL('../cordis.patch.yml', import.meta.url)), 'utf8')
+    expect(patch).toMatch(/^\s*- id: xrn1997-session-delete$/m)
   })
 
   /* ── npm 发布面（缺哪一条，`npm publish` 不是失败就是发出去一个坏包） ── */
@@ -249,11 +262,52 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(manifest.scripts.build).toBe('tsdown && tsc -p tsconfig.build.json')
   })
 
-  it('展示元信息：locale 两套语言与图标都进了发布清单', () => {
+  it('展示元信息：locale 两套语言、图标与 README 截图都进了发布清单', () => {
     expect(manifest.exports['./locale/*.json']).toBe('./locale/*.json')
     expect(manifest.files).toContain('locale')
     expect(manifest.files).toContain('icon.svg')
     expect(manifest.icon).toBe('./icon.svg')
+    // README 是插件详情页的详情文档；相对图片从**包内**读，截图不进包就是三张破图。
+    expect(manifest.files).toContain('docs/screenshots')
+  })
+
+  // 图标形状、图标集、控件实现与控件 / Markdown 样式逐字派生自 DeepSeek Harness 的 MIT 客户端包
+  // （各文件头注），`lib/client.js` 还内联了 react-markdown / remark-gfm 闭包（MIT / ISC）。两类
+  // 第三方代码都要求版权与许可声明随副本分发：这份声明必须真的进包，并点名「从哪来、落到哪」，
+  // 否则 npm 上的副本就是缺声明的副本。
+  it('第三方素材的许可声明随包发布，并点名来源、落点与内联依赖', () => {
+    const notice = readFileSync(fileURLToPath(new URL('../THIRD_PARTY_NOTICES.md', import.meta.url)), 'utf8')
+    expect(manifest.files).toContain('THIRD_PARTY_NOTICES.md')
+    expect(notice).toContain('MIT License')
+    expect(notice).toContain('ISC License')
+    expect(notice).toContain('Copyright (c) 2026 DeepSeek')
+    for (const source of [
+      '@deepseek-ai/dsh-client-ui-primitives',
+      '@deepseek-ai/dsh-client-ui-conversation',
+      '@deepseek-ai/dsh-client-ui-workspace',
+    ]) {
+      expect(notice).toContain(source)
+    }
+    for (const copied of [
+      'icon.svg',
+      'src/client/ui/icons.tsx',
+      'src/client/ui/Button.tsx',
+      'src/client/ui/Tag.tsx',
+      'src/client/ui/Modal.tsx',
+      'src/client/ui/Tooltip.tsx',
+      'src/client/ui/Toast.tsx',
+      'src/client/ui/MenuItemButton.tsx',
+      'src/client/ui/Checkbox.tsx',
+      'src/client/ui/top-layer.ts',
+      'src/client/ui/format.ts',
+      'src/client/ui/ui.css',
+      'src/client/ui/markdown.css',
+    ]) {
+      expect(notice).toContain(copied)
+    }
+    for (const inlined of ['react-markdown', 'remark-gfm', '@ungap/structured-clone']) {
+      expect(notice).toContain(inlined)
+    }
   })
 
   it('仓库/主页/工单面指向真实远端（不是编的 URL）', () => {

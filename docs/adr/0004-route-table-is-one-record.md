@@ -38,7 +38,7 @@ Status: accepted
 
 ## 边界
 
-- **不给段名做动态发现**：九个段名是硬契约，`wire.ts` 仍是它们的家；`route-table.ts` 只负责「怎么处理」。
+- **不给段名做动态发现**：段名是硬契约，`wire.ts` 仍是它们的家；`route-table.ts` 只负责「怎么处理」。
   线上方法是线上形状的一部分，按 ADR-0003 归 wire（`ROUTES` 每项 `{ path, method }`），路由记录与浏览器半都只投影。
 - **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这几处：鉴权归宿主 `/api` bridge（ADR-0033），状态与失败信封的落地在 `src/api/connection-route.ts`（`dispatch` 只抛带 `httpStatus` 的请求错误），错误映射在 `src/remote/map-error.ts`。
 

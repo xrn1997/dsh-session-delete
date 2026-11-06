@@ -1,6 +1,6 @@
 # dsh-session-delete — 给 agent 的工作须知
 
-DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读哪份、哪些门必须过、哪些红线跨所有改动。架构细节、构建步骤、历史裁决都不在这里。双半产物：Node 半（Cordis 插件 + `/dsh-session-delete-api`，`src/{domain,ports,trash,verbs,api,log}`）与浏览器半（左侧栏回收站面板、行菜单、批量浮条、插件设置页维护卡，`src/client`）。
+DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读哪份、哪些门必须过、哪些红线跨所有改动。架构细节、构建步骤、历史裁决都不在这里。双半产物：Node 半（Cordis 插件 + `/dsh-session-delete-api`，`src/{domain,ports,trash,verbs,api,log}`）与浏览器半（左侧栏回收站面板、行菜单、批量浮条、插件设置页的可调项 + 维护卡，`src/client`）。
 
 ## 先读哪份
 
@@ -32,7 +32,7 @@ DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读�
 - **删除 / 恢复不碰归档**：回收站与归档是两套状态；删除必须把 session 和它的 agent handle 一起摘掉，恢复走冷 resume。判据与已知限制见 ADR-0008。
 - **附件红线**：附件只随永久删除清 `.dsh` 内独占图片副本——不碰源文件、不碰普通文件、共享引用保留；剩余引用源读不出就跳过。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。孤儿会话与孤儿附件的检查/清理都是**手动**：只在插件设置页的维护卡里触发，任何面板与写后重读都不自动扫（ADR-0021）。
 - **浏览器半不许 import 任何宿主客户端包**（type-only 也不留）；跨插件一律 `import type`；宿主类型面用本地窄镜像，不装宿主类型包、不做 `declare module` 增强。
-- **客户端条目注册只在 `src/client/index.tsx`**：槽位只挂官方已声明的；可选服务走 `ctx.get`，不进条目的 `inject`（条目 pending = 宿主进程死）。
+- **客户端条目注册只在 `src/client/index.tsx`**：槽位只挂官方已声明的；可选服务走 `ctx.get`，不进条目的 `inject`（条目 pending = 宿主进程死）；可能迟到的服务用 `ctx.inject([...])` 的 scoped 等待切过去，不改条目的 `inject`。
 - **宿主要求只在顶层 `engines.dsh`**；`@deepseek-ai/dsh*` peer 保持零条。窗口值与真机名单的事实源是 `package.json`；README 与徽章是投影（文档门校验），`tests/skeleton.test.ts` 双向钉住 `package.json` 与实测代次。
 - **工具名 / 服务名带插件专属前缀**：宿主对重名直接抛错，不是显示难看，是整个工具面挂掉。
 

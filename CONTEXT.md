@@ -36,13 +36,13 @@ _Avoid_: 缓存（它是宿主持久副本；派生请求缓存在 `cache/attach
 _唯一实现_: `src/trash/attachments.ts` 的 `attachmentsInContent`。
 
 **同源取数闸（same-origin fetch gate）**:
-只挂附件字节段的浏览器取数约束：拒 `Sec-Fetch-Site` 为 same-site / cross-site 的请求，以及与 Host 头不同 authority 的 http(s) Origin / Referer；桌面壳的 `dsh-app:` 来源与三头全缺的非浏览器客户端放行。拒绝回 403 + 失败信封。只挂这一段是因为只有它的响应能被别的页面当 `<img>` 渲染（字节 oracle）；其余八段是 JSON，跨源读不到。
+只挂附件字节段的浏览器取数约束：拒 `Sec-Fetch-Site` 为 same-site / cross-site 的请求，以及与 Host 头不同 authority 的 http(s) Origin / Referer；桌面壳的 `dsh-app:` 来源与三头全缺的非浏览器客户端放行。拒绝回 403 + 失败信封。只挂这一段是因为只有它的响应能被别的页面当 `<img>` 渲染（字节 oracle）；其余九段是 JSON，跨源读不到。
 _唯一实现_: `src/api/connection-route.ts` 的 `isSameOriginFetch`；声明住 `src/api/route-table.ts` 的 `fetchGate`。
 _Avoid_: 请求栅栏（旧概念已随 ADR-0033 删除；这里只收字节 oracle，不做身份 / 归属判定）。
 
 **可调项（config）**:
-宿主 profile 的 patch 层里给本插件的三只旋钮（孤儿预览条数 / 附件响应上限 / JSON 扫描上限）；不是界面设置，也不跨到浏览器半。
-_唯一实现_: `src/config.ts` 的 `DEFAULT_CONFIG` / `normalizeConfig` / `Config`（Standard Schema）；`apply` 归一一次后作为 `CoreDeps.config` 注入，读方从 deps 读。
+宿主 profile 的 patch 层里给本插件的三只旋钮（孤儿预览条数 / 附件响应上限 / JSON 扫描上限）；写有两个入口：直接改 patch，或在插件设置页的「可调项」卡里改（走 `/config` 的写支）。
+_唯一实现_: `src/config.ts` 的 `DEFAULT_CONFIG` / `normalizeConfig` / `Config`（Standard Schema）；`apply` 归一一次后作为 `CoreDeps.config` 注入，读方从 deps 读；跨半的读/写由 `src/verbs/config.ts` 与 `src/client/config-settings.tsx` 承载（ADR-0043）。
 _Avoid_: 设置（界面设置页）、环境变量（配置只走宿主的 patch 层，ADR-0037）。
 
 **引用扫描（reference scan）**:
@@ -182,8 +182,13 @@ _Avoid_: 弹窗（太泛；这里专指名单上那两类与「最上层」判�
 _唯一实现_: `src/client/use-trash-query.ts`。
 _Avoid_: 缓存、空清单（`unknown` 不是空，`ready([])` 才是空）。
 
+**可调项卡（options card）**:
+插件设置页里「可调项」那张卡：三只数字输入 + 保存；挂载读一次 `/config`，保存经宿主 `configEditor.edit` 写回 patch 层并让 Node 半这一行重启（浏览器半的卡片不随卸载，用保存回执回填；重开插件页时重读）。
+_唯一实现_: `src/client/config-settings.tsx` 的 `ConfigSettings`；线上形状与范围住 `src/shared/wire.ts` 的 `SessionDeleteConfigWire` / `CONFIG_LIMITS`。
+_Avoid_: 宿主配置页（宿主的字段投影不认本插件的 Standard Schema）、设置面板。
+
 **维护卡（maintenance card）**:
-插件设置页（`plugins.bundle.config`，按 bundle 包名寻址）里的一张卡，装两段手动维护：孤儿会话与孤儿附件。检查只读、清理过确认框、清完自动重查；挂载不发请求，没有定时器。
+插件设置页（`plugins.bundle.config`，按 bundle 包名寻址）里「维护」那张卡，装两段手动维护：孤儿会话与孤儿附件。检查只读、清理过确认框、清完自动重查；挂载不发请求，没有定时器。
 _唯一实现_: `src/client/maintenance-settings.tsx` 的 `MaintenanceSettings`（读数与动作住 `src/client/use-maintenance.ts` 的 `useMaintenance`）。
 _Avoid_: 设置面板、清理任务（「面板」专指回收站面板；这里没有自动任务）。
 

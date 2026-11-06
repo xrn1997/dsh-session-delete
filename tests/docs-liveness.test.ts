@@ -114,7 +114,7 @@ function adrNumbering(nums: number[]): string[] {
 
 interface CompatibilityManifest {
   engines: { dsh: string }
-  dsh: { compatibility: { dshReleases: Record<string, string> } }
+  xrn1997: { dshReleases: Record<string, string> }
 }
 
 function normalize(raw: string): string {
@@ -513,7 +513,7 @@ describe('文档门 · 文档分层与 ADR 形状', () => {
 
 describe('文档门 · 兼容性事实单源', () => {
   const manifest = JSON.parse(read('package.json')) as CompatibilityManifest
-  const releases = Object.keys(manifest.dsh.compatibility.dshReleases)
+  const releases = Object.keys(manifest.xrn1997.dshReleases)
   const window = manifest.engines.dsh
 
   /** 徽章只投影首末代次：全量枚举会随每次实测变长，完整名单由正文钉住。 */
@@ -551,7 +551,7 @@ describe('文档门 · 兼容性事实单源', () => {
 describe('文档门 · 可调项事实单源', () => {
   // 三只旋钮的事实源是 `src/config.ts` 的 `DEFAULT_CONFIG`；README 的「可调项」表与 profile 的
   // `cordis.patch.yml` 示例都只投影它（ADR-0037 后果）。默认值一改，这两处跟着红。
-  const entries = Object.entries(DEFAULT_CONFIG) as Array<[string, number]>
+  const entries = Object.entries(DEFAULT_CONFIG)
 
   const readmeDrift = (readme: string): string[] =>
     entries.filter(([key, value]) => !readme.includes(`| \`${key}\` | \`${String(value)}`)).map(([key]) => key)

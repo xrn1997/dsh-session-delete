@@ -1,4 +1,4 @@
-// 现代宿主 exact Fetch 路由（ADR-0033）：九段注册、Request/Response 适配、body 闸与 4xx/信封语义。
+// 现代宿主 exact Fetch 路由（ADR-0033）：十段注册、Request/Response 适配、body 闸与 4xx/信封语义。
 //
 // 鉴权不在这层测：`connection.fetch.register` 的路由由宿主 `/api` bridge 在 handler 之前做
 // Host/Origin/浏览器认证；这里只钉插件自己的分发与响应形状。
@@ -44,14 +44,15 @@ function urlOf(segment: string): string {
 }
 
 describe('connection exact Fetch 路由 · 注册', () => {
-  it('九段都注册在 /api 下，方法与路由表一致，body 一律 buffered', async () => {
+  it('十段都注册在 /api 下，方法与路由表一致，body 一律 buffered', async () => {
     const { deps } = createFakeDeps()
     const harness = makeService()
     const dispose = registerConnectionRoutes(harness.service, createDispatcher(deps))
-    expect(harness.routes.size).toBe(9)
+    expect(harness.routes.size).toBe(10)
     const expected: Array<[string, 'GET' | 'POST']> = [
       ['/list', 'GET'],
       ['/ping', 'GET'],
+      ['/config', 'POST'],
       ['/detail', 'POST'],
       ['/apply', 'POST'],
       ['/empty', 'POST'],
@@ -108,7 +109,7 @@ describe('connection exact Fetch 路由 · 注册', () => {
     }
     const dispose = registerConnectionRoutes(service, createDispatcher(deps))
     await expect(dispose()).resolves.toBeUndefined()
-    expect(removed).toHaveLength(8)
+    expect(removed).toHaveLength(9)
   })
 
   it('用调用方给的分发器：适配器不自己另建一条到达序链（ADR-0033 决定 5）', async () => {

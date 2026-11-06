@@ -29,6 +29,9 @@ export interface ClientContextLike {
   slots: SlotsLike
   /** 可选服务的读面（宿主自己的写法：`ctx.get('…')?.…`）。**缺省调用**：老宿主上没有这个方法。 */
   get?(name: string): unknown
+  /** 可选服务迟到时的安装面（`ctx.inject(['…'], child => …)`）：服务就绪才回调，缺席就一直等。
+   *  **缺省调用**：老宿主上没有这个方法。 */
+  inject?(deps: readonly string[], callback: (child: ClientContextLike) => unknown): unknown
   /** 挂一个随本插件卸载而撤销的副作用（返回的清理函数由框架接管）。
    *  属性声明：测试会把它当成员读（`expect(ctx.effect).not.toHaveBeenCalled()`），实现不读 `this`。 */
   effect: (execute: () => unknown, label?: string) => unknown

@@ -1,0 +1,30 @@
+/**
+ * 「可调项」卡的数字输入（本插件自造控件）。
+ *
+ * 为什么不并进 `ui.css`：那份是照宿主 primitives 逐字抄的对照表，`tests/skeleton.test.ts` 的
+ * 界面保真门要求它与官方明文逐属性一致；这里是我们自己的表单控件，混进去会把那份核对弄脏。
+ *
+ * 配色只用宿主公开 token（`--dsw-alias-*`）：这份控件不在抄本表里，不需要 `--sd-*` 别名层的
+ * 私有 token 兜底；几何走别名层已有的圆角。
+ */
+.sd-config-input {
+  width: 132px;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  border: 0.5px solid var(--dsw-alias-border-l1);
+  border-radius: var(--sd-radius-md);
+  box-sizing: border-box;
+}
+
+.sd-config-input:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+.sd-config-input:disabled {
+  opacity: 0.6;
+}

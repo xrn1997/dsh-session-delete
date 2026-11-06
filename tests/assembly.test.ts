@@ -1025,7 +1025,7 @@ describe('Node 半组合根的接线', () => {
     return env
   }
 
-  it('九段按 exact Fetch 注册点挂上，方法、body 模式与 effect 标签都在', () => {
+  it('十段按 exact Fetch 注册点挂上，方法、body 模式与 effect 标签都在', () => {
     const env = applyWith()
     expect(env.exact.map((route) => `${route.path}:${route.methods.join(',')}`).sort()).toEqual(
       Object.values(ROUTES).map((route) => `${OFFICIAL_SESSION_DELETE_API_PREFIX}${route.path}:${route.method}`).sort(),

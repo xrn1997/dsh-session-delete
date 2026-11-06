@@ -1,6 +1,6 @@
 /**
- * 本插件控件的样式装载：把 `ui.css` 的文本挂成一个 `<style>`，**每个 ui 组件 import 本模块**
- * （副作用导入），所以「组件在屏幕上」必然等于「样式在场」。
+ * 本插件控件的样式装载：把 `ui.css` / `markdown.css` / `forms.css` 的文本挂成一个 `<style>`，
+ * **每个 ui 组件 import 本模块**（副作用导入），所以「组件在屏幕上」必然等于「样式在场」。
  *
  * 为什么是往 DOM 里注 `<style>`、而不是构建期抽成 `.css` 资产：
  * 宿主对客户端插件的样式**本来就有这条一等公民通道**——浏览器半的模块表在**工厂物化**
@@ -20,6 +20,7 @@
  * 记一个本地标志位（见 `Tooltip.tsx`）。
  */
 import css from './ui.css'
+import formsCss from './forms.css'
 import markdownCss from './markdown.css'
 
 /** 认领标记：既是宿主 HMR 的归档线索，也是「已经装过」的幂等判据。 */
@@ -34,9 +35,10 @@ function install(): void {
   const element = document.createElement('style')
   element.setAttribute('data-dsh-session-delete', STYLE_MARKER)
   // `markdown.css` 与控件那份**分开写、一起装**：前者是我们给会话正文排的字阶（吃宿主 markdown
-  // token），后者是照官方明文逐字抄的那份表（核对口径见 docs/development.md 的界面保真复核门：按文件头那张来源表逐属性
-  // 零差异，条数不钉在这里）——两份的来源与核对方式不同，装运可以同一趟。
-  element.textContent = `${css}\n${markdownCss}`
+  // token），`forms.css` 是本插件自造的设置表单控件（不属于抄本对照表）；后者是照官方明文逐字抄的
+  // 那份表（核对口径见 docs/development.md 的界面保真复核门：按文件头那张来源表逐属性
+  // 零差异，条数不钉在这里）——三份的来源与核对方式不同，装运可以同一趟。
+  element.textContent = `${css}\n${markdownCss}\n${formsCss}`
   head.appendChild(element)
 }
 
@@ -50,24 +52,28 @@ install()
  * `pointerdown` 置真、`keydown` 置假）。官方还会据此发布 `data-input-modality` 去控制焦点环的
  * 显隐，**那件事不复制**：宿主自己那份 primitives 已经在同一份文档上发布了它，我们再来一份就是
  * 两个写入者抢同一个属性。
+ *
+ * 监听器归 `apply` 的 effect（`src/client/index.tsx` 的 `installPointerModality`）：用户在
+ * 卸载 / HMR 换代时要把它们摘掉，模块作用域装上就没人负责收了。样式本身仍是模块作用域——
+ * 宿主在工厂物化时认领 `<style>` 并在条目卸载时统一摘除，这是它给插件 UI 的正式通道。
  */
 let pointerModality = false
 
-if (typeof window !== 'undefined') {
-  window.addEventListener(
-    'pointerdown',
-    () => {
-      pointerModality = true
-    },
-    true,
-  )
-  window.addEventListener(
-    'keydown',
-    () => {
-      pointerModality = false
-    },
-    true,
-  )
+/** 装上两个捕获阶段的监听器，返回摘除函数。重复调用会装两套，所以调用点只该是 `apply` 的一个 effect。 */
+export function installPointerModality(): () => void {
+  if (typeof window === 'undefined') return () => undefined
+  const onPointerDown = (): void => {
+    pointerModality = true
+  }
+  const onKeyDown = (): void => {
+    pointerModality = false
+  }
+  window.addEventListener('pointerdown', onPointerDown, true)
+  window.addEventListener('keydown', onKeyDown, true)
+  return () => {
+    window.removeEventListener('pointerdown', onPointerDown, true)
+    window.removeEventListener('keydown', onKeyDown, true)
+  }
 }
 
 /** 最近一次输入是否来自指针（仅本插件自用）。 */

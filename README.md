@@ -36,6 +36,7 @@
 - **恢复**：单条即点即回，批量带确认；回到各自的原项目目录（删除前你自己归档过的仍保持归档）
 - **显式彻底删除**：单条「彻底删除…」与页脚「清空回收站…」共用同一个二次确认；不自动过期
 - **手动清理残留**：插件设置页有一张「维护」卡，随时检查两类残留——父会话已不在的子会话，和 `.dsh` 里已没有任何引用的图片副本；看过数量与体积再由你决定清不清，不自动检查、不自动清理
+- **可调项有表单**：插件详情页的「可调项」卡直接改三只旋钮（孤儿预览条数、附件响应上限、JSON 扫描上限），保存写回 profile 的 patch 层；也可以继续直接改 `cordis.patch.yml`
 - **失败不吞**：宿主读不到时把原文上屏并给「重试」；不可用时不注册任何入口
 - **文案随宿主语言**：中文 / English 挂在宿主 locale 服务上
 
@@ -59,7 +60,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 **兼容性分两层，别混**：
 
 - **装得上**由 `package.json` 的 `engines.dsh` 决定：宿主拿运行中的版本比这个区间，不满足即拒绝并回滚。窗口是 **`>=0.1.7-rc.2 <0.3.0-0`**（预发布版本参与匹配）。地板由两件硬依赖定：`sidebar.session.row.leading`（0.1.7-rc.2 首现）与 `workspaceRegistry.unarchiveSession`；`0.1.7-rc.2` 是第一个同时具备全部所需槽位与服务方法的代次，CLI 台架验过四个槽位齐全、激活零错误。更低的 `0.1.7-rc.1` 缺行首勾选槽位；0.1.7-alpha、0.1.6、0.1.5 还缺会话行菜单/行尾槽位或 `unarchiveSession`，**不要装**。
-- **真跑过**由 `dsh.compatibility.dshReleases` 记录，只列桌面真机实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1**（均 `compatible`）。窗口内的其他代次装得上但没在桌面真机上验过，不作为推荐目标；窗口外的一律拒装。
+- **真跑过**由 `xrn1997.dshReleases` 记录，只列桌面真机实测过的宿主：**DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1**（均 `compatible`）。窗口内的其他代次装得上但没在桌面真机上验过，不作为推荐目标；窗口外的一律拒装。
 - **部署注意**：exact Fetch 路由的 owner principal 校验（非 owner 回 403）自 `0.2.1-alpha.3` 起才有；更早的代次（含 `0.2.0-rc.2`）只有宿主 `/api` 的 trusted-host / 浏览器认证。单机 web / 桌面标准组合可用；要跑多 Peer 部署，优先名单里带这道校验的实测代次（`0.2.1-rc.1` 起）。
 
 ## 用法
@@ -98,7 +99,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 ## 可调项
 
-三只旋钮都有默认值，在宿主 profile 的 `cordis.patch.yml` 里改；不需要改代码：
+三只旋钮都有默认值；可以在宿主 profile 的 `cordis.patch.yml` 里改，也可以在插件设置页的「可调项」卡里改，都不需要改代码：
 
 | 键 | 默认值 | 作用 |
 | --- | --- | --- |
@@ -108,7 +109,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 ```yaml
 - insert:
-    - id: session-delete
+    - id: xrn1997-session-delete
       name: '@xrn1997/dsh-session-delete'
       config:
         orphanPreviewLimit: 200
@@ -116,7 +117,10 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
         maxJsonRefBytes: 10485760
 ```
 
-配置在插件激活时归一；未知键、非整数或越界会让这一条激活失败（不会用半套配置启动）。宿主不渲染这三个字段的表单（0.2.2-rc.1 实测 `Config.listConfigs` 回 `status: unsupported`；本仓不引宿主 schema 库，见 [ADR-0037](docs/adr/0037-options-through-local-standard-schema-config.md)），以 `cordis.patch.yml` 为准。
+0.6.1 及以前的行 id 是 `session-delete`；如果你的 profile 覆盖过这一行，升级后请把 id 同步成
+`xrn1997-session-delete`，否则那份覆盖不再命中本行。
+
+配置在插件激活时归一；未知键、非整数或越界会让这一条激活失败（不会用半套配置启动）。宿主的字段投影仍不认这枚手写的 Standard Schema（0.2.2-rc.1 实测 `Config.listConfigs` 回 `status: unsupported`），所以字段表单由插件设置页的「可调项」卡提供（[ADR-0043](docs/adr/0043-options-form-through-config-route.md)）：三只数字输入 + 保存，写回 profile 的 patch 层（宿主的 `configEditor.edit`，保存后这一行会重启）。也可以继续直接改 `cordis.patch.yml`，两条路改的是同一份配置。
 
 ## 界面语言
 
@@ -150,7 +154,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 
 **把宿主绑到局域网地址后，插件入口不出现，或操作报「需要宿主的 Web 身份」/「非受信来源」？**
 
-本插件把九段注册到宿主的 exact Fetch 路由（`/api/dsh-session-delete-api/...`），取数门槛就是宿主 `/api` 的那一套：浏览器、桌面壳的请求转发与本机 `curl` 都需要宿主签发的 Web 身份（`dsh web` 那次访问换来的 cookie），不再有回环免身份，也没有旧前缀 fallback。支持面是 web UI 与桌面端，二者都装 `client-connection`；入口探测回 401/403 时插件不注册任何入口（页面表现为插件不存在），不会摆出一个点下去必然失败的入口；操作中途身份失效，原文「需要宿主的 Web 身份」上屏。原文写「非受信来源」说的是另一件事：这条请求的归属不成立，`Host` 不被认为是本次部署的地址，或 `Origin` 与它对不上（宿主 `/api` 查 Host / `sec-fetch-site` / Origin；附件字节段另有插件的同源取数闸，同站/跨站页面与 authority 对不上的 `Origin` / `Referer` 都拒）。常见成因有两种：用自定义域名（含 hosts 文件）访问，却没把它写进宿主 `client-connection` 的 `trustedHosts`——宿主自己的页面同样要求这一条；或者反向代理改写了 `Host`，它必须保留客户端的原始 `Host`。绑定时另有一条前提：宿主只接受具体接口地址、拒绝 `0.0.0.0`，请绑到某个具体 IP（例如 `webserver.host: 192.168.50.199`）。
+本插件把十段注册到宿主的 exact Fetch 路由（`/api/dsh-session-delete-api/...`），取数门槛就是宿主 `/api` 的那一套：浏览器、桌面壳的请求转发与本机 `curl` 都需要宿主签发的 Web 身份（`dsh web` 那次访问换来的 cookie），不再有回环免身份，也没有旧前缀 fallback。支持面是 web UI 与桌面端，二者都装 `client-connection`；入口探测回 401/403 时插件不注册任何入口（页面表现为插件不存在），不会摆出一个点下去必然失败的入口；操作中途身份失效，原文「需要宿主的 Web 身份」上屏。原文写「非受信来源」说的是另一件事：这条请求的归属不成立，`Host` 不被认为是本次部署的地址，或 `Origin` 与它对不上（宿主 `/api` 查 Host / `sec-fetch-site` / Origin；附件字节段另有插件的同源取数闸，同站/跨站页面与 authority 对不上的 `Origin` / `Referer` 都拒）。常见成因有两种：用自定义域名（含 hosts 文件）访问，却没把它写进宿主 `client-connection` 的 `trustedHosts`——宿主自己的页面同样要求这一条；或者反向代理改写了 `Host`，它必须保留客户端的原始 `Host`。绑定时另有一条前提：宿主只接受具体接口地址、拒绝 `0.0.0.0`，请绑到某个具体 IP（例如 `webserver.host: 192.168.50.199`）。
 
 ## 开发
 
@@ -163,3 +167,7 @@ dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete
 ## 许可
 
 [Apache-2.0](LICENSE)。
+
+图标形状、控件与 Markdown 样式派生自 DeepSeek Harness 的 MIT 许可代码，`lib/client.js` 另内联了
+`react-markdown` / `remark-gfm` 及其传递依赖（MIT / ISC）；来源、落点与许可全文见
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。

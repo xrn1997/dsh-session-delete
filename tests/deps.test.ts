@@ -17,9 +17,9 @@ const deleteSessionIsExhaustive: Exclude<keyof DeleteSessionDeps, 'fs' | 'host' 
 const deleteSessionHasNow: 'now' extends keyof DeleteSessionDeps ? true : false = true
 const coreHasNow: 'now' extends keyof CoreDeps ? true : false = false
 
-/** 组合根的全量面 = 会话删除的时钟 + 永久删除的能力 + 附件读面；比 DeleteSessionDeps 多 attachments。 */
-const deleteKeys: Record<keyof DeleteDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, config: true, now: true, attachments: true }
-const deleteIsExhaustive: Exclude<keyof DeleteDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'config' | 'now' | 'attachments'> extends never ? true : false = true
+/** 组合根的全量面 = 会话删除的时钟 + 永久删除的能力 + 附件读面；另带 `/config` 写支的两件。 */
+const deleteKeys: Record<keyof DeleteDeps, true> = { fs: true, host: true, ledger: true, home: true, presence: true, config: true, now: true, attachments: true, configEditor: true, entry: true }
+const deleteIsExhaustive: Exclude<keyof DeleteDeps, 'fs' | 'host' | 'ledger' | 'home' | 'presence' | 'config' | 'now' | 'attachments' | 'configEditor' | 'entry'> extends never ? true : false = true
 
 /** 能力闸：removeDir 只在永久删除的执行面；动词的 host 面不含在场三件（它们经 PresenceCapability）。 */
 type CoreFsRemoveDir = 'removeDir' extends keyof CoreDeps['fs'] ? true : false
@@ -68,7 +68,7 @@ it('CoreDeps 是六项基础；会话删除加时钟，组合根再加永久删�
   expect(deleteSessionIsExhaustive).toBe(true)
   expect(deleteSessionHasNow).toBe(true)
   expect(coreHasNow).toBe(false)
-  expect(Object.keys(deleteKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'config', 'now', 'attachments'])
+  expect(Object.keys(deleteKeys)).toEqual(['fs', 'host', 'ledger', 'home', 'presence', 'config', 'now', 'attachments', 'configEditor', 'entry'])
   expect(deleteIsExhaustive).toBe(true)
   expect(coreFsRemoveDir).toBe(false)
   expect(deleteSessionFsRemoveDir).toBe(false)
@@ -90,6 +90,9 @@ it('deps 切片的收窄是运行期事实：core 没有删除能力与时钟', 
   expect(slices.core.fs).not.toHaveProperty('removeFile')
   expect(slices.core.config).toBe(deps.config)
   expect(slices.attachment.attachments).toBe(deps.attachments)
+  expect(slices.config.config).toBe(deps.config)
+  expect(slices.config).not.toHaveProperty('now')
+  expect(slices.config).not.toHaveProperty('attachments')
   expect(slices.removal).not.toHaveProperty('now')
   expect(slices.removal.fs).toHaveProperty('removeDir')
   expect(slices.removal.fs).toHaveProperty('removeFile')

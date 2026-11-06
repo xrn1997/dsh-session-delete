@@ -12,10 +12,11 @@
  * 这张表只回答“怎么处理”。
  */
 import { PARAMS, ROUTES, type ApplyAction, type RouteName } from '../shared/wire.js'
-import type { CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
+import type { ConfigEditorLike, CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
 import type { AttachmentsPort } from '../ports/attachments-port.js'
 import type { TrashEntry } from '../trash/entry.js'
 import { applyActions } from '../verbs/batch.js'
+import { configPatchOf, readOrSaveConfig } from '../verbs/config.js'
 import { routeError } from '../verbs/errors.js'
 import { reportOrphans, loadOrphanGroups } from '../verbs/orphan-subagents.js'
 import { createTrashScope } from '../verbs/trash-scope.js'
@@ -48,15 +49,17 @@ export interface RouteRead {
 }
 
 /** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测五段拿基础面，`attachment` 段另多一条
- *  宿主 `attachments` 读面，两个删盘段多删除能力，`/apply` 是唯一拿全量面的行——段的 run 里长出超面
- *  调用就是编译错，dispatch 也只按这一格注入（运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
-export type RouteSlice = 'core' | 'removal' | 'full' | 'attachment'
+ *  宿主 `attachments` 读面，两个删盘段多删除能力，`/apply` 是唯一拿全量面的行，`/config` 只多
+ *  configEditor + entry 两件（段的 run 里长出超面调用就是编译错；dispatch 也只按这一格注入，
+ *  运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
+export type RouteSlice = 'core' | 'removal' | 'full' | 'attachment' | 'config'
 /** 切片名 → 依赖面：{@link RouteSpec.run} 的 deps 参数类型与 `depsFor` 的返回类型都从这一格取。 */
 export type SliceDeps = {
   core: CoreDeps
   removal: RemovalDeps
   full: DeleteDeps
   attachment: CoreDeps & { readonly attachments: AttachmentsPort }
+  config: CoreDeps & { readonly configEditor?: ConfigEditorLike; readonly entry?: unknown }
 }
 
 interface BaseRouteSpec<S extends RouteSlice> {
@@ -71,7 +74,7 @@ interface BaseRouteSpec<S extends RouteSlice> {
   readonly fetchGate?: 'same-origin'
 }
 
-/** JSON 段：处理函数拿请求体与读面；`query` 不在这里（九行里只有二进制段需要查询串）。 */
+/** JSON 段：处理函数拿请求体与读面；`query` 不在这里（十行里只有二进制段需要查询串）。 */
 export interface JsonRouteSpec<S extends RouteSlice = RouteSlice> extends BaseRouteSpec<S> {
   readonly response: 'json'
   /** 声明成函数属性而不是方法：方法签名是双变的，显式标注更宽的 deps 能绕过切片闸；属性按逆变校验。 */
@@ -86,7 +89,7 @@ export interface BinaryRouteSpec<S extends RouteSlice = RouteSlice> extends Base
 
 export type RouteSpec<S extends RouteSlice = RouteSlice> = JsonRouteSpec<S> | BinaryRouteSpec<S>
 
-/** 九行的并集（表的值类型）：每行由自己的 `slice` 与 `response` 字面量定型，`run` 的 deps 面随之收窄。 */
+/** 十行的并集（表的值类型）：每行由自己的 `slice` 与 `response` 字面量定型，`run` 的 deps 面随之收窄。 */
 export type AnyRouteSpec = { [S in RouteSlice]: RouteSpec<S> }[RouteSlice]
 
 /** 必填的非空字符串字段（缺、空串、类型不对都是**同一句话**：说清是哪个字段）。 */
@@ -153,7 +156,7 @@ function requireIdArray(body: JsonBody): string[] {
 }
 
 /**
- * 九个段名各一行。`Record<段名, AnyRouteSpec>` 是闸：`wire.ts` 加了段名而这里没加，编译不过；
+ * 十个段名各一行。`Record<段名, AnyRouteSpec>` 是闸：`wire.ts` 加了段名而这里没加，编译不过；
  * 每行的 `slice` 又把该行的 `run` 钉在自己那一格 deps 上（ADR-0032）。
  */
 export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
@@ -179,6 +182,18 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
     // 依赖接上了、映射生效了"），不是清单里此刻有几条——拿它当健康检查等于每次页面加载都跑一遍对账。
     // eslint-disable-next-line @typescript-eslint/require-await -- `run` 的契约面是 Promise（路由处理器统一 await）；这一格没有可读的东西，同步字面量就是全部实现体——为一条写法规则把它改成同步值等于改契约。
     run: async () => 'pong',
+  },
+  [ROUTES.config.path]: {
+    slice: 'config',
+    method: ROUTES.config.method,
+    body: 'json',
+    // 空体是读（与 detail 同法用 POST 表达一个读），只有写才进到达序链：`configEditor.edit`
+    // 会让这一行重启，不能和删除 / 恢复交错。判据与动词共用 `src/verbs/config.ts` 的 `configPatchOf`。
+    purity: (body) => configPatchOf(body) === undefined ? 'pure' : 'chained',
+    read: 'none',
+    response: 'json',
+    // 校验（400）与 configEditor 缺席（io）都住 `src/verbs/config.ts`；这里只声明"怎么处理"。
+    run: async (deps, body) => readOrSaveConfig(deps, body),
   },
   [ROUTES.attachment.path]: {
     slice: 'attachment',

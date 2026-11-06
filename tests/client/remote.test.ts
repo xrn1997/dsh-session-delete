@@ -6,7 +6,7 @@
 //
 // 信封形状（`RemoteResult`）、失败形状（`RemoteFailure`）与标记位判别（`isDSHRemoteError`）的家是
 // 两半共用的 `src/shared/wire.js`；这里验的是**浏览器半对它们的使用**：判别、原文兜底、注入面展开。
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   PARAMS,
   ROUTES,
@@ -22,6 +22,7 @@ import {
   failureOf,
   probeChannel,
   unwrapRemoteResult,
+  type RawSessionDeleteRemote,
   type SessionDeleteRemote,
 } from '../../src/client/remote.js'
 import type { TrashPanelDeps } from '../../src/client/trash-panel.js'
@@ -96,7 +97,7 @@ describe('注入面的展开', () => {
 })
 
 describe('createHttpRemote · 文档挂载点', () => {
-  it('八段 fetch 都保留 document.baseURI 的挂载点', async () => {
+  it('九个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
     vi.spyOn(document, 'baseURI', 'get').mockReturnValue('http://host/dsh/')
     const paths: string[] = []
     vi.stubGlobal('fetch', async (path: string) => {
@@ -109,6 +110,8 @@ describe('createHttpRemote · 文档挂载点', () => {
     const remote = createHttpRemote()
     await remote.list()
     await remote.ping()
+    await remote.config()
+    await remote.saveConfig({ orphanPreviewLimit: 200, maxAttachmentBytes: 20971520, maxJsonRefBytes: 10485760 })
     await remote.orphans()
     await remote.attachmentOrphans()
     await remote.attachmentClean()
@@ -119,6 +122,8 @@ describe('createHttpRemote · 文档挂载点', () => {
     expect(paths).toEqual([
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.list.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.config.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.config.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`,
@@ -129,7 +134,32 @@ describe('createHttpRemote · 文档挂载点', () => {
   })
 })
 
-describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）', () => {
+describe('createHttpRemote · config 读/写共用一段', () => {
+  it('两趟都是 POST：读发空对象、写带整份值；方法/路径投影自段名表', async () => {
+    const calls: Array<{ path: string; method: string | undefined; body: unknown }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      // 本仓只以 string 体调 fetch；类型收窄证明拿到的不是被 String 折过的对象。
+      const raw = init.body
+      if (typeof raw !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof raw}`)
+      calls.push({ path, method: init.method, body: JSON.parse(raw) })
+      return new Response(JSON.stringify({ ok: true, value: {} }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    const next = { orphanPreviewLimit: 200, maxAttachmentBytes: 20971520, maxJsonRefBytes: 10485760 }
+    const remote = createHttpRemote()
+    await expect(remote.config()).resolves.toEqual({ ok: true, value: {} })
+    await expect(remote.saveConfig(next)).resolves.toEqual({ ok: true, value: {} })
+
+    const path = `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.config.path}`
+    expect(calls).toEqual([
+      { path, method: ROUTES.config.method, body: {} },
+      { path, method: ROUTES.config.method, body: next },
+    ])
+  })
+})
+
+describe('createHttpRemote · detail 那一趟（十段里的 `POST /detail`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
@@ -169,6 +199,10 @@ describe('createHttpRemote · detail 那一趟（九段里的 `POST /detail`）'
 })
 
 describe('probeChannel · 唯一 /api 通道', () => {
+  /** 失败路径会 `console.warn` 留诊断；这些用例只关心入口出不出，别把警告刷进测试输出。 */
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  })
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
   const failureEnvelope = () =>
@@ -240,7 +274,7 @@ describe('createHttpRemote · 非信封 JSON 的诊断（issue #8 第 1 条）',
   })
 })
 
-describe('createHttpRemote · orphans 那一趟（九段里的 `GET /orphans`）', () => {
+describe('createHttpRemote · orphans 那一趟（十段里的 `GET /orphans`）', () => {
   const report = {
     roots: ['session-root'],
     totalSessions: 2,
@@ -279,7 +313,7 @@ describe('createHttpRemote · orphans 那一趟（九段里的 `GET /orphans`）
 
 // 2026-10-27 孤儿附件：报告是纯读（GET），清理是聚合写（POST）。两段都回 JSON 信封，
 // 失败支在注入面展开成 throw——与其余段同一条契约。
-describe('createHttpRemote · 孤儿附件两段（九段里的 `GET /attachment-orphans` / `POST /attachment-clean`）', () => {
+describe('createHttpRemote · 孤儿附件两段（十段里的 `GET /attachment-orphans` / `POST /attachment-clean`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
@@ -428,5 +462,40 @@ describe('注入面 · 一个动作只有一条路', () => {
         ids.map((id) => ({ id, action, ok: true as const, value: null })),
     }
     await expect(applyOne(gone, 'restore', 'a')).rejects.toThrow(/单条动作回了幂等空值/)
+  })
+})
+
+describe('取数通道探测：一次往返 + 5s 上限', () => {
+  const rawOf = (ping: (signal?: AbortSignal) => Promise<unknown>): RawSessionDeleteRemote =>
+    ({ ping } as unknown as RawSessionDeleteRemote)
+
+  it('成功回 pong 才真', async () => {
+    const ping = vi.fn(async (_signal?: AbortSignal) => ({ ok: true as const, value: 'pong' }))
+    await expect(probeChannel(rawOf(ping))).resolves.toBe(true)
+    expect(ping).toHaveBeenCalledTimes(1)
+  })
+
+  it('失败信封 / 非 pong 都按不可用，且只探一次，并在 console 留下原因', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const failure = vi.fn(async (_signal?: AbortSignal) => ({ ok: false as const, error: { code: 'sessiondelete/io', message: 'x' } }))
+    await expect(probeChannel(rawOf(failure))).resolves.toBe(false)
+    expect(failure).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('入口不注册'), 'sessiondelete/io', 'x')
+
+    const wrong = vi.fn(async (_signal?: AbortSignal) => ({ ok: true as const, value: 'nope' }))
+    await expect(probeChannel(rawOf(wrong))).resolves.toBe(false)
+    expect(wrong).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('不是 pong'), 'nope')
+  })
+
+  it('超时：AbortSignal 被 abort，回 false，不重试，并留下诊断', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const ping = vi.fn((signal?: AbortSignal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+    }))
+    await expect(probeChannel(rawOf(ping), { timeoutMs: 5 })).resolves.toBe(false)
+    expect(ping).toHaveBeenCalledTimes(1)
+    expect(ping.mock.calls[0]?.[0]?.aborted).toBe(true)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('打不通'), expect.any(Error))
   })
 })

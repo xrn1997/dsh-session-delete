@@ -1,5 +1,5 @@
 - insert:
-    - id: session-delete
+    - id: xrn1997-session-delete
       name: '@xrn1997/dsh-session-delete'
       config:
         orphanPreviewLimit: 200

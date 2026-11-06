@@ -28,6 +28,6 @@ ADR-0004 把段名、纯度、读面与 body 收进一条路由记录；但 deps
 
 - **保留全量 `DeleteDeps`、继续靠源码护栏数 `removeDir` 调用点**：读段运行期仍持有删除能力，护栏只能事后发现调用，不能阻止。
 - **把 `run` 写成方法签名**：方法参数双变，`slice:'core'` 那一行把 deps 标成删除面照样编译过——切片只剩运行期投影，类型面不再挡超面调用。
-- **在 dispatch 里逐行做类型判断**：表的值类型是九行并集，注入点拿不到逐行对应；逐行判断会把同一张表的知识又抄一遍。
+- **在 dispatch 里逐行做类型判断**：表的值类型是整张表的并集，注入点拿不到逐行对应；逐行判断会把同一张表的知识又抄一遍。
 
 锚点：`src/api/route-table.ts`；`src/api/dispatch.ts`（`slicesOf` / `depsFor`）；`tests/route-table.test.ts`；`tests/deps.test.ts`；ADR-0004；ADR-0027。

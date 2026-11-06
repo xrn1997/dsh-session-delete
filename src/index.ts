@@ -4,13 +4,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createDispatcher } from './api/dispatch.js'
 import { registerConnectionRoutes, type ConnectionFetchServiceLike } from './api/connection-route.js'
 import { Config, normalizeConfig } from './config.js'
+import type { ConfigEditorLike, DeleteDeps } from './deps.js'
 import { createAttachmentsPort } from './ports/attachments-port.js'
 import { createFsPort } from './ports/fs-port.js'
 import { createHostPort } from './ports/host-port.js'
 import { resolveHome } from './ports/home.js'
 import { createTrashLedger } from './trash/ledger.js'
 import { createHostStorageManifest } from './trash/storage-manifest.js'
-import type { DeleteDeps } from './deps.js'
 import { createMemberPresence } from './verbs/member-presence.js'
 
 export const name = '@xrn1997/dsh-session-delete'
@@ -33,7 +33,7 @@ export { Config }
  * - `agents`：只给 handle 捕获用（`ctx.get('agents')`；缺席时 `ctx.inject(['agents'])` 等服务就绪再装）。
  *   它同样可能晚于本插件激活，写进插件 inject 只会让整个插件 pending。
  *
- * `connection` 是浏览器半取数通道的唯一承载者：九段注册到 `connection.fetch.register` 的
+ * `connection` 是浏览器半取数通道的唯一承载者：十段注册到 `connection.fetch.register` 的
  * `/api/dsh-session-delete-api/*`，Host/Origin/浏览器认证由宿主 `/api` bridge 完成（ADR-0033）。
  * 支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`；服务缺席时插件停在 pending
  * ——可见的激活失败，而不是静默地没有入口。`webServer` 不再直接使用：exact route 仍由宿主的
@@ -63,6 +63,12 @@ export function apply(ctx: Context, rawConfig?: unknown): void {
   const home = resolveHome()
   const rawManifest = createHostStorageManifest(ctx)
   const host = createHostPort(ctx)
+  // `/config` 的写支：`configEditor` 跟 `connection` 一样按 ctx.get 可选读——不是标准组合必有，
+  // 缺席时写支回 io、读支照常，不让整条插件因为一个只有插件页才用到的服务而 pending。
+  const configEditor = ctx.get('configEditor') as ConfigEditorLike | undefined
+  // `configEditor.edit` 要的是 Loader entry：`ctx.fiber.entry` 由 Loader 挂上，Cordis 类型里没有它，
+  // 所以按窄形状取一次；拿不到时写支回 io（读支不受影响）。
+  const entry = (ctx as { readonly fiber?: { readonly entry?: unknown } }).fiber?.entry
   const deps: DeleteDeps = {
     fs,
     host,
@@ -72,6 +78,8 @@ export function apply(ctx: Context, rawConfig?: unknown): void {
     config,
     attachments: createAttachmentsPort(ctx),
     now: () => Date.now(),
+    ...(configEditor === undefined ? {} : { configEditor }),
+    ...(entry === undefined ? {} : { entry }),
   }
   const connection = ctx.get('connection') as ConnectionFetchServiceLike | undefined
   // `inject` 保证 apply 只在 connection 就绪后跑；这里仍判一次，把"服务被摘走"变成响亮错误，

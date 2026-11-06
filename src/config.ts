@@ -4,34 +4,27 @@
  * 为什么不用 `@deepseek-ai/schemastery` 写 schema：那是宿主包，值 import 会破本仓「跨插件一律
  * `import type`」的硬约束；Cordis 的 Config 接受 Standard Schema（`@standard-schema/spec`），
  * 手写这一小段即可，不需要把宿主 schema 库搬进插件。代价是宿主只为 native Schemastery schema 投影
- * 字段表单，这枚手写的 Standard Schema 不在其列——配置以 profile 的 `cordis.patch.yml` 为准
- * （README「可调项」有示例）。
+ * 字段表单，这枚手写的 Standard Schema 不在其列——字段表单由插件设置页的「可调项」卡提供
+ * （ADR-0043），profile 的 `cordis.patch.yml` 仍是默认值与覆盖的家。
  *
  * 这里只做**默认值、归一与 schema**，不持有运行期现场：`apply` 归一一次，结果作为
  * `CoreDeps.config` 注入；读方从自己的 deps 读，不 import 模块级单例。
  * 客户端 6 秒撤销时长不在这里：它是浏览器半的产品决定，不跨半传。
  */
 
-export interface SessionDeleteConfig {
-  /** 设置页维护卡「孤儿附件」预览清单最多列多少条（数量与字节仍按全量报告）。 */
-  readonly orphanPreviewLimit: number
-  /** `GET /attachment` 单次响应字节上限（服务路径与直接 fs fallback 共用）。 */
-  readonly maxAttachmentBytes: number
-  /** 附件引用扫描里单个 JSON 引用源的字节上限；超过就按「读不出」fail closed。 */
-  readonly maxJsonRefBytes: number
-}
+import { CONFIG_LIMITS, type SessionDeleteConfigWire } from './shared/wire.js'
+
+/** 三只可调项。字段名是线上契约（`shared/wire.ts` 的 `SessionDeleteConfigWire`），这里只是别名；
+ *  Node 半读到的是归一后的只读快照，所以 `readonly` 保留。默认值、归一与 Standard Schema 住本文件，
+ *  接受范围住在 `shared/wire.ts` 的 `CONFIG_LIMITS`：表单与归一必须是同一格，不然会「表单说能存、
+ *  激活时报越界」。 */
+export type SessionDeleteConfig = Readonly<SessionDeleteConfigWire>
 
 export const DEFAULT_CONFIG: SessionDeleteConfig = Object.freeze({
   orphanPreviewLimit: 200,
   maxAttachmentBytes: 20 * 1024 * 1024,
   maxJsonRefBytes: 10 * 1024 * 1024,
 })
-
-const LIMITS = {
-  orphanPreviewLimit: { min: 1, max: 10_000 },
-  maxAttachmentBytes: { min: 1, max: 200 * 1024 * 1024 },
-  maxJsonRefBytes: { min: 1, max: 100 * 1024 * 1024 },
-} as const
 
 function intField(
   input: Record<string, unknown>,
@@ -54,14 +47,14 @@ export function normalizeConfig(value: unknown): SessionDeleteConfig {
   if (value === undefined || value === null) return DEFAULT_CONFIG
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('配置需为对象')
   const input = value as Record<string, unknown>
-  const known = new Set<string>(Object.keys(LIMITS))
+  const known = new Set<string>(Object.keys(CONFIG_LIMITS))
   for (const key of Object.keys(input)) {
     if (!known.has(key)) throw new Error(`未知配置项：${key}`)
   }
   return {
-    orphanPreviewLimit: intField(input, 'orphanPreviewLimit', LIMITS.orphanPreviewLimit),
-    maxAttachmentBytes: intField(input, 'maxAttachmentBytes', LIMITS.maxAttachmentBytes),
-    maxJsonRefBytes: intField(input, 'maxJsonRefBytes', LIMITS.maxJsonRefBytes),
+    orphanPreviewLimit: intField(input, 'orphanPreviewLimit', CONFIG_LIMITS.orphanPreviewLimit),
+    maxAttachmentBytes: intField(input, 'maxAttachmentBytes', CONFIG_LIMITS.maxAttachmentBytes),
+    maxJsonRefBytes: intField(input, 'maxJsonRefBytes', CONFIG_LIMITS.maxJsonRefBytes),
   }
 }
 

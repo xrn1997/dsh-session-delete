@@ -2,10 +2,10 @@
  * 浏览器半的取数通道：同源 fetch 宿主 `connection.fetch` 的 exact Fetch 路由（`/api` + 插件前缀）。
  * 信封与失败原文在这一层收口。
  *
- * - 九段注册在宿主 `connection.fetch.register` 上，鉴权归宿主 `/api` bridge（ADR-0033）；
+ * - 十段注册在宿主 `connection.fetch.register` 上，鉴权归宿主 `/api` bridge（ADR-0033）；
  *   没有旧前缀 fallback——支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`。
  *   官方 remote.<namespace> 仍不可用（第三方拿不到 Typert 描述符的动态发现挂载点）。
- * - 九段的**段名与方法**住 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`），
+ * - 十段的**段名与方法**住 `src/shared/wire.ts` 的结构化段名表（`ROUTES` 每项 `{ path, method }`），
  *   本文件只投影段名与方法（GET 段直接取 `ROUTES.x.method`，写段把它交给 `post()`）——方法字面量
  *   不在本文件出现第二份；取数地址（官方 `/api` 前缀 + 文档挂载点）归 `src/client/api-base.ts`
  *   （根部署下与旧版逐字相同）。
@@ -31,6 +31,7 @@ import {
   type PurgeStatsWire,
   type RemoteFailure,
   type RemoteResult,
+  type SessionDeleteConfigWire,
   type TrashDetailWire,
   type TrashRowWire,
 } from '../shared/wire.js'
@@ -125,13 +126,18 @@ export async function callRemote<T>(run: () => Promise<T>): Promise<RemoteOutcom
 }
 
 /** 本插件前缀路由那套**响应信封**的窄镜像（不是宿主服务 `ctx.remote.*`——那条 typert 通道为什么用不了，见 `AGENTS.md` 的 `remote.<namespace>` 那条）：
- *  每个方法 resolve 成 `RemoteResult<T>`。九个段名里这层走八个 JSON 段：`list` / `ping` / `orphans` / `detail` / `apply` / `empty` /
+ *  每个方法 resolve 成 `RemoteResult<T>`。十个段名里这层走九个 JSON 段：`list` / `ping` / `config` / `orphans` / `detail` / `apply` / `empty` /
  *  `attachment-orphans` / `attachment-clean`；写动作统一走 `apply`（一组 id 进、逐条结果出）；
  *  `/attachment` 是二进制段，由 `src/client/attachment-view.tsx` 直接拼地址。 */
 export interface RawSessionDeleteRemote {
   list(): Promise<RemoteResult<TrashEntryLike[]>>
-  /** 通道的"在不在"：一次零成本的 GET（探测专用，见 `src/api/dispatch.ts` 的 `ping` 支）。 */
-  ping(): Promise<RemoteResult<string>>
+  /** 通道的"在不在"：一次零成本的 GET（探测专用，见 `src/api/dispatch.ts` 的 `ping` 支）。
+   *  `signal` 由探测方给：半开连接不能把 `activate` 永远吊在这里。 */
+  ping(signal?: AbortSignal): Promise<RemoteResult<string>>
+  /** 读三只可调项的当前值：空体 POST（与 `/detail` 的“POST 表达读”同法）。 */
+  config(): Promise<RemoteResult<SessionDeleteConfigWire>>
+  /** 写回三只可调项：走宿主 `configEditor.edit`，这一行会重启；失败以 `io` 信封回来。 */
+  saveConfig(config: SessionDeleteConfigWire): Promise<RemoteResult<SessionDeleteConfigWire>>
   /** 纯读：回收站之外的无主子会话扫描。它**不清理**——清理是 `apply` 的 `orphan-clean` 动作，
    *  这一段只交回"有多少、在哪、多大"（读不到语料时报 `io`，调用方不许把它折成"零条残留"）。 */
   orphans(): Promise<RemoteResult<OrphanReportWire>>
@@ -203,7 +209,18 @@ export function createHttpRemote(): RawSessionDeleteRemote {
     // 每段的方法都从段名表投影：GET 段直接取，写段交给 `post()` 带上同一格。
     // 路径由 `api-base.ts` 投影：官方 `/api` 前缀 + 当前文档挂载点（根部署下就是 `/api/...`）。
     list: () => requestEnvelope<TrashEntryLike[]>(apiPath(ROUTES.list.path), { method: ROUTES.list.method }),
-    ping: () => requestEnvelope<string>(apiPath(ROUTES.ping.path), { method: ROUTES.ping.method }),
+    ping: (signal) =>
+      requestEnvelope<string>(
+        apiPath(ROUTES.ping.path),
+        signal === undefined ? { method: ROUTES.ping.method } : { method: ROUTES.ping.method, signal },
+      ),
+    config: () =>
+      requestEnvelope<SessionDeleteConfigWire>(apiPath(ROUTES.config.path), post(ROUTES.config, {})),
+    saveConfig: (next) =>
+      requestEnvelope<SessionDeleteConfigWire>(
+        apiPath(ROUTES.config.path),
+        post(ROUTES.config, { ...next }),
+      ),
     orphans: () =>
       requestEnvelope<OrphanReportWire>(apiPath(ROUTES.orphans.path), { method: ROUTES.orphans.method }),
     attachmentOrphans: () =>
@@ -229,19 +246,50 @@ export function createHttpRemote(): RawSessionDeleteRemote {
   }
 }
 
+/** 探测默认上限：5s。超时经 `AbortController` 打断 fetch，`activate` 不会永远吊在一条半开连接上。 */
+export const PROBE_TIMEOUT_MS = 5000
+
+/**
+ * 探测的可选覆盖。**生产调用方不传**：注册路径只用 {@link PROBE_TIMEOUT_MS}。
+ * 这一格存在是为了让「超时算探测不过」这条支能在测试里真的跑到——不然它要等 5 秒墙上时间。
+ */
+export interface ProbeOptions {
+  /** 单次往返的上限；超时经 `AbortController` 打断 fetch。 */
+  readonly timeoutMs?: number
+}
+
 /**
  * 探测唯一通道：一次 `GET /ping` 回成功信封（`pong`）才注册入口。
  *
  * - 401/403 是宿主 `/api` 的纯文本身份/归属失败：入口不出现，不装禁用态。
  * - 失败信封 / 404 / 非信封同样按不可用处理：`/api` 网关对未知路径也可能回错误形状，
  *   不能据此把入口摆出来让每个动作都失败。
+ * - **往返有 5s 上限**：半开连接或宿主没起来时 `activate` 不悬着；超时与网络失败同样是
+ *   「这一代不可用」，不自动重试（一次探测一个结论，刷新页面才会再探）。三种失败都在
+ *   console 留下原因——入口不出现是有意的，但"为什么没出现"不能只活在脑子里。
  */
-export async function probeChannel(raw: RawSessionDeleteRemote): Promise<boolean> {
+export async function probeChannel(
+  raw: RawSessionDeleteRemote,
+  options: ProbeOptions = {},
+): Promise<boolean> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? PROBE_TIMEOUT_MS)
   try {
-    const result = await raw.ping()
-    return result.ok && result.value === 'pong'
-  } catch {
+    const result = await raw.ping(controller.signal)
+    if (!result.ok) {
+      console.warn('[dsh-session-delete] 取数通道探测失败，入口不注册：', result.error.code, result.error.message)
+      return false
+    }
+    if (result.value !== 'pong') {
+      console.warn('[dsh-session-delete] 取数通道回的不是 pong，入口不注册：', result.value)
+      return false
+    }
+    return true
+  } catch (error) {
+    console.warn('[dsh-session-delete] 取数通道打不通，入口不注册：', error)
     return false
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -266,7 +314,7 @@ export type OneShotSuccess<A extends ApplyAction> = {
 }
 
 /**
- * 注入面（`deps`）的 interface：**七个方法**（raw 层另有 `ping` 供探测；九段里的 `/attachment` 由
+ * 注入面（`deps`）的 interface：**九个方法**（raw 层另有 `ping` 供探测；十段里的 `/attachment` 由
  * `src/client/attachment-view.tsx` 直接拼地址，也不在这层）。
  *
  * **不再有 N=1 的便捷方法**：`delete` / `restore` / `countSubagents` 曾是同一段
@@ -276,6 +324,10 @@ export type OneShotSuccess<A extends ApplyAction> = {
  */
 export interface SessionDeleteRemote {
   list(): Promise<TrashEntryLike[]>
+  /** 三只可调项的当前值（`apply` 归一后的那一份）。 */
+  config(): Promise<SessionDeleteConfigWire>
+  /** 写回三只可调项：宿主 `configEditor.edit` 落盘并重启这一行；失败就是 throw。 */
+  saveConfig(config: SessionDeleteConfigWire): Promise<SessionDeleteConfigWire>
   /** 回收站之外的无主子会话报告（纯读）。读不到就是 throw —— 界面上那是**一次失败的检查**，
    *  不是"零条残留"（把 `io` 折成空报告等于把"不知道"说成"没有"）。 */
   scanOrphans(): Promise<OrphanReportWire>
@@ -289,6 +341,9 @@ export interface SessionDeleteRemote {
   /** 清空回收站（聚合回执）。 */
   emptyTrash(): Promise<PurgeResultLike>
 }
+
+/** 插件设置页「可调项」卡只要这两件。 */
+export type ConfigDeps = Pick<SessionDeleteRemote, 'config' | 'saveConfig'>
 
 /** 需要那一段 `/apply` 的组件只要这一段 deps（单条非写调用见 {@link applyOne}，写动作走 `./write.js` 的 `runWrite`）。 */
 export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
@@ -327,6 +382,8 @@ export function buildDeps(raw: RawSessionDeleteRemote): SessionDeleteRemote {
   }
   return {
     list: () => raw.list().then((result) => unwrapRemoteResult(result)),
+    config: () => raw.config().then((result) => unwrapRemoteResult(result)),
+    saveConfig: (next) => raw.saveConfig(next).then((result) => unwrapRemoteResult(result)),
     scanOrphans: () => raw.orphans().then((result) => unwrapRemoteResult(result)),
     scanAttachmentOrphans: () => raw.attachmentOrphans().then((result) => unwrapRemoteResult(result)),
     cleanAttachmentOrphans: () => raw.attachmentClean().then((result) => unwrapRemoteResult(result)),

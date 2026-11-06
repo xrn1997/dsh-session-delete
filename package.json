@@ -27,7 +27,9 @@
     "icon.svg",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs/screenshots"
   ],
   "engines": {
     "node": ">=24",
@@ -44,10 +46,14 @@
     "gates": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm run pack:dry"
   },
   "peerDependencies": {
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "react-dom": "18.3.1"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "react-dom": {
       "optional": true
     }
   },
@@ -76,6 +82,7 @@
     "vitest": "3.2.7"
   },
   "dsh": {
+    "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
@@ -85,16 +92,16 @@
         "@deepseek-ai/dsh-client-ui-context-menu"
       ],
       "platform": "web"
-    },
-    "compatibility": {
-      "dshReleases": {
-        "0.2.0-rc.2": "compatible",
-        "0.2.1-rc.1": "compatible",
-        "0.2.1-rc.2": "compatible",
-        "0.2.1-rc.3": "compatible",
-        "0.2.1-rc.5": "compatible",
-        "0.2.2-rc.1": "compatible"
-      }
+    }
+  },
+  "xrn1997": {
+    "dshReleases": {
+      "0.2.0-rc.2": "compatible",
+      "0.2.1-rc.1": "compatible",
+      "0.2.1-rc.2": "compatible",
+      "0.2.1-rc.3": "compatible",
+      "0.2.1-rc.5": "compatible",
+      "0.2.2-rc.1": "compatible"
     }
   },
   "publishConfig": {

@@ -26,6 +26,7 @@ import { resetMainView } from '../../src/client/main-view.js'
 import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { enterSelection, resetSelection } from '../../src/client/batch-selection-store.js'
 import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import { DEFAULT_CONFIG } from '../../src/config.js'
 import { ROUTES, OFFICIAL_SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
 
 // 撤销提示与删除请求都是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
@@ -119,11 +120,16 @@ function okOutcomes(action: ApplyAction, ids: readonly string[]): ApplyOutcome[]
   })
 }
 
-/** 一个**与实现同形**的 `RawSessionDeleteRemote`：八个 JSON 段各回一个信封（写动词全走 `apply`；附件字节段是二进制，不经这层）。 */
+/** 一个**与实现同形**的 `RawSessionDeleteRemote`：九个 JSON 段各回一个信封（写动词全走 `apply`；附件字节段是二进制，不经这层）。 */
 function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
     ping: async () => ({ ok: true, value: 'pong' }),
+    config: async () => ({
+      ok: true,
+      value: { ...DEFAULT_CONFIG },
+    }),
+    saveConfig: async (next) => ({ ok: true, value: next }),
     orphans: async () => ({
       ok: true,
       value: { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] },
@@ -139,7 +145,7 @@ function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionD
 
 /**
  * 取数通道的三种状态。
- * - `up`：八个 JSON 段按井号回信封（**探测过**；附件字节段不经这层）；
+ * - `up`：九个 JSON 段按井号回信封（**探测过**；附件字节段不经这层）；
  * - `throwing`：`fetch` 直接 reject（路由不在、宿主没起来）——探测不过；
  * - `not-json`：回的是 SPA 的 index.html（前缀路由没注册时落到兜底处理器）——探测也不过。
  */
@@ -154,6 +160,9 @@ function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { c
     [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.list.path]: async () => raw.list(),
     // 探测走这一问（不再每次页面加载都跑一遍全表对账）
     [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.ping.path]: async () => raw.ping(),
+    // 可调项：空体读、带字段写（与 Node 半 `/config` 的判据同形）
+    [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.config.path]: async (body) =>
+      Object.keys(body).length === 0 ? raw.config() : raw.saveConfig(body as never),
     // 两条纯读要有座位：面板挂载读详情、确认框打开那一刻问一次计数
     [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.detail.path]: async (body) =>
       raw.detail(body['entryId'] as string, body['before'] as number | undefined),
@@ -202,11 +211,23 @@ async function bootstrap(
   const registered: Registration[] = []
   /** `ctx.effect` 交回的清理函数（真宿主按逆序在卸载时调用）；`disposeAll` 就是卸载那一刻。 */
   const cleanups: (() => unknown)[] = []
+  /** `ctx.inject` 的等待队列：服务迟到时测试手动触发。 */
+  const lateInject: Array<{ deps: readonly string[]; callback: (child: unknown) => unknown }> = []
   const ctx = {
     slots: {
       inject(key: string, contribute: () => unknown): unknown {
         injected.push(key)
-        return contribute()
+        const before = registered.length
+        contribute()
+        const added = registered.slice(before)
+        // 真宿主的 `slots.inject` 返回摘除函数；legacy → 数据动作的切换要靠它。
+        // 按**行对象**摘，不按注册时的下标：先摘一条会让后面那条的下标前移。
+        return () => {
+          for (const row of added) {
+            const index = registered.indexOf(row)
+            if (index >= 0) registered.splice(index, 1)
+          }
+        }
       },
       register(options: Omit<Registration, 'component'>, component: unknown): unknown {
         registered.push({ ...options, component: component as Registration['component'] })
@@ -218,6 +239,10 @@ async function bootstrap(
       if (name === 'contextMenus') return services.contextMenus
       if (name === 'sessions') return services.sessions
       return undefined
+    },
+    inject: (deps: readonly string[], callback: (child: unknown) => unknown) => {
+      lateInject.push({ deps, callback })
+      return () => undefined
     },
     effect: (execute: () => unknown) => {
       cleanups.push(execute() as () => unknown)
@@ -235,6 +260,17 @@ async function bootstrap(
     injected,
     registered,
     fetchCalls,
+    lateInject,
+    /** 手动让一个迟到的 `contextMenus` 就绪：模拟 `ui-context-menu` 晚于本条目激活。 */
+    provideContextMenus: (menus: unknown): void => {
+      const pending = lateInject.shift()
+      if (pending === undefined) throw new Error('没有在等 contextMenus')
+      pending.callback({
+        slots: ctx.slots,
+        get: (name: string) => name === 'contextMenus' ? menus : name === 'sessions' ? services.sessions : undefined,
+        effect: ctx.effect,
+      })
+    },
     /** 卸载这一刻：真宿主按登记逆序调用清理函数（`bindMainView` 与激活守卫都挂在这上面）。 */
     async disposeAll() {
       for (const cleanup of cleanups.reverse()) await cleanup()
@@ -478,6 +514,18 @@ describe('apply 的装配面', () => {
     }
   })
 
+  it('contextMenus 迟到：先 legacy 两行，服务就绪后切数据动作并摘掉 legacy 行', async () => {
+    const { injected, registered, provideContextMenus } = await bootstrap()
+    expect(registered.filter((row) => row.name === MENU_SLOT)).toHaveLength(2)
+
+    const register = vi.fn(() => () => undefined)
+    provideContextMenus({ register })
+
+    expect(register).toHaveBeenCalledTimes(1)
+    expect(registered.filter((row) => row.name === MENU_SLOT)).toHaveLength(0)
+    expect(injected.filter((key) => key === 'contextMenu.icon')).toHaveLength(2)
+  })
+
   it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {
     const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
     const { registered, fetchCalls } = await bootstrap(rawRemote({ apply }))
@@ -611,9 +659,9 @@ describe('apply 的装配面', () => {
   })
 })
 
-// **探测在飞时插件可能已经被卸载**（宿主 HMR、条目销毁）。探测是一次往返、没有超时，
-// 这段窗口可以任意长；续拍再注册就是把贡献写进已销毁的注册表。守卫钉在探测之前登记，
-// 探测回来后先看它——不是靠给探测加超时，也不是拿探测失败冒充卸载。
+// **探测在飞时插件可能已经被卸载**（宿主 HMR、条目销毁）。探测是一次往返（有 5s 上限，
+// 但这道守卫不拿它当卸载信号），这段窗口仍可能跨过卸载；续拍再注册就是把贡献写进已销毁的
+// 注册表。守卫钉在探测之前登记，探测回来后先看它——不是拿探测失败冒充卸载。
 describe('探测期间插件被卸载（disposed 守卫）', () => {
   it('探测期间插件被卸载：后续不再注册任何槽位', async () => {
     let resolvePing!: (value: unknown) => void
@@ -636,6 +684,14 @@ describe('探测期间插件被卸载（disposed 守卫）', () => {
 // （`web boot: N entry did not activate` ⇒ 桌面壳 `reportFatal`，整个进程结束）。
 // 前缀路由缺席时（Node 半没接线、宿主没起来）本插件就是"不存在"，不是一个能让外壳死掉的理由。
 describe('取数通道探测不过（路由缺席态）', () => {
+  /** 探测失败会 `console.warn` 留诊断；这一组只验入口不出现，别把警告刷进测试输出。 */
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('inject 只声明一定存在的服务（slots）：通道不是 inject 的成员', () => {
     expect(inject).toEqual(['slots'])
   })
@@ -836,16 +892,19 @@ describe('中央面板（`main` 的占用者）', () => {
 })
 
 describe('插件设置页（`plugins.bundle.config` 的占用者）', () => {
-  it('注入面给 deps/t；挂载只渲染卡片，不自动发检查请求', async () => {
+  it('注入面给 deps/t；挂载只渲染两张卡，不自动发检查请求（可调项读一次当前值）', async () => {
     const { seat, fetchCalls } = await bootstrap()
     const { Component, props } = seat(SETTINGS_SLOT)
     render(<Component {...props} />)
 
     expect(screen.getByText('维护')).toBeInTheDocument()
+    expect(screen.getByText('可调项')).toBeInTheDocument()
     expect(screen.getAllByText('尚未检查')).toHaveLength(2)
-    // 探测那一问是注册的前提；之后没有任何自动扫描（手动触发）。
+    // 探测那一问是注册的前提；可调项卡挂载时读一次当前值（不是扫描）；
+    // 维护两段仍是手动触发，之后没有别的请求。
     expect(fetchCalls.map((call) => call.path)).toEqual([
       `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`,
+      `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.config.path}`,
     ])
   })
 

@@ -5,9 +5,10 @@
 // 请求仍被装成 `Request` 交给注册的 exact Fetch 路由，响应原样写回。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 九个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
+//  ① 十个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
 //    POST empty＝清空、GET orphans＝无主子会话扫描、GET attachment＝附件原始字节、
-//    GET attachment-orphans＝孤儿附件报告、POST attachment-clean＝孤儿附件清理）；
+//    GET attachment-orphans＝孤儿附件报告、POST attachment-clean＝孤儿附件清理、
+//    POST config＝空体读 / 带字段写三只可调项）；
 //  ② 信封就是浏览器半消费的那个形状
 //  （`{ok:true,value}` / `{ok:false,error:{code,message,details?}}`）；③ 码只从那五个里出、且失败的
 //  **原文**进 `error.message`；④ 请求体不对回 400 + 信封；路径 / 方法不匹配由宿主 exact route
@@ -44,7 +45,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
   trashEntry(entryIdOf(sessionDirName), { sessionId: sessionDirName, ...over })
 
 /**
- * 九个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
+ * 十个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
  * （`tests/support/fake-deps.ts` 里那第二个 adapter）。
  * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
@@ -1661,7 +1662,7 @@ describe('路由层 · GET /attachment（二进制附件字节，2026-10-27）',
   })
 })
 
-// 孤儿附件（2026-10-27，第八、第九段）：报告与清理共用同一份引用扫描。
+// 孤儿附件（2026-10-27）：报告与清理共用同一份引用扫描。
 // 报告是纯读（不排链、不读清册），读不出引用源 ⇒ 200 + io（不拿 0 冒充"没有孤儿"）；
 // 清理是写动作（上链），只删 `objects` 下无引用的图片，聚合回 `AttachmentCleanupWire`。
 describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment-clean，2026-10-27）', () => {
@@ -1837,5 +1838,83 @@ describe('路由层 · 孤儿附件（GET /attachment-orphans、POST /attachment
     expect(body).toMatchObject({ ok: true, value: { removed: 0, freedBytes: 0, failed: 0 } })
     expect((body.value as { skipped?: string }).skipped).toMatch(/无法判定孤儿/)
     expect(made.fs.removeFile).not.toHaveBeenCalled()
+  })
+})
+
+describe('路由层 · 可调项（/config 空体读、带字段写）', () => {
+  const NEXT = { orphanPreviewLimit: 321, maxAttachmentBytes: 2 * 1024 * 1024, maxJsonRefBytes: 3 * 1024 * 1024 }
+
+  it('空体读：回 apply 归一后的那三只旋钮', async () => {
+    const { deps } = makeDeps({ config: NEXT })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.config.path, { method: ROUTES.config.method, body: {} })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: NEXT })
+  })
+
+  it('带字段写：完整 raw config 交给 configEditor.edit，current 与 next 合并，entry 原样带过去', async () => {
+    const edit = vi.fn(async (_entry: unknown, change: (current: Record<string, unknown>) => Record<string, unknown>) => {
+      expect(change({ orphanPreviewLimit: 7 })).toEqual(NEXT)
+    })
+    const entry = { id: 'row' }
+    const { deps } = makeDeps()
+    const base = await start({ ...deps, configEditor: { edit }, entry })
+    const { status, body } = await call(base, ROUTES.config.path, { method: ROUTES.config.method, body: NEXT })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: NEXT })
+    expect(edit).toHaveBeenCalledTimes(1)
+    expect(edit.mock.calls[0]?.[0]).toBe(entry)
+  })
+
+  it('只带一个字段写：其余字段保持当前值，不回落默认值', async () => {
+    const edit = vi.fn(async (_entry: unknown, change: (current: Record<string, unknown>) => Record<string, unknown>) => {
+      expect(change({ orphanPreviewLimit: 7 })).toEqual({ ...NEXT, orphanPreviewLimit: 999 })
+    })
+    const { deps } = makeDeps({ config: NEXT })
+    const base = await start({ ...deps, configEditor: { edit }, entry: {} })
+    const { status, body } = await call(base, ROUTES.config.path, {
+      method: ROUTES.config.method,
+      body: { orphanPreviewLimit: 999 },
+    })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { ...NEXT, orphanPreviewLimit: 999 } })
+    expect(edit).toHaveBeenCalledTimes(1)
+  })
+
+  it('越界回 400 + bad-request，不碰 editor', async () => {
+    const edit = vi.fn(async () => {})
+    const { deps } = makeDeps()
+    const base = await start({ ...deps, configEditor: { edit }, entry: {} })
+    const { status, body } = await call(base, ROUTES.config.path, {
+      method: ROUTES.config.method,
+      body: { ...NEXT, orphanPreviewLimit: 0 },
+    })
+    expect(status).toBe(400)
+    // 路由自检码在信封里折成 `io`（适配器既有口径：码只从动词表里出，路由站点名不冒充动词码），
+    // 请求本身不对靠 400 状态与原文区分。
+    expect(body).toMatchObject({ ok: false, error: { code: 'sessiondelete/io' } })
+    expect((body.error as { message: string }).message).toContain('orphanPreviewLimit')
+    expect(edit).not.toHaveBeenCalled()
+  })
+
+  it('宿主没有 configEditor / entry：读照常，写回 io 原文（不假装保存成功）', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    const read = await call(base, ROUTES.config.path, { method: ROUTES.config.method, body: {} })
+    expect(read.body).toEqual({ ok: true, value: DEFAULT_CONFIG })
+    const write = await call(base, ROUTES.config.path, { method: ROUTES.config.method, body: NEXT })
+    expect(write.status).toBe(200)
+    expect(write.body).toMatchObject({ ok: false, error: { code: 'sessiondelete/io' } })
+    expect((write.body.error as { message: string }).message).toContain('cordis.patch.yml')
+  })
+
+  it('editor.edit 拒绝：io 原文带出原因', async () => {
+    const edit = vi.fn(async () => { throw new Error('被更高层覆盖') })
+    const { deps } = makeDeps()
+    const base = await start({ ...deps, configEditor: { edit }, entry: {} })
+    const { status, body } = await call(base, ROUTES.config.path, { method: ROUTES.config.method, body: NEXT })
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: false, error: { code: 'sessiondelete/io' } })
+    expect((body.error as { message: string }).message).toContain('被更高层覆盖')
   })
 })

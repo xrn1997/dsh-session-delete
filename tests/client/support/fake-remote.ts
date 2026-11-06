@@ -5,6 +5,7 @@
  * 不再各自拿对象字面量凑依赖、也不再用 `as never` 跨过 interface——打洞意味着这个 interface 没被验证。
  */
 import { vi } from 'vitest'
+import { DEFAULT_CONFIG } from '../../../src/config.js'
 import type {
   AttachmentOrphanReportWire,
   OrphanReportWire,
@@ -13,7 +14,7 @@ import type {
   TrashDetailLike,
   TrashEntryLike,
 } from '../../../src/client/remote.js'
-import type { ApplyAction, ApplyOutcome, AttachmentCleanupWire } from '../../../src/shared/wire.js'
+import type { ApplyAction, ApplyOutcome, AttachmentCleanupWire, SessionDeleteConfigWire } from '../../../src/shared/wire.js'
 import { outcomes } from './outcomes.js'
 import type { Mocked } from '../../support/mocked.js'
 
@@ -33,6 +34,8 @@ const DETAIL_FIXTURE: TrashDetailLike = {
 export function createFakeRemote(over: Partial<FakeRemote> = {}): FakeRemote {
   const remote: FakeRemote = {
     list: vi.fn(async (): Promise<TrashEntryLike[]> => []),
+    config: vi.fn(async (): Promise<SessionDeleteConfigWire> => ({ ...DEFAULT_CONFIG })),
+    saveConfig: vi.fn(async (next: SessionDeleteConfigWire): Promise<SessionDeleteConfigWire> => ({ ...next })),
     scanOrphans: vi.fn(async (): Promise<OrphanReportWire> => EMPTY_ORPHANS),
     detail: vi.fn(async (): Promise<TrashDetailLike> => DETAIL_FIXTURE),
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>

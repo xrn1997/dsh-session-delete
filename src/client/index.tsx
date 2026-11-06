@@ -39,16 +39,17 @@ import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
 import { DeleteMenuItem } from './delete-menu-item.js'
 import { bindMainView } from './main-view.js'
-import { MaintenanceSettings } from './maintenance-settings.js'
 import {
   buildDeps,
   createHttpRemote,
   probeChannel,
   type SessionDeleteRemote,
 } from './remote.js'
+import { SettingsCards } from './settings-cards.js'
 import { TrashPanelIcon } from './trash-entry.js'
 import { TrashPanel } from './trash-panel.js'
 import { IconCheckOutlineRegular, IconTrashOutlineRegular } from './ui/icons.js'
+import { installPointerModality } from './ui/styles.js'
 import { UndoToast } from './undo-toast.js'
 
 export const name = '@xrn1997/dsh-session-delete/client'
@@ -60,8 +61,9 @@ export const name = '@xrn1997/dsh-session-delete/client'
  * **`locale` 也不在这里**：宿主自己的 `ui-sidebar` 是硬注入它的，但那是"宿主知道自己那一代"的前提；
  * 本插件要跨代活着 ⇒ 走 `ctx.get('locale')` 可选读，缺席时降级到内置 zh 文案（见 `copy.ts` 头注）。
  * 写进 inject 就等于"这一代没有 locale 就不让整个客户端条目激活"，而那等于宿主进程死。
- * **`contextMenus` 同理**：0.2.2+ 用 `ctx.get('contextMenus')` 探测，包本身在 package.json 的
- * `dsh.client.inject` 里排到前面；旧宿主没有这个服务时回退 legacy 槽位。
+ * **`contextMenus` 同理**：0.2.2+ 用 `ctx.get('contextMenus')` 探测，服务比本条目晚到时按
+ * `ctx.inject(['contextMenus'])` 的 scoped 等待切过去；旧宿主没有这个服务时回调不来，legacy 槽位留着。
+ * 条目自己的 `inject` 仍然只有 `slots`——把可能迟到的服务写进去等于让整个客户端条目 pending。
  */
 export const inject = ['slots']
 
@@ -210,8 +212,9 @@ function TrashPanelIconSlot({ size }: { size?: number }) {
  */
 async function activate(client: ClientContextLike): Promise<void> {
   bindMainView(client)
-  // 探测是一次往返、没有超时；期间宿主可能已经卸载本条目（HMR / 条目销毁）。卸载标记必须
-  // 抢在探测之前登记，回来先看它——续拍再注册就是把贡献写进一个已销毁的注册表。
+  // 探测是一次往返（有 5s 上限，但这道守卫不拿它当卸载信号）；期间宿主可能已经卸载本条目
+  // （HMR / 条目销毁）。卸载标记必须抢在探测之前登记，回来先看它——续拍再注册就是把贡献
+  // 写进一个已销毁的注册表。
   let disposed = false
   if (typeof client.effect === 'function') {
     client.effect(() => () => {
@@ -228,49 +231,86 @@ async function activate(client: ClientContextLike): Promise<void> {
 
   // 0.2.2+：两行菜单改住 ctx.contextMenus，才能排在 Archive(600) 之后；旧宿主没有这个服务，
   // 继续走 legacy 槽位（两套注册互斥）。贡献对象住 context-menu-actions.ts，注册仍只在本文件。
-  let usesContextMenus = false
-  const contextMenus = client.get?.('contextMenus') as ContextMenusLike | null | undefined
-  if (contextMenus !== null && contextMenus !== undefined && typeof contextMenus.register === 'function') {
-    const sessions = client.get?.('sessions') as SessionsServiceLike | null | undefined
+  //
+  // **一次性 `ctx.get` 不够**：`dsh.client.inject` 只排模块到达（build 侧的 `arriveGraphRow`），
+  // 不保证服务已 provide。若本条目先激活、`ui-context-menu` 后提供 `contextMenus`，只探一次就会
+  // 永久停在 legacy。所以先按现状注册，再用 `ctx.inject(['contextMenus'])` 等服务迟到：旧宿主
+  // 没有这个服务时它永远不回调，legacy 留着。
+
+  /** 数据动作路径：注册 contextMenus 贡献 + 两个 icon key。返回是否成功接管。 */
+  const registerDataMenus = (target: ClientContextLike): boolean => {
+    const menus = target.get?.('contextMenus') as ContextMenusLike | null | undefined
+    if (menus === null || menus === undefined || typeof menus.register !== 'function') return false
+    const sessions = target.get?.('sessions') as SessionsServiceLike | null | undefined
     try {
-      client.effect(
-        () => contextMenus.register(createSessionMenuContribution(t, sessions?.list)),
+      target.effect(
+        () => menus.register(createSessionMenuContribution(t, sessions?.list)),
         'session-delete: context menu actions',
       )
-      usesContextMenus = true
     } catch (error) {
       console.warn('[dsh-session-delete] context menu 注册失败，回退 legacy 菜单行：', error)
+      return false
     }
-    if (usesContextMenus) {
-      try {
-        client.slots.inject('contextMenu.icon', () =>
-          client.slots.register({ name: 'contextMenu.icon', key: ICON_BATCH }, IconCheckOutlineRegular),
-        )
-        client.slots.inject('contextMenu.icon', () =>
-          client.slots.register({ name: 'contextMenu.icon', key: ICON_DELETE }, IconTrashOutlineRegular),
-        )
-      } catch (error) {
-        console.warn('[dsh-session-delete] context menu 图标注册失败：', error)
-      }
+    try {
+      target.slots.inject('contextMenu.icon', () =>
+        target.slots.register({ name: 'contextMenu.icon', key: ICON_BATCH }, IconCheckOutlineRegular),
+      )
+      target.slots.inject('contextMenu.icon', () =>
+        target.slots.register({ name: 'contextMenu.icon', key: ICON_DELETE }, IconTrashOutlineRegular),
+      )
+    } catch (error) {
+      console.warn('[dsh-session-delete] context menu 图标注册失败：', error)
     }
+    return true
   }
 
-  if (!usesContextMenus) {
+  /** legacy 菜单行：返回两个注册的摘除函数（宿主对 `slots.inject` 的返回值就是 disposer）。 */
+  const registerLegacyMenus = (): Array<() => void> => {
+    const disposers: Array<() => void> = []
+    const keep = (dispose: unknown): void => {
+      if (typeof dispose === 'function') disposers.push(dispose as () => void)
+    }
     // ① 菜单行：只发请求，注入面一件都不需要（会话 id / 名字由槽位投影给）。
-    client.slots.inject(MENU_SLOT, () =>
+    keep(client.slots.inject(MENU_SLOT, () =>
       client.slots.register(
         { name: MENU_SLOT, id: `${PLUGIN_ID}.delete`, order: 900, inject: () => ({ t }) },
         DeleteRow,
       ),
-    )
-
+    ))
     // ①' 多选入口：官方菜单行之后、删除之前（order 850，带发丝线）；按下进入/退出多选模式并收菜单。
-    client.slots.inject(MENU_SLOT, () =>
+    keep(client.slots.inject(MENU_SLOT, () =>
       client.slots.register(
         { name: MENU_SLOT, id: `${PLUGIN_ID}.batch-select`, order: 850, inject: () => ({ t }) },
         SelectRow,
       ),
-    )
+    ))
+    return disposers
+  }
+
+  if (!registerDataMenus(client)) {
+    const legacy = registerLegacyMenus()
+    let legacyDisposed = false
+    try {
+      // 先问 `in`：读成员本身也可能抛——动态包沙箱的 ctx 是只放行白名单动词的 Proxy，未放行的
+      // 成员在 get 时就拒绝（`has` 则老实回 false，不会顺手报一次失败）。直接调用保持方法调用的
+      // `this`，也只 get 一次。
+      if ('inject' in client) {
+        client.inject(['contextMenus'], (child) => {
+          if (!registerDataMenus(child)) return
+          if (legacyDisposed) return
+          legacyDisposed = true
+          for (const dispose of legacy) {
+            try {
+              dispose()
+            } catch (error) {
+              console.warn('[dsh-session-delete] legacy 菜单行摘除失败：', error)
+            }
+          }
+        })
+      }
+    } catch (error) {
+      console.warn('[dsh-session-delete] 等待 contextMenus 就绪失败，legacy 菜单行保留：', error)
+    }
   }
 
   // ①' 行首勾选框：多选模式内的主勾选。宿主只在没有状态点、非归档的行渲染这一格；
@@ -341,13 +381,13 @@ async function activate(client: ClientContextLike): Promise<void> {
     client.slots.register({ name: MAIN_SLOT, key: PANEL_ID, inject: () => ({ deps, t }) }, TrashPanel),
   )
 
-  // ④ 插件设置页的「维护」卡：宿主按 **bundle 包名**寻址这个 keyed 子槽位。
+  // ④ 插件设置页的两张卡（可调项 + 维护）：宿主按 **bundle 包名**寻址这个 keyed 子槽位。
   // 页面没挂载时宿主不会声明它，`inject` 就等着——不在更早的宿主上硬注册（那会响亮失败）。
-  // 卡片里两段都是手动触发；这里只给读数面与文案，不在这里发任何扫描。
+  // 「可调项」挂载读一次 `/config`；「维护」两段是手动触发。这里只给读数面与文案，不在这里发扫描。
   client.slots.inject(SETTINGS_SLOT, () =>
     client.slots.register(
       { name: SETTINGS_SLOT, key: PLUGIN_ID, inject: () => ({ deps, t }) },
-      MaintenanceSettings,
+      SettingsCards,
     ),
   )
 }
@@ -361,7 +401,17 @@ async function activate(client: ClientContextLike): Promise<void> {
  * `ctx.slots.subscribe("sidebar.panellist", syncPanels)`（asar @44795361）。
  */
 export function apply(ctx: unknown): void {
-  void activate(ctx as ClientContextLike).catch((error: unknown) => {
+  const client = ctx as ClientContextLike
+  // 指针模态的两个 window 监听器归 effect：条目卸载 / HMR 换代时摘掉，不留无人认领的闭包。
+  // 注册失败不改变入口；Tooltip 的模态判断退化为「非指针」，只是少一层时序优化。
+  if (typeof client.effect === 'function') {
+    try {
+      client.effect(() => installPointerModality(), 'session-delete: pointer modality')
+    } catch {
+      // 见上：监听器是优化，不是入口的前置条件。
+    }
+  }
+  void activate(client).catch((error: unknown) => {
     console.warn('[dsh-session-delete] 入口未注册（取数通道不可用）:', error)
   })
 }
