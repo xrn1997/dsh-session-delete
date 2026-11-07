@@ -2,6 +2,38 @@
 
 只记已发布版本的用户可见变化；逐提交明细看 git。未发布改动不预写。版本号与 tag 规则见 `docs/development.md` 的「发版流程」。
 
+## [0.7.0] - 2026-11-07
+
+### 新增
+
+- 插件详情页新增「可调项」卡：孤儿附件预览条数、附件单次响应上限、附件引用扫描的单个 JSON 上限三只旋钮可直接在页面上改并保存，写回 profile 的 `cordis.patch.yml`；保存后插件这一行重启，卡片用保存回执回填，重开本页从盘上重读。新通道段 `POST /config` 空体读、带字段写；宿主没有 `configEditor` 时回 `io` 并给出改 YAML 的替代路径（ADR-0043）。
+- 回收站详情新增「工作步骤」四档：简洁 / 标准 / 详细 / 完全展开。默认「标准」把连续的过程块收成一行「工作步骤 · N 步」，点开仍逐条折叠；简洁档只画提问与回答，并让「加载更早」按同一份预算自动连翻，直到出现对话内容、翻完或到达上限（ADR-0047）。
+- 详情新增「会话信息」表与计量行：项目、模型、创建、最后活动、会话 id、回收站目录、原本归档一次列出，不折叠；标题排整排 sticky，长会话读到中段时返回键仍钉在顶上。
+
+### 变更
+
+- 回收站清单行去掉底色与描边，行右动作收成图标按钮（恢复用自绘 ↩，彻底删除用垃圾桶）；组头开合改用宿主工作区行的文件夹图标。
+- 工作区已从宿主账本删掉的条目统一归入「未分组」组并沉底；行上不再挂「原工作区已不存在」提示，分组本身就是去向。
+- 插件图标按 `prefers-color-scheme` 分浅 / 深两档取色，不再用一个中灰同时应付两种主题。
+- 随包发布 `THIRD_PARTY_NOTICES.md` 与 `docs/screenshots/`：前者补 MIT / ISC 许可全文与来源，后者让插件详情页渲染的 README 图离线也不破；`react-dom` 补为 optional peer（ADR-0044）。
+- 真机代次账本从 `dsh.compatibility.dshReleases` 移到 `xrn1997.dshReleases`；`dsh.*` 只留官方字段并补 `manifestVersion: 1`（ADR-0046）。
+- patch 行 id 改为 `xrn1997-session-delete`，与工具名、服务名同带插件前缀（ADR-0045）。
+- 宿主 `contextMenus` 迟到时改用 `ctx.inject` 的 scoped 等待切到数据动作，探测加 5 秒上限；指针模态监听器归 `apply` 的 effect。
+- 英文界面标题改 sentence case；移除未使用的 `@deepseek-ai/cordis` peer。
+
+### 修复
+
+- agent handle 包装器卸载时按身份恢复自己的那一份。
+- 客户端探测期间条目被卸载后不再补注册槽位。
+- 清册记录 schema 只承诺 `valueSchema.parse`，契约测试钉住本地校验器；宿主换代先跑真实 `storageDomain.open` 冒烟（ADR-0042）。
+
+### 升级注意
+
+- **破坏性：profile 行 id 改名。** 0.6.1 及以前是 `session-delete`；在 profile 的 `cordis.patch.yml` 覆盖过这一行的，升级后要把 id 同步成 `xrn1997-session-delete`，否则那份覆盖不再命中。
+- **真机账本位置变了**：`package.json` 的 `xrn1997.dshReleases`，旧的 `dsh.compatibility.dshReleases` 不再存在；宿主与市场都不读它，商店牌子读 npm `latest` 的 `engines.dsh`。
+- 设置页保存会重启插件这一行，不是整台宿主；浏览器半仍走宿主 HMR，Node 半改动要重启宿主。
+- 详情的默认档位是「标准」（过程块收成一行）；要逐条看过程块切「详细」，要一次铺开切「完全展开」。
+
 ## [0.6.1] - 2026-11-05
 
 ### 变更
