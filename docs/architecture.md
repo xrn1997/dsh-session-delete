@@ -114,7 +114,7 @@ index.ts   组合根：装配、注册（exact Fetch 路由 / 槽位 / effect）
 | 会话日志的选代与走帧（多帧 zstd） | `src/log/session-log.ts` + `src/log/zstd-frames.ts` | 正文该显示什么 |
 | 详情给谁看、给多少（块投影：user/assistant/reasoning/tool/injection/system/compaction；`source.kind` 分 user/injection；工具 call/result 按 `callId` 配对；单块字符闸、每页块数 + 页级字符闸 + `olderCursor` 游标；附件每块/每页两道闸；计数不过闸；子会话摘要=折进这一条的孩子按清册原序过线，超 `SUBAGENT_SUMMARY_LIMIT` 只列前 N 条并给总数） | `src/trash/detail.ts` | 帧怎么切（那是 `log/`）；折叠怎么画（`src/client/trash-detail.tsx`）；「谁露面、折进谁」（`src/trash/groups.ts`，详情不折）；自绘/读盘是受约束偏离（宿主无只读渲染口，ADR-0026） |
 | 正文怎么排版成 DOM（裸 HTML、链接与图片的收口） | `src/client/markdown.tsx` + `src/client/ui/markdown.css` | 抄来的宿主消息行样式 |
-| 详情块的折叠呈现（默认折叠、摘要、工具状态、全部展开/折叠、加载更早、prepend 后滚动补偿）与子会话段、那颗返回父会话的头部按钮 | `src/client/trash-detail.tsx` | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存、孩子视图的开合（`src/client/use-trash-panel-controller.ts`）；受约束偏离见 ADR-0026 |
+| 详情块的折叠呈现（默认折叠、摘要、工具状态、工作步骤四档、简洁档分页联动、加载更早、prepend 后滚动补偿）与子会话段、那颗返回父会话的头部按钮 | `src/client/trash-detail.tsx` + `src/client/detail-blocks.ts`（哪些块算过程内容、标准档怎么收组）+ `src/client/use-detail-pager.ts`（连翻预算与滚动锚点） | 正文怎么排版（`src/client/markdown.tsx`）；详情取数与缓存、孩子视图的开合（`src/client/use-trash-panel-controller.ts`）；受约束偏离见 ADR-0026 |
 | 详情与维护卡预览的附件渲染 / 放大 / 失败占位 / 清理提示的呈现 | `src/client/attachment-view.tsx` | 什么时候出清理提示（面板归 `src/client/use-trash-query.ts`、维护卡归 `src/client/use-maintenance.ts`）；附件二进制怎么读（归 `src/api/attachment.ts`） |
 | 宿主 storage domain 的绑定（域 open/close、条目校验器） | `src/trash/storage-manifest.ts` | 清册的读法（真相读归 `src/trash/ledger.ts`；`src/trash/manifest.ts` 只是 raw 端口） |
 | 清册的 raw 端口（只给 ledger 与对账实现，不认 storage 域形状） | `src/trash/manifest.ts` | 与目录怎么对账（`src/trash/reconcile.ts`） |

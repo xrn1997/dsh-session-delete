@@ -4,7 +4,7 @@
 // ①整套界面变成英文键名（`trash.title` 这种字面量直接上屏，宿主 `translate` 查不到就回键名），
 // 或者 ②服务缺席时整个客户端条目 pending ⇒ 宿主启动自检致命失败（`web boot: N entry did not activate`）。
 import { describe, expect, it, vi } from 'vitest'
-import { createTranslate, splitOn, zhTranslate, type Translate } from '../../src/client/copy.js'
+import { createTranslate, splitOn, stepsText, zhTranslate, type Translate } from '../../src/client/copy.js'
 import type { ClientContextLike } from '../../src/client/context.js'
 import { must } from '../support/fixture.js'
 
@@ -71,9 +71,9 @@ describe('文案接线', () => {
     expect(en('trash.title')).toBe('Trash')
     expect(en('trash.summary', { count: 3, size: '22KB' })).toBe('3 sessions · 22KB reclaimable')
     expect(en('detail.image.alt', { alt: 'shot' })).toBe('[Image · shot]')
-    const combined = en('detail.deletedAt.combined', { relative: '2d ago', absolute: '10/14/2026' })
-    expect(combined).toBe('2d ago (10/14/2026)')
-    expect(combined).not.toMatch(/[\u4e00-\u9fff（）]/)
+    const header = en('detail.subagents.header', { n: 2, size: '3.0KB' })
+    expect(header).toBe('Subagent sessions (2) · 3.0KB, restored or deleted with this session')
+    expect(header).not.toMatch(/[\u4e00-\u9fff（）]/)
     expect(en('menu.live')).not.toBe('menu.live')
     expect(ns).toBe('xrn1997-session-delete')
   })
@@ -348,6 +348,28 @@ describe('撤销横幅 · 批量失败摘要', () => {
     expect(dicts.en['undo.failedBatch'], ns).toBeDefined()
     expect(dicts.en['undo.failedBatch']).not.toBe('undo.failedBatch')
     expect(dicts.en['undo.failedBatch']).not.toMatch(/[\u4e00-\u9fff]/)
+  })
+})
+
+describe('工作步骤计数', () => {
+  it('英文单数用另一条键：n=1 是 "1 step"，不是 "1 steps"；中文两条同形', () => {
+    const service = fakeLocale()
+    createTranslate(contextWith(service))
+    const [, dicts] = service.register.mock.calls[0] as [
+      string,
+      { zh: Record<string, string>; en: Record<string, string> },
+    ]
+    const en: Translate = (key, params) => {
+      const template = must(dicts.en[key], `en 字典里的键 ${key}`)
+      return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+        params !== undefined && name in params ? String(params[name]) : match,
+      )
+    }
+
+    expect(stepsText(1, en)).toBe('1 step')
+    expect(stepsText(2, en)).toBe('2 steps')
+    expect(stepsText(1, zhTranslate)).toBe('1 步')
+    expect(stepsText(3, zhTranslate)).toBe('3 步')
   })
 })
 

@@ -1,9 +1,15 @@
 /**
- * 本插件 UI 层要用的图标（逐条抄自 `@deepseek-ai/dsh-client-ui-primitives` 的明文产物；
- * 出处与改写规则见 `ui.css` 头注）。
+ * 本插件 UI 层要用的图标。除**恢复箭头**外逐条抄自 `@deepseek-ai/dsh-client-ui-primitives`
+ * 的明文产物（出处与改写规则见 `ui.css` 头注）。
  *
- * 只留本插件用到的：垃圾桶、警示、打开的项目文件夹、关闭叉、圆圈对勾、对勾、下折/右折 chevron。
- * **几何、`viewBox`、`strokeWidth` 逐字不动**——它们是官方图标集的形状，改了就不再与宿主同屏同形。
+ * 只留本插件用到的：垃圾桶、警示、文件夹（开盖填充 / 闭盒描边）、**实心三角**（分组头悬停时的
+ * 折叠指示）、关闭叉、圆圈对勾、对勾、下折/右折 chevron、恢复（本插件自绘的回退箭头）、
+ * 子会话分支（branch）。
+ * **官方字形几何、`viewBox`、`strokeWidth` 逐字不动**——改了就不再与宿主同屏同形。
+ *
+ * **唯一的自绘字形是 `IconRestoreOutlineRegular`**：官方集里 `unarchive-outline`（箱子）与归档动作太像、
+ * `refresh-outline`（顺时针圆箭头）读起来是"刷新"，都没有"把这条会话放回去"的意思。自绘的 ↩ 沿用宿主
+ * 16×16 / 1px 描边的一族几何，不伪装成官方图标。
  *
  * 两条与官方实现的差异（都是减法，不是改写）：
  * - 只暴露 `size`：调用处只传 `size`，不摊开官方整个图标 API。
@@ -65,21 +71,6 @@ export function IconWarningOutlineRegular({ size }: IconProps): ReactElement {
   )
 }
 
-export function IconFolderOpenOutlineRegular({ size }: IconProps): ReactElement {
-  return (
-    <IconFrame size={size}>
-      <path
-        d="M12.3994 13.5986H2.04956C1.49728 13.5986 1.04956 13.1509 1.04956 12.5986V3.40137C1.04956 2.84908 1.49728 2.40137 2.04956 2.40137H4.76632C5.01016 2.40137 5.24561 2.49046 5.42836 2.6519L6.94088 3.98799C7.12364 4.14943 7.35908 4.23852 7.60293 4.23852H12.3994C12.9517 4.23852 13.3994 4.68624 13.3994 5.23852V7.16991"
-        stroke="currentColor"
-      />
-      <path
-        d="M2.55911 7.93683C2.67584 7.49906 3.07229 7.19446 3.52536 7.19446H13.6491C14.3061 7.19446 14.7846 7.81725 14.6153 8.45209L13.4411 12.856C13.3244 13.2938 12.9279 13.5984 12.4748 13.5984H2.35113C1.69411 13.5984 1.21562 12.9756 1.38489 12.3407L2.55911 7.93683Z"
-        stroke="currentColor"
-      />
-    </IconFrame>
-  )
-}
-
 export function IconCloseOutlineRegular({ size }: IconProps): ReactElement {
   return (
     <IconFrame size={size}>
@@ -117,7 +108,53 @@ export function IconCheckOutlineRegular({ size }: IconProps): ReactElement {
   )
 }
 
-/** 分组头「展开中」那一枚（官方 `IconChevronDownOutlineRegular`，`viewBox`/`d` 逐字）。 */
+/** 分组头：展开时（官方 `IconFolderOpenRegular`，16×16；开盖那一片带 0.16 透明度）。 */
+export function IconFolderOpenRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M2.55912 7.93683C2.67584 7.49906 3.0723 7.19446 3.52536 7.19446H13.6491C14.3061 7.19446 14.7846 7.81725 14.6153 8.45209L13.4411 12.856C13.3244 13.2938 12.9279 13.5984 12.4748 13.5984H2.35113C1.69411 13.5984 1.21562 12.9756 1.38489 12.3407L2.55912 7.93683Z"
+        fill="currentColor"
+        opacity="0.16"
+      />
+      <path
+        d="M13.6491 6.69446C14.6346 6.69453 15.3522 7.62895 15.0983 8.58118L13.9245 12.9845C13.7494 13.6412 13.1539 14.0988 12.4743 14.0988H2.35126C1.36574 14.0988 0.648153 13.1643 0.902044 12.212L2.07587 7.80774C2.25102 7.15128 2.84567 6.69455 3.52509 6.69446H13.6491ZM3.52509 7.69446C3.29865 7.69455 3.10004 7.84674 3.04169 8.06555L1.86786 12.4698C1.78345 12.7872 2.02285 13.0988 2.35126 13.0988H12.4743C12.7007 13.0988 12.8992 12.9463 12.9577 12.7277L14.1325 8.32336C14.2171 8.00598 13.9776 7.69453 13.6491 7.69446H3.52509Z"
+        fill="currentColor"
+      />
+      <path
+        d="M4.7666 1.90137C5.13227 1.90144 5.48571 2.03525 5.75977 2.27734L7.27246 3.61328C7.36379 3.69382 7.48174 3.73828 7.60352 3.73828H12.3994C13.2276 3.73841 13.8993 4.41005 13.8994 5.23828V6.7168C13.8183 6.70327 13.735 6.69436 13.6494 6.69434H12.8994V5.23828C12.8993 4.96233 12.6754 4.73841 12.3994 4.73828H7.60352C7.23781 4.73828 6.88446 4.60438 6.61035 4.3623L5.09766 3.02637C5.00636 2.94576 4.88838 2.90144 4.7666 2.90137H2.0498C1.77366 2.90137 1.5498 3.12523 1.5498 3.40137V9.78223L0.902344 12.2119C0.648452 13.1642 1.36604 14.0986 2.35156 14.0986H2.0498C1.2214 14.0986 0.549838 13.427 0.549805 12.5986V3.40137C0.549805 2.57294 1.22138 1.90137 2.0498 1.90137H4.7666Z"
+        fill="currentColor"
+      />
+    </IconFrame>
+  )
+}
+
+/** 分组头：收起时（官方 `IconFolderCloseRegular`，16×16）。 */
+export function IconFolderCloseRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M1.50439 3.11059C1.50439 2.55831 1.95211 2.1106 2.50439 2.1106H5.43389C5.67773 2.1106 5.91318 2.19969 6.09593 2.36113L7.71649 3.79265C7.89924 3.95409 8.1347 4.04319 8.3785 4.04319H13.4958C14.0481 4.04319 14.4958 4.4909 14.4958 5.04319V12.8894C14.4958 13.4417 14.0481 13.8894 13.4958 13.8894H2.50439C1.95211 13.8894 1.50439 13.4417 1.50439 12.8894V4.04319V3.11059Z"
+        stroke="currentColor"
+      />
+      <path d="M3.63501 7.66614H12.3647" stroke="currentColor" />
+    </IconFrame>
+  )
+}
+
+/** 分组头悬停时替换文件夹的折叠指示（官方 `IconTriangleRightFillRegular`）；展开时旋转 90°。 */
+export function IconTriangleRightFillRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M5.5 4.5C5.5 4.40714 5.52586 4.31612 5.57467 4.23713C5.62349 4.15815 5.69334 4.09431 5.77639 4.05279C5.85945 4.01126 5.95242 3.99368 6.0449 4.00202C6.13738 4.01036 6.22572 4.04429 6.3 4.1L10.967 7.6C11.0291 7.64657 11.0795 7.70697 11.1142 7.77639C11.1489 7.84582 11.167 7.92238 11.167 8C11.167 8.07762 11.1489 8.15418 11.1142 8.22361C11.0795 8.29303 11.0291 8.35343 10.967 8.4L6.3 11.9C6.22572 11.9557 6.13738 11.9896 6.0449 11.998C5.95242 12.0063 5.85945 11.9887 5.77639 11.9472C5.69334 11.9057 5.62349 11.8419 5.57467 11.7629C5.52586 11.6839 5.5 11.5929 5.5 11.5V4.5Z"
+        fill="currentColor"
+      />
+    </IconFrame>
+  )
+}
+
+/** 折叠头与标准档「工作步骤」组「展开中」那一枚（官方 `IconChevronDownOutlineRegular`，`viewBox`/`d` 逐字）。 */
 export function IconChevronDownOutlineRegular({ size }: IconProps): ReactElement {
   return (
     <IconFrame size={size}>
@@ -129,7 +166,7 @@ export function IconChevronDownOutlineRegular({ size }: IconProps): ReactElement
   )
 }
 
-/** 分组头「已折叠」那一枚（官方 `IconChevronRightOutlineRegular`）。 */
+/** 折叠头与子会话导航行「已折叠 / 前进」那一枚（官方 `IconChevronRightOutlineRegular`）。 */
 export function IconChevronRightOutlineRegular({ size }: IconProps): ReactElement {
   return (
     <IconFrame size={size}>
@@ -137,6 +174,44 @@ export function IconChevronRightOutlineRegular({ size }: IconProps): ReactElemen
         d="M6 12L9.29289 8.70711C9.68342 8.31658 9.68342 7.68342 9.29289 7.29289L6 4"
         stroke="currentColor"
       />
+    </IconFrame>
+  )
+}
+
+/** 行内「恢复」：**本插件自绘**的回退箭头（↩，16×16 / 1px，与宿主图标同一族几何）。
+ *  官方集里的 `unarchive` 与归档动作的"箱子"轮廓太近、`refresh` 读作"刷新"，都不合适。 */
+export function IconRestoreOutlineRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M4.4 2.7L1.5 5.6L4.4 8.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M1.5 5.6H9.9A4.1 4.1 0 0 1 9.9 13.8H4.7"
+        stroke="currentColor"
+        strokeLinecap="round"
+      />
+    </IconFrame>
+  )
+}
+
+/** 子会话行的前导：官方 `IconBranchOutlineRegular`（16×16）。 */
+export function IconBranchOutlineRegular({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M1.01503 8.0001L5.6964 8.0001C6.41913 8.0001 6.78049 8.0001 7.12115 7.91951C7.4232 7.84804 7.71233 7.73014 7.97821 7.57C8.27809 7.38939 8.5364 7.13669 9.05303 6.63129L11.3281 4.40564"
+        stroke="currentColor"
+      />
+      <path
+        d="M1.01221 7.9999L5.6964 7.9999C6.41913 7.9999 6.78049 7.9999 7.12115 8.08049C7.4232 8.15196 7.71233 8.26986 7.97821 8.43C8.27809 8.61061 8.5364 8.86331 9.05303 9.36871L11.3281 11.5944"
+        stroke="currentColor"
+      />
+      <circle cx="12.4502" cy="3.3079" r="1.56962" stroke="currentColor" />
+      <circle cx="12.4502" cy="12.6921" r="1.56962" stroke="currentColor" />
     </IconFrame>
   )
 }

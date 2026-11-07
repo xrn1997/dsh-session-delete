@@ -271,6 +271,14 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(manifest.files).toContain('docs/screenshots')
   })
 
+  it('插件卡片图标随宿主主题换色：两档颜色取自 label-primary', () => {
+    const icon = readFileSync(fileURLToPath(new URL('../icon.svg', import.meta.url)), 'utf8')
+    // 宿主 ThemePresenter 把解析后的主题写到根节点 color-scheme，SVG 图片内部的媒体查询据此切换
+    expect(icon).toContain('@media (prefers-color-scheme: dark)')
+    expect(icon).toContain('stroke: #0f1115')
+    expect(icon).toContain('stroke: #f9fafb')
+  })
+
   // 图标形状、图标集、控件实现与控件 / Markdown 样式逐字派生自 DeepSeek Harness 的 MIT 客户端包
   // （各文件头注），`lib/client.js` 还内联了 react-markdown / remark-gfm 闭包（MIT / ISC）。两类
   // 第三方代码都要求版权与许可声明随副本分发：这份声明必须真的进包，并点名「从哪来、落到哪」，

@@ -30,13 +30,15 @@ const ZH = {
   'trash.empty.hint': '在会话条目的「…」菜单里选「删除」，会话会先进到这里，随时可以恢复。',
   'trash.summary': '{count} 个会话 · 可释放 {size}',
   'trash.group.count': '{count} 个会话',
+  'trash.group.ungrouped': '未分组',
   'trash.project.unknown': '未记录项目',
   'trash.row.deletedNow': '刚刚删除',
   'trash.row.deletedAgo': '删除于 {n}{unit}前',
   'trash.row.subagents': '含 {n} 个子会话',
   'trash.row.strandedSubagents': '盘上还剩 {n} 个子会话',
   // 删除时记下的工作区已经不在账本里（宿主的「删除工作区」只删注册、保留日志）：
-  // 恢复照常回盘，但会落在「未分组」——行上先说，别等它从清单里消失才发现换了地方。
+  // 恢复照常回盘，但会落在「未分组」——清单的分组本身就是去向的说明；这句话只留给批量恢复
+  // 确认框逐条说，行上不再重复。
   'trash.row.workspaceGone': '原工作区已不存在，恢复后归入未分组',
   'trash.unit.minutes': '分钟',
   'trash.unit.hours': '小时',
@@ -44,7 +46,9 @@ const ZH = {
   'trash.unit.months': '个月',
   'trash.unit.years': '年',
   'trash.row.restore': '恢复',
-  'trash.row.purge': '彻底删除…',
+  'trash.row.purge': '彻底删除',
+  // 图标按钮的可及名要带对象：清单里每一行都有一颗「彻底删除」，只报动作会与确认框那颗同名。
+  'trash.row.purgeOne': '彻底删除「{title}」',
   'trash.footer.note': '回收站本体在宿主数据根下的 {dir} 里，不自动过期；清空后不可恢复。',
   'trash.emptyAll': '清空回收站…',
   'trash.confirm.all': '清空回收站？',
@@ -158,8 +162,6 @@ const ZH = {
   'detail.noBody': '这条会话没有可显示的内容',
   'detail.field.created': '创建',
   'detail.field.lastActivity': '最后活动',
-  'detail.field.deletedAt': '删除于',
-  'detail.deletedAt.combined': '{relative}（{absolute}）',
   'detail.field.span': '活跃跨度',
   'detail.field.size': '大小',
   'detail.field.turns': '轮数',
@@ -191,8 +193,16 @@ const ZH = {
   'detail.block.truncated': '已截断',
   'detail.loadOlder': '加载更早',
   'detail.loadOlder.loading': '正在加载更早…',
-  'detail.expandAll': '全部展开',
-  'detail.collapseAll': '全部折叠',
+  'detail.viewMode.label': '工作步骤展示',
+  'detail.viewMode.compact': '简洁',
+  'detail.viewMode.standard': '标准',
+  'detail.viewMode.detailed': '详细',
+  'detail.viewMode.verbose': '完全展开',
+  'detail.compact.empty': '这段会话只有过程内容；切到「标准」可以看到。',
+  'detail.compact.pageOnly': '这一页只有过程内容；点「加载更早」继续往前看。',
+  'detail.process.header': '工作步骤',
+  'detail.process.step': '{n} 步',
+  'detail.process.steps': '{n} 步',
   'detail.injection.runtimeContext': '运行上下文',
   'detail.injection.timeContext': '时间上下文',
   'detail.injection.agentInstructions': 'Agent 指令',
@@ -216,7 +226,8 @@ const ZH = {
   'detail.attachment.saving': '保存中…',
   'detail.attachment.saveFailed': '保存失败：{message}',
   'detail.back': '← 返回清单',
-  'detail.subagents.header': '子会话（{n}） · {size}',
+  'detail.subagents.header': '子会话（{n}） · {size}，随本条一起恢复或删除',
+  'detail.subagents.open': '查看子会话详情',
   'detail.subagents.truncated': '仅列出前 {shown} 条，共 {total} 条',
   'detail.backToParent': '← 返回父会话',
   'detail.list.label': '回收站清单',
@@ -277,6 +288,7 @@ const EN: Record<CopyKey, string> = {
     'Pick Delete in a session’s “…” menu; the session lands here first and can be restored at any time.',
   'trash.summary': '{count} sessions · {size} reclaimable',
   'trash.group.count': '{count} sessions',
+  'trash.group.ungrouped': 'Ungrouped',
   'trash.project.unknown': 'Unrecorded project',
   'trash.row.deletedNow': 'Deleted just now',
   'trash.row.deletedAgo': 'Deleted {n}{unit} ago',
@@ -289,7 +301,8 @@ const EN: Record<CopyKey, string> = {
   'trash.unit.months': 'mo',
   'trash.unit.years': 'y',
   'trash.row.restore': 'Restore',
-  'trash.row.purge': 'Delete permanently…',
+  'trash.row.purge': 'Delete permanently',
+  'trash.row.purgeOne': 'Delete “{title}” permanently',
   'trash.footer.note':
     'The trash itself lives under the host data root in {dir}; it never expires on its own, and emptying it cannot be undone.',
   'trash.emptyAll': 'Empty the trash…',
@@ -389,8 +402,6 @@ const EN: Record<CopyKey, string> = {
   'detail.noBody': 'This session has nothing to show',
   'detail.field.created': 'Created',
   'detail.field.lastActivity': 'Last activity',
-  'detail.field.deletedAt': 'Deleted',
-  'detail.deletedAt.combined': '{relative} ({absolute})',
   'detail.field.span': 'Active for',
   'detail.field.size': 'Size',
   'detail.field.turns': 'Turns',
@@ -422,8 +433,16 @@ const EN: Record<CopyKey, string> = {
   'detail.block.truncated': 'Truncated',
   'detail.loadOlder': 'Load earlier',
   'detail.loadOlder.loading': 'Loading earlier…',
-  'detail.expandAll': 'Expand all',
-  'detail.collapseAll': 'Collapse all',
+  'detail.viewMode.label': 'Work steps',
+  'detail.viewMode.compact': 'Compact',
+  'detail.viewMode.standard': 'Standard',
+  'detail.viewMode.detailed': 'Detailed',
+  'detail.viewMode.verbose': 'Verbose',
+  'detail.compact.empty': 'This session has only process content; switch to “Standard” to see it.',
+  'detail.compact.pageOnly': 'Only process content on this page; choose “Load earlier” to keep looking.',
+  'detail.process.header': 'Work steps',
+  'detail.process.step': '{n} step',
+  'detail.process.steps': '{n} steps',
   'detail.injection.runtimeContext': 'Runtime context',
   'detail.injection.timeContext': 'Time context',
   'detail.injection.agentInstructions': 'Agent instructions',
@@ -446,7 +465,8 @@ const EN: Record<CopyKey, string> = {
   'detail.attachment.saving': 'Saving…',
   'detail.attachment.saveFailed': 'Save failed: {message}',
   'detail.back': '← Back to list',
-  'detail.subagents.header': 'Subagent sessions ({n}) · {size}',
+  'detail.subagents.header': 'Subagent sessions ({n}) · {size}, restored or deleted with this session',
+  'detail.subagents.open': 'Open subagent session',
   'detail.subagents.truncated': 'Showing the first {shown} of {total} subagent sessions',
   'detail.backToParent': '← Back to parent session',
   'detail.list.label': 'Trash list',
@@ -575,7 +595,7 @@ export function splitOn(sentence: string, inner: string): [string, string, strin
 }
 
 /**
- * 绝对时间那一句串。清单行的 `title`、确认框里的meta、详情的元信息三处要的是同一个写法，
+ * 绝对时间那一句串。清单行的 `title`、确认框里的meta、详情的会话信息三处要的是同一个写法，
  * 各自 `new Date(...).toLocaleString()` 一遍迟早会漂成两种样子。
  */
 export function absoluteText(at: number): string {
@@ -597,6 +617,11 @@ const UNIT_KEY: Record<Exclude<RelativeTimeUnit, 'now'>, CopyKey> = {
 /** 单位词本身（调用方把它填进各自语言的整句模板里，语序由各语言自己钉）。 */
 export function unitWord(unit: RelativeTimeUnit, t: Translate): string {
   return unit === 'now' ? t('common.justNow') : t(UNIT_KEY[unit])
+}
+
+/** 「工作步骤 N 步」：英文 n=1 要单数、中文两条同形；选哪条键只住这里，调用方只报数。 */
+export function stepsText(n: number, t: Translate): string {
+  return t(n === 1 ? 'detail.process.step' : 'detail.process.steps', { n })
 }
 
 /** 「7分钟前」这类**不带谓语**的相对短语；`now` 桶不套模板——"刚刚前"不是话。 */

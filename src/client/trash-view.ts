@@ -1,11 +1,11 @@
 /**
- * 回收站界面共用的**视图词汇**：卡片配方、危险红、项目名的念法。
+ * 回收站界面共用的**视图词汇**：卡片配方、清单行、危险红、项目名与分组的念法。
  *
  * 它从 `trash-panel.tsx` 拆出来，因为清单面板与两个确认框（`trash-confirm.tsx`）都要用这几样——
  * 拆之前它们同住一个文件、只能靠"同一个文件里的常量"共享。拆之后两处读的是同一份，不是两份抄写。
  *
  * **配色与圆角一律走 token，字号是字面量 px**（宿主同类面也这么写）：卡片用宿主设置面的底层 token
- * （`bg-layer-2` + `border-l4` + `radius-lg`），选中态换宿主"选中"那一档（见 `trash-panel.tsx` 头注）。
+ * （`bg-layer-2` + `border-l4` + `radius-lg`），清单行不铺底不描边、选中态只换宿主"选中"那一档底色。
  */
 import type { CSSProperties } from 'react'
 import { unescapeProjectKey } from '../shared/wire.js'
@@ -24,11 +24,33 @@ export const CARD: CSSProperties = {
   borderRadius: 'var(--sd-radius-lg)',
 }
 
-/** 选中行：底色与描边都换成宿主"选中"那一档（`trash-panel.tsx` 头注里有这两枚 token 的实测取值）。 */
-export const CARD_SELECTED: CSSProperties = {
-  ...CARD,
+/**
+ * 清单条目行：与 `CARD` 同族但**不铺底、不描边**。
+ *
+ * 为什么和 `CARD` 分成两份而不改 `CARD`：`CARD` 还被读数失败块与附件回执块借用（`trash-panel.tsx`
+ * 的 `role="status"`、`attachment-view.tsx`），那一类是"要打断你视线的一块"，带底色和边框才对；
+ * 清单行是"一列可以扫的东西"，边框叠出来就是 2010 年代后台面板的长相。
+ *
+ * 悬停底色与动作列的低强调/提亮住在 `ui/layout.css`：inline style 表达不了 `:hover` /
+ * `:focus-within`，而 `ui.css` 是照宿主明文逐字抄的对照表，混进自造规则会把保真复核弄脏
+ * （同 `forms.css` 文件头给的理由）。
+ */
+export const ROW: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  minWidth: 0,
+  padding: '8px 10px',
+  borderRadius: 'var(--sd-radius-lg)',
+}
+
+/**
+ * 选中行：底色用 inline style **故意压在** `layout.css` 的悬停底色之上——元素上的声明优先于
+ * 样式表里的 `:hover` 规则，选中与悬停同时成立时看到的是选中那一档，不会闪。
+ */
+export const ROW_SELECTED: CSSProperties = {
+  ...ROW,
   background: 'var(--sd-button-ghost-active-fill)',
-  border: '0.5px solid var(--sd-button-ghost-active-border)',
 }
 
 /**
@@ -58,17 +80,34 @@ export function projectLabel(projectDir: string, t: Translate): string {
 export interface ProjectGroup {
   projectDir: string
   label: string
+  /** 组头悬停的全文：未分组组用组名，其余用有损的原始 `projectDir`。 */
+  title: string
+  /** 「未分组」组：工作区已不在账本里的条目都归这里，永远沉底。 */
+  ungrouped: boolean
   /** 组内最新一条的删除时间——组间排序的键。 */
   latest: number
   entries: readonly TrashEntryLike[]
 }
 
-/** 按项目分组：组内按删除时间倒序，组间按各组最新一条倒序（刚删掉的那个项目排在最上面）。 */
+/**
+ * 「未分组」组的键：工作区已从宿主账本删掉（`workspaceMissing`）的条目都归这里。
+ * 哨兵值不与真实 `projectDir` 同形——空 cwd 已经由 `projectLabel` 念成「未记录项目」，
+ * 两者不是同一件事，不能撞键。
+ */
+export const UNGROUPED_PROJECT_DIR = '__dsh-session-delete__ungrouped'
+
+function groupKeyOf(entry: TrashEntryLike): string {
+  return entry.workspaceMissing === true ? UNGROUPED_PROJECT_DIR : entry.projectDir
+}
+
+/** 按项目分组：组内按删除时间倒序，组间按各组最新一条倒序（刚删掉的那个项目排在最上面）。
+ *  工作区已不存在的条目统一进「未分组」组，且该组永远沉底——它不是一个可比较的项目。 */
 export function groupByProject(entries: readonly TrashEntryLike[], t: Translate): ProjectGroup[] {
   const byProject = new Map<string, TrashEntryLike[]>()
   for (const entry of [...entries].sort((a, b) => b.deletedAt - a.deletedAt)) {
-    const list = byProject.get(entry.projectDir)
-    if (list === undefined) byProject.set(entry.projectDir, [entry])
+    const key = groupKeyOf(entry)
+    const list = byProject.get(key)
+    if (list === undefined) byProject.set(key, [entry])
     else list.push(entry)
   }
   return [...byProject]
@@ -77,12 +116,19 @@ export function groupByProject(entries: readonly TrashEntryLike[], t: Translate)
     .flatMap(([projectDir, list]) => {
       const first = list[0]
       if (first === undefined) return []
+      const ungrouped = projectDir === UNGROUPED_PROJECT_DIR
+      const label = ungrouped ? t('trash.group.ungrouped') : projectLabel(projectDir, t)
       return [{
         projectDir,
-        label: projectLabel(projectDir, t),
+        label,
+        title: ungrouped ? label : projectDir,
+        ungrouped,
         latest: first.deletedAt,
         entries: list,
       }]
     })
-    .sort((a, b) => b.latest - a.latest)
+    .sort((a, b) => {
+      if (a.ungrouped !== b.ungrouped) return a.ungrouped ? 1 : -1
+      return b.latest - a.latest
+    })
 }

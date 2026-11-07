@@ -1,7 +1,7 @@
 // 回收站的详情块：四态 + 可折叠的正文块 + 分页（docs/ui-spec.md）
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { zhTranslate } from '../../src/client/copy.js'
+import { zhTranslate, type Translate } from '../../src/client/copy.js'
 import { TrashDetail, type DetailPager, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import {
@@ -105,12 +105,17 @@ function withBlocks(blocks: TrashDetailBlockWire[], over: Over = {}) {
   return at({ kind: 'ready', entry, detail: { ...detail, blocks } }, over)
 }
 
+/** 逐块折叠的判据住在「详细」档：默认「标准」把连续的过程块收成一组（docs/ui-spec.md 状态⑥）。 */
+function detailedMode(): void {
+  fireEvent.click(screen.getByRole('button', { name: '详细' }))
+}
+
 describe('回收站详情块 · 四种状态', () => {
   it('未选中：只有引导句，没有任何动作按钮', () => {
     at({ kind: 'idle' })
     expect(screen.getByText('选中一条会话，看它讲了什么')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '恢复' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '彻底删除…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '彻底删除' })).not.toBeInTheDocument()
   })
 
   it('读数中：说在读哪一条，且这里不摆动作（动作住在清单行右侧）', () => {
@@ -140,18 +145,22 @@ describe('回收站详情块 · 四种状态', () => {
 })
 
 describe('回收站详情块 · 有内容', () => {
-  it('标题优先用清册那一份；元信息按时间→体量→位置摆出来', () => {
+  it('标题优先用清册那一份；会话信息单表直显、计量行独立成行', () => {
     at({ kind: 'ready', entry, detail })
     expect(screen.getByText('清册标题')).toBeInTheDocument()
     expect(screen.queryByText('日志标题')).not.toBeInTheDocument()
+    // 一张表：项目 → 模型 → 创建 → 最后活动 → 会话 id → 回收站目录 → 原本归档，全部默认可见（不折叠）。
+    const labels = [...document.querySelectorAll('dt')].map((dt) => dt.textContent)
+    expect(labels).toEqual(['项目', '模型', '创建', '最后活动', '会话 id', '回收站目录', '原本归档'])
     expect(screen.getByText('C:/develop/GitLab/x')).toBeInTheDocument()
-    expect(screen.getByText(entry.id)).toBeInTheDocument()
     expect(screen.getByText('m-1, m-2')).toBeInTheDocument()
+    expect(screen.getByText(entry.id)).toBeInTheDocument()
     expect(screen.getByText('是')).toBeInTheDocument() // 原本归档
+    // 计量行：大小 → 活跃跨度 → 五个计数，横着扫。
     expect(screen.getByText('40')).toBeInTheDocument() // 工具调用条数
-    // 注入条数是这条会话的读数，住在元信息表里；正文那些块是另一本账。
     expect(screen.getByText('注入上下文')).toBeInTheDocument()
     expect(screen.getByText('241')).toBeInTheDocument()
+    expect(screen.getByText('1 天')).toBeInTheDocument() // 活跃跨度归计量行
     expect(screen.queryByText(/未显示/)).not.toBeInTheDocument()
   })
 
@@ -228,13 +237,14 @@ describe('回收站详情块 · 有内容', () => {
   it('详情里不摆动作按钮（2026-10-15 真机反馈后：动作住在清单行右侧）', () => {
     at({ kind: 'ready', entry, detail })
     expect(screen.queryByRole('button', { name: '恢复' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '彻底删除…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '彻底删除' })).not.toBeInTheDocument()
   })
 })
 
 describe('回收站详情块 · 折叠', () => {
   it('思考默认折叠：折叠头给摘要，点开才出现正文', () => {
     withBlocks([reasoningBlock('r1', 1, '先分析需求\n正文里的独有句子')])
+    detailedMode()
     const header = screen.getByRole('button', { name: /思考/ })
     expect(header).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('正文里的独有句子')).not.toBeInTheDocument()
@@ -245,6 +255,7 @@ describe('回收站详情块 · 折叠', () => {
 
   it('工具调用默认折叠：折叠头给工具名与状态，展开才有参数和结果', () => {
     withBlocks([toolBlock('t1', 1, { name: 'read', status: 'ok' })])
+    detailedMode()
     const header = screen.getByRole('button', { name: /read/ })
     expect(header).toHaveTextContent('成功')
     expect(screen.queryByText('参数')).not.toBeInTheDocument()
@@ -261,12 +272,14 @@ describe('回收站详情块 · 折叠', () => {
       toolBlock('t1', 1, { name: 'bash', status: 'error', result: '炸了' }),
       toolBlock('t2', 2, { name: 'write', status: 'unfinished', args: '{}', result: '' }),
     ])
+    detailedMode()
     expect(screen.getByRole('button', { name: /bash/ })).toHaveTextContent('失败')
     expect(screen.getByRole('button', { name: /write/ })).toHaveTextContent('未完成')
   })
 
   it('注入上下文默认折叠：折叠头给来源标签，展开才出现原文', () => {
     withBlocks([injectionBlock('i1', 1, 'runtime-context', '摘要行\n上下文正文独有')])
+    detailedMode()
     const header = screen.getByRole('button', { name: /上下文注入/ })
     expect(header).toHaveTextContent('运行上下文')
     expect(screen.queryByText('上下文正文独有')).not.toBeInTheDocument()
@@ -284,6 +297,7 @@ describe('回收站详情块 · 折叠', () => {
     ['goal', '目标'],
   ] as const)('注入来源 %s 映射成「%s」，不把宿主 slug 露在正文', (kind, label) => {
     withBlocks([injectionBlock('i1', 1, kind, '正文')])
+    detailedMode()
     const header = screen.getByRole('button', { name: /上下文注入/ })
     expect(header).toHaveTextContent(label)
     expect(header).not.toHaveTextContent(kind)
@@ -291,6 +305,7 @@ describe('回收站详情块 · 折叠', () => {
 
   it('认不出的注入来源落「其他上下文」，原串只留在 title', () => {
     withBlocks([injectionBlock('i1', 1, 'future-kind', '正文')])
+    detailedMode()
     const header = screen.getByRole('button', { name: /上下文注入/ })
     expect(header).toHaveTextContent('其他上下文')
     expect(header).not.toHaveTextContent('future-kind')
@@ -302,31 +317,201 @@ describe('回收站详情块 · 折叠', () => {
       systemBlock('s1', 1, '系统摘要\n系统正文独有'),
       compactionBlock('c1', 2, '压缩摘要\n压缩正文独有'),
     ])
+    detailedMode()
     expect(screen.getByRole('button', { name: /系统消息/ })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.getByRole('button', { name: /上下文已压缩/ })).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('系统正文独有')).not.toBeInTheDocument()
     expect(screen.queryByText('压缩正文独有')).not.toBeInTheDocument()
   })
 
-  it('全部展开 / 全部折叠：一次开合这一页所有可折叠块', () => {
+  it('工作步骤四档：标准收组、简洁只看对话、详细逐条、完全展开一次铺开', () => {
     withBlocks([
       reasoningBlock('r1', 1, '思考摘要\n思考正文独有'),
       toolBlock('t1', 2),
       injectionBlock('i1', 3, 'time-context', '时间摘要\n时间正文独有'),
     ])
-    const expand = screen.getByRole('button', { name: '全部展开' })
-    fireEvent.click(expand)
+    // 默认「标准」：连续过程块收成一组，块本身不直接出场；点开组才逐条出现（仍各自折叠）。
+    expect(screen.getByRole('button', { name: /工作步骤/ })).toHaveTextContent('3 步')
+    expect(screen.queryByRole('button', { name: /思考/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /工作步骤/ }))
+    expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('思考正文独有')).not.toBeInTheDocument()
+    // 详细：过程块逐条列出（各自折叠）。
+    fireEvent.click(screen.getByRole('button', { name: '详细' }))
+    expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('思考正文独有')).not.toBeInTheDocument()
+    // 简洁：过程块整段不出现。
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(screen.queryByRole('button', { name: /思考/ })).not.toBeInTheDocument()
+    // 完全展开：这一页的过程块一次铺开；逐条仍可再收起。
+    fireEvent.click(screen.getByRole('button', { name: '完全展开' }))
     expect(screen.getByText(/思考正文独有/)).toBeInTheDocument()
     expect(screen.getByText('参数')).toBeInTheDocument()
     expect(screen.getByText(/时间正文独有/)).toBeInTheDocument()
-    const collapse = screen.getByRole('button', { name: '全部折叠' })
-    fireEvent.click(collapse)
+    const header = screen.getByRole('button', { name: /思考/ })
+    fireEvent.click(header)
+    expect(header).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByText('思考正文独有')).not.toBeInTheDocument()
-    expect(screen.queryByText('参数')).not.toBeInTheDocument()
+  })
+
+  it('再点一次「完全展开」不会把读者刚收起的块重新铺开', () => {
+    withBlocks([reasoningBlock('r1', 1, '思考正文独有')])
+    const verbose = screen.getByRole('button', { name: '完全展开' })
+    fireEvent.click(verbose)
+    fireEvent.click(screen.getByRole('button', { name: /思考/ }))
+    expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
+
+    fireEvent.click(verbose)
+    expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
+    // 折叠时摘要仍会念出首行，正文体才是「有没有铺开」的判据。
+    expect(document.querySelector('[data-sd-block-body]')).toBeNull()
+  })
+
+  it('离开「完全展开」时收回这一页铺开的块，回到详细档的逐条折叠', () => {
+    withBlocks([reasoningBlock('r1', 1, '思考正文独有'), toolBlock('t1', 2)])
+    fireEvent.click(screen.getByRole('button', { name: '完全展开' }))
+    expect(document.querySelectorAll('[data-sd-block-body]')).toHaveLength(2)
+
+    fireEvent.click(screen.getByRole('button', { name: '详细' }))
+    expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: /read/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(document.querySelectorAll('[data-sd-block-body]')).toHaveLength(0)
+  })
+
+  it('标准档的步数走单复数：一块时说单数，不写成 "1 steps"', () => {
+    const t: Translate = (key, params) => {
+      if (key === 'detail.process.step') return '1 step'
+      if (key === 'detail.process.steps') return `${String(params?.n)} steps`
+      return zhTranslate(key, params)
+    }
+    withBlocks([toolBlock('t1', 1)], { t })
+    expect(screen.getByRole('button', { name: /工作步骤/ })).toHaveTextContent('1 step')
+  })
+
+  it('简洁档自动连翻在飞时不再说「点加载更早」：按钮此刻按不动', () => {
+    render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
+      { loadingOlder: true },
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(screen.queryByText('这一页只有过程内容；点「加载更早」继续往前看。')).not.toBeInTheDocument()
+  })
+
+  it('简洁档遇到只有过程内容的会话：明说去哪看，不留一块空白', () => {
+    withBlocks([reasoningBlock('r1', 1, '只有过程')])
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(screen.getByText('这段会话只有过程内容；切到「标准」可以看到。')).toBeInTheDocument()
+  })
+
+  it('简洁档还有更早页时只说这一页只有过程内容，不冒充整条会话', () => {
+    at({
+      kind: 'ready',
+      entry,
+      detail: { ...detail, blocks: [reasoningBlock('r1', 1, '只有过程')], olderCursor: 1 },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(screen.getByText('这一页只有过程内容；点「加载更早」继续往前看。')).toBeInTheDocument()
+    expect(screen.queryByText('这段会话只有过程内容；切到「标准」可以看到。')).not.toBeInTheDocument()
+  })
+
+  it('切到简洁档时当前页全是过程块：自动连翻一页，不用先点「加载更早」', () => {
+    const onLoadOlder = vi.fn()
+    render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
+      { onLoadOlder },
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+  })
+
+  it('切到简洁档时当前页有对话：不自动请求更早页', () => {
+    const onLoadOlder = vi.fn()
+    render(detailElement(
+      {
+        kind: 'ready',
+        entry,
+        detail: { ...detail, blocks: [userBlock('10', 1, '尾页'), toolBlock('9', 2)], olderCursor: 9 },
+      },
+      { onLoadOlder },
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(onLoadOlder).not.toHaveBeenCalled()
+  })
+
+  it('自动连翻有上限：到 AUTO_OLDER_PAGE_LIMIT 页就停，之后的新页不再请求', () => {
+    const onLoadOlder = vi.fn()
+    let blocks: TrashDetailBlockWire[] = [toolBlock('100', 1)]
+    let cursor: number | null = 99
+    const { rerender } = render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks, olderCursor: 100 } },
+      { onLoadOlder },
+    ))
+    // 切到简洁档时当前页全是过程块 ⇒ 首屏就自动连翻，不要求先点按钮。
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+
+    // 连续 11 页都只有过程块：前 10 页自动请求，第 11 页落地时预算已尽。
+    for (let page = 0; page < 11; page += 1) {
+      blocks = [toolBlock(String(90 - page), 1), ...blocks]
+      rerender(detailElement(
+        { kind: 'ready', entry, detail: { ...detail, blocks, olderCursor: cursor } },
+        { onLoadOlder },
+      ))
+      cursor = cursor === null ? null : cursor - 1
+    }
+    expect(onLoadOlder).toHaveBeenCalledTimes(11)
+    expect(screen.getByText('这一页只有过程内容；点「加载更早」继续往前看。')).toBeInTheDocument()
+  })
+
+  it('自动连翻遇到游标耗尽就停，并改说整条会话只有过程内容', () => {
+    const onLoadOlder = vi.fn()
+    const tail = [toolBlock('10', 1)]
+    const { rerender } = render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
+      { onLoadOlder },
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+
+    rerender(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: null } },
+      { onLoadOlder },
+    ))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('这段会话只有过程内容；切到「标准」可以看到。')).toBeInTheDocument()
+  })
+
+  it('默认「标准」档：过程组展开后工具头仍带状态、仍各自折叠', () => {
+    withBlocks([toolBlock('t1', 1, { name: 'read', status: 'error', result: '炸了' })])
+    fireEvent.click(screen.getByRole('button', { name: /工作步骤/ }))
+    const header = screen.getByRole('button', { name: /read/ })
+    expect(header).toHaveTextContent('失败')
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('标准档 prepend 更早过程块合并进同一组：已展开的组不收回', () => {
+    const tail = [toolBlock('9', 2)]
+    const { rerender } = render(detailElement({
+      kind: 'ready',
+      entry,
+      detail: { ...detail, blocks: tail, olderCursor: 9 },
+    }))
+    fireEvent.click(screen.getByRole('button', { name: /工作步骤/ }))
+    expect(screen.getByRole('button', { name: /read/ })).toHaveAttribute('aria-expanded', 'false')
+
+    // 更早一页带来一块同样是过程内容的块，两页在这里合并成同一组；组的键取「组后那条对话」，
+    // 不随 prepend 改动，所以读者已经点开的那一组仍在。
+    rerender(detailElement({
+      kind: 'ready',
+      entry,
+      detail: { ...detail, blocks: [toolBlock('8', 1), ...tail], olderCursor: 8 },
+    }))
+    expect(screen.getAllByRole('button', { name: /read/ })).toHaveLength(2)
   })
 
   it('截断过的块在展开体里标"已截断"，不把少掉的字说成完整', () => {
     withBlocks([reasoningBlock('r1', 1, '只剩这一段', true)])
+    detailedMode()
     fireEvent.click(screen.getByRole('button', { name: /思考/ }))
     expect(screen.getByText('已截断')).toBeInTheDocument()
   })
@@ -348,14 +533,60 @@ describe('回收站详情块 · 折叠', () => {
       toolBlock('t1', 2, { result: 'a ** b' }),
       injectionBlock('i1', 3, 'time-context', '**注入**'),
     ])
+    detailedMode()
     expect(screen.getByRole('button', { name: /思考/ })).not.toHaveTextContent('**')
     expect(screen.getByRole('button', { name: /read/ })).toHaveTextContent('a ** b')
     expect(screen.getByRole('button', { name: /上下文注入/ })).toHaveTextContent('**注入**')
   })
 
+  it('简洁档「加载更早」自动连翻：整页过程块被隐藏时就继续往前，直到出现对话内容', () => {
+    const onLoadOlder = vi.fn()
+    const tail = [userBlock('10', 1, '尾页正文')]
+    const { rerender } = render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
+      { onLoadOlder },
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '简洁' }))
+    fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+
+    // 第一页全是过程块：简洁档下不可见 ⇒ 自动再翻一页。
+    rerender(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
+      { onLoadOlder },
+    ))
+    expect(onLoadOlder).toHaveBeenCalledTimes(2)
+
+    // 第二页带回用户提问 ⇒ 停在这一页，不再自动翻。
+    rerender(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('8', 1, '更早的提问'), toolBlock('9', 1), ...tail], olderCursor: 8 } },
+      { onLoadOlder },
+    ))
+    expect(screen.getByText('更早的提问')).toBeInTheDocument()
+    expect(onLoadOlder).toHaveBeenCalledTimes(2)
+  })
+
+  it('详细档「加载更早」一次只翻一页（过程块本身可见，不触发自动连翻）', () => {
+    const onLoadOlder = vi.fn()
+    const tail = [userBlock('10', 1, '尾页正文')]
+    const { rerender } = render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
+      { onLoadOlder },
+    ))
+    fireEvent.click(screen.getByRole('button', { name: '详细' }))
+    fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
+    rerender(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
+      { onLoadOlder },
+    ))
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: /read/ })).toBeInTheDocument()
+  })
+
   it('prepend 更早一页保留已展开的块：开合挂在块 id 上，不随页重排', () => {
     const tail = [toolBlock('10', 1), reasoningBlock('11', 2, '思考摘要\n思考正文独有')]
     const { rerender } = render(detailElement({ kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } }))
+    detailedMode()
     fireEvent.click(screen.getByRole('button', { name: /read/ }))
     expect(screen.getByRole('button', { name: /read/ })).toHaveAttribute('aria-expanded', 'true')
 
@@ -472,12 +703,12 @@ describe('回收站详情块 · 两档形态的差别', () => {
   })
 })
 
-describe('回收站详情块 · 「删除于」两样都给（docs/ui-spec.md 状态⑥）', () => {
-  it('相对那句好读、绝对那句好核对，同一格里两个都在', () => {
+describe('回收站详情块 · 删除时间不进详情', () => {
+  it('删除于只在清单行；详情表里没有它（相对/绝对都不重复）', () => {
     at({ kind: 'ready', entry, detail })
-    const value = screen.getByText(/前（/).textContent
-    expect(value).toMatch(/^(刚刚|\d+(分钟|小时|天|个月|年)前)（.+）$/)
-    expect(value).toContain(new Date(DELETED_AT).toLocaleString())
+    expect(document.querySelector('dt')?.textContent).toBe('项目')
+    expect(screen.queryByText(/前（/)).not.toBeInTheDocument()
+    expect(screen.queryByText('删除于')).not.toBeInTheDocument()
   })
 })
 
@@ -677,7 +908,7 @@ describe('回收站详情块 · 子会话', () => {
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
     at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2] } }, { detailNav: { onOpenChild } })
     // 段上的合计是这一批孩子的清册大小（与清单行同一口径）：永久删除按整组释放，删前要能核对「几个都在这儿」
-    expect(screen.getByText('子会话（2） · 3.0KB')).toBeInTheDocument()
+    expect(screen.getByText('子会话（2） · 3.0KB，随本条一起恢复或删除')).toBeInTheDocument()
     const row = screen.getByText('孩子会话')
     fireEvent.click(row)
     expect(onOpenChild).toHaveBeenCalledWith(KID)
@@ -786,7 +1017,7 @@ describe('回收站详情块 · 子会话', () => {
   })
 
   // jsdom 量不了布局，钉的是声明契约：宽档父详情的标题排没有返回键、孩子视图有；
-  // 标题排不按紧凑按钮（28px）预留行高时，下方元信息会在父子切换时上下跳 6px。
+  // 标题排不按紧凑按钮（28px）预留行高时，下方会话信息会在父子切换时上下跳 6px。
   it('标题排恒定预留紧凑按钮的行高：父子视图同高、没有返回键的父详情也不塌陷', () => {
     const { container } = at({ kind: 'ready', entry, detail }, { wide: true })
     const head = must(container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '详情标题排')

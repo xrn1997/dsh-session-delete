@@ -6,7 +6,7 @@
  * - 标题优先用清册标题，空串才回落到日志的 session/title。
  * - 正文是**块**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给
  *   标签 + 首行摘要（工具另给状态）。注入也铺进正文——这是对宿主 Chat 的有意偏离（它隐藏普通注入，
- *   而这里的目标是「删之前看全」）；条数另进元信息表。
+ *   而这里的目标是「删之前看全」）；条数另进计量行。
  *
  * 助手正文与思考走 Markdown，用户提问保持原话；工具参数/结果走等宽纯文本（限高可滚）。
  * 附件随块位置渲染：用户气泡之上、助手正文之后、工具展开体末尾。
@@ -15,23 +15,24 @@ import {
   type CSSProperties,
   type ReactNode,
   type RefObject,
-  useLayoutEffect,
-  useRef,
   useState,
 } from 'react'
 import { AttachmentStrip } from './attachment-view.js'
-import { absoluteText, agoText, localeProbe, type CopyKey, type Translate } from './copy.js'
+import { absoluteText, agoText, localeProbe, stepsText, type CopyKey, type Translate } from './copy.js'
 import type { TrashDetailBlockWire, TrashDetailInjectionBlockWire, TrashDetailTextBlockWire, TrashEntryWire } from '../shared/wire.js'
 import type { TrashDetailLike } from './remote.js'
 import { MarkdownBody } from './markdown.js'
 import { Button } from './ui/Button.js'
 import { fileSizeText } from './ui/format.js'
 import {
+  IconBranchOutlineRegular,
   IconChevronDownOutlineRegular,
   IconChevronRightOutlineRegular,
   IconWarningOutlineRegular,
 } from './ui/icons.js'
-import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
+import { ELLIPSIS, QUIET_DANGER, TABULAR_NUMS } from './ui/recipe.js'
+import { hasDialogue, isDisclosureBlock, threadItems } from './detail-blocks.js'
+import { useDetailPager } from './use-detail-pager.js'
 
 /** 详情主体只承诺清册那一行：孩子视图看的那条不在客户端清单里，没有只读数可配对
  *  （孩子摘要随父详情过线，那一格的判据住 `src/client/remote.ts` 的 `TrashDetailLike`）。 */
@@ -81,32 +82,86 @@ const SHELL: CSSProperties = {
   flexDirection: 'column',
   gap: 12,
   boxSizing: 'border-box',
-  height: '100%',
+  // 只给下限、不给定高：`HEAD` 的 sticky 包含块是这一层，定高会被滚动容器拉成首屏高，
+  // 长会话读到第二屏之后返回键就跟着滚走（触屏没有 Esc 兜底）。`minHeight` 让壳随内容长高。
+  minHeight: '100%',
   minWidth: 0,
 }
 
 /** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（docs/ui-spec.md 状态⑥）。
  *  标题排按紧凑按钮（`ui.css` 的 `.sd-button-sm`）预留高度：宽档父详情没有返回键、孩子视图有，
- *  不预留时下方元信息会在父子切换时跳 6px。 */
-const HEAD: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 10, minHeight: 28 }
+ *  不预留时下方会话信息会在父子切换时跳 6px。
+ *
+ *  `position: sticky`：长会话读到中段时返回键仍在顶上（触屏没有 Esc 兜底，返回必须常驻）。
+ *  底色用宿主页面底色（`bg-base`）把滚过的正文盖住。 */
+const HEAD: CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  gap: 10,
+  minHeight: 28,
+  position: 'sticky',
+  top: 0,
+  zIndex: 1,
+  background: 'var(--dsw-alias-bg-base)',
+  paddingBottom: 6,
+}
 
 const TITLE_LINE: CSSProperties = { ...ELLIPSIS, flex: '1 1 auto', minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: '22px' }
 
 const BACK: CSSProperties = { flex: 'none' }
 
-/** 元信息那张表：label 一列、值一列，窄档也不横向溢出。 */
+/**
+ * 会话信息表：一张两列表，行序按「认出这条会话 → 时间定位 → 精确核对 → 调试属性」排
+ * （docs/ui-spec.md 状态⑥）。标签列自动宽、值列吃余宽；长串省略号收、全称走 `title`。
+ * 不做折叠、不做卡片：这类信息是给核对用的，默认就该看得见。
+ */
 const META: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'auto 1fr',
   gap: '3px 12px',
-  margin: 0,
+  margin: '8px 0 0',
   fontSize: 12,
-  lineHeight: '17px',
+  lineHeight: '18px',
 }
 
 const META_LABEL = { color: 'var(--sd-label-tertiary)', whiteSpace: 'nowrap' } as CSSProperties
 
-const META_VALUE = { margin: 0, minWidth: 0, wordBreak: 'break-word' } as CSSProperties
+const META_VALUE = {
+  ...ELLIPSIS,
+  ...TABULAR_NUMS,
+  margin: 0,
+  minWidth: 0,
+} as CSSProperties
+
+const META_CODE = {
+  fontFamily: 'var(--ds-font-family-code)',
+  fontSize: 11,
+  color: 'var(--dsw-alias-label-secondary)',
+} as CSSProperties
+
+/**
+ * 计量行：一行内联的「标签 值」对，自动换行。和表分开是因为它们是**可以横着扫的数字**，
+ * 不是要逐行核对的字符串。不插中点分隔符——分隔符是各语言自己的写法（同 `detail.subagents.header`）。
+ */
+const METRICS: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: '2px 14px',
+  marginTop: 8,
+  minWidth: 0,
+  fontSize: 12,
+  lineHeight: '18px',
+}
+
+const METRIC = { display: 'inline-flex', gap: 6, minWidth: 0, maxWidth: '100%' } as CSSProperties
+
+const METRIC_LABEL = { flex: 'none', color: 'var(--sd-label-tertiary)', whiteSpace: 'nowrap' } as CSSProperties
+
+const METRIC_VALUE = {
+  ...ELLIPSIS,
+  ...TABULAR_NUMS,
+  minWidth: 0,
+} as CSSProperties
 
 /**
  * 线程的行距取宿主那两档里的 12px 那档（`ChatView.module.css` 的 `--dsh-chat-flow-gap`：默认 6px，
@@ -173,15 +228,22 @@ const BLOCK_ROW: CSSProperties = {
   textAlign: 'start',
   width: '100%',
   minWidth: 0,
-  gap: 6,
+  gap: 8,
 }
 
-/** 标签不参与收缩：摘要是 `1 1 auto`，标签若也可缩，长结果会把「工具调用 / 来源」挤成几个字。 */
+/**
+ * 标签不参与收缩：摘要是 `1 1 auto`，标签若也可缩，长结果会把「工具调用 / 来源」挤成几个字。
+ *
+ * 颜色**不跟着 `.sd-disclosure-row` 继承**：那颗类给的是 `label-tertiary`，而摘要也是 tertiary，
+ * 两截同色只差一个字重，真机上就糊成一句「系统消息You are an AI agent…」。标签提到 secondary，
+ * 摘要留在 tertiary，中间再留 8px，标签才真的像标签。
+ */
 const BLOCK_TITLE: CSSProperties = {
   ...ELLIPSIS,
   flex: 'none',
   maxWidth: '50%',
   fontWeight: 500,
+  color: 'var(--dsw-alias-label-secondary)',
   fontSize: 'var(--dsh-content-font-size-secondary, 13px)',
 }
 
@@ -196,7 +258,7 @@ const BLOCK_SUMMARY: CSSProperties = {
 
 const BLOCK_META: CSSProperties = {
   flex: 'none',
-  fontSize: 11.5,
+  fontSize: 11,
   lineHeight: '18px',
   color: 'var(--sd-label-tertiary)',
   whiteSpace: 'nowrap',
@@ -235,25 +297,32 @@ const CODE_BLOCK: CSSProperties = {
 }
 
 const SECTION_LABEL: CSSProperties = {
-  fontSize: 11.5,
+  fontSize: 11,
   lineHeight: '16px',
   color: 'var(--sd-label-tertiary)',
 }
 
 /**
- * 子会话行：折叠头同族的可点行，卡片底 + 小圆角；悬停走 sd-disclosure-row 的宿主配方。
- * 两处内联覆盖各有理由：宿主类给折叠头钉死行高并随之裁溢出，导航行带内边距，须放开
- * 高度按内容撑开，否则裁字；指针光标宿主只发给带展开语义的行，导航行不借那套语义，
- * 光标就内联自给。
+ * 子会话行：与清单行同语言的无边框导航行（悬停底色住 `ui/layout.css`）。两处内联覆盖各有理由：
+ * 宿主类给折叠头钉死行高并随之裁溢出，导航行带内边距，须放开高度按内容撑开，否则裁字；
+ * 指针光标宿主只发给带展开语义的行，导航行不借那套语义，光标就内联自给。
+ * 底色与边框不铺——一列带框的行叠起来就是"一叠卡片"，与清单行同一条判据。
  */
 const SUBAGENT_ROW: CSSProperties = {
   ...BLOCK_ROW,
-  padding: '6px 10px',
+  padding: '6px 8px',
   height: 'auto',
   cursor: 'pointer',
-  background: 'var(--dsw-alias-bg-layer-2)',
-  border: '0.5px solid var(--sd-border-l4)',
   borderRadius: 'var(--sd-radius-md)',
+}
+
+/** 工作步骤分组展开后，里面的过程块再缩进一档（与折叠体的前导对齐，前导宽随内容字号一起变）。 */
+const PROCESS_BODY: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  padding: '2px 0 4px calc(22px + var(--dsh-content-font-delta, 0px))',
+  minWidth: 0,
 }
 
 const TOOLBAR: CSSProperties = {
@@ -265,7 +334,7 @@ const TOOLBAR: CSSProperties = {
 }
 
 const TRUNCATED: CSSProperties = {
-  fontSize: 11.5,
+  fontSize: 11,
   lineHeight: '16px',
   color: 'var(--sd-label-tertiary)',
 }
@@ -341,14 +410,20 @@ function toolStatus(status: 'ok' | 'error' | 'unfinished', t: Translate): string
   return t('detail.block.status.unfinished')
 }
 
-type DisclosureBlockWire = Exclude<TrashDetailBlockWire, { kind: 'user' } | { kind: 'assistant' }>
+/** 工作步骤展示的档位（学宿主「工作步骤展示」那四档；回收站的轮次全部已结束，
+ *  所以落成「过程块显示多少」这一件事）。`docs/ui-spec.md` 状态⑥ 是判据的家。 */
+type ViewMode = 'compact' | 'standard' | 'detailed' | 'verbose'
 
-function isDisclosureBlock(block: TrashDetailBlockWire): block is DisclosureBlockWire {
-  return block.kind !== 'user' && block.kind !== 'assistant'
-}
+const VIEW_MODES: readonly { readonly key: ViewMode; readonly label: CopyKey }[] = [
+  { key: 'compact', label: 'detail.viewMode.compact' },
+  { key: 'standard', label: 'detail.viewMode.standard' },
+  { key: 'detailed', label: 'detail.viewMode.detailed' },
+  { key: 'verbose', label: 'detail.viewMode.verbose' },
+]
 
 interface DisclosureProps {
-  block: DisclosureBlockWire
+  /** 折叠头只读块的 `kind`（`data-sd-block`）与 `id`（开合键）；块内容由 `children` 给。 */
+  block: { readonly kind: TrashDetailBlockWire['kind']; readonly id: string }
   label: string
   /** 悬停原文（标签是映射后的人话时用）；缺省与 `label` 相同。 */
   title?: string | undefined
@@ -536,7 +611,7 @@ export function TrashDetail({
           height: '100%',
           padding: '24px',
           textAlign: 'center',
-          fontSize: 12.5,
+          fontSize: 12,
           lineHeight: '18px',
           color: 'var(--sd-label-tertiary)',
         }}
@@ -616,7 +691,7 @@ export function TrashDetail({
 function LoadingBody({ t }: { t: Translate }) {
   return (
     <>
-      <div style={{ fontSize: 12.5, lineHeight: '18px', color: 'var(--sd-label-tertiary)' }}>
+      <div style={{ fontSize: 12, lineHeight: '18px', color: 'var(--sd-label-tertiary)' }}>
         {t('detail.loading')}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -636,12 +711,24 @@ function LoadingBody({ t }: { t: Translate }) {
   )
 }
 
-function Meta({ label, title, children }: { label: string; title?: string; children: string }) {
+function Meta({ label, title, code, children }: { label: string; title?: string; code?: boolean; children: string }) {
   return (
     <>
       <dt style={META_LABEL}>{label}</dt>
-      <dd style={META_VALUE} title={title}>{children}</dd>
+      <dd style={META_VALUE} title={title}>
+        {code === true ? <code style={META_CODE}>{children}</code> : children}
+      </dd>
     </>
+  )
+}
+
+/** 计量行里的一对（标签 + 值）：可以横着扫的数字，不占表的行。 */
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <span style={METRIC}>
+      <span style={METRIC_LABEL}>{label}</span>
+      <span style={METRIC_VALUE}>{value}</span>
+    </span>
   )
 }
 
@@ -655,26 +742,37 @@ interface ReadyBodyProps {
 }
 
 /**
- * 有内容：元信息（时间 → 体量 → 位置三组的顺序）+ 子会话段 + 折叠块。
+ * 有内容：会话信息（身份 → 时间 → 核对 → 属性）+ 计量行 + 子会话段 + 工作步骤。
  *
- * 页面上**两本账分开读**：元信息里的计数是整条日志的（注入条数也在表里）；
- * 正文是分页取回来的块。`olderCursor` 非空时顶部出「加载更早」。
- * 折叠状态只活在这个组件里；切条目用 `key={entry.id}` 重挂载，不会把 A 的展开状态带到 B。
+ * 页面上**两本账分开读**：会话信息里的计数是整条日志的（注入条数也在计量行里）；
+ * 正文是分页取回来的块。`olderCursor` 非空时正文工具栏出「加载更早」。
+ * 工作步骤档位与折叠状态只活在这个组件里；切条目用 `key={entry.id}` 重挂载，不会把 A 的
+ * 展开状态带到 B。
  */
 function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
   const { loadingOlder, olderFailure, onLoadOlder, scrollRef } = pager
+  const [mode, setMode] = useState<ViewMode>('standard')
+  /** 标准档「工作步骤」组的开合（按组后那条对话块的 id 记，prepend 不换键）。 */
+  const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set())
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
-  /** 更早一页要 prepend 时的块数；换页回来（组件重挂载）这份意图会丢，那是可接受的边界。 */
-  const pendingScroll = useRef<{ blocks: number } | null>(null)
-  /** 上一次布局后的滚动高度：合并更早一页时用它算**真正插进来的高度**，不把请求在飞期间的
-   *  滚动或折叠变化也算进去。 */
-  const lastHeight = useRef<number | null>(null)
+  /** 手动「加载更早」、简洁档自动连翻与 prepend 后的滚动锚点整块住在 hook 里。 */
+  const { loadOlder } = useDetailPager({
+    blocks: detail.blocks,
+    olderCursor: detail.olderCursor,
+    loadingOlder,
+    olderFailure,
+    compact: mode === 'compact',
+    onLoadOlder,
+    scrollRef,
+  })
 
   // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（借哪句住 copy.ts 的 localeProbe）。
   const probe = localeProbe(t)
   const project = detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
+  const models = detail.models.join(', ') || '—'
+  const span = spanText(detail.createdAt, detail.lastActivity, t) ?? '—'
   const disclosureBlocks = detail.blocks.filter(isDisclosureBlock)
-  const allOpen = disclosureBlocks.length > 0 && disclosureBlocks.every((block) => open.has(block.id))
+  const items = threadItems(detail.blocks)
   // 入口回调取一次本地名：`detailNav.onOpenChild` 的窄化穿不进 onClick 闭包。
   const openChild = detailNav.onOpenChild
 
@@ -686,78 +784,71 @@ function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
       return next
     })
   }
-  const toggleAll = (): void => {
-    setOpen(allOpen ? new Set() : new Set(disclosureBlocks.map((block) => block.id)))
+  const toggleGroup = (id: string): void => {
+    setOpenGroups((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   }
 
-  const loadOlder = (): void => {
-    const element = scrollRef?.current
-    if (element !== null && element !== undefined) {
-      pendingScroll.current = { blocks: detail.blocks.length }
+  /** 换档：完全展开 = 详细档 + 把当前全部过程块铺开；离开这一档时收回，档位之间才有可感知的差别。
+   *  之后读者仍可逐条收起（完全展开不是一把锁，只是一次性的默认）。
+   *  切进简洁档时当前页全是过程块 ⇒ 先按同一份预算自动往前翻，不让首屏留白。 */
+  const chooseViewMode = (next: ViewMode): void => {
+    setMode(next)
+    // 只在**切进**完全展开时铺开：再点一次按住的档位不该把读者刚收起的块重新打开。
+    if (next === 'verbose') {
+      if (mode !== 'verbose') setOpen(new Set(disclosureBlocks.map((block) => block.id)))
+    } else if (mode === 'verbose') {
+      setOpen(new Set())
     }
-    onLoadOlder()
+    if (
+      next === 'compact'
+      && mode !== 'compact'
+      && detail.blocks.length > 0
+      && !hasDialogue(detail.blocks)
+      && detail.olderCursor !== null
+    ) loadOlder()
   }
-
-  // 更早一页 prepend 后补偿滚动位置：读者正看着的那一块不因上方长出新内容而跳走。
-  // 加的是**当前** `scrollTop`（请求在飞时读者可能继续滚动），高度差只取这一拍真正插进来的部分。
-  useLayoutEffect(() => {
-    const element = scrollRef?.current
-    const pending = pendingScroll.current
-    if (element === null || element === undefined || pending === null) return
-    if (detail.blocks.length !== pending.blocks) {
-      pendingScroll.current = null
-      if (lastHeight.current !== null) {
-        element.scrollTop += element.scrollHeight - lastHeight.current
-      }
-      return
-    }
-    if (!loadingOlder) pendingScroll.current = null
-  }, [detail.blocks.length, loadingOlder, scrollRef])
-
-  // 每次布局后记下高度：它在合并更早一页的那一拍就是「插入前」的高度（滚动不触发渲染，
-  // 折叠开合会先渲染、顺带把这笔高度更新掉）。
-  useLayoutEffect(() => {
-    const element = scrollRef?.current
-    if (element !== null && element !== undefined) lastHeight.current = element.scrollHeight
-  })
 
   return (
     <>
+      {/* 会话信息：一张表 + 一行计量，全部默认可见（docs/ui-spec.md 状态⑥）。
+          顺序按决策相关性：项目/模型认出这一条 → 两个时间点 → 精确核对用的 id 与目录 → 归档状态；
+          计量从「多大、活了多久」读到「里面有多少内容」。 */}
       <dl style={META}>
+        <Meta label={t('detail.field.project')} title={project}>{project}</Meta>
+        <Meta label={t('detail.field.models')} title={models}>{models}</Meta>
         <Meta label={t('detail.field.created')}>{timeText(detail.createdAt)}</Meta>
         <Meta label={t('detail.field.lastActivity')}>{timeText(detail.lastActivity)}</Meta>
-        <Meta label={t('detail.field.span')}>{spanText(detail.createdAt, detail.lastActivity, t) ?? '—'}</Meta>
-        {/* 「删除于」两样都要（docs/ui-spec.md 状态⑥）：相对那句好读，绝对那句好核对。 */}
-        <Meta label={t('detail.field.deletedAt')}>
-          {t('detail.deletedAt.combined', {
-            relative: agoText(entry.deletedAt, Date.now(), t),
-            absolute: absoluteText(entry.deletedAt),
-          })}
-        </Meta>
-        <Meta label={t('detail.field.size')}>{fileSizeText(entry.sizeBytes)}</Meta>
-        <Meta label={t('detail.field.turns')}>{String(detail.turnCount)}</Meta>
-        <Meta label={t('detail.field.userMessages')}>{String(detail.userMessageCount)}</Meta>
-        <Meta label={t('detail.field.assistantMessages')}>{String(detail.assistantMessageCount)}</Meta>
-        <Meta label={t('detail.field.toolCalls')}>{String(detail.toolCallCount)}</Meta>
-        <Meta label={t('detail.field.injections')}>{String(detail.injectedCount)}</Meta>
-        <Meta label={t('detail.field.models')}>{detail.models.join(', ') || '—'}</Meta>
-        <Meta label={t('detail.field.project')} title={project}>{project}</Meta>
-        <Meta label={t('detail.field.sessionId')} title={entry.sessionId}>{entry.sessionId}</Meta>
-        <Meta label={t('detail.field.trashDir')} title={entry.id}>{entry.id}</Meta>
+        <Meta label={t('detail.field.sessionId')} title={entry.sessionId} code>{entry.sessionId}</Meta>
+        <Meta label={t('detail.field.trashDir')} title={entry.id} code>{entry.id}</Meta>
         <Meta label={t('detail.field.wasArchived')}>
           {entry.wasArchived ? t('detail.value.yes') : t('detail.value.no')}
         </Meta>
       </dl>
+      <div style={METRICS}>
+        <Metric label={t('detail.field.size')} value={fileSizeText(entry.sizeBytes)} />
+        <Metric label={t('detail.field.span')} value={span} />
+        <Metric label={t('detail.field.turns')} value={String(detail.turnCount)} />
+        <Metric label={t('detail.field.userMessages')} value={String(detail.userMessageCount)} />
+        <Metric label={t('detail.field.assistantMessages')} value={String(detail.assistantMessageCount)} />
+        <Metric label={t('detail.field.toolCalls')} value={String(detail.toolCallCount)} />
+        {/* 注入条数仍是这条会话的读数，和其余计数同一层；正文那些块是另一本账。 */}
+        <Metric label={t('detail.field.injections')} value={String(detail.injectedCount)} />
+      </div>
 
       {/* 孩子不在客户端清单里，父详情是唯一能往下走一层的地方；这一段因此跟着详情走，不是清单的一列。
-          行的两样事实（清册 `title` / `sizeBytes` + `deletedAt`）与清单行同一口径；段标题多给一个条数，
-          「几个都在这儿」在点之前就能核对。入口判据只认 `detailNav.onOpenChild`（ADR-0029 单级判据，
-          派生住控制器）：孩子视图开着时控制器交不出它，这一段就整段不画。 */}
+          行的两样事实（清册 `title` / `sizeBytes` + `deletedAt`）与清单行同一口径；段标题多给条数与去向。
+          入口判据只认 `detailNav.onOpenChild`（ADR-0029 单级判据，派生住控制器）：孩子视图开着时
+          控制器交不出它，这一段就整段不画。 */}
       {detail.subagents === undefined || detail.subagents.length === 0 || openChild === undefined ? null : (
-        <div data-dsh-session-delete="trash-subagents" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div data-dsh-session-delete="trash-subagents" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <div style={SECTION_LABEL}>
-            {/* 整句一个键：括号与分隔符是各语言自己的写法（zh「子会话（2） · 3.0KB」/ en「Subagent sessions (2) · 3.0KB」），
-                与 `detail.deletedAt.combined` 同一条判据——拼在 JSX 里就钉死了某一门语言的标点。 */}
+            {/* 整句一个键：括号与分隔符是各语言自己的写法（zh「子会话（2） · 3.0KB，随本条一起恢复或删除」），
+                拼在 JSX 里就钉死了某一门语言的标点。 */}
             {t('detail.subagents.header', {
               n: detail.subagents.length,
               size: fileSizeText(detail.subagents.reduce((sum, child) => sum + child.sizeBytes, 0)),
@@ -771,13 +862,20 @@ function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
               data-dsh-session-delete="trash-subagent-row"
               data-entry-id={child.id}
               style={SUBAGENT_ROW}
+              title={t('detail.subagents.open')}
               onClick={() => openChild(child)}
             >
+              <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
+                <IconBranchOutlineRegular size={14} />
+              </span>
               <span style={{ ...ELLIPSIS, flex: '1 1 auto', minWidth: 0 }}>
                 {child.title === '' ? t('common.untitled') : child.title}
               </span>
               <span style={BLOCK_META}>{fileSizeText(child.sizeBytes)}</span>
               <span style={BLOCK_META}>{agoText(child.deletedAt, Date.now(), t)}</span>
+              <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
+                <IconChevronRightOutlineRegular size={14} />
+              </span>
             </button>
           ))}
           {/* 条数闸截断时把总数说出来：段标题只报已列出的条数与它们的合计，
@@ -799,20 +897,66 @@ function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
         {olderFailure === null ? null : (
           <span role="status" style={{ ...META_LINE, minWidth: 0, wordBreak: 'break-word' }}>{olderFailure}</span>
         )}
-        {disclosureBlocks.length === 0 ? null : (
-          <span style={{ marginLeft: 'auto' }}>
-            <Button variant="ghost" size="sm" onClick={toggleAll}>
-              {allOpen ? t('detail.collapseAll') : t('detail.expandAll')}
-            </Button>
+        <span style={{ marginLeft: 'auto' }}>
+          <span className="sd-seg" role="group" aria-label={t('detail.viewMode.label')}>
+            {VIEW_MODES.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                aria-pressed={mode === key}
+                onClick={() => { chooseViewMode(key) }}
+              >
+                {t(label)}
+              </button>
+            ))}
           </span>
-        )}
+        </span>
       </div>
 
       {detail.blocks.length === 0 ? (
         <div style={META_LINE}>{t('detail.noBody')}</div>
       ) : (
         <div style={THREAD}>
-          {detail.blocks.map((block) => renderBlock(block, { open, toggle, probe, t }))}
+          {mode === 'standard'
+            ? items.map((item) => item.kind === 'block'
+                ? renderBlock(item.block, { open, toggle, probe, t })
+                : (
+                  <div key={item.id}>
+                    <button
+                      type="button"
+                      className="sd-disclosure-row"
+                      data-dsh-session-delete="trash-process-head"
+                      data-expandable=""
+                      aria-expanded={openGroups.has(item.id)}
+                      onClick={() => { toggleGroup(item.id) }}
+                      style={BLOCK_ROW}
+                    >
+                      <span className="sd-disclosure-leading" style={{ marginRight: 0 }} aria-hidden="true">
+                        {openGroups.has(item.id)
+                          ? <IconChevronDownOutlineRegular size={14} />
+                          : <IconChevronRightOutlineRegular size={14} />}
+                      </span>
+                      <span style={BLOCK_TITLE}>{t('detail.process.header')}</span>
+                      <span style={BLOCK_SUMMARY}>{stepsText(item.blocks.length, t)}</span>
+                    </button>
+                    {openGroups.has(item.id)
+                      ? <div style={PROCESS_BODY}>{item.blocks.map((block) => renderBlock(block, { open, toggle, probe, t }))}</div>
+                      : null}
+                  </div>
+                ))
+            : detail.blocks
+                .filter((block) => mode !== 'compact' || !isDisclosureBlock(block))
+                .map((block) => renderBlock(block, { open, toggle, probe, t }))}
+          {/* 简洁档只画对话；当前页全是过程内容时不能留一块空白。还有更早页就只说这一页，
+              翻完了才敢说「这段会话只有过程内容」——看不见更早的页，不等于它不存在。
+              自动连翻在飞时不挂这句：此刻按钮正停在「正在加载更早…」上，不能再叫人去点它。 */}
+          {mode === 'compact' && detail.blocks.length > 0 && !hasDialogue(detail.blocks) && !loadingOlder
+            ? (
+              <div style={META_LINE}>
+                {t(detail.olderCursor === null ? 'detail.compact.empty' : 'detail.compact.pageOnly')}
+              </div>
+            )
+            : null}
         </div>
       )}
     </>

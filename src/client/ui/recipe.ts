@@ -13,3 +13,6 @@ export const ELLIPSIS: CSSProperties = {
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
 }
+
+/** 数字等宽：清单行、信息表与计量行共用一处，读数横着扫时才不抖。 */
+export const TABULAR_NUMS: CSSProperties = { fontVariantNumeric: 'tabular-nums' }

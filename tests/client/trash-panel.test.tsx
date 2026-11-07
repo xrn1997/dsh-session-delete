@@ -108,7 +108,7 @@ describe('回收站面板', () => {
     const deps = makeDeps()
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^恢复/ }))
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a']))
   })
 
@@ -116,25 +116,26 @@ describe('回收站面板', () => {
     const deps = makeDeps()
     renderNarrow(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^恢复/ }))
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['a']))
     // 还在清单里；若按钮点击冒泡到整行，窄档会切到详情、这一行从 DOM 消失。
     expect(screen.getByRole('row', { name: /code-review/ })).toBeInTheDocument()
   })
 
-  // 原工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）⇒ 恢复照常回盘、落在「未分组」。
-  // 这句话必须在**点之前**就看得见：它不是某次动作的失败，是这一条要去哪。
-  it('原工作区已不存在：行上先说恢复后归入未分组；工作区还在时没有这句', async () => {
+  // 工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）⇒ 条目直接归入「未分组」组。
+  // 分组本身就是去向的说明，行上不再挂一句提示。
+  it('工作区已不存在的条目归入「未分组」组（沉底），行上不再挂提示', async () => {
     const gone = render(
       <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), workspaceMissing: true }]) })} />,
     )
-    const row = await screen.findByRole('row', { name: /code-review/ })
-    expect(within(row).getByText('原工作区已不存在，恢复后归入未分组')).toBeInTheDocument()
+    expect(await screen.findByRole('row', { name: /code-review/ })).toBeInTheDocument()
+    expect(screen.getByRole('row', { name: /未分组/ })).toBeInTheDocument()
+    expect(screen.queryByText(/原工作区已不存在/)).toBeNull()
     gone.unmount()
 
     render(<TrashPanel deps={makeDeps()} />)
     await screen.findByRole('row', { name: /code-review/ })
-    expect(screen.queryByText(/原工作区已不存在/)).toBeNull()
+    expect(screen.queryByRole('row', { name: /未分组/ })).toBeNull()
   })
 
   it('清空要先二次确认，确认后才调清空（一段一次）', async () => {
@@ -170,7 +171,7 @@ describe('回收站面板', () => {
     })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^恢复/ }))
     expect(await screen.findByRole('status')).toHaveTextContent(/原项目目录已不存在/)
   })
 })
@@ -179,8 +180,10 @@ describe('回收站面板 · 两栏与下钻', () => {
   it('宽档：清单在左（420 定宽、动作在行右侧）、详情在右', async () => {
     const { container } = renderWide(makeDeps())
     const row = await screen.findByRole('row', { name: /code-review/ })
-    // 两颗动作住在行里，且点击它们不许把"选中"改掉（选中是点行，不是点按钮）
-    expect(within(row).getAllByRole('button').map((b) => b.textContent.trim())).toEqual(['恢复', '彻底删除…'])
+    // 两颗动作住在行里（图标按钮，无文字），且点击它们不许把"选中"改掉（选中是点行，不是点按钮）
+    const actions = within(row).getAllByRole('button')
+    expect(actions).toHaveLength(2)
+    expect(actions.map((button) => button.className)).toEqual(['sd-icon-btn', 'sd-icon-btn sd-icon-btn-danger'])
     expect(row).toHaveAttribute('aria-selected', 'true') // 宽档自动选中就是这一条
     expect(container.querySelector('[data-dsh-session-delete="trash-list"]')).toBeInTheDocument()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeInTheDocument()
@@ -192,7 +195,7 @@ describe('回收站面板 · 两栏与下钻', () => {
     const deps = makeDeps()
     const { container } = renderNarrow(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    expect(within(row).getByRole('button', { name: '恢复' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: /^恢复/ })).toBeInTheDocument()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).not.toBeInTheDocument()
 
     fireEvent.click(row)
@@ -234,7 +237,7 @@ describe('回收站面板 · 两栏与下钻', () => {
     renderWide(deps)
     expect(await screen.findByRole('status')).toHaveTextContent(/第 2 帧解压失败/)
     const row = screen.getByRole('row', { name: /code-review/ })
-    expect(within(row).getByRole('button', { name: '恢复' })).toBeEnabled()
+    expect(within(row).getByRole('button', { name: /^恢复/ })).toBeEnabled()
     // 「重试」只重读那一条，不牵清单
     deps.detail.mockResolvedValue(detailFixture)
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
@@ -290,15 +293,21 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     })
     renderWide(deps)
 
+    // 逐块折叠的判据住在「详细」档（默认标准档把过程块收成一组）。
+    fireEvent.click(await screen.findByRole('button', { name: '详细' }))
     const fold = await screen.findByRole('button', { name: /思考/ })
     fireEvent.click(fold)
     expect(fold).toHaveAttribute('aria-expanded', 'true')
 
     fireEvent.click(screen.getByRole('row', { name: /第二条/ }))
+    // 换条目重挂载详情：档位也回到默认「标准」；切到详细再验这一条的折叠是新的。
+    fireEvent.click(await screen.findByRole('button', { name: '详细' }))
     await waitFor(() => expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false'))
     expect(screen.getByText('b 的思考正文')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('row', { name: /第一条/ }))
+    // 切回来先把档位切到详细，才看得见块；正文与折叠状态都是新的。
+    fireEvent.click(await screen.findByRole('button', { name: '详细' }))
     await waitFor(() => expect(screen.getByText('a 的思考正文')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
     // 切回来读的是缓存，不重发 /detail。
@@ -495,17 +504,17 @@ describe('回收站面板 · 其余行为', () => {
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
     await screen.findByText('先看改动')
-    fireEvent.click(within(row).getByRole('button', { name: '恢复' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^恢复/ }))
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
     expect(screen.queryByText('先看改动')).not.toBeInTheDocument()
     expect(deps.list).toHaveBeenCalledTimes(2)
   })
 
-  it('行里的「彻底删除…」也要先确认，确认后走一次 purge（N=1 的批量）', async () => {
+  it('行里的「彻底删除」也要先确认，确认后走一次 purge（N=1 的批量）', async () => {
     const deps = makeDeps()
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^彻底删除/ }))
     expect(deps.applyOutcomes).not.toHaveBeenCalled()
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
@@ -523,7 +532,7 @@ describe('回收站面板 · 其余行为', () => {
     })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^彻底删除/ }))
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
     expect(await screen.findByText('已删除会话，但 2 个附件未能清理')).toBeInTheDocument()
   })
@@ -535,7 +544,7 @@ describe('回收站面板 · 其余行为', () => {
     const deps = makeDeps({ list: vi.fn(async () => group) })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
-    fireEvent.click(within(row).getByRole('button', { name: '彻底删除…' }))
+    fireEvent.click(within(row).getByRole('button', { name: /^彻底删除/ }))
     const dialog = screen.getByRole('dialog')
     expect(within(dialog).getByText(/1\.5KB/)).toBeInTheDocument()
     expect(within(dialog).queryByText(/1\.0KB/)).not.toBeInTheDocument()
@@ -689,7 +698,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     const deps = makeDeps({ list: vi.fn(async () => [row]) })
     renderWide(deps)
     expect(await screen.findByText(/可释放 226KB/)).toBeInTheDocument()
-    fireEvent.click(within(screen.getByRole('row', { name: /code-review/ })).getByRole('button', { name: '彻底删除…' }))
+    fireEvent.click(within(screen.getByRole('row', { name: /code-review/ })).getByRole('button', { name: /^彻底删除/ }))
     expect(within(screen.getByRole('dialog')).getByText(/226KB/)).toBeInTheDocument()
   })
 
@@ -705,14 +714,14 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   })
 
   // 整页只有一块实心红（2026-10-01 立的层级，两栏改版一步没让）。
-  it('危险动作分两档：行内那把只有字色，实心红仍然只有「清空回收站…」', async () => {
+  it('危险动作分两档：行内那颗图标只有字色，实心红仍然只有「清空回收站…」', async () => {
     renderWide(makeDeps())
     const row = await screen.findByRole('row', { name: /code-review/ })
-    const danger = within(row).getByRole('button', { name: '彻底删除…' })
-    expect(danger.classList.contains('sd-button-ghost')).toBe(true)
-    expect(danger.style.color).toBe('var(--dsw-alias-state-error-primary)')
-    // 铺了内联 background 就会把 `.sd-button-ghost:hover` 打死（内联永远赢过类规则）——点错之前就没反馈了。
+    const danger = within(row).getByRole('button', { name: /^彻底删除/ })
+    expect(danger.classList.contains('sd-icon-btn-danger')).toBe(true)
+    // 图标按钮不铺底、不描边：危险层级只靠字色与悬停；实心红仍是页脚那一颗。
     expect(danger.style.background).toBe('')
+    expect(danger.style.border).toBe('')
 
     const bulk = screen.getByRole('button', { name: '清空回收站…' })
     expect(bulk.classList.contains('sd-button-primary')).toBe(true)
@@ -723,7 +732,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     )
   })
 
-  it('选中的行换成宿主"选中"那一档的两枚 token，未选中的还是卡片配方', async () => {
+  it('选中的行只换底色；未选中的行不带底色也不带描边', async () => {
     const twoRows = [
       pick(rows, 0),
       { ...pick(rows, 0), id: 'b', sessionId: 'session-b', title: '另一条会话' },
@@ -731,11 +740,44 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     const { container } = renderWide(makeDeps({ list: vi.fn(async () => twoRows) }))
     const row = await screen.findByRole('row', { name: /code-review/ })
     expect(row.style.background).toBe('var(--sd-button-ghost-active-fill)')
-    expect(row.style.border).toContain('var(--sd-button-ghost-active-border)')
+    // 选中不再加描边：一列带框的行叠起来就是"一叠卡片"，那是这一版要去掉的长相。
+    // 底色留在元素上而不是伪类里，是为了压过 `layout.css` 的悬停底色（元素声明优先于样式表规则）。
+    expect(row.style.border).toBe('')
     // 两行才谈得上"未选中"：只渲一行时宽档必然把那唯一一行自动选中，未选中那一侧无从断言。
     const unselected = container.querySelectorAll('[aria-selected="false"]')
     expect(unselected).toHaveLength(1)
-    expect((unselected[0] as HTMLElement).style.background).toBe('var(--dsw-alias-bg-layer-2)')
+    const plain = unselected[0] as HTMLElement
+    expect(plain.style.background).toBe('')
+    expect(plain.style.border).toBe('')
+    // 圆角仍然留着：悬停与选中的底色要靠它收边，去掉就变成一整条通栏。
+    expect(plain.style.borderRadius).toBe('var(--sd-radius-lg)')
+  })
+
+  it('动作列住在自己的 gridcell 里，两颗图标按钮仍在可访问性树里', async () => {
+    renderWide(makeDeps({ list: vi.fn(async () => [pick(rows, 0)]) }))
+    const row = await screen.findByRole('row', { name: /code-review/ })
+    // 图标按钮的类名是 `layout.css` 提亮条件的接缝（上面那条已钉过）；这里钉它们仍住在同一格
+    // `gridcell` 里：row 的直接子代必须是 cell，动作与内容走同一条 ARIA 判据。
+    const buttons = within(row).getAllByRole('button')
+    expect(buttons).toHaveLength(2)
+    const cell = buttons[0]?.parentElement
+    expect(cell?.getAttribute('role')).toBe('gridcell')
+    expect(buttons[1]?.parentElement).toBe(cell)
+    // 图标按钮常驻（默认低强调），两颗始终在可访问性树里：恢复只报动作（行名已经把标题念过
+    // 一遍），彻底删除带对象——它要避开确认框那颗同名的「彻底删除」（判据住 copy.ts 的 `trash.row.purgeOne`）。
+    expect(within(row).getByRole('button', { name: '恢复' })).toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: /^彻底删除/ })).toBeInTheDocument()
+  })
+
+  it('窄档面板根挂 sd-narrow，宽档不挂（触屏动作常亮只认窄档）', async () => {
+    const narrow = renderNarrow(makeDeps())
+    await screen.findByRole('row', { name: /code-review/ })
+    expect(must(narrow.container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-panel"]'), '窄档面板根').classList.contains('sd-narrow')).toBe(true)
+    narrow.unmount()
+
+    const wide = renderWide(makeDeps())
+    await screen.findByRole('row', { name: /code-review/ })
+    expect(must(wide.container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-panel"]'), '宽档面板根').classList.contains('sd-narrow')).toBe(false)
   })
 })
 
@@ -765,6 +807,27 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
     expect(pick(heads(container), 0).getAttribute('aria-expanded')).toBe('false')
     // 组头本身不能被一起收掉——收掉就没有再点开的地方了
     expect(heads(container)).toHaveLength(2)
+  })
+
+  // 开合指示学宿主工作区行：默认官方文件夹图标（开/闭随状态），悬停换成实心三角并旋转（条件住 layout.css）。
+  it('组头文件夹随开合换字形；三角的旋转类跟着状态走', async () => {
+    const { container } = renderNarrow(depsOf())
+    await screen.findByText('甲组第一条')
+    const head = pick(heads(container), 0)
+    const folder = head.querySelector('.sd-group-folder')
+    const arrow = head.querySelector('.sd-group-arrow')
+    expect(folder).not.toBeNull()
+    expect(arrow).not.toBeNull()
+    // 展开：开盖文件夹（官方 folder-open 里那一片 0.16 填充）+ 三角旋转 90°。
+    expect(folder?.innerHTML).toContain('opacity="0.16"')
+    expect(arrow?.classList.contains('sd-group-arrow-open')).toBe(true)
+    fireEvent.click(head)
+    // 收起：闭盖文件夹 + 三角回正。
+    expect(folder?.innerHTML).not.toContain('opacity="0.16"')
+    expect(arrow?.classList.contains('sd-group-arrow-open')).toBe(false)
+    // 旧的下折/右折 chevron 不再出现在组头里（那一套已换成宿主的工作区行做法）。
+    expect(head.querySelector('.sd-group-chevron svg')).not.toBeNull()
+    expect(head.querySelectorAll('.sd-disclosure-leading')).toHaveLength(2)
   })
 
   it('折叠掉的组不参与 ↑↓：键盘序列只走看得见的行', async () => {
@@ -884,10 +947,12 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   it('进多选：行内两颗按钮退场，每行左侧出勾选框，头部给计数', async () => {
     const { container } = renderNarrow(depsOf())
     await screen.findByText('第一条')
-    expect(screen.getAllByRole('button', { name: '恢复' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: /^恢复/ })).toHaveLength(3)
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
-    expect(screen.queryByRole('button', { name: '恢复' })).toBeNull()
-    expect(screen.queryByRole('button', { name: '彻底删除…' })).toBeNull()
+    // 行内两颗动作退场（页脚还有「恢复 0 条 / 彻底删除 0 条」，所以按行断言，不按全页名字）。
+    for (const row of container.querySelectorAll('[data-dsh-session-delete="trash-row"]')) {
+      expect(within(row as HTMLElement).queryAllByRole('button')).toHaveLength(0)
+    }
     expect(boxes(container)).toHaveLength(3)
     expect(screen.getByText('已选 0 条')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '退出多选' })).toBeInTheDocument()

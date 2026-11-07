@@ -8,10 +8,11 @@
  * - 动作留在清单行右侧；详情只负责看，失败原文留在出事的那一行。
  * - 空态不出现「清空回收站…」；「读不到」与「空的」分开。
  * - 危险层级：页脚那排的最后一颗是整页唯一的实心红（非多选是「清空回收站…」，
- *   多选是「彻底删除 N 条」）；行内「彻底删除…」只给字色，不给底色。
+ *   多选是「彻底删除 N 条」）；行内「彻底删除」图标默认只给字色，不铺实心底，悬停才转红。
  *
- * 样式：结构与布局用内联样式；配色与圆角走宿主 token；控件样式在 src/client/ui/ui.css，
- * 由 ui/styles.ts 在模块物化时注入 style。界面规格见 docs/ui-spec.md；
+ * 样式：结构与布局用内联样式；配色与圆角走宿主 token；控件与清单行样式在 `src/client/ui/`
+ * （`ui.css` 是宿主抄本，`forms.css` / `layout.css` 是自造规则），由 `ui/styles.ts` 注入 style。
+ * 界面规格见 docs/ui-spec.md；
  * 改断点或列宽前先看 SPLIT_MIN_WIDTH、LIST_COLUMN_DEFAULT / LIST_COLUMN_MIN、DETAIL_RESERVE 与 usePanelWidth。
  */
 import {
@@ -33,19 +34,20 @@ import { Button } from './ui/Button.js'
 import { Checkbox } from './ui/Checkbox.js'
 import { fileSizeText, relativeTime } from './ui/format.js'
 import {
-  IconChevronDownOutlineRegular,
-  IconChevronRightOutlineRegular,
-  IconFolderOpenOutlineRegular,
+  IconFolderCloseRegular,
+  IconFolderOpenRegular,
+  IconRestoreOutlineRegular,
   IconTrashOutlineRegular,
+  IconTriangleRightFillRegular,
   IconWarningOutlineRegular,
 } from './ui/icons.js'
-import { ELLIPSIS, QUIET_DANGER } from './ui/recipe.js'
+import { ELLIPSIS, TABULAR_NUMS } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
 import { TrashConfirm } from './trash-confirm.js'
 import { useTrashPanelController } from './use-trash-panel-controller.js'
 import { listView, useTrashQuery } from './use-trash-query.js'
 import { useTrashSelection } from './use-trash-selection.js'
-import { BULK_DANGER, CARD, CARD_SELECTED, groupByProject } from './trash-view.js'
+import { BULK_DANGER, CARD, ROW, ROW_SELECTED, groupByProject } from './trash-view.js'
 
 /** 面板的依赖面：两个读（`list` / `detail`）+ **一段 `apply`** + 清空。
  *  **没有第二条路**：「恢复一条」也走 `apply`（N=1），面板不再同时吃
@@ -72,8 +74,8 @@ const TRASH_DIR = TRASH_DIR_LABEL
  * 900 这一档清单为 411，刚好守住两边可读下限。改数字前先同步 DETAIL_RESERVE 与 usePanelWidth。
  */
 const SPLIT_MIN_WIDTH = 900
-/** 左栏默认宽：为“行内有动作”设计——两颗按钮约 152px，卡片内边距 28px，
- *  剩下约 240px 给标题与元信息。可拖范围见 LIST_COLUMN_MIN / DETAIL_RESERVE。 */
+/** 左栏默认宽：为“行内有动作”设计——两颗 28px 图标按钮加间距与行内边距约 80px，
+ *  剩下约 340px 给标题与元信息。可拖范围见 LIST_COLUMN_MIN / DETAIL_RESERVE。 */
 const LIST_COLUMN_DEFAULT = 420
 /** 左栏下限 330：再窄时「删除于 … · 224KB」那行就会开始被省略号截断。
  *  按钮 flex:none，不参与这个下限。 */
@@ -168,8 +170,9 @@ const TOOLBAR: CSSProperties = {
 }
 
 /**
- * 行那句「删除于 3小时前」：整句模板住在字典里（两种语言各自钉语序），单位词与绝对串走 `copy.ts`
- * 那一处——详情那格要的是同一份，别抄成两本账。`now` 桶不套模板："删除于 刚刚前"不是话。
+ * 行那句「删除于 3小时前」：整句模板住在字典里（两种语言各自钉语序），单位词走 `copy.ts`
+ * 的 `unitWord` / `relativeTime`——子会话行的时间读同一族，别抄成两本账。`now` 桶不套模板：
+ * "删除于 刚刚前"不是话。
  */
 function deletedAgo(at: number, now: number, t: Translate): string {
   const { unit, n } = relativeTime(at, now)
@@ -338,7 +341,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           </Button>
         </div>
       ) : view.loading ? (
-        <div style={{ padding: '20px 2px', fontSize: 12.5, color: 'var(--sd-label-tertiary)' }}>{t('trash.loading')}</div>
+        <div style={{ padding: '20px 2px', fontSize: 12, color: 'var(--sd-label-tertiary)' }}>{t('trash.loading')}</div>
       ) : view.empty ? (
         <div
           style={{
@@ -368,7 +371,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           >
             <IconTrashOutlineRegular size={20} />
           </span>
-          <div style={{ fontSize: 13.5, color: 'var(--dsw-alias-label-secondary)' }}>{t('trash.empty.title')}</div>
+          <div style={{ fontSize: 14, color: 'var(--dsw-alias-label-secondary)' }}>{t('trash.empty.title')}</div>
           <div style={{ maxWidth: 340, fontSize: 12, lineHeight: '18px', color: 'var(--sd-label-tertiary)' }}>
             {t('trash.empty.hint')}
           </div>
@@ -380,18 +383,21 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             role="rowgroup"
             data-dsh-session-delete="trash-group"
             aria-label={group.label}
-            style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}
+            // 行与行之间不再留缝：无边框的行靠自己的 padding 撑节奏，行间距一加就散成一叠碎片。
+            // 组头与首行之间那 4px 挂在组头行上（`marginBottom`），所以这里的 gap 只管行。
+            style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}
           >
-            {/* 折叠头抄宿主的 `DisclosureRow`（`ui.css` 里那一段）：前导一枚官方 chevron 说
-                "展开中/已折叠"，`aria-expanded` 给读屏。组头本身**不跟着收掉**——收掉就没有
-                再点开的地方了。计数留在组头上，所以折叠之后"这个项目还有几条"仍然看得见。
+            {/* 折叠头抄宿主的 `DisclosureRow`（`ui.css` 里那一段）：前导是官方文件夹图标
+                （展开=开盖、收起=闭盒），`aria-expanded` 给读屏；鼠标经过时换成旋转的实心三角
+                （条件住 `layout.css`）。组头本身**不跟着收掉**——收掉就没有再点开的地方了。
+                计数留在组头上，所以折叠之后"这个项目还有几条"仍然看得见。
                 两处与宿主那份的必要差别：① 我们这一行的可点部分是 `<button>`，UA 的
                 `text-align:center` 会渗进里面的文字（真机上项目名整个居中就是这个），显式压成 `start`；
                 ② 多选态下勾选框住在按钮**外面**——`<input>` 是交互内容，不能嵌进 `<button>`。 */}
             <div
               role="row"
               data-dsh-session-delete="trash-group-row"
-              style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginBottom: 4 }}
             >
               {/* 组头一格收下勾选框与折叠钮：row 的直接子代必须是 cell（rowgroup > row > gridcell）。
                   组头行也是 row，这一格 colspan 横跨整行，与条目行的两格对齐列数。 */}
@@ -425,22 +431,26 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                     gap: 6,
                   }}
                 >
-                  <span className="sd-disclosure-leading" aria-hidden="true">
+                  <span className="sd-disclosure-leading sd-group-folder" aria-hidden="true">
                     {isCollapsed(group.projectDir)
-                      ? <IconChevronRightOutlineRegular size={14} />
-                      : <IconChevronDownOutlineRegular size={14} />}
+                      ? <IconFolderCloseRegular size={14} />
+                      : <IconFolderOpenRegular size={14} />}
                   </span>
-                  <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
-                    <IconFolderOpenOutlineRegular size={13} />
+                  {/* 悬停时文件夹换成实心三角并旋转 90°（与宿主工作区行同法，住 `ui/layout.css`）；
+                      触屏没有 hover，保持文件夹本身表达开合。 */}
+                  <span className="sd-disclosure-leading sd-group-chevron" aria-hidden="true">
+                    <span className={isCollapsed(group.projectDir) ? 'sd-group-arrow' : 'sd-group-arrow sd-group-arrow-open'}>
+                      <IconTriangleRightFillRegular size={14} />
+                    </span>
                   </span>
                   <span
                     className="sd-disclosure-title"
                     style={{ ...ELLIPSIS, minWidth: 0, flex: '1 1 auto', fontWeight: 500 }}
-                    title={group.projectDir}
+                    title={group.title}
                   >
                     {group.label}
                   </span>
-                  <span style={{ marginLeft: 'auto', flex: 'none', fontSize: 11.5, color: 'var(--sd-label-tertiary)' }}>
+                  <span style={{ marginLeft: 'auto', flex: 'none', fontSize: 11, color: 'var(--sd-label-tertiary)' }}>
                     {t('trash.group.count', { count: group.entries.length })}
                   </span>
                 </button>
@@ -462,7 +472,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   tabIndex={entry.id === nav.tabStopId ? 0 : -1}
                   data-dsh-session-delete="trash-row"
                   data-entry-id={entry.id}
-                  style={isSelected ? CARD_SELECTED : CARD}
+                  style={isSelected ? ROW_SELECTED : ROW}
                   onClick={() => {
                     // 多选态下点行说的是"勾上/取消这一条"，不再切换详情：两套语义同时活在一次点击里
                     // 一定有一套是错的（docs/ui-spec.md 状态④）。
@@ -474,7 +484,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   }}
                 >
                   {/* 勾选框在**标题左侧**（照用户给的参考图那一版布局）。两颗动作按钮这时整排退场：
-                      一次只给一种动作语义，不会在批量确认框旁边再手滑点到单条「彻底删除…」。
+                      一次只给一种动作语义，不会在批量确认框旁边再手滑点到单条「彻底删除」。
                       勾选框住进自己的 gridcell：row 的直接子代必须是 cell，交互内容在 cell 里才够得着。 */}
                   {selectMode ? (
                     <div role="gridcell" style={{ display: 'flex', alignItems: 'center' }}>
@@ -490,7 +500,13 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       {title}
                     </div>
                     <div
-                      style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}
+                      style={{
+                        ...ELLIPSIS,
+                        ...TABULAR_NUMS,
+                        fontSize: 12,
+                        lineHeight: '16px',
+                        color: 'var(--dsw-alias-label-secondary)',
+                      }}
                       title={absoluteText(entry.deletedAt)}
                     >
                       {[
@@ -501,17 +517,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                         stranded > 0 ? t('trash.row.strandedSubagents', { n: stranded }) : '',
                       ].filter(Boolean).join(' · ')}
                     </div>
-                    {/* 原工作区已被删掉（宿主的「删除工作区」只删注册、保留日志）：恢复照样能回盘，
-                        但会落在「未分组」。**点之前**就告诉用户它要去哪——这条不在行右侧的失败位，
-                        它是这一条的属性，不是某次动作的结果。 */}
-                    {entry.workspaceMissing === true ? (
-                      <div
-                        data-dsh-session-delete="trash-row-workspace-gone"
-                        style={{ fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}
-                      >
-                        {t('trash.row.workspaceGone')}
-                      </div>
-                    ) : null}
+                    {/* 原工作区已被删掉的条目直接归入「未分组」组，行上不再挂一句提示：
+                        分组本身就是去向的说明（`trash-view.ts` 的 UNGROUPED_PROJECT_DIR）。 */}
                     {/* 恢复/彻底删除的失败原文留在这一行：动作与原因同一行（docs/ui-spec.md「失败落点」）。 */}
                     {controller.actionFailure[entry.id] === undefined ? null : (
                       <div
@@ -533,33 +540,37 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                       </div>
                     )}
                   </div>
-                  {/* 两颗动作按钮住在行右侧；选中态只改卡片底色与描边，不抢动作位置。多选态整排退场。 */}
+                  {/* 两颗动作按钮住在行右侧，常驻但默认低强调（图标按钮的几何与悬停住在
+                      `ui/layout.css`）；悬停/选中/聚焦时提亮，窄档常亮——触屏没有 hover，
+                      点行即下钻，不能靠"先选中才出场"拿到动作。多选态整排退场。 */}
                   {selectMode ? null : (
-                    <div role="gridcell" style={{ display: 'flex', gap: 6, flex: 'none' }}>
-                      <Button
-                        variant="outline"
-                        size="sm"
+                    <div role="gridcell" style={{ display: 'flex', gap: 2, flex: 'none' }}>
+                      <button
+                        type="button"
+                        className="sd-icon-btn"
+                        title={t('trash.row.restore')}
+                        aria-label={t('trash.row.restore')}
                         disabled={controller.busy}
                         onClick={(event) => {
                           event.stopPropagation()
                           void controller.restore(entry)
                         }}
                       >
-                        {t('trash.row.restore')}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        style={QUIET_DANGER}
-                        icon={<IconTrashOutlineRegular size={13} />}
+                        <IconRestoreOutlineRegular size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="sd-icon-btn sd-icon-btn-danger"
+                        title={t('trash.row.purge')}
+                        aria-label={t('trash.row.purgeOne', { title })}
                         disabled={controller.busy}
                         onClick={(event) => {
                           event.stopPropagation()
                           controller.request({ kind: 'entry', entry })
                         }}
                       >
-                        {t('trash.row.purge')}
-                      </Button>
+                        <IconTrashOutlineRegular size={14} />
+                      </button>
                     </div>
                   )}
                 </div>
@@ -632,7 +643,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     <div
       ref={rootRef}
       data-dsh-session-delete="trash-panel"
-      className={resize.resizing ? 'sd-resizing' : undefined}
+      className={[resize.resizing ? 'sd-resizing' : '', wide ? '' : 'sd-narrow'].filter(Boolean).join(' ') || undefined}
       style={PAGE}
     >
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, paddingBottom: 14 }}>
@@ -685,7 +696,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
           {/* 「不自动过期」必须完整可见，所以这一处不用 ELLIPSIS；句子整体一个 key，
               渲染时按 {dir} 切一刀把目录包成 code，避免两种语言各钉一次语序。
               多选态共用这一份；动作专属警告归各自的确认框。 */}
-          <span style={{ minWidth: 0, fontSize: 11.5, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
+          <span style={{ minWidth: 0, fontSize: 11, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
             {noteParts[0]}
             <span style={{ fontFamily: 'var(--ds-font-family-code)', fontSize: 11 }}>{noteParts[1]}</span>
             {noteParts[2]}

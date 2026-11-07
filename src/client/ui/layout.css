@@ -1,0 +1,170 @@
+/**
+ * 清单行 / 行内动作 / 工作步骤开关的**本插件自造规则**（不在抄本对照表里）。
+ *
+ * 为什么不并进 `ui.css`：那份是照宿主 `dsh-client-ui-primitives` 明文逐字抄的对照表，
+ * `docs/development.md` 的界面保真复核门要求它与官方逐属性一致（差异只允许文件头列出的那几处）。
+ * 把自造规则混进去会把那次核对弄脏——同 `forms.css` 文件头给的理由。
+ *
+ * 为什么非要有个 CSS 文件：`trash-view.ts` 的 `ROW` 是 inline style，而 inline style 表达不了
+ * `:hover` / `:focus-within` / `prefers-reduced-motion`。动作列的低强调与提亮、分段开关的选中态
+ * 本身就是伪类。
+ *
+ * 配色只用宿主**公开** token（`--dsw-alias-*`）与本插件的 `--sd-*` 别名层（后者在 `ui.css` 顶部
+ * 定义、逐条退到公开 token）。**悬停一律走 `--sd-interactive-bg-hover`**（宿主交互悬停档，半透明叠色）：
+ * `bg-layer-1` / `bg-layer-2` 在浅色主题下与页面底色同值，拿它们做悬停等于没变色（2026-11-07 真机反馈）。
+ */
+
+/* 悬停档为什么是 `--sd-interactive-bg-hover`：判据住文件头注。
+   选中态的底色写在元素上（`ROW_SELECTED`），伪类打不过它，所以选中 + 悬停同时成立时
+   看到的是选中那一档，不会在鼠标经过时闪回浅色。 */
+[data-dsh-session-delete="trash-row"]:hover {
+  background: var(--sd-interactive-bg-hover);
+}
+
+/*
+ * 行内动作：两颗图标按钮**常驻**，默认低强调，悬停 / 键盘落到这一行 / 这一行被选中时提亮；
+ * 窄档（面板根 `.sd-narrow`）常亮——触屏没有 hover，点行即下钻，不能要求"先选中才出场"。
+ *
+ * 用 `opacity` 而不是 `visibility` 或 `display`：两颗按钮始终住在自己的 `gridcell` 里、
+ * 始终在可访问性树内（docs/ui-spec.md 状态④）。
+ */
+.sd-icon-btn {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: var(--sd-radius-sm);
+  background: transparent;
+  color: var(--sd-label-tertiary);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 120ms ease-out, background-color 120ms ease-out, color 120ms ease-out;
+}
+
+[data-dsh-session-delete="trash-row"]:hover .sd-icon-btn,
+[data-dsh-session-delete="trash-row"]:focus-within .sd-icon-btn,
+[data-dsh-session-delete="trash-row"][aria-selected='true'] .sd-icon-btn,
+.sd-narrow [data-dsh-session-delete="trash-row"] .sd-icon-btn {
+  opacity: 1;
+}
+
+.sd-icon-btn:hover:not(:disabled) {
+  background: var(--sd-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.sd-icon-btn-danger:hover:not(:disabled) {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* 禁用态要压过上一组的提亮（那一组是 0,3,0）：写入在飞时按钮不能看起来还能点。 */
+[data-dsh-session-delete="trash-row"] .sd-icon-btn:disabled,
+.sd-narrow [data-dsh-session-delete="trash-row"] .sd-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 为什么不能依赖宿主焦点环 token：住 `ui.css` 的清单行注释。图标按钮没有裁切，环画在外侧一档。 */
+.sd-icon-btn:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/*
+ * 工作步骤展示的分段开关（简洁 / 标准 / 详细 / 完全展开）。与工具栏按钮同族的几何；
+ * 选中态走宿主"紧按"那一档底色与品牌色。原生 `<select>` 与插件其余控件不是一套长相，
+ * 所以这里做成四段平铺。
+ */
+.sd-seg {
+  display: inline-flex;
+  flex: none;
+  border: 0.5px solid var(--dsw-alias-border-l2);
+  border-radius: var(--sd-radius-sm);
+  overflow: hidden;
+}
+
+.sd-seg button {
+  border: none;
+  background: transparent;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--sd-label-tertiary);
+  cursor: pointer;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+.sd-seg button:hover {
+  background: var(--sd-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.sd-seg button[aria-pressed='true'] {
+  background: var(--sd-button-ghost-active-fill);
+  color: var(--dsw-alias-brand-primary);
+  font-weight: 500;
+}
+
+/* `.sd-seg` 的 `overflow: hidden` 会裁掉外描边，环画在内侧一档；颜色与图标按钮同一枚品牌色。 */
+.sd-seg button:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -1px;
+}
+
+/* 子会话导航行：与清单行同语言（边框与底色不铺，见 `trash-detail.tsx` 的 SUBAGENT_ROW）。
+   标题是主要信息，取 primary；折叠头那套类把行色钉成 tertiary，这里显式覆盖。
+   大小/时间仍由各自的 `BLOCK_META` 保持 tertiary。 */
+[data-dsh-session-delete="trash-subagent-row"],
+[data-dsh-session-delete="trash-subagent-row"]:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+[data-dsh-session-delete="trash-subagent-row"]:hover {
+  background: var(--sd-interactive-bg-hover);
+}
+
+/*
+ * 分组头的开合指示：与宿主工作区行同法（`Rows.module.css` 的 `.projectRow` 那一族）——
+ * 默认显示**官方文件夹图标**（展开=开盖 `IconFolderOpenRegular`、收起=闭盒 `IconFolderCloseRegular`）；
+ * 鼠标经过时文件夹隐去、换成**实心三角**并旋转 90°（150ms，宿主原文的时长）。
+ * 触屏没有 hover，文件夹本身就是开合状态；键盘用户的 aria-expanded 仍在按钮上。
+ */
+[data-dsh-session-delete="trash-group-row"] .sd-group-chevron {
+  display: none;
+}
+
+@media (hover: hover) {
+  [data-dsh-session-delete="trash-group-row"]:hover .sd-group-chevron {
+    display: inline-flex;
+  }
+
+  [data-dsh-session-delete="trash-group-row"]:hover .sd-group-folder {
+    display: none;
+  }
+}
+
+.sd-group-arrow {
+  display: inline-flex;
+  transition: transform 150ms ease-in-out;
+}
+
+.sd-group-arrow-open {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-icon-btn,
+  .sd-seg button {
+    transition: none;
+  }
+
+  .sd-group-arrow {
+    transition: none;
+  }
+}

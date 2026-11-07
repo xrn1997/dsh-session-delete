@@ -1,5 +1,5 @@
 /**
- * 本插件控件的样式装载：把 `ui.css` / `markdown.css` / `forms.css` 的文本挂成一个 `<style>`，
+ * 本插件控件的样式装载：把 `ui.css` / `markdown.css` / `forms.css` / `layout.css` 的文本挂成一个 `<style>`，
  * **每个 ui 组件 import 本模块**（副作用导入），所以「组件在屏幕上」必然等于「样式在场」。
  *
  * 为什么是往 DOM 里注 `<style>`、而不是构建期抽成 `.css` 资产：
@@ -21,6 +21,7 @@
  */
 import css from './ui.css'
 import formsCss from './forms.css'
+import layoutCss from './layout.css'
 import markdownCss from './markdown.css'
 
 /** 认领标记：既是宿主 HMR 的归档线索，也是「已经装过」的幂等判据。 */
@@ -34,11 +35,12 @@ function install(): void {
   if (head.querySelector(`style[data-dsh-session-delete="${STYLE_MARKER}"]`) !== null) return
   const element = document.createElement('style')
   element.setAttribute('data-dsh-session-delete', STYLE_MARKER)
-  // `markdown.css` 与控件那份**分开写、一起装**：前者是我们给会话正文排的字阶（吃宿主 markdown
-  // token），`forms.css` 是本插件自造的设置表单控件（不属于抄本对照表）；后者是照官方明文逐字抄的
-  // 那份表（核对口径见 docs/development.md 的界面保真复核门：按文件头那张来源表逐属性
-  // 零差异，条数不钉在这里）——三份的来源与核对方式不同，装运可以同一趟。
-  element.textContent = `${css}\n${markdownCss}\n${formsCss}`
+  // `markdown.css` 与控件那几份**分开写、一起装**：`markdown.css` 是我们给会话正文排的字阶（吃宿主
+  // markdown token），`forms.css` 是设置表单控件、`layout.css` 是清单行 / 行内动作 / 工作步骤开关与
+  // 组头图标的伪类（inline style 表达不了 `:hover` / `:focus-within`），三份都不属于抄本对照表；
+  // `ui.css` 是照官方明文逐字抄的那份表（核对口径见 docs/development.md 的界面保真复核门：按文件头
+  // 那张来源表逐属性零差异，条数不钉在这里）——四份的来源与核对方式不同，装运可以同一趟。
+  element.textContent = `${css}\n${markdownCss}\n${formsCss}\n${layoutCss}`
   head.appendChild(element)
 }
 

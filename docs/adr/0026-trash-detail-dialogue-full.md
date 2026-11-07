@@ -17,8 +17,8 @@ Status: accepted
 1. **正文从“消息”改成“块”**：`TrashDetailWire.messages` 换成 `blocks` 判别联合——`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`user/message` 按 `source.kind` 分 user / injection；`assistant/message.content` 按 `text` / `reasoning` 拆块，附件并进相邻的文字块；`tool/call` 建工具块、`tool/result` 按 `callId` 回填（成功 / 失败 / 未完成三态）；`system/message` 与 `compaction/summary` 各成一块。turn/step/job/request 这类簿记事件不进正文。
 2. **分页是游标，不是总量闸**：一次只回尾部一页（块数上限住 `src/trash/detail.ts` 的 `PAGE_BLOCK_LIMIT`，正文总量上限住 `PAGE_CHAR_LIMIT`；单块超字符闸时仍保留一块，游标才能前进），`olderCursor` 指页首；`POST /detail` 的 body 多一格可选 `before`，客户端把游标原样回传取更早一页。每块另有单块字符闸（`PER_BLOCK_CHAR_CAP`，正文与工具参数/结果各自算），超了标 `truncated`。计数是整条日志的，不受分页影响。
 3. **块构建只留当前页**：走日志时用有界缓冲只保留当前页的块（块数与正文字符双闸），不把整条日志的正文堆在内存里；工具结果可能落在游标之后，仍会回填到页内那个调用块——不能把“已完成”误报成“未完成”。
-4. **界面按宿主 Chat 的折叠语法画**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给标签 + 首行摘要（工具另给状态与工具名）；可逐块开合，也可「全部展开 / 全部折叠」。有更早页时顶部出「加载更早」，prepend 后按滚动高度差补偿位置。
-5. **注入不再只报“未显示”**：它成为可折叠的 injection 块，`sourceKind` 原样过线、界面映射来源标签；条数进元信息表。这是对宿主 Chat 的**产品选择**（不是受约束偏离）——宿主隐藏普通注入，而这里的目标是“删之前看全”。
+4. **界面按宿主 Chat 的折叠语法画**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给标签 + 首行摘要（工具另给状态与工具名）；可逐块开合。连续过程块的呈现按四档（简洁 / 标准 / 详细 / 完全展开）投影，逐档判据与简洁档的分页联动见 ADR-0047。有更早页时正文工具栏出「加载更早」，prepend 后按滚动高度差补偿位置。
+5. **注入不再只报“未显示”**：它成为可折叠的 injection 块，`sourceKind` 原样过线、界面映射来源标签；条数进详情的计量行。这是对宿主 Chat 的**产品选择**（不是受约束偏离）——宿主隐藏普通注入，而这里的目标是“删之前看全”。
 
 ## 边界
 

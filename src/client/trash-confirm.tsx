@@ -90,7 +90,7 @@ export function TrashConfirm({
                 <div style={{ ...ELLIPSIS, fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
                   {projectLabel(entry.projectDir, t)}
                 </div>
-                {/* 逐条说清去向：这一条的原工作区不存在，回去后会在「未分组」（与行上同一句）。 */}
+                {/* 逐条说清去向：这一条的原工作区不存在，回去后会在「未分组」。 */}
                 {entry.workspaceMissing === true ? (
                   <div style={{ fontSize: 12, lineHeight: '16px', color: 'var(--sd-label-tertiary)' }}>
                     {t('trash.row.workspaceGone')}

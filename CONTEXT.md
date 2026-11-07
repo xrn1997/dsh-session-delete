@@ -84,6 +84,16 @@ _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 _唯一实现_: `src/trash/detail.ts` 的 `readTrashDetail` / `PageBuilder`；线上形状住 `src/shared/wire.ts` 的 `TrashDetailBlockWire`。
 _Avoid_: 消息（消息是日志里的 `user/message` / `assistant/message`；一条消息可以拆成多个块，工具块来自 `tool/call` 而不是 assistant content）。
 
+**工作步骤展示（work steps view）**:
+回收站详情的阅读档位：简洁 / 标准 / 详细 / 完全展开。它是同一份详情块的四种投影，不是四套渲染器：简洁只画用户与助手块；标准把**连续**过程块收成「工作步骤」组，点开仍逐条折叠；详细逐条列出、各自折叠；完全展开 = 详细 + 一次铺开当前页。档位与展开状态只活在当前条目，切条目重挂载后回到默认，不跨会话记住、也不写进配置。
+_唯一实现_: `src/client/trash-detail.tsx` 的 `ViewMode`；`src/client/detail-blocks.ts` 的 `threadItems`；自动连翻预算住 `src/client/use-detail-pager.ts` 的 `AUTO_OLDER_PAGE_LIMIT`。
+_Avoid_: 全部展开 / 全部折叠（旧的单开关已删）；筛选、过滤（没有第二套读法）。
+
+**未分组（ungrouped）**:
+回收站清单里原工作区已从宿主账本删掉的条目统一归入的组；该组永远沉底，因为它不是一个可比较的项目。它与「未记录项目」（空 cwd）不是同一件事。
+_唯一实现_: `src/client/trash-view.ts` 的 `UNGROUPED_PROJECT_DIR` / `groupByProject`；组的 `ungrouped` 与 `title` 由它派生。
+_Avoid_: 未记录项目（那是空 cwd）；工作区已丢失提示（清单分组本身就是去向的说明）。
+
 **清册（manifest）**:
 条目的索引，住在宿主 storage 域（介质在数据根下的 `storages/`）。它是**内部索引、不用手碰**；外部真正的事实来源是 `session-trash/` 里那些目录，两者由**对账**拉平。清册只记文件里真有的事实：随盘上随时变的数（还剩几个孩子、这次释放多少）现算现给、不落清册。
 _Avoid_: 索引、数据库（清册是宿主 storage 域里的内部索引，但不是一个可查询的数据库）。
@@ -208,7 +218,7 @@ _唯一实现_: `src/client/use-trash-panel-controller.ts`。
 _Avoid_: 确认框状态（框只管呈现；开合与关框规则不在视图里）。
 
 **孩子视图（child view）**:
-回收站详情正在看某个子条目时的离清单导航态：详情主体切到孩子（同一套元信息、正文与分页），清单选中仍在父行，组动作仍按整组；单级，返回回到清单选中那条的详情。入口是父详情的「子会话」段（裁决见 ADR-0029）。
+回收站详情正在看某个子条目时的离清单导航态：详情主体切到孩子（同一套会话信息、正文与分页），清单选中仍在父行，组动作仍按整组；单级，返回回到清单选中那条的详情。入口是父详情的「子会话」段（裁决见 ADR-0029）。
 _唯一实现_: `src/client/use-trash-panel-controller.ts` 的 `childView`。
 _Avoid_: 下钻（下钻专指窄档清单→详情那一层，孩子视图在详情内部）；子会话详情页（不是新页面或新段，只是详情主体换人）。
 

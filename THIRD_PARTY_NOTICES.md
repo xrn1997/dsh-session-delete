@@ -13,8 +13,8 @@
 
 | 上游包（MIT） | 上游产物 | 本包中的副本 | 改写 |
 | --- | --- | --- | --- |
-| `@deepseek-ai/dsh-client-ui-primitives` | `IconTrashOutlineRegular` 的图标形状 | `icon.svg` | 颜色写死为中灰（图片形式的 SVG 不继承 `currentColor`）；不带 `aria-hidden`（可及名由承载它的宿主卡片提供） |
-| `@deepseek-ai/dsh-client-ui-primitives` | 图标集的明文产物 | `src/client/ui/icons.tsx` | 只保留本插件用到的图标；几何、`viewBox`、`strokeWidth` 不动；只暴露 `size` |
+| `@deepseek-ai/dsh-client-ui-primitives` | `IconTrashOutlineRegular` 的图标形状 | `icon.svg` | 颜色分浅/深两档写死（`#0f1115` / `#f9fafb`，取自宿主 `--dsw-alias-label-primary`），由 SVG 内部的 `prefers-color-scheme` 切换（图片形式的 SVG 不继承 `currentColor`）；不带 `aria-hidden`（可及名由承载它的宿主卡片提供） |
+| `@deepseek-ai/dsh-client-ui-primitives` | 图标集的明文产物（恢复箭头除外） | `src/client/ui/icons.tsx` | 只保留本插件用到的图标；官方字形几何、`viewBox`、`strokeWidth` 不动；只暴露 `size`；唯一自绘的 `IconRestoreOutlineRegular` 不声称派生自官方图标集（其 ↩ 字形为本插件自绘，见文件头注） |
 | `@deepseek-ai/dsh-client-ui-primitives` | `Button` / `Tag` / `Modal` / `Tooltip` / `Toast` / `MenuItemButton` / `Checkbox` 的明文实现，以及 `top-layer.ts` / `format.ts` | `src/client/ui/Button.tsx`、`src/client/ui/Tag.tsx`、`src/client/ui/Modal.tsx`、`src/client/ui/Tooltip.tsx`、`src/client/ui/Toast.tsx`、`src/client/ui/MenuItemButton.tsx`、`src/client/ui/Checkbox.tsx`、`src/client/ui/top-layer.ts`、`src/client/ui/format.ts` | 只收本插件用到的变体与行为；组件 API 收窄；文件头注点名与官方的差异 |
 | `@deepseek-ai/dsh-client-ui-primitives` | `Button` / `Tag` / `Modal` / `Tooltip` / `Toast` / `Menu` / `Checkbox` / `DisclosureRow` 的 CSS Module 明文 | `src/client/ui/ui.css` | 类名加 `sd-` 前缀；`@keyframes` 改名；配色与几何走 `--sd-*` 别名层（解析到宿主 `--dsw-*` token）；只收用到的变体；文件头点名的七处本插件自造差异 |
 | `@deepseek-ai/dsh-client-ui-primitives` | `markdown/MarkdownText.module.css`（`.markdown` 一支）、`markdown/CodeBlock.module.css`（`pre`） | `src/client/ui/markdown.css` | 选择器适配 react-markdown 产出的 DOM；文件头点名的三处有意差异 |
