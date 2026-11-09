@@ -18,13 +18,14 @@ import {
   togglePick,
   useSelection,
 } from '../../src/client/batch-selection-store.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
-  resetSelection()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetSelection()
+  resetClientState()
 })
 
 const ids = (): string[] => getPicks().map((item) => item.sessionId)

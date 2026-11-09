@@ -1,25 +1,23 @@
 /**
  * 批量删除的确认框——挂在 `shell.overlay` 上的宿主，加它读的那个模块级现场。
  *
- * 为什么又开一个文件而不是把 `delete-confirm.tsx` 撑大：单删那张框是**已交付的面**（docs/ui-spec.md 状态 ②，
- * 用例钉着），批量形与它只有三件不同——标题随条数、目标卡逐条列、执行是一次批量 `apply`。共用一个壳
- * 意味着单删的 `busy` / 失败面要跟着学批量形，那是拿已交付的行为去换省一个文件。卡片样式（`TARGET_CARD`）
- * 与 hint、子会话那两句**复用**单删的，一句不造第二个键。
+ * 与单删那张框的关系：**页脚与关框规则共壳**（`confirm-dialog.tsx`，裁决见 ADR-0052），业务面
+ * 仍然各是各的——批量形的标题随条数、目标卡逐条列、执行是一次批量 `apply`、失败面按行回；
+ * 单删的 `busy` / 失败面没有被拖进来。卡片样式（`TARGET_CARD`）与 hint、子会话那两句**复用**单删的，
+ * 一句不造第二个键。
  *
  * 现场是模块级的（同 `delete-confirm.tsx` / `undo-notices.ts`）：请求从浮条那颗按钮发来，确认框住在
  * `shell.overlay` 上——它必须活在行开关那棵子树之外（槽位行随宿主重排而卸载，见 `delete-confirm.tsx` 头注）。
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import { useBusyGate } from './busy-gate.js'
-import { useIdleClose } from './confirm-close.js'
 import { fetchCounts } from './batch-select.js'
+import { ConfirmDialog } from './confirm-dialog.js'
 import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
-import type { SessionDeleteRemote } from './remote.js'
+import type { OneShotDeps } from './remote.js'
 import { getPicks, shrinkPicksToFailures, type PickItem } from './batch-selection-store.js'
 import { createStore } from './store.js'
-import { Button } from './ui/Button.js'
-import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
 import { deleteSessionsFromBatch } from './write-seats.js'
 
@@ -60,14 +58,12 @@ export function resetBatchConfirm(): void {
   requestStore.reset()
 }
 
-export type BatchConfirmDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
-
 /** 常驻的批量确认框宿主。没有待确认的批量删除时什么都不渲染。 */
 export function BatchConfirmHost({
   deps,
   t = zhTranslate,
 }: {
-  deps: BatchConfirmDeps
+  deps: OneShotDeps
   t?: Translate
 }): ReactElement | null {
   const current = useDeleteBatchRequest()
@@ -111,12 +107,11 @@ function BatchConfirmDialog({
   t,
 }: {
   request: BatchDeleteRequest
-  deps: BatchConfirmDeps
+  deps: OneShotDeps
   t: Translate
 }) {
   /** 这一趟的闸：写入座位把 apply → 收尾 → 重读整趟包在里面，`busy` 期间主按钮按住。 */
   const gate = useBusyGate()
-  const { close, closeDisabled } = useIdleClose(gate.busy, clearDeleteBatchRequest)
   /** 逐条失败原文：`sessionId → 信封的 message`。失败**不关框**（与单删同款）。 */
   const [failures, setFailures] = useState<ReadonlyMap<string, string>>(new Map())
   /** 开框那一刻现问的子会话计数；`null` = 有一条读不到 ⇒ 那两半句整句不说（不许拿 0 冒充"没有"）。 */
@@ -145,10 +140,11 @@ function BatchConfirmDialog({
   const run = async (): Promise<void> => {
     setFailures(new Map())
     // 首轮发全部；重试轮只发失败的那些——上一轮已把请求现场收缩到失败名单，`current.items` 就是那一批。
-    const failed = await deleteSessionsFromBatch(deps, current.items.map((item) => item.sessionId), gate)
+    const result = await deleteSessionsFromBatch(deps, current.items.map((item) => item.sessionId), gate)
     // 被闸挡回的那一趟什么都没跑：不改勾选、不收框，也不再追加失败（进入时清旧失败那一下已在同一
     // 动作里发生）——界面后果全部归在飞的那一趟（判据住 `busy-gate.ts`）。
-    if (failed === undefined) return
+    if (result.kind === 'blocked') return
+    const failed = result.value
     shrinkPicksToFailures([...failed.keys()])
     if (failed.size === 0) {
       clearDeleteBatchRequest()
@@ -159,25 +155,16 @@ function BatchConfirmDialog({
   }
 
   return (
-    <Modal
-      open
-      onClose={close}
-      title={
-        current.items.length === 1 ? t('dialog.title') : t('dialog.batch.title', { n: current.items.length })
-      }
+    <ConfirmDialog
+      title={current.items.length === 1 ? t('dialog.title') : t('dialog.batch.title', { n: current.items.length })}
       closeLabel={t('common.close')}
-      footer={
-        <>
-          <Button variant="outline" disabled={closeDisabled} onClick={close}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="primary" disabled={gate.busy} onClick={() => void run()}>
-            {failedIds.length > 0
-              ? t('dialog.batch.retry', { n: failedIds.length })
-              : t('batch.run', { n: ids.length })}
-          </Button>
-        </>
-      }
+      cancelLabel={t('common.cancel')}
+      confirmLabel={failedIds.length > 0
+        ? t('dialog.batch.retry', { n: failedIds.length })
+        : t('batch.run', { n: ids.length })}
+      busy={gate.busy}
+      onCancel={clearDeleteBatchRequest}
+      onConfirm={() => void run()}
     >
       <div data-dsh-session-delete="batch-target-card" style={BATCH_TARGET_CARD}>
         {current.items.map((item) => {
@@ -200,6 +187,6 @@ function BatchConfirmDialog({
       </div>
       {totalKids === 0 ? null : <p>{t('dialog.subagents', { n: totalKids })}</p>}
       <p>{t('dialog.hint')}</p>
-    </Modal>
+    </ConfirmDialog>
   )
 }

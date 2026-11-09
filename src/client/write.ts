@@ -15,11 +15,12 @@
  *   这里不再重复守卫。
  * - **闸包住整趟**：给了 `gate` 就把 apply → settle → refresh 一起包进去——refresh 落在闸外时，
  *   旧清单还在屏上，同一个动作能被再点一次；调用方不再自己 `around`。同一枚闸已有任务在飞时
- *   这一趟**不跑**（连点不发第二条），交回 `undefined`：座位照它收「这一趟没跑」，不伪造 outcome。
+ *   这一趟**不跑**（连点不发第二条），交回 `{ kind: 'blocked' }`：座位照它收「这一趟没跑」，
+ *   不伪造 outcome。
  */
-import type { BusyGate } from './busy-gate.js'
+import type { BusyGate, GateRun } from './busy-gate.js'
 import { readReceipt, summarizeReceipt } from './receipt.js'
-import { callRemote, type OneShotDeps } from './remote.js'
+import type { OneShotDeps } from './remote.js'
 import {
   noPresentation,
   settleWrite,
@@ -64,15 +65,16 @@ export interface WriteInput<A extends ApplyAction> {
 }
 
 /** 签名上的分岔就是判据：**没传闸 ⇒ 这一趟一定跑**，回真结果；**传了闸 ⇒ 可能被同一枚闸的在飞那一趟
- *  挡回**，那时这一趟什么都没做、回 `undefined`。`runWrite` 不替调用方编造成果——挡回来的那趟怎么收尾
- *  归座位与界面（判据住 `busy-gate.ts`）。第二支把 `gate` 钉成 `undefined`：`BusyGate | undefined`
- *  这类"可能真有闸"的输入不许落到「一定跑完」那一支，否则类型会把挡回漏成 `WriteOutcome`。 */
-export function runWrite<A extends ApplyAction>(input: WriteInput<A> & { readonly gate: BusyGate }): Promise<WriteOutcome<A> | undefined>
+ *  挡回**，那时这一趟什么都没做、回 `{ kind: 'blocked' }`。`runWrite` 不替调用方编造成果——挡回来的
+ *  那趟怎么收尾归座位与界面（判据住 `busy-gate.ts`）。第二支把 `gate` 钉成 `undefined`：
+ *  `BusyGate | undefined` 这类"可能真有闸"的输入不许落到「一定跑完」那一支，否则类型会把挡回漏成
+ *  `WriteOutcome`。 */
+export function runWrite<A extends ApplyAction>(input: WriteInput<A> & { readonly gate: BusyGate }): Promise<GateRun<WriteOutcome<A>>>
 export function runWrite<A extends ApplyAction>(input: WriteInput<A> & { readonly gate?: undefined }): Promise<WriteOutcome<A>>
-export async function runWrite<A extends ApplyAction>(input: WriteInput<A>): Promise<WriteOutcome<A> | undefined> {
+export async function runWrite<A extends ApplyAction>(input: WriteInput<A>): Promise<GateRun<WriteOutcome<A>> | WriteOutcome<A>> {
   const lifecycle = async (): Promise<WriteOutcome<A>> => {
     const ids = [...new Set(input.ids)]
-    const outcome = await callRemote(() => input.deps.applyOutcomes(input.action, ids))
+    const outcome = await input.deps.applyOutcomes(input.action, ids)
 
     if (!outcome.ok) {
       const failures = new Map(ids.map((id) => [id, outcome.failure.message] as const))

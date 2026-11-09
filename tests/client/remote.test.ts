@@ -1,28 +1,24 @@
-// 浏览器半的远程面（信封判别 + 注入面那一处展开）
+// 浏览器半的取数通道（路径 / 方法 / 请求体投影 + 唯一下落 + 探测）
 //
-// 这一层钉住的是**契约形状**：两半之间的 unary 调用 resolve 成 `{ ok: true, value }` /
-// `{ ok: false, error }`，失败是返回而不是 reject；展开（`unwrapRemoteResult`）发生一次，
-// 之后组件面只认裸值与 throw。用例全部围绕这条契约，不触碰任何组件。
+// 这一层钉住的是**契约形状**：每个操作交回同一种落地面 `{ ok:true, value }` / `{ ok:false, failure }`；
+// 失败**不抛**，也不再经过「raw 信封 → 展开 → 再归一」的分层。信封解析、401/403 原文、非信封诊断与
+// 网络失败归一都在 `createHttpRemote` 这一条通道里完成。用例全部围绕这条契约，不触碰任何组件。
 //
-// 信封形状（`RemoteResult`）、失败形状（`RemoteFailure`）与标记位判别（`isDSHRemoteError`）的家是
-// 两半共用的 `src/shared/wire.js`；这里验的是**浏览器半对它们的使用**：判别、原文兜底、注入面展开。
+// 信封形状（`RemoteResult`）与失败形状（`RemoteFailure`）的家是两半共用的 `src/shared/wire.js`；
+// 这里验的是**浏览器半对它们的使用**：解析、原文兜底、落地面。标记位判别（`isDSHRemoteError`）本文件
+// 不再用到——浏览器半不抛失败、也不补标记，那条判别的用例住在 `tests/wire-shape.test.ts`。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   PARAMS,
   ROUTES,
   OFFICIAL_SESSION_DELETE_API_PREFIX,
-  isDSHRemoteError,
   type ApplyOutcome,
-  type RemoteFailure,
 } from '../../src/shared/wire.js'
 import {
   applyOne,
-  buildDeps,
   createHttpRemote,
-  failureOf,
   probeChannel,
-  unwrapRemoteResult,
-  type RawSessionDeleteRemote,
+  type RemoteOutcome,
   type SessionDeleteRemote,
 } from '../../src/client/remote.js'
 import type { TrashPanelDeps } from '../../src/client/trash-panel.js'
@@ -34,67 +30,12 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const FAILURE: RemoteFailure = { code: 'sessiondelete/live', message: '会话正在运行' }
-
-describe('失败判别（标记位）与原文兜底', () => {
-  it('官方标记位才认失败；普通 {code,message} 对象不算', () => {
-    expect(isDSHRemoteError(Object.assign(new Error('x'), { code: 'sessiondelete/io', isDSHRemoteError: true }))).toBe(true)
-    // 这正是上一版自造鸭子判别的地方：普通 `{code, message}`（不是官方 RemoteError 实例）不认。
-    expect(isDSHRemoteError({ code: 'sessiondelete/io', message: 'x' })).toBe(false)
-    expect(isDSHRemoteError({ isDSHRemoteError: true })).toBe(false)
-    expect(isDSHRemoteError(new Error('x'))).toBe(false)
-    expect(isDSHRemoteError(null)).toBe(false)
-    expect(isDSHRemoteError('sessiondelete/io')).toBe(false)
-  })
-
-  it('失败原文与码都不丢：带标记位的失败带自己的 code，其余按原文兜底', () => {
-    expect(failureOf(Object.assign(new Error('会话正在运行'), { code: 'sessiondelete/live', isDSHRemoteError: true }))).toEqual({
-      code: 'sessiondelete/live',
-      message: '会话正在运行',
-    })
-    expect(failureOf(new TypeError('x.map is not a function'))).toEqual({
-      code: 'client/unknown',
-      message: 'x.map is not a function',
-    })
-    expect(failureOf('炸了')).toEqual({ code: 'client/unknown', message: '炸了' })
-  })
-
-  // 2026-10-17 错误面对齐：详情（`sessionId` / `activity`）必须一路走到组件面，不能在这里掉。
-  it('带标记位的失败把 details 第三件原样带出', () => {
-    const marked = Object.assign(new Error('会话正在运行'), {
-      code: 'workspace/session-active',
-      isDSHRemoteError: true,
-      details: { sessionId: 'session-a', activity: [{ kind: 'turn' }] },
-    })
-    expect(failureOf(marked)).toEqual({
-      code: 'workspace/session-active',
-      message: '会话正在运行',
-      details: { sessionId: 'session-a', activity: [{ kind: 'turn' }] },
-    })
-  })
-})
-
-describe('注入面的展开', () => {
-  it('ok 支原样给值', () => {
-    expect(unwrapRemoteResult({ ok: true, value: 42 })).toBe(42)
-  })
-
-  it('失败支抛异常：message 是原文，code 保住且被打上官方的结构标记位', () => {
-    let thrown: unknown
-    try {
-      unwrapRemoteResult({ ok: false, error: FAILURE })
-    } catch (reason) {
-      thrown = reason
-    }
-    expect(thrown).toBeInstanceOf(Error)
-    const error = thrown as Error & { code?: string }
-    expect(error.message).toBe('会话正在运行')
-    expect(error.code).toBe('sessiondelete/live')
-    // 展开后抛出来的东西仍是「远程失败」——下游 `failureOf` 靠标记位而不是鸭子类型认出它。
-    expect(isDSHRemoteError(thrown)).toBe(true)
-    expect(failureOf(thrown)).toEqual(FAILURE)
-  })
-})
+/** 一次落地面 → 失败原文；成功即用例前提不成立，直接炸掉。 */
+async function failureMessage(run: Promise<RemoteOutcome<unknown>>): Promise<string> {
+  const outcome = await run
+  if (outcome.ok) throw new Error('这一趟应当失败')
+  return outcome.failure.message
+}
 
 describe('createHttpRemote · 文档挂载点', () => {
   it('九个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
@@ -112,12 +53,12 @@ describe('createHttpRemote · 文档挂载点', () => {
     await remote.ping()
     await remote.config()
     await remote.saveConfig({ orphanPreviewLimit: 200, maxAttachmentBytes: 20971520, maxJsonRefBytes: 10485760 })
-    await remote.orphans()
-    await remote.attachmentOrphans()
-    await remote.attachmentClean()
+    await remote.scanOrphans()
+    await remote.scanAttachmentOrphans()
+    await remote.cleanAttachmentOrphans()
     await remote.detail('e1')
-    await remote.apply('purge', ['e1'])
-    await remote.empty()
+    await remote.applyOutcomes('purge', ['e1'])
+    await remote.emptyTrash()
 
     expect(paths).toEqual([
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.list.path}`,
@@ -184,14 +125,13 @@ describe('createHttpRemote · detail 那一趟（十段里的 `POST /detail`）'
     vi.unstubAllGlobals()
   })
 
-  it('注入面把失败支展成 throw，码与原文都不丢（详情读失败要能原样上屏）', async () => {
+  it('通道把失败支原样交回落地面，码与原文都不丢（详情读失败要能原样上屏）', async () => {
     vi.stubGlobal('fetch', async () =>
       new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '读会话日志失败：第 2 帧解压失败' } }),
         { headers: { 'content-type': 'application/json' } }))
-    const deps = buildDeps(createHttpRemote())
-    await expect(deps.detail('e1')).rejects.toMatchObject({
-      code: 'sessiondelete/io',
-      message: '读会话日志失败：第 2 帧解压失败',
+    await expect(createHttpRemote().detail('e1')).resolves.toEqual({
+      ok: false,
+      failure: { code: 'sessiondelete/io', message: '读会话日志失败：第 2 帧解压失败' },
     })
     vi.unstubAllGlobals()
   })
@@ -243,9 +183,9 @@ describe('probeChannel · 唯一 /api 通道', () => {
 
   it('401/403 纯文本翻成两条固定原文，不冒充「回的不是信封」', async () => {
     vi.stubGlobal('fetch', async () => new Response('unauthorized', { status: 401 }))
-    await expect(createHttpRemote().list()).rejects.toThrow(/宿主的 Web 身份/)
+    expect(await failureMessage(createHttpRemote().list())).toMatch(/宿主的 Web 身份/)
     vi.stubGlobal('fetch', async () => new Response('forbidden', { status: 403 }))
-    await expect(createHttpRemote().list()).rejects.toThrow('非受信来源')
+    expect(await failureMessage(createHttpRemote().list())).toBe('非受信来源')
   })
 })
 
@@ -253,10 +193,10 @@ describe('createHttpRemote · 非信封 JSON 的诊断（issue #8 第 1 条）',
   const json = (body: unknown) =>
     new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
 
-  it('中间层回 {} 或 {"error":"…"} 时：抛「回的不是信封」，不是 TypeError、不是 "undefined" 上屏', async () => {
+  it('中间层回 {} 或 {"error":"…"} 时：落「回的不是信封」，不是 TypeError、不是 "undefined" 上屏', async () => {
     for (const body of [{}, { error: 'boom' }, { ok: 'yes', value: 1 }]) {
       vi.stubGlobal('fetch', async () => json(body))
-      await expect(createHttpRemote().list()).rejects.toThrow(/取数通道回的不是信封/)
+      expect(await failureMessage(createHttpRemote().list())).toMatch(/取数通道回的不是信封/)
       vi.unstubAllGlobals()
     }
   })
@@ -291,28 +231,27 @@ describe('createHttpRemote · orphans 那一趟（十段里的 `GET /orphans`）
       calls.push({ path, init })
       return envelope(report)
     })
-    await expect(createHttpRemote().orphans()).resolves.toEqual({ ok: true, value: report })
+    await expect(createHttpRemote().scanOrphans()).resolves.toEqual({ ok: true, value: report })
     expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`)
     expect(pick(calls, 0).init?.method).toBe('GET')
     expect(pick(calls, 0).init?.body).toBeUndefined()
     vi.unstubAllGlobals()
   })
 
-  it('注入面把失败支展成 throw：扫描失败不许折成"零条残留"', async () => {
+  it('通道把失败支原样交回：扫描失败不许折成"零条残留"', async () => {
     vi.stubGlobal('fetch', async () =>
       new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: 'sessionQuery 不在' } }),
         { headers: { 'content-type': 'application/json' } }))
-    const deps = buildDeps(createHttpRemote())
-    await expect(deps.scanOrphans()).rejects.toMatchObject({
-      code: 'sessiondelete/io',
-      message: 'sessionQuery 不在',
+    await expect(createHttpRemote().scanOrphans()).resolves.toEqual({
+      ok: false,
+      failure: { code: 'sessiondelete/io', message: 'sessionQuery 不在' },
     })
     vi.unstubAllGlobals()
   })
 })
 
 // 2026-10-27 孤儿附件：报告是纯读（GET），清理是聚合写（POST）。两段都回 JSON 信封，
-// 失败支在注入面展开成 throw——与其余段同一条契约。
+// 失败按 `RemoteOutcome` 交回调用方（ADR-0053）——与其余段同一条契约。
 describe('createHttpRemote · 孤儿附件两段（十段里的 `GET /attachment-orphans` / `POST /attachment-clean`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
@@ -324,21 +263,21 @@ describe('createHttpRemote · 孤儿附件两段（十段里的 `GET /attachment
       calls.push({ path, init })
       return envelope(report)
     })
-    await expect(createHttpRemote().attachmentOrphans()).resolves.toEqual({ ok: true, value: report })
+    await expect(createHttpRemote().scanAttachmentOrphans()).resolves.toEqual({ ok: true, value: report })
     expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`)
     expect(pick(calls, 0).init?.method).toBe('GET')
     expect(pick(calls, 0).init?.body).toBeUndefined()
     vi.unstubAllGlobals()
   })
 
-  it('清理 POST 到 /attachment-clean，空请求体；聚合回执原样展开', async () => {
+  it('清理 POST 到 /attachment-clean，空请求体；聚合回执原样落地', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     const cleanup = { removed: 106, freedBytes: 29_150_413, failed: 0 }
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       calls.push({ path, init })
       return envelope(cleanup)
     })
-    await expect(createHttpRemote().attachmentClean()).resolves.toEqual({ ok: true, value: cleanup })
+    await expect(createHttpRemote().cleanAttachmentOrphans()).resolves.toEqual({ ok: true, value: cleanup })
     expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`)
     expect(pick(calls, 0).init?.method).toBe('POST')
     const cleanBody = pick(calls, 0).init?.body
@@ -347,27 +286,25 @@ describe('createHttpRemote · 孤儿附件两段（十段里的 `GET /attachment
     vi.unstubAllGlobals()
   })
 
-  it('注入面展开两段：成功支给裸值，失败支抛原文与码', async () => {
+  it('两段的失败都以落地面交回，码与原文不丢', async () => {
     const report = { count: 3, totalBytes: 300, items: [] }
     vi.stubGlobal('fetch', async (path: string) => {
       if (path.endsWith(ROUTES.attachmentOrphans.path)) return envelope(report)
       return envelope({ removed: 2, freedBytes: 200, failed: 0 })
     })
-    const deps = buildDeps(createHttpRemote())
-    await expect(deps.scanAttachmentOrphans()).resolves.toEqual(report)
-    await expect(deps.cleanAttachmentOrphans()).resolves.toEqual({ removed: 2, freedBytes: 200, failed: 0 })
+    const remote = createHttpRemote()
+    await expect(remote.scanAttachmentOrphans()).resolves.toEqual({ ok: true, value: report })
+    await expect(remote.cleanAttachmentOrphans()).resolves.toEqual({
+      ok: true,
+      value: { removed: 2, freedBytes: 200, failed: 0 },
+    })
 
     vi.stubGlobal('fetch', async () =>
       new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '引用源读不出' } }),
         { headers: { 'content-type': 'application/json' } }))
-    await expect(deps.scanAttachmentOrphans()).rejects.toMatchObject({
-      code: 'sessiondelete/io',
-      message: '引用源读不出',
-    })
-    await expect(deps.cleanAttachmentOrphans()).rejects.toMatchObject({
-      code: 'sessiondelete/io',
-      message: '引用源读不出',
-    })
+    const failure = { ok: false, failure: { code: 'sessiondelete/io', message: '引用源读不出' } }
+    await expect(remote.scanAttachmentOrphans()).resolves.toEqual(failure)
+    await expect(remote.cleanAttachmentOrphans()).resolves.toEqual(failure)
     vi.unstubAllGlobals()
   })
 })
@@ -384,7 +321,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
       calls.push({ path, init })
       return envelope([{ id: 'e1', action: 'restore', ok: true, value: { id: 'e1' } }])
     })
-    await expect(createHttpRemote().apply('restore', ['e1', 'e2'])).resolves.toMatchObject({ ok: true })
+    await expect(createHttpRemote().applyOutcomes('restore', ['e1', 'e2'])).resolves.toMatchObject({ ok: true })
     expect(calls).toHaveLength(1)
     expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`)
     expect(pick(calls, 0).init?.method).toBe('POST')
@@ -400,12 +337,12 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
       calls.push({ path, init })
       return envelope({ removed: 3, freedBytes: 1 })
     })
-    await expect(createHttpRemote().empty()).resolves.toMatchObject({ ok: true, value: { removed: 3 } })
+    await expect(createHttpRemote().emptyTrash()).resolves.toMatchObject({ ok: true, value: { removed: 3 } })
     expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`)
     vi.unstubAllGlobals()
   })
 
-  it('注入面：applyOne 展成裸值；批量里单条的失败**不 throw**（它住在 outcome 里）', async () => {
+  it('通道：applyOne 折成同一落地面；批量里单条的失败**不 throw**（它住在 outcome 里）', async () => {
     vi.stubGlobal('fetch', async () =>
       new Response(JSON.stringify({
         ok: true,
@@ -414,21 +351,27 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
           { id: 'b', action: 'restore', ok: false, error: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' } },
         ],
       }), { headers: { 'content-type': 'application/json' } }))
-    const deps = buildDeps(createHttpRemote())
-    const outcomes = await deps.applyOutcomes('restore', ['a', 'b'])
-    expect(outcomes.map((o) => o.ok)).toEqual([true, false])
-    // N=1 的那一支才把失败展成 throw（组件按"这条没成"处理，与批量同一张表）
-    await expect(applyOne(deps, 'restore', 'b')).rejects.toMatchObject({ code: 'sessiondelete/project-missing' })
+    const remote = createHttpRemote()
+    const result = await remote.applyOutcomes('restore', ['a', 'b'])
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.map((o) => o.ok)).toEqual([true, false])
+    // N=1 的那一支把逐条失败折成落地面（组件按"这条没成"处理，与批量同一张表）
+    await expect(applyOne(remote, 'restore', 'b')).resolves.toEqual({
+      ok: false,
+      failure: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' },
+    })
     vi.unstubAllGlobals()
   })
 
-  it('整次调用没办成（顶层 ok:false）时便捷支与批量口都抛原文', async () => {
+  it('整次调用没办成（顶层 ok:false）时 applyOne 与批量口都交回同一个失败', async () => {
     vi.stubGlobal('fetch', async () =>
       new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '方法不允许' } }),
         { headers: { 'content-type': 'application/json' } }))
-    const deps = buildDeps(createHttpRemote())
-    await expect(deps.applyOutcomes('purge', ['a'])).rejects.toMatchObject({ code: 'sessiondelete/io', message: '方法不允许' })
-    await expect(applyOne(deps, 'count', 'x')).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    const remote = createHttpRemote()
+    const failure = { ok: false, failure: { code: 'sessiondelete/io', message: '方法不允许' } }
+    await expect(remote.applyOutcomes('purge', ['a'])).resolves.toEqual(failure)
+    await expect(applyOne(remote, 'count', 'x')).resolves.toEqual(failure)
     vi.unstubAllGlobals()
   })
 })
@@ -445,29 +388,34 @@ describe('注入面 · 一个动作只有一条路', () => {
 
   it('`applyOne` 取的是**发出去的那个 id** 的结果，不是第一条', async () => {
     const deps = {
-      applyOutcomes: async (action: 'restore', ids: readonly string[]) => ids.map((id) => ({
-        id, action, ok: true as const, value: { id } as never,
-      })),
+      applyOutcomes: async (action: 'restore', ids: readonly string[]) => ({
+        ok: true as const,
+        value: ids.map((id) => ({ id, action, ok: true as const, value: { id } as never })),
+      }),
     }
     const outcome = await applyOne(deps, 'restore', 'only-one')
-    expect(outcome.id).toBe('only-one')
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok) return
+    expect(outcome.value.id).toBe('only-one')
   })
 
   it('applyOne：请求的 id 没回 / 回了幂等空值 ⇒ 都当通道错，不冒充成功', async () => {
-    const empty = { applyOutcomes: async () => [] as ApplyOutcome[] }
-    await expect(applyOne(empty, 'restore', 'a')).rejects.toThrow(/批量通道没回这一条的结果/)
+    const empty = { applyOutcomes: async () => ({ ok: true as const, value: [] as ApplyOutcome[] }) }
+    expect(await failureMessage(applyOne(empty, 'restore', 'a'))).toMatch(/批量通道没回这一条的结果/)
 
     const gone = {
-      applyOutcomes: async (action: 'restore', ids: readonly string[]) =>
-        ids.map((id) => ({ id, action, ok: true as const, value: null })),
+      applyOutcomes: async (action: 'restore', ids: readonly string[]) => ({
+        ok: true as const,
+        value: ids.map((id) => ({ id, action, ok: true as const, value: null })),
+      }),
     }
-    await expect(applyOne(gone, 'restore', 'a')).rejects.toThrow(/单条动作回了幂等空值/)
+    expect(await failureMessage(applyOne(gone, 'restore', 'a'))).toMatch(/单条动作回了幂等空值/)
   })
 })
 
 describe('取数通道探测：一次往返 + 5s 上限', () => {
-  const rawOf = (ping: (signal?: AbortSignal) => Promise<unknown>): RawSessionDeleteRemote =>
-    ({ ping } as unknown as RawSessionDeleteRemote)
+  const rawOf = (ping: (signal?: AbortSignal) => Promise<unknown>): SessionDeleteRemote =>
+    ({ ping } as unknown as SessionDeleteRemote)
 
   it('成功回 pong 才真', async () => {
     const ping = vi.fn(async (_signal?: AbortSignal) => ({ ok: true as const, value: 'pong' }))
@@ -477,7 +425,10 @@ describe('取数通道探测：一次往返 + 5s 上限', () => {
 
   it('失败信封 / 非 pong 都按不可用，且只探一次，并在 console 留下原因', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
-    const failure = vi.fn(async (_signal?: AbortSignal) => ({ ok: false as const, error: { code: 'sessiondelete/io', message: 'x' } }))
+    const failure = vi.fn(async (_signal?: AbortSignal) => ({
+      ok: false as const,
+      failure: { code: 'sessiondelete/io', message: 'x' },
+    }))
     await expect(probeChannel(rawOf(failure))).resolves.toBe(false)
     expect(failure).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('入口不注册'), 'sessiondelete/io', 'x')

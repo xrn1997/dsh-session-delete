@@ -11,35 +11,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DeleteConfirmHost,
   requestDelete,
-  resetDeleteRequest,
   useDeleteRequest,
 } from '../../src/client/delete-confirm.js'
 import { DeleteMenuItem, type DeleteMenuItemProps } from '../../src/client/delete-menu-item.js'
-import type { DeleteConfirmDeps } from '../../src/client/remote.js'
+import type { OneShotDeps } from '../../src/client/remote.js'
 import { fakeApply } from './support/fake-apply.js'
-import { createFakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, type BareSessionDeleteRemote } from './support/fake-remote.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
-import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
-  // 撤销提示与删除请求都是**模块级现场**（跨用例存活）：每个用例前复位，用例之间互不串味。
-  resetUndoNotice()
-  resetDeleteRequest()
+  // 撤销台与删除请求都是**模块级现场**（跨用例存活）：一条复位口收全部，用例之间互不串味。
+  resetClientState()
 })
 
 afterEach(() => {
   // 收场也复位：用例中途失败时，下一份文件/下一轮不从上一轮的现场接着跑。
-  resetUndoNotice()
-  resetDeleteRequest()
+  resetClientState()
 })
 
 /** 菜单/确认框只吃 `applyOutcomes`：一颗完整的假远程面替掉手搭对象与 `as never`。 */
-const deps = (applyOutcomes: DeleteConfirmDeps['applyOutcomes']) => createFakeRemote({ applyOutcomes: vi.fn(applyOutcomes) })
+const deps = (applyOutcomes: BareSessionDeleteRemote['applyOutcomes']) => createFakeRemote({ applyOutcomes: vi.fn(applyOutcomes) })
 
 /** 行 + 确认框宿主（缺省再挂上撤销提示的宿主），也就是真机上同屏的那几样。 */
 function renderScene(
   props: Omit<DeleteMenuItemProps, 'dismissMenu'>,
-  deps: DeleteConfirmDeps,
+  deps: OneShotDeps,
   extra?: ReactElement,
 ) {
   return render(

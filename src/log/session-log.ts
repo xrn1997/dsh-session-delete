@@ -24,6 +24,8 @@ export interface SessionRecord {
   id?: string
   createdAt?: number
   cwd?: string
+  /** `session` 头里的父会话（fork / subagent 子会话才有）；显示名兜底用它认「这是一条子会话」。 */
+  parentSession?: string
   data?: unknown
 }
 

@@ -1,5 +1,6 @@
 /**
- * 回收站详情块：只画状态，不取数。选中、缓存、失败与重读都在面板控制器里。
+ * 回收站详情块：只画状态，不取数。选中与孩子视图归面板控制器；账本、失败与重读归
+ * `use-trash-detail-reader.ts`。
  *
  * 三条界面约束：
  * - 动作（恢复/彻底删除）留在清单行右侧；详情只负责看。
@@ -15,6 +16,9 @@ import {
   type CSSProperties,
   type ReactNode,
   type RefObject,
+  useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
 } from 'react'
 import { AttachmentStrip } from './attachment-view.js'
@@ -32,7 +36,9 @@ import {
 } from './ui/icons.js'
 import { ELLIPSIS, QUIET_DANGER, TABULAR_NUMS } from './ui/recipe.js'
 import { hasDialogue, isDisclosureBlock, threadItems } from './detail-blocks.js'
+import { intentPrefetchHandlers, useDelayedPrefetch } from './use-prefetch.js'
 import { useDetailPager } from './use-detail-pager.js'
+import { JUMP_SCROLL_MARGIN_PX } from './use-prompt-rail.js'
 
 /** 详情主体只承诺清册那一行：孩子视图看的那条不在客户端清单里，没有只读数可配对
  *  （孩子摘要随父详情过线，那一格的判据住 `src/client/remote.ts` 的 `TrashDetailLike`）。 */
@@ -40,9 +46,12 @@ export type TrashDetailState =
   | { kind: 'idle' }
   | { kind: 'loading'; entry: TrashEntryWire }
   | { kind: 'failed'; entry: TrashEntryWire; message: string }
+  /** 换到没读过的条目时的「保持」：画的是上一条已就绪的详情，正文 `inert` + `aria-busy`；
+   *  超过静默窗口才在标题排出提示（`HOLD_NOTICE_DELAY_MS`）。首次读数没有上一条可保持，走 `loading`。 */
+  | { kind: 'holding'; entry: TrashEntryWire; detail: TrashDetailLike }
   | { kind: 'ready'; entry: TrashEntryWire; detail: TrashDetailLike }
 
-/** 「加载更早」这一块（在飞/失败 + 滚动容器）整体过手：`TrashDetail` 只转交，谁画正文谁拆开用。
+/** 分页这一块（在飞/失败 + 滚动容器）整体过手：`TrashDetail` 只转交，谁画正文谁拆开用。
  *  四样东西是一个概念（分页读面）的四个格子，打包走一个名字，不再逐样穿透组件边界。 */
 export interface DetailPager {
   /** 更早一页正在读。 */
@@ -57,8 +66,10 @@ export interface DetailPager {
 /** 详情的导航面（孩子视图的开与回）：类型定义住在这里（视图定 prop 形状），
  *  控制器 `import type` 它避免环。判据（谁在场、title 给什么）住控制器的 `detailNav` 派生。 */
 export interface DetailNav {
-  /** 只在主体是清单选中那条时交出（ADR-0029 单级判据的唯一实现）。 */
+  /** 只在主体是清单选中那条时交出（ADR-0055 沿用的单级判据，唯一实现）。 */
   readonly onOpenChild?: (child: TrashEntryWire) => void
+  /** 与 `onOpenChild` 同进同出的意图预取：hover/focus 子会话行时先把它的详情读进来。 */
+  readonly onPrefetchChild?: (child: TrashEntryWire) => void
   /** 孩子视图的返回目标；title 是原文（未命名兜底由视图按 t 处理）。 */
   readonly parentContext?: { readonly title: string; readonly onBack: () => void }
 }
@@ -94,21 +105,62 @@ const SHELL: CSSProperties = {
  *
  *  `position: sticky`：长会话读到中段时返回键仍在顶上（触屏没有 Esc 兜底，返回必须常驻）。
  *  底色用宿主页面底色（`bg-base`）把滚过的正文盖住。 */
+const HEAD_MIN_HEIGHT = 28
+const HEAD_PAD_BOTTOM = 6
+
 const HEAD: CSSProperties = {
   display: 'flex',
   alignItems: 'flex-start',
   gap: 10,
-  minHeight: 28,
+  minHeight: HEAD_MIN_HEIGHT,
   position: 'sticky',
   top: 0,
   zIndex: 1,
   background: 'var(--dsw-alias-bg-base)',
-  paddingBottom: 6,
+  paddingBottom: HEAD_PAD_BOTTOM,
 }
 
 const TITLE_LINE: CSSProperties = { ...ELLIPSIS, flex: '1 1 auto', minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: '22px' }
 
 const BACK: CSSProperties = { flex: 'none' }
+
+/**
+ * 标题排的常驻子会话徽标：滚进正文后仍能知道「有孩子」，点它展开子会话段并跳回去。
+ * 底色（含悬停）住 `layout.css`：内联底色压过 `:hover`。
+ * 与「返回父会话 / 返回清单」同排在右端，子会话计数先于返回，两者不抢位置。
+ */
+const JUMP_BADGE: CSSProperties = {
+  flex: 'none',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 6,
+  border: '0.5px solid var(--dsw-alias-border-l2)',
+  color: 'var(--dsw-alias-label-secondary)',
+  borderRadius: 999,
+  padding: '2px 6px 2px 9px',
+  font: 'inherit',
+  fontSize: 11,
+  lineHeight: '16px',
+  cursor: 'pointer',
+}
+
+const JUMP_BADGE_ICON: CSSProperties = {
+  display: 'inline-flex',
+  flex: 'none',
+  color: 'var(--dsw-alias-label-secondary)',
+}
+
+/** 详情保持超过这个静默窗口才出「正在读…」：本地一次读数通常在这之前落地，用户看不到任何字样。
+ *  300ms 与宿主目录选择器的慢扫描提示同档（`SLOW_SCAN_DELAY_MS`）。 */
+const HOLD_NOTICE_DELAY_MS = 300
+
+/** 保持期的提示：排在标题之后、返回键之前，行高不超出标题排预留的 28px。 */
+const HOLD_NOTICE: CSSProperties = {
+  flex: 'none',
+  fontSize: 12,
+  lineHeight: '18px',
+  color: 'var(--sd-label-tertiary)',
+}
 
 /**
  * 会话信息表：一张两列表，行序按「认出这条会话 → 时间定位 → 精确核对 → 调试属性」排
@@ -141,7 +193,7 @@ const META_CODE = {
 
 /**
  * 计量行：一行内联的「标签 值」对，自动换行。和表分开是因为它们是**可以横着扫的数字**，
- * 不是要逐行核对的字符串。不插中点分隔符——分隔符是各语言自己的写法（同 `detail.subagents.header`）。
+ * 不是要逐行核对的字符串。不插中点分隔符——分隔符是各语言自己的写法，拼在 JSX 里就钉死了某一门语言的标点。
  */
 const METRICS: CSSProperties = {
   display: 'flex',
@@ -176,7 +228,8 @@ const THREAD: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 1
  * **只有用户有气泡**，助手那侧宿主不铺底、不给边框，正文直接铺满栏；给助手画带边框的卡片
  * 会与宿主消息行不同形。字号走 `--dsh-content-font-size` 那根轴，宿主调内容字号时这里一起动。
  */
-const USER_ROW: CSSProperties = { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, minWidth: 0 }
+/** 提问轨跳过来的落位让位（`JUMP_SCROLL_MARGIN_PX`）：目标行停在 sticky 标题排之下而不是被它盖住。 */
+const USER_ROW: CSSProperties = { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, minWidth: 0, scrollMarginTop: JUMP_SCROLL_MARGIN_PX }
 
 const ASSISTANT_ROW: CSSProperties = { display: 'flex', flexDirection: 'column', minWidth: 0 }
 
@@ -303,17 +356,133 @@ const SECTION_LABEL: CSSProperties = {
 }
 
 /**
- * 子会话行：与清单行同语言的无边框导航行（悬停底色住 `ui/layout.css`）。两处内联覆盖各有理由：
- * 宿主类给折叠头钉死行高并随之裁溢出，导航行带内边距，须放开高度按内容撑开，否则裁字；
- * 指针光标宿主只发给带展开语义的行，导航行不借那套语义，光标就内联自给。
- * 底色与边框不铺——一列带框的行叠起来就是"一叠卡片"，与清单行同一条判据。
+ * 子会话段默认收起成**一条单行摘要条**（docs/ui-spec.md 状态⑥）：
+ * 突出靠对比不靠面积——品牌色实心计数徽标是全段唯一重色焦点，标签取主色，整段仍只有一行；
+ * 孩子再多（条数闸）默认也是这一行。展开体的条数用地板高度内滚，见 `SUBAGENT_RAIL`。
+ *
+ * 段顶发丝分隔与左轨缩进是**层级信息**：扫视时有「另一类对象从这里开始」的断点，不铺卡片底。
+ * `scrollMarginTop` 让「标题排徽标」跳过来时，段顶落在 sticky 标题排之下而不是被它盖住；
+ * 数值从 `HEAD` 的几何派生（最小高度 + 底留白），不在这里另写一份像素。
  */
-const SUBAGENT_ROW: CSSProperties = {
-  ...BLOCK_ROW,
-  padding: '6px 8px',
-  height: 'auto',
+const SUBAGENTS: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 6,
+  borderTop: '1px solid var(--sd-border-l4)',
+  paddingTop: 10,
+  marginTop: 2,
+  scrollMarginTop: HEAD_MIN_HEIGHT + HEAD_PAD_BOTTOM,
+}
+
+/** 摘要条本体。底色留给 `layout.css`（内联底色压过 `:hover`，悬停就永远不可见）。 */
+const SUBAGENT_STRIP: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  minWidth: 0,
+  border: 'none',
+  padding: '4px 6px',
+  font: 'inherit',
+  textAlign: 'start',
   cursor: 'pointer',
   borderRadius: 'var(--sd-radius-md)',
+  color: 'var(--dsw-alias-label-primary)',
+}
+
+const SUBAGENT_LEAD: CSSProperties = {
+  display: 'inline-flex',
+  flex: 'none',
+  color: 'var(--dsw-alias-brand-primary)',
+}
+
+const SUBAGENT_LABEL: CSSProperties = {
+  flex: 'none',
+  fontSize: 13,
+  lineHeight: '20px',
+  fontWeight: 600,
+  color: 'var(--dsw-alias-label-primary)',
+}
+
+/** 计数徽标：实心品牌色 + 反白字（`label-primary-foreground` 就是宿主给主色底的那支前景）。 */
+const SUBAGENT_COUNT: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  minWidth: 20,
+  height: 20,
+  padding: '0 7px',
+  borderRadius: 999,
+  background: 'var(--dsw-alias-brand-primary)',
+  color: 'var(--sd-label-primary-foreground)',
+  fontSize: 11,
+  fontWeight: 600,
+  lineHeight: '16px',
+  ...TABULAR_NUMS,
+}
+
+/** 合计吃余宽，把展开 chevron 推到最右；与清单行同一口径（清册 `sizeBytes` 的和）。 */
+const SUBAGENT_SIZE: CSSProperties = { ...BLOCK_META, marginLeft: 'auto' }
+
+/** 标题排徽标里的计数与摘要条同一枚实心徽标，只是小一档——两处说的是同一个数。 */
+const JUMP_BADGE_COUNT: CSSProperties = {
+  ...SUBAGENT_COUNT,
+  minWidth: 16,
+  height: 16,
+  padding: '0 5px',
+  fontSize: 10,
+}
+
+const SUBAGENT_CHEVRON: CSSProperties = {
+  display: 'inline-flex',
+  flex: 'none',
+  color: 'var(--dsw-alias-label-secondary)',
+}
+
+/** 展开体：先给「随本条一起恢复或删除」，再是列表与截断提示。 */
+const SUBAGENT_BODY: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6 }
+
+/** 孩子列表限高内滚：20 / 200 条都不把正文撑爆（与 `CODE_BLOCK` 同一手法）。 */
+const SUBAGENT_RAIL: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  marginLeft: 6,
+  paddingLeft: 10,
+  borderLeft: '1px solid var(--sd-border-l3)',
+  maxHeight: 260,
+  overflow: 'auto',
+  scrollbarGutter: 'stable',
+}
+
+/**
+ * 子会话行：与清单行同语言的**无边框导航行**——不再借折叠头的类与 chevron
+ * （chevron 在这栏只表示「原地展开」，整栏换页是另一回事）。
+ * 底色住 `layout.css`：内联底色会压过 `:hover`，悬停就永远不可见（2026-11-07 真机反馈同源）。
+ */
+const SUBAGENT_ROW: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  width: '100%',
+  minWidth: 0,
+  border: 'none',
+  padding: '6px 8px',
+  font: 'inherit',
+  textAlign: 'start',
+  cursor: 'pointer',
+  borderRadius: 'var(--sd-radius-md)',
+  color: 'var(--dsw-alias-label-primary)',
+  flex: 'none',
+}
+
+const SUBAGENT_TITLE: CSSProperties = {
+  ...ELLIPSIS,
+  flex: '1 1 auto',
+  minWidth: 0,
+  fontSize: 13,
+  lineHeight: '20px',
+  fontWeight: 500,
 }
 
 /** 工作步骤分组展开后，里面的过程块再缩进一档（与折叠体的前导对齐，前导宽随内容字号一起变）。 */
@@ -361,11 +530,31 @@ function spanText(from: number, to: number, t: Translate): string | undefined {
     : t('detail.value.spanDays', { n: Math.round(ms / DAY) })
 }
 
-/** 详情头部显示的那句标题：清册优先，空串才回落到日志里的 `session/title`。 */
-function titleOf(entry: TrashEntryWire, detail: TrashDetailLike | undefined, t: Translate): string {
-  if (entry.title !== '') return entry.title
-  if (detail !== undefined && detail.logTitle !== '') return detail.logTitle
+/** 空串不是名字：wire 用缺席表示没读到，清册字段仍可能是空串；行名与标题排共用这一条。 */
+function present(value: string | undefined): value is string {
+  return value !== undefined && value !== ''
+}
+
+/** 子会话行与摘要条共用的显示名：label 优先（与工作中同名，ADR-0058），清册标题次之；空串走未命名兜底。 */
+function rowName(entry: Pick<TrashEntryWire, 'label' | 'title'>, t: Translate): string {
+  const name = present(entry.label) ? entry.label : entry.title
+  return name === '' ? t('common.untitled') : name
+}
+
+/** 标题排的显示名：父行交来的 label 优先，其次**这条详情自己的** descriptor label（独立子会话没有
+ *  父行可兜），再回落清册标题、日志 `session/title`；空串走未命名兜底（ADR-0058）。 */
+function headerName(entry: TrashEntryWire, detail: TrashDetailLike | undefined, t: Translate): string {
+  if (present(entry.label)) return entry.label
+  if (detail !== undefined && present(detail.label)) return detail.label
+  if (present(entry.title)) return entry.title
+  if (detail !== undefined && present(detail.logTitle)) return detail.logTitle
   return t('common.untitled')
+}
+
+/** 标题排徽标与摘要条共用：孩子总数的顶层读数（仅截断时出线），否则按已列条数算。 */
+function subagentCountOf(detail: TrashDetailLike | undefined): number | null {
+  if (detail === undefined || detail.subagents === undefined || detail.subagents.length === 0) return null
+  return detail.subagentsTotal ?? detail.subagents.length
 }
 
 /** 折叠头的摘要：第一行非空文字。 */
@@ -530,7 +719,7 @@ function renderBlock(block: TrashDetailBlockWire, context: BlockRenderContext): 
   switch (block.kind) {
     case 'user':
       return (
-        <div key={block.id} data-sd-msg="user" style={USER_ROW}>
+        <div key={block.id} data-sd-msg="user" data-block-id={block.id} style={USER_ROW}>
           <div style={META_LINE}>{`${t('detail.role.user')} · ${timeText(block.time)}`}</div>
           <AttachmentStrip attachments={block.attachments} t={t} align="end" />
           {/* 纯附件块没有可说的话 ⇒ 不铺一只空气泡；图/文件名就是这一条的内容。 */}
@@ -601,6 +790,43 @@ export function TrashDetail({
   pager,
   t,
 }: TrashDetailProps) {
+  const { scrollRef } = pager
+  const holding = state.kind === 'holding'
+  const shownId = state.kind === 'idle' ? null : state.entry.id
+  const [holdNotice, setHoldNotice] = useState(false)
+  /** 子会话段的展开状态：默认收起（docs/ui-spec.md 状态⑥）；标题排徽标与段头说的是同一个开关。 */
+  const [subagentsOpen, setSubagentsOpen] = useState(false)
+  /** 子会话段的锚点：标题排徽标点下去要滚到这里（跨 `ReadyBody` 的组件边界）。 */
+  const subagentsRef = useRef<HTMLDivElement>(null)
+
+  // 换到另一条（含 holding → ready 的整帧换）时滚动位置回顶：容器是共用的，不显式复位就会
+  // 继承上一条的偏移（长切短还会被浏览器 clamp 到中段，观感就是跳）。
+  // 只在**shown id 真的变了**时复位：首挂不碰（新容器本来就是 0，也不能覆盖分页补偿的初始读数）。
+  const previousShownId = useRef<string | null | undefined>(undefined)
+  useLayoutEffect(() => {
+    const previous = previousShownId.current
+    previousShownId.current = shownId
+    if (previous === undefined || previous === shownId) return
+    const element = scrollRef?.current
+    if (element !== null && element !== undefined) element.scrollTop = 0
+  }, [shownId, scrollRef])
+
+  // 子会话段的开合只活在这一条会话的详情里：换条目（含父子视图切换）回到默认收起，
+  // 与工作步骤档位同一生命周期（ui-spec 状态⑥）。**layout 阶段**收：下一条命中账本时首帧就带
+  // 新主体，passive 再收会让展开体先画一帧（ADR-0050 的切换稳定性）。
+  useLayoutEffect(() => { setSubagentsOpen(false) }, [shownId])
+
+  // 提示只在保持超过静默窗口后出现：本地读数通常在这之前落地，用户看不到 loading 字样。
+  const holdId = holding ? state.entry.id : null
+  useEffect(() => {
+    if (holdId === null) {
+      setHoldNotice(false)
+      return
+    }
+    const timer = setTimeout(() => { setHoldNotice(true) }, HOLD_NOTICE_DELAY_MS)
+    return () => { clearTimeout(timer) }
+  }, [holdId])
+
   if (state.kind === 'idle') {
     return (
       <div
@@ -622,8 +848,34 @@ export function TrashDetail({
   }
 
   const entry = state.entry
-  const detail = state.kind === 'ready' ? state.detail : undefined
-  const title = titleOf(entry, detail, t)
+  const detail = state.kind === 'ready' || state.kind === 'holding' ? state.detail : undefined
+  const title = headerName(entry, detail, t)
+  /** 标题排徽标只在「确有孩子 + 入口在场」时出现；孩子视图里 `onOpenChild` 缺席，自然不画。 */
+  const subagentCount = subagentCountOf(detail)
+  const subagents: SubagentSection = {
+    open: subagentsOpen,
+    onToggle: () => { setSubagentsOpen((current) => !current) },
+    anchorRef: subagentsRef,
+  }
+  const showSubagents = (): void => {
+    setSubagentsOpen(true)
+    const section = subagentsRef.current
+    // jsdom 没有 scrollIntoView：跑得动测试，真实浏览器里一定有。
+    if (section !== null && typeof section.scrollIntoView === 'function') {
+      section.scrollIntoView({ block: 'start' })
+    }
+  }
+  const body = detail === undefined ? null : (
+    <ReadyBody
+      key={entry.id}
+      entry={entry}
+      detail={detail}
+      detailNav={detailNav}
+      pager={pager}
+      subagents={subagents}
+      t={t}
+    />
+  )
 
   return (
     <div style={SHELL}>
@@ -634,6 +886,24 @@ export function TrashDetail({
           {/* 内层按文字收缩：悬停提示不跟着吃满整行。 */}
           <span title={title}>{title}</span>
         </div>
+        {holding && holdNotice ? (
+          <span data-dsh-session-delete="trash-detail-hold" style={HOLD_NOTICE}>
+            {t('detail.loading')}
+          </span>
+        ) : null}
+        {subagentCount === null || detailNav.onOpenChild === undefined ? null : (
+          <button
+            type="button"
+            data-dsh-session-delete="trash-subagents-jump"
+            style={JUMP_BADGE}
+            title={t('detail.subagents.jump')}
+            onClick={showSubagents}
+          >
+            <span style={JUMP_BADGE_ICON} aria-hidden="true"><IconBranchOutlineRegular size={12} /></span>
+            <span>{t('detail.subagents.label')}</span>
+            <span style={JUMP_BADGE_COUNT}>{subagentCount}</span>
+          </button>
+        )}
         {detailNav.parentContext !== undefined ? (
           <Button
             variant="ghost"
@@ -673,37 +943,40 @@ export function TrashDetail({
         </div>
       ) : null}
 
-      {detail === undefined ? null : (
-        <ReadyBody
-          key={entry.id}
-          entry={entry}
-          detail={detail}
-          detailNav={detailNav}
-          pager={pager}
-          t={t}
-        />
-      )}
+      {detail === undefined ? null : holding ? (
+        // 保持期：正文按上一条画，但整块 inert + aria-busy——不能把 A 的分页读到 B 上，
+        // 也点不了 A 的子会话。读数中不标 aria-busy：那一段有自己的状态句与骨架。
+        <div data-dsh-session-delete="trash-detail-hold-body" aria-busy="true" {...{ inert: '' }}>
+          {body}
+        </div>
+      ) : body}
     </div>
   )
 }
 
-/** 读数中：一句"正在读" + 骨架几条。不给百分比（本机量级是"一条 135ms"，给进度是假话）。 */
+/** 读数中：只有**没有上一条可保持**时才会走到这里（首次）。骨架按内容形状画：
+ *  meta 表四行 + 正文块几条；条走 `--sd-bg-skeleton` 与 2s 脉冲（`layout.css`，reduced-motion 关）。
+ *  不给百分比（本机量级是"一条 135ms"，给进度是假话）。 */
 function LoadingBody({ t }: { t: Translate }) {
   return (
     <>
       <div style={{ fontSize: 12, lineHeight: '18px', color: 'var(--sd-label-tertiary)' }}>
         {t('detail.loading')}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {([70, 96, 52, 88, 34] as const).map((percent, index) => (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 8 }} aria-hidden="true">
+        {([['48px', '72%'], ['40px', '58%'], ['56px', '66%'], ['44px', '50%']] as const).map(([label, value]) => (
+          <div key={label} style={{ display: 'flex', gap: 12 }}>
+            <div className="sd-skeleton-bar" style={{ height: 11, width: label, borderRadius: 6 }} />
+            <div className="sd-skeleton-bar" style={{ height: 11, width: value, borderRadius: 6 }} />
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }} aria-hidden="true">
+        {([70, 96, 52, 88, 34] as const).map((percent) => (
           <div
-            key={index}
-            style={{
-              height: 11,
-              width: `${percent}%`,
-              borderRadius: 6,
-              background: 'var(--dsw-alias-bg-layer-2)',
-            }}
+            key={percent}
+            className="sd-skeleton-bar"
+            style={{ height: 11, width: `${percent}%`, borderRadius: 6 }}
           />
         ))}
       </div>
@@ -732,12 +1005,20 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
+/** 子会话段的三件：开合、切换与锚点。标题排徽标与段头共用一个开关，一起过手。 */
+interface SubagentSection {
+  readonly open: boolean
+  readonly onToggle: () => void
+  readonly anchorRef: RefObject<HTMLDivElement>
+}
+
 interface ReadyBodyProps {
   entry: TrashEntryWire
   detail: TrashDetailLike
-  /** 入口判据只有一条：`detailNav.onOpenChild` 在场（ADR-0029 单级判据，派生住控制器）。 */
+  /** 入口判据只有一条：`detailNav.onOpenChild` 在场（ADR-0055 沿用的单级判据，派生住控制器）。 */
   detailNav: DetailNav
   pager: DetailPager
+  subagents: SubagentSection
   t: Translate
 }
 
@@ -745,11 +1026,11 @@ interface ReadyBodyProps {
  * 有内容：会话信息（身份 → 时间 → 核对 → 属性）+ 计量行 + 子会话段 + 工作步骤。
  *
  * 页面上**两本账分开读**：会话信息里的计数是整条日志的（注入条数也在计量行里）；
- * 正文是分页取回来的块。`olderCursor` 非空时正文工具栏出「加载更早」。
+ * 正文是分页取回来的块：有更早页时工具栏出「加载更早」，跳转走右缘的提问轨（ADR-0057）。
  * 工作步骤档位与折叠状态只活在这个组件里；切条目用 `key={entry.id}` 重挂载，不会把 A 的
  * 展开状态带到 B。
  */
-function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
+function ReadyBody({ entry, detail, detailNav, pager, subagents, t }: ReadyBodyProps) {
   const { loadingOlder, olderFailure, onLoadOlder, scrollRef } = pager
   const [mode, setMode] = useState<ViewMode>('standard')
   /** 标准档「工作步骤」组的开合（按组后那条对话块的 id 记，prepend 不换键）。 */
@@ -764,6 +1045,11 @@ function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
     compact: mode === 'compact',
     onLoadOlder,
     scrollRef,
+  })
+
+  /** 子会话行的意图预取：与清单行同一套 150ms 延时；孩子视图里 `onPrefetchChild` 缺席，自然什么都不做。 */
+  const prefetchChild = useDelayedPrefetch((child: TrashEntryWire): void => {
+    detailNav.onPrefetchChild?.(child)
   })
 
   // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（借哪句住 copy.ts 的 localeProbe）。
@@ -841,54 +1127,72 @@ function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
       </div>
 
       {/* 孩子不在客户端清单里，父详情是唯一能往下走一层的地方；这一段因此跟着详情走，不是清单的一列。
-          行的两样事实（清册 `title` / `sizeBytes` + `deletedAt`）与清单行同一口径；段标题多给条数与去向。
-          入口判据只认 `detailNav.onOpenChild`（ADR-0029 单级判据，派生住控制器）：孩子视图开着时
+          默认收起成一条摘要条（只占一行），展开才逐条列出；标题排的徽标与这里共用同一个开关。
+          入口判据只认 `detailNav.onOpenChild`（ADR-0055 沿用的单级判据，派生住控制器）：孩子视图开着时
           控制器交不出它，这一段就整段不画。 */}
       {detail.subagents === undefined || detail.subagents.length === 0 || openChild === undefined ? null : (
-        <div data-dsh-session-delete="trash-subagents" style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={SECTION_LABEL}>
-            {/* 整句一个键：括号与分隔符是各语言自己的写法（zh「子会话（2） · 3.0KB，随本条一起恢复或删除」），
-                拼在 JSX 里就钉死了某一门语言的标点。 */}
-            {t('detail.subagents.header', {
-              n: detail.subagents.length,
-              size: fileSizeText(detail.subagents.reduce((sum, child) => sum + child.sizeBytes, 0)),
-            })}
-          </div>
-          {detail.subagents.map((child) => (
-            <button
-              key={child.id}
-              type="button"
-              className="sd-disclosure-row"
-              data-dsh-session-delete="trash-subagent-row"
-              data-entry-id={child.id}
-              style={SUBAGENT_ROW}
-              title={t('detail.subagents.open')}
-              onClick={() => openChild(child)}
-            >
-              <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
-                <IconBranchOutlineRegular size={14} />
-              </span>
-              <span style={{ ...ELLIPSIS, flex: '1 1 auto', minWidth: 0 }}>
-                {child.title === '' ? t('common.untitled') : child.title}
-              </span>
-              <span style={BLOCK_META}>{fileSizeText(child.sizeBytes)}</span>
-              <span style={BLOCK_META}>{agoText(child.deletedAt, Date.now(), t)}</span>
-              <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--sd-label-tertiary)' }} aria-hidden="true">
-                <IconChevronRightOutlineRegular size={14} />
-              </span>
-            </button>
-          ))}
-          {/* 条数闸截断时把总数说出来：段标题只报已列出的条数与它们的合计，
-              剩下的孩子仍随整组释放，不能让人误以为整组就这么大。 */}
-          {detail.subagentsTotal === undefined ? null : (
-            <div style={SECTION_LABEL} data-dsh-session-delete="trash-subagents-truncated">
-              {t('detail.subagents.truncated', { shown: detail.subagents.length, total: detail.subagentsTotal })}
+        <div ref={subagents.anchorRef} data-dsh-session-delete="trash-subagents" style={SUBAGENTS}>
+          {/* 计数取孩子总数（超条数闸时仍是实数）；大小取 wire 的**全量**合计（`subagentsSizeBytes`），
+              旧账本没有这一格时按已列孩子求和兜底。截断另在展开体里说清。整句不在 JSX 里拼标点：各语言自己写。 */}
+          <button
+            type="button"
+            data-dsh-session-delete="trash-subagents-toggle"
+            aria-expanded={subagents.open}
+            style={SUBAGENT_STRIP}
+            title={subagents.open ? t('detail.subagents.collapse') : t('detail.subagents.expand')}
+            onClick={subagents.onToggle}
+          >
+            <span style={SUBAGENT_LEAD} aria-hidden="true"><IconBranchOutlineRegular size={14} /></span>
+            <span style={SUBAGENT_LABEL}>{t('detail.subagents.label')}</span>
+            <span style={SUBAGENT_COUNT}>{subagentCountOf(detail)}</span>
+            <span style={SUBAGENT_SIZE}>
+              {fileSizeText(detail.subagentsSizeBytes ?? detail.subagents.reduce((sum, child) => sum + child.sizeBytes, 0))}
+            </span>
+            <span style={SUBAGENT_CHEVRON} aria-hidden="true">
+              {subagents.open ? <IconChevronDownOutlineRegular size={14} /> : <IconChevronRightOutlineRegular size={14} />}
+            </span>
+          </button>
+          {subagents.open ? (
+            <div style={SUBAGENT_BODY}>
+              {/* 组语义住展开体：收起时计数已经在说「有几个」，这里说「它们跟着谁走」。 */}
+              <div style={SECTION_LABEL}>{t('detail.subagents.note')}</div>
+              {/* 限高内滚：条数再多也不把正文撑爆（与 `CODE_BLOCK` 同一手法）。 */}
+              <div data-dsh-session-delete="trash-subagent-list" style={SUBAGENT_RAIL}>
+                {detail.subagents.map((child) => (
+                  <button
+                    key={child.id}
+                    type="button"
+                    data-dsh-session-delete="trash-subagent-row"
+                    data-entry-id={child.id}
+                    style={SUBAGENT_ROW}
+                    title={t('detail.subagents.open')}
+                    {...intentPrefetchHandlers(prefetchChild, child)}
+                    onClick={() => openChild(child)}
+                  >
+                    <span style={{ ...SUBAGENT_LEAD, color: 'var(--dsw-alias-label-secondary)' }} aria-hidden="true">
+                      <IconBranchOutlineRegular size={14} />
+                    </span>
+                    <span style={SUBAGENT_TITLE}>{rowName(child, t)}</span>
+                    <span style={BLOCK_META}>{fileSizeText(child.sizeBytes)}</span>
+                    <span style={BLOCK_META}>{agoText(child.deletedAt, Date.now(), t)}</span>
+                  </button>
+                ))}
+              </div>
+              {/* 条数闸截断时把总数说出来：摘要条报总数与已列孩子的合计，
+                  剩下的孩子仍随整组释放，不能让人误以为整组就这么大。 */}
+              {detail.subagentsTotal === undefined ? null : (
+                <div style={SECTION_LABEL} data-dsh-session-delete="trash-subagents-truncated">
+                  {t('detail.subagents.truncated', { shown: detail.subagents.length, total: detail.subagentsTotal })}
+                </div>
+              )}
             </div>
-          )}
+          ) : null}
         </div>
       )}
 
       <div style={TOOLBAR}>
+        {/* 分页只由读者点这里发起（ADR-0057）：滚到顶不会替人取数。在飞时按钮禁用并改说
+            「正在加载更早…」；读失败的原文落在同一行的状态格里，正文仍是「有内容」。 */}
         {detail.olderCursor === null ? null : (
           <Button variant="outline" size="sm" disabled={loadingOlder} onClick={loadOlder}>
             {loadingOlder ? t('detail.loadOlder.loading') : t('detail.loadOlder')}
@@ -949,7 +1253,7 @@ function ReadyBody({ entry, detail, detailNav, pager, t }: ReadyBodyProps) {
                 .map((block) => renderBlock(block, { open, toggle, probe, t }))}
           {/* 简洁档只画对话；当前页全是过程内容时不能留一块空白。还有更早页就只说这一页，
               翻完了才敢说「这段会话只有过程内容」——看不见更早的页，不等于它不存在。
-              自动连翻在飞时不挂这句：此刻按钮正停在「正在加载更早…」上，不能再叫人去点它。 */}
+              自动连翻在飞时不挂这句：此刻工具栏那颗按钮正停在「正在加载更早…」上，不能再叫人去点它。 */}
           {mode === 'compact' && detail.blocks.length > 0 && !hasDialogue(detail.blocks) && !loadingOlder
             ? (
               <div style={META_LINE}>

@@ -19,7 +19,7 @@
  *
  * 请求本身不对（id/kind 形状）⇒ 400；对象不在 / 超限 / 读失败 ⇒ 200 + 信封（与其余段同一条错误面）。
  */
-import type { FsPort } from '../ports/fs-port.js'
+import type { FsAttachmentPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
 import type {
   AttachmentsPort,
@@ -83,7 +83,7 @@ function safeFilename(name: string | null | undefined, fallback: string): string
 
 /** 读附件只需要 stat + read、宿主 `attachments` 读面与响应上限；执行面（removeDir/removeFile）不给。 */
 export interface AttachmentReadPorts {
-  fs: Pick<FsPort, 'statFile' | 'readFile'>
+  fs: FsAttachmentPort
   home: string
   attachments: AttachmentsPort
   config: Pick<SessionDeleteConfig, 'maxAttachmentBytes'>

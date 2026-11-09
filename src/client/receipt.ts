@@ -36,6 +36,28 @@ export interface Receipt<A extends ApplyAction> {
 /** 浏览器半自己的未分类诊断码（通道打不通 / 非信封 / 单条协议错）。它不过线，线上失败码仍归 `shared/wire.ts`。 */
 export const CLIENT_UNKNOWN_CODE = 'client/unknown'
 
+/**
+ * 一个动作在回执读法里的三格事实。**`Record<ApplyAction, …>` 是编译闸**：`/apply` 新增动作而这里
+ * 忘了登记，编译不过——新动作不许静默落进「not-found 算失败 / 没有附件读数 / 没有落地 id」这三条
+ * 兜底。与 `src/api/route-table.ts` 的 `APPLY_ACTION_TABLE` 同一个处方：按动作的知识只有一张表。
+ */
+interface ReceiptShape {
+  /** `not-found` 失败是不是中性提示（孤儿清理把「组已经不在了」当成功）。 */
+  readonly neutralOnNotFound: boolean
+  /** `ok` 回执里的值是否带那半份附件读数（purge / orphan-clean）。 */
+  readonly attachmentCleanup: boolean
+  /** 真正落地、可以参与撤销/回盘的 id 域；`none` = 这个动作没有可撤销的落地 id。 */
+  readonly landed: 'entry' | 'session' | 'none'
+}
+
+const RECEIPT_SHAPE: Record<ApplyAction, ReceiptShape> = {
+  delete: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'entry' },
+  restore: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'session' },
+  purge: { neutralOnNotFound: false, attachmentCleanup: true, landed: 'none' },
+  count: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'none' },
+  'orphan-clean': { neutralOnNotFound: true, attachmentCleanup: true, landed: 'none' },
+}
+
 export interface ReceiptOptions {
   /** N=1：null 只能是通道答错了，不冒充幂等成功。 */
   readonly single?: boolean
@@ -75,7 +97,7 @@ function decode<A extends ApplyAction>(
   if (outcome.action !== action) return undefined
   const typed = outcome as Extract<ApplyOutcome, { action: A }>
   if (!typed.ok) {
-    return action === 'orphan-clean' && typed.error.code === SESSION_DELETE_CODES['not-found']
+    return RECEIPT_SHAPE[action].neutralOnNotFound && typed.error.code === SESSION_DELETE_CODES['not-found']
       ? { kind: 'neutral', id: typed.id, error: typed.error }
       : { kind: 'failed', id: typed.id, error: typed.error }
   }
@@ -184,7 +206,7 @@ function statsAttachments(value: unknown): AttachmentCleanupWire | undefined {
 function summarizeAttachmentCleanup<A extends ApplyAction>(
   receipt: Receipt<A>,
 ): AttachmentCleanupWire | undefined {
-  if (receipt.action !== 'purge' && receipt.action !== 'orphan-clean') return undefined
+  if (!RECEIPT_SHAPE[receipt.action].attachmentCleanup) return undefined
   let removed = 0
   let freedBytes = 0
   let failedCount = 0
@@ -247,9 +269,10 @@ export function summarizeReceipt<A extends ApplyAction>(
       freedBytes: partial.freedBytes + detailNumber(verdict.error.details, 'freedBytes'),
     }
   }
-  const landedIds = receipt.action === 'delete'
+  const landed = RECEIPT_SHAPE[receipt.action].landed
+  const landedIds = landed === 'entry'
     ? landedEntryIds(receipt)
-    : receipt.action === 'restore'
+    : landed === 'session'
       ? restoredSessionIds(receipt, sessionIdOfEntry)
       : []
   const attachmentCleanup = summarizeAttachmentCleanup(receipt)

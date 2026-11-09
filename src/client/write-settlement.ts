@@ -7,7 +7,7 @@
  * 四条判据：
  * - **跨槽位在信封成功时就跑**：`afterDelete` / `afterRestore` 与 `invalidate` 不管逐条成败都跑
  *   （回滚失败可能留下半套，回收站清单不能继续摆旧行）；呈现钩子（发布/熄灭撤销、遗忘主视图、
- *   清详情缓存）只在至少一条落地（`anySuccess`）时跑——没有落点的撤销是假动作。delete 的撤销
+ *   清详情账本）只在至少一条落地（`anySuccess`）时跑——没有落点的撤销是假动作。delete 的撤销
  *   另要求落地名单非空：全部被同批前一条带走时没有可撤销的条目。
  * - **面板恢复用 `panelSeat: true` 明说**（「缺席」不再承载语义）：外部恢复（撤销横幅）由 settlement
  *   调 `afterRestore` 重开；面板恢复自带「回来」的结算，只 `forgetMainView`、不重开、不抢焦点。
@@ -51,11 +51,11 @@ export type WritePresentationByAction = {
     /** 面板恢复座位：true = 面板已替这条完成「回来」的结算，只遗忘、不重开、不抢焦点。 */
     panelSeat?: true
     dismissUndo?(entryIds: readonly string[]): void
-    clearDetailCache?(entryIds: readonly string[]): void
+    forgetTrashDetails?(entryIds: readonly string[]): void
   }
   purge: {
     dismissUndo?(entryIds: readonly string[]): void
-    clearDetailCache?(entryIds: readonly string[]): void
+    forgetTrashDetails?(entryIds: readonly string[]): void
   }
   count: Record<string, never>
   'orphan-clean': Record<string, never>
@@ -102,7 +102,7 @@ export function settleWrite<A extends ApplyAction>(
       if (!success.summary.anySuccess) return
       seat.dismissUndo?.(success.summary.successIds)
       if (seat.panelSeat === true) forgetMainView(restored)
-      seat.clearDetailCache?.(success.summary.successIds)
+      seat.forgetTrashDetails?.(success.summary.successIds)
       return
     }
     case 'purge': {
@@ -110,7 +110,7 @@ export function settleWrite<A extends ApplyAction>(
       if (success.summary.anySuccess) {
         // 永久删除也让指向这些条目的撤销横幅熄灭：留着就是一条注定失败的「撤销」。
         seat.dismissUndo?.(success.summary.successIds)
-        seat.clearDetailCache?.(success.summary.successIds)
+        seat.forgetTrashDetails?.(success.summary.successIds)
       }
       return
     }

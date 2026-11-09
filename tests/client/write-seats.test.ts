@@ -14,7 +14,11 @@ const mocks = vi.hoisted(() => ({
   afterDelete: vi.fn(),
   afterRestore: vi.fn(),
 }))
-vi.mock('../../src/client/trash-store.js', () => ({ invalidateTrash: mocks.invalidateTrash }))
+vi.mock('../../src/client/trash-store.js', () => ({
+  invalidateTrash: mocks.invalidateTrash,
+  // 复位册（`reset-client-state.ts`）会调它；这份用例不碰清单现场，给一个空实现即可。
+  resetTrashStore: () => undefined,
+}))
 // 通知台只套一层**调用记录**，实现仍是真品（`mockImplementation` 挂在下面那几个 hoisted spy 上）：
 // `ownsNotice` 按引用比 store 里的那一条，连 store 一起替身掉的话，
 // 「restoreFromUndo 拥有整趟」断言的就是替身自己（判据没被验过）。
@@ -38,15 +42,21 @@ vi.mock('../../src/client/main-view.js', () => ({
   afterDelete: mocks.afterDelete,
   afterRestore: mocks.afterRestore,
   forgetMainView: mocks.forgetMainView,
+  // 复位册（`reset-client-state.ts`）会调它；重开记忆不在这份用例的断言面里。
+  resetMainView: () => undefined,
 }))
 
 import type { BusyGate } from '../../src/client/busy-gate.js'
 import { zhTranslate } from '../../src/client/copy.js'
+import type { TrashDetailLike } from '../../src/client/remote.js'
+import { readCachedTrashDetail, writeTrashDetail } from '../../src/client/trash-snapshot.js'
 import {
-  publishUndoBatchNotice, publishUndoNotice, resetUndoNotice, useUndoNotice,
+  publishUndoBatchNotice, publishUndoNotice, useUndoNotice,
   type UndoNotice,
 } from '../../src/client/undo-notices.js'
 import { outcomes, trashRow } from './support/outcomes.js'
+import { applyDeps } from './support/fake-remote.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 import {
   deleteSessionFromMenu, deleteSessionsFromBatch,
   purgeFromPanel, restoreFromPanel, restoreFromUndo,
@@ -54,28 +64,34 @@ import {
 
 const valueOf = <A extends 'delete' | 'restore'>(action: A, id: string, v: ApplyValueByAction[A]): ApplyOutcome =>
   pick(outcomes(action, [id], { [id]: { value: v } }), 0)
+const detailOf = (entryId: string): TrashDetailLike => ({
+  entryId, cwd: '', createdAt: 0, lastActivity: 0, logTitle: '', models: [],
+  turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
+  injectedCount: 0, blocks: [], olderCursor: null,
+})
 /** 一枚不改变时序的闸：座位仍必须在里面跑，但用例不关心 busy 的中间态（那是 busy-gate 的测试）。 */
 const gate = (): BusyGate => {
-  // `vi.fn` 的 `Mock` 会把泛型签名塌成非泛型（`Promise<unknown>`），所以按 `BusyGate['around']` 收一次窄。
-  const around = vi.fn(async <T,>(task: () => Promise<T>): Promise<T> => task()) as unknown as BusyGate['around']
+  // 闸的落地面是判别联合（`blocked` / `ran`）；用例只关心"放行"，仍用 `vi.fn` 记调用次数。
+  const around = vi.fn(async <T,>(task: () => Promise<T>) => ({ kind: 'ran' as const, value: await task() })) as unknown as BusyGate['around']
   return { busy: false, around }
 }
 
 beforeEach(() => {
   vi.clearAllMocks()
   // 通知台是模块级 store：不清零会把上一条横幅（含 seq）带进下一个用例。
-  resetUndoNotice()
+  // 模块级现场（跨用例存活）：一条复位口收全部。
+  resetClientState()
 })
 
 describe('删除座位', () => {
   it('单删成功：失效 + 按落地条目发布撤销，失败为空', async () => {
     const g = gate()
     const deps = { applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [valueOf('delete', 's1', trashRow('e1', 's1'))]) }
-    const failure = await deleteSessionFromMenu(deps, { sessionId: 's1', title: '标题' }, g)
+    const failure = await deleteSessionFromMenu(applyDeps(deps.applyOutcomes), { sessionId: 's1', title: '标题' }, g)
     expect(g.around).toHaveBeenCalledTimes(1)
     expect(mocks.invalidateTrash).toHaveBeenCalledTimes(1)
     expect(mocks.publishUndoNotice).toHaveBeenCalledWith({ entryId: 'e1', title: '标题' })
-    expect(failure).toBeNull()
+    expect(failure).toEqual({ kind: 'ran', value: null })
   })
 
   it('批量删除：撤销名单只收 ok 条目的 entryId，失败表按 id 回', async () => {
@@ -85,10 +101,10 @@ describe('删除座位', () => {
         pick(outcomes('delete', ['s2'], { s2: { message: '删不动' } }), 0),
       ]),
     }
-    const failures = await deleteSessionsFromBatch(deps, ['s1', 's2'], gate())
+    const result = await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1', 's2'], gate())
     expect(mocks.publishUndoBatchNotice).toHaveBeenCalledWith({ entryIds: ['e1'], n: 1 })
     // 这枚闸是新的、没被占 ⇒ 座位一定跑完并交出失败表（被挡回那一路见下面「闸在飞时」那条）。
-    expect([...must(failures, '失败表').entries()]).toEqual([['s2', '删不动']])
+    expect(result).toEqual({ kind: 'ran', value: new Map([['s2', '删不动']]) })
   })
 
   it('一条都没落地：不发布没有落点的撤销横幅', async () => {
@@ -97,7 +113,7 @@ describe('删除座位', () => {
         pick(outcomes('delete', ['s1'], { s1: { message: '删不动' } }), 0),
       ]),
     }
-    await deleteSessionsFromBatch(deps, ['s1'], gate())
+    await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1'], gate())
     expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
   })
 })
@@ -115,7 +131,7 @@ describe('restoreFromUndo 拥有整趟', () => {
         throw Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' })
       }),
     }
-    await act(async () => { await restoreFromUndo(deps, must(current, '撤销横幅'), zhTranslate) })
+    await act(async () => { await restoreFromUndo(applyDeps(deps.applyOutcomes), must(current, '撤销横幅'), zhTranslate) })
     expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', ['e1'])
     expect(mocks.failNotice).toHaveBeenCalledWith(current, '原项目目录已不在')
     expect(view.result.current).toMatchObject({ kind: 'one', entryId: 'e1', failure: '原项目目录已不在' })
@@ -129,7 +145,7 @@ describe('restoreFromUndo 拥有整趟', () => {
       applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> =>
         outcomes('restore', ['e1'], { e1: { message: '会话目录不在盘上' } })),
     }
-    await act(async () => { await restoreFromUndo(deps, must(current, '撤销横幅'), zhTranslate) })
+    await act(async () => { await restoreFromUndo(applyDeps(deps.applyOutcomes), must(current, '撤销横幅'), zhTranslate) })
     expect(mocks.failNotice).toHaveBeenCalledWith(current, '会话目录不在盘上')
   })
 
@@ -141,7 +157,7 @@ describe('restoreFromUndo 拥有整趟', () => {
       applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> =>
         outcomes('restore', ['e1'], { e1: { value: null } })),
     }
-    await act(async () => { await restoreFromUndo(deps, must(current, '撤销横幅'), zhTranslate) })
+    await act(async () => { await restoreFromUndo(applyDeps(deps.applyOutcomes), must(current, '撤销横幅'), zhTranslate) })
     expect(mocks.failNotice).toHaveBeenCalledWith(current, expect.stringContaining('单条动作回了幂等空值'))
   })
 
@@ -157,7 +173,7 @@ describe('restoreFromUndo 拥有整趟', () => {
         pick(outcomes('restore', ['e3'], { e3: { message: '会话正在运行', code: 'sessiondelete/live' } }), 0),
       ]),
     }
-    await act(async () => { await restoreFromUndo(deps, must(current, '撤销横幅'), zhTranslate) })
+    await act(async () => { await restoreFromUndo(applyDeps(deps.applyOutcomes), must(current, '撤销横幅'), zhTranslate) })
     expect(deps.applyOutcomes).toHaveBeenCalledWith('restore', entryIds)
     expect(mocks.failNotice).toHaveBeenCalledWith(current, '3 条会话未能撤销：会话正在运行 · 项目目录不在')
   })
@@ -166,17 +182,37 @@ describe('restoreFromUndo 拥有整趟', () => {
     const view = renderHook(() => useUndoNotice())
     act(() => { publishUndoNotice({ entryId: 'e1', title: '标题' }) })
     const current = view.result.current
+    writeTrashDetail('e1', detailOf('e1'))
     const deps = {
       applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [valueOf('restore', 'e1', trashRow('e1', 's1'))]),
     }
-    await act(async () => { await restoreFromUndo(deps, must(current, '撤销横幅'), zhTranslate) })
+    await act(async () => { await restoreFromUndo(applyDeps(deps.applyOutcomes), must(current, '撤销横幅'), zhTranslate) })
     expect(mocks.invalidateTrash).toHaveBeenCalledTimes(1)
     // 主视图重开归 settlement（外部恢复座位不带 panelSeat）。
     expect(mocks.afterRestore).toHaveBeenCalledWith(['s1'])
     expect(mocks.forgetMainView).not.toHaveBeenCalled()
+    // 写成功即丢详情账本（ADR-0048 决定 4）：面板没挂载，这一趟也不许把已恢复条目的详情留在账本里。
+    expect(readCachedTrashDetail('e1')).toBeUndefined()
     // 座位不传 dismissUndo：部分失败的回滚要让失败原文留在同一条横幅上。
     expect(mocks.dismissUndoNotice).not.toHaveBeenCalled()
     expect(mocks.clearUndoNotice).toHaveBeenCalledTimes(1)
+  })
+
+  it('部分失败：只丢成功条目的详情账本，失败那条留着（它还在回收站里）', async () => {
+    const view = renderHook(() => useUndoNotice())
+    act(() => { publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 }) })
+    const current = view.result.current
+    writeTrashDetail('e1', detailOf('e1'))
+    writeTrashDetail('e2', detailOf('e2'))
+    const deps = {
+      applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [
+        valueOf('restore', 'e1', trashRow('e1', 's1')),
+        pick(outcomes('restore', ['e2'], { e2: { message: '会话正在运行' } }), 0),
+      ]),
+    }
+    await act(async () => { await restoreFromUndo(applyDeps(deps.applyOutcomes), must(current, '撤销横幅'), zhTranslate) })
+    expect(readCachedTrashDetail('e1')).toBeUndefined()
+    expect(readCachedTrashDetail('e2')).toBeDefined()
   })
 
   it('成功但期间被新删除覆盖：不动别人的横幅（ownsNotice 判据）', async () => {
@@ -188,7 +224,7 @@ describe('restoreFromUndo 拥有整趟', () => {
       applyOutcomes: vi.fn(() => new Promise<ApplyOutcome[]>((resolve) => { resolveApply = resolve })),
     }
     let trip!: Promise<void>
-    act(() => { trip = restoreFromUndo(deps, must(old, '撤销横幅（旧那一条）'), zhTranslate) })
+    act(() => { trip = restoreFromUndo(applyDeps(deps.applyOutcomes), must(old, '撤销横幅（旧那一条）'), zhTranslate) })
     // 撤销在飞：来了新删除，通知台换成新横幅。
     act(() => { publishUndoNotice({ entryId: 'e2', title: '新标题' }) })
     const fresh = view.result.current
@@ -201,7 +237,7 @@ describe('restoreFromUndo 拥有整趟', () => {
 
   it('单条形但落点是空串：早退——不发 /apply、不动横幅', async () => {
     const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [])
-    await restoreFromUndo({ applyOutcomes }, oneNotice(''), zhTranslate)
+    await restoreFromUndo(applyDeps(applyOutcomes), oneNotice(''), zhTranslate)
     expect(applyOutcomes).not.toHaveBeenCalled()
     expect(mocks.failNotice).not.toHaveBeenCalled()
     expect(mocks.clearUndoNotice).not.toHaveBeenCalled()
@@ -209,7 +245,7 @@ describe('restoreFromUndo 拥有整趟', () => {
 })
 
 describe('面板座位', () => {
-  it('恢复：闸包住整趟、dismiss/forget/cache/refresh 都接上，already-gone 从 entries 取 sessionId', async () => {
+  it('恢复：闸包住整趟、dismiss/forget/账本/refresh 都接上，already-gone 从 entries 取 sessionId', async () => {
     const deps = {
       applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [
         valueOf('restore', 'e1', trashRow('e1', 's1')),
@@ -218,33 +254,34 @@ describe('面板座位', () => {
     }
     const g = gate()
     const refreshAfterWrite = vi.fn(async () => {})
-    const clearDetailCache = vi.fn()
-    const outcome = await restoreFromPanel({
-      deps, ids: ['e1', 'e2'],
+    const forgetTrashDetails = vi.fn()
+    const run = await restoreFromPanel({
+      deps: applyDeps(deps.applyOutcomes), ids: ['e1', 'e2'],
       entries: [trashRow('e1', 's1'), trashRow('e2', 's2')],
-      gate: g, refreshAfterWrite, clearDetailCache,
+      gate: g, refreshAfterWrite, forgetTrashDetails,
     })
     expect(g.around).toHaveBeenCalledTimes(1)
     expect(mocks.dismissUndoNotice).toHaveBeenCalledWith(['e1', 'e2'])
     expect(mocks.forgetMainView).toHaveBeenCalledWith(['s1', 's2'])
     expect(mocks.afterRestore).not.toHaveBeenCalled()
-    expect(clearDetailCache).toHaveBeenCalledWith(['e1', 'e2'])
-    expect(refreshAfterWrite).toHaveBeenCalledWith(outcome)
+    expect(forgetTrashDetails).toHaveBeenCalledWith(['e1', 'e2'])
+    expect(run.kind).toBe('ran')
+    if (run.kind === 'ran') expect(refreshAfterWrite).toHaveBeenLastCalledWith(run.value)
   })
 
-  it('彻底删除：anySuccess 时熄灭撤销横幅并清详情缓存（这条以前被静默忽略）', async () => {
+  it('彻底删除：anySuccess 时熄灭撤销横幅并清详情账本（这条以前被静默忽略）', async () => {
     const deps = {
       applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [
         pick(outcomes('purge', ['e1'], { e1: { value: { removed: 1, freedBytes: 1 } } }), 0),
       ]),
     }
-    const clearDetailCache = vi.fn()
+    const forgetTrashDetails = vi.fn()
     await purgeFromPanel({
-      deps, ids: ['e1'], gate: gate(),
-      refreshAfterWrite: vi.fn(async () => {}), clearDetailCache,
+      deps: applyDeps(deps.applyOutcomes), ids: ['e1'], gate: gate(),
+      refreshAfterWrite: vi.fn(async () => {}), forgetTrashDetails,
     })
     expect(mocks.dismissUndoNotice).toHaveBeenCalledWith(['e1'])
-    expect(clearDetailCache).toHaveBeenCalledWith(['e1'])
+    expect(forgetTrashDetails).toHaveBeenCalledWith(['e1'])
     expect(mocks.forgetMainView).not.toHaveBeenCalled()
   })
 })
@@ -255,23 +292,23 @@ describe('座位 · 闸在飞时这一趟不跑', () => {
   /** 已被占住的闸：只注入真闸挡回时的那个形状（任务一次都不执行）。 */
   const flying = (): BusyGate => ({
     busy: true,
-    around: vi.fn(async () => undefined),
+    around: async () => ({ kind: 'blocked' }),
   })
 
-  it('三个交回 outcome 的座位都回 undefined，单删座位回「这一趟没跑」；一次都不发 /apply、不结算', async () => {
+  it('三个交回 outcome 的座位都回 blocked，单删座位也回 blocked；一次都不发 /apply、不结算', async () => {
     const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [])
     const deps = { applyOutcomes }
     const g = flying()
 
-    await expect(deleteSessionsFromBatch(deps, ['s1'], g)).resolves.toBeUndefined()
+    await expect(deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1'], g)).resolves.toEqual({ kind: 'blocked' })
     await expect(purgeFromPanel({
-      deps, ids: ['e1'], gate: g, refreshAfterWrite: vi.fn(async () => {}), clearDetailCache: vi.fn(),
-    })).resolves.toBeUndefined()
+      deps: applyDeps(deps.applyOutcomes), ids: ['e1'], gate: g, refreshAfterWrite: vi.fn(async () => {}), forgetTrashDetails: vi.fn(),
+    })).resolves.toEqual({ kind: 'blocked' })
     await expect(restoreFromPanel({
-      deps, ids: ['e1'], entries: null, gate: g, refreshAfterWrite: vi.fn(async () => {}), clearDetailCache: vi.fn(),
-    })).resolves.toBeUndefined()
-    // 单删座位不许把「没跑」折成 `null`（那是「跑了、这条没有失败」，确认框会据此收框）。
-    await expect(deleteSessionFromMenu(deps, { sessionId: 's1', title: 'T' }, g)).resolves.toBeUndefined()
+      deps: applyDeps(deps.applyOutcomes), ids: ['e1'], entries: null, gate: g, refreshAfterWrite: vi.fn(async () => {}), forgetTrashDetails: vi.fn(),
+    })).resolves.toEqual({ kind: 'blocked' })
+    // 单删座位不许把「没跑」折成「跑了、这条没有失败」（那会让确认框据此收框）。
+    await expect(deleteSessionFromMenu(applyDeps(deps.applyOutcomes), { sessionId: 's1', title: 'T' }, g)).resolves.toEqual({ kind: 'blocked' })
 
     expect(applyOutcomes).not.toHaveBeenCalled()
     expect(mocks.invalidateTrash).not.toHaveBeenCalled()

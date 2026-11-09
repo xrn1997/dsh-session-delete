@@ -10,19 +10,23 @@
  * 孤儿附件是聚合的 `POST /attachment-clean`（回执就是 `AttachmentCleanupWire` 本身）。
  * 面板的 `useTrashQuery` 与本 hook 互不引用：维护卡是手动面，面板是挂载即读的清单面。
  */
-import { useState } from 'react'
 import type { Translate } from './copy.js'
 import { attachmentSkippedSentence, readReceipt, summarizeReceipt, type ReceiptSummary } from './receipt.js'
 import {
-  callRemote,
   type AttachmentCleanupWire,
   type AttachmentOrphanReportWire,
   type OrphanReportWire,
+  type RemoteOutcome,
   type SessionDeleteRemote,
 } from './remote.js'
 import type { ApplyOutcome } from '../shared/wire.js'
 import { fileSizeText } from './ui/format.js'
-import { useMaintenanceSection, type MaintenanceSectionView } from './use-maintenance-section.js'
+import {
+  useMaintenanceSection,
+  type MaintenanceScanOutcome,
+  type MaintenanceSectionView,
+  type MaintenanceSettlePlan,
+} from './use-maintenance-section.js'
 
 /** 维护卡只需要这四段：两份报告 + 孤儿会话的批量写 + 孤儿附件的聚合写。 */
 export type MaintenanceDeps = Pick<
@@ -31,9 +35,8 @@ export type MaintenanceDeps = Pick<
 >
 
 export interface Maintenance {
-  /** 孤儿会话段 + 它独有的第二回执：这一趟清理顺带清掉的附件读数（`.dsh` 内独占图片副本）。
-   *  重查读不出来，和段的 `notice` 一样是过去那一趟的回执；下一次检查 / 清理会被收掉。 */
-  readonly orphans: MaintenanceSectionView<OrphanReportWire> & { readonly attachmentNotice: string | null }
+  /** 孤儿会话段：清理顺带清掉的附件读数在这台状态机的 `secondaryNotice` 上（第二回执）。 */
+  readonly orphans: MaintenanceSectionView<OrphanReportWire>
   readonly attachments: MaintenanceSectionView<AttachmentOrphanReportWire>
 }
 
@@ -72,63 +75,69 @@ function orphanCleanFailureSentence(
   return `${base}${partial}`
 }
 
+/** 检查落地 + 本段的失败前缀 → 段机器吃的落地面；「怎么说」归 glue，「什么时候摆」归机器。 */
+function scanText<R>(
+  outcome: RemoteOutcome<R>,
+  text: (message: string) => string,
+): MaintenanceScanOutcome<R> {
+  return outcome.ok ? outcome : { ok: false, text: text(outcome.failure.message) }
+}
+
 export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translate }): Maintenance {
   /* ── 孤儿会话段：`GET /orphans` 读 + `/apply` 的 `orphan-clean` 写 ─────────── */
-  const [orphanAttachmentNotice, setOrphanAttachmentNotice] = useState<string | null>(null)
   const orphans = useMaintenanceSection<OrphanReportWire, ApplyOutcome[]>({
-    scan: () => callRemote(() => deps.scanOrphans()),
-    // 新一次检查是新的只读快照：上一趟清理顺带清掉的附件回执一起收掉，不冒充这一次的读数。
-    // 只在赢了之后收（输家不收）：否则被后发检查顶掉的输家会把赢家的回执清掉。
-    onScanWon: () => { setOrphanAttachmentNotice(null) },
-    clean: (report) => {
-      if (report.roots.length === 0) return null
-      // 清理这一趟一起飞，上一趟的回执就不再是读数：写在发请求之前。这里不需要检查那套赢家判定
-      // ——同时只有一趟写在飞，靠的是界面上的忙碌禁用（`maintenance-parts.tsx` 与确认框的确认键），
-      // 不是这台状态机给的保证；改动这两处之一前先确认不会出现输家替赢家清场。
-      setOrphanAttachmentNotice(null)
-      return callRemote(() => deps.applyOutcomes('orphan-clean', report.roots))
-    },
-    scanFailureText: (message) => t('trash.orphans.failure', { message }),
-    settle: (outcome, report) => {
+    scan: async () => scanText(
+      await deps.scanOrphans(),
+      (message) => t('trash.orphans.failure', { message }),
+    ),
+    clean: (report) => report.roots.length === 0
+      ? null
+      : deps.applyOutcomes('orphan-clean', report.roots),
+    // 回执判读只住 `receipt.ts`（三态判读与 partial 的累加语义都在那里）；这里只消费摘要。
+    // 请求名单用**这一趟**点击那一刻的报告：状态机把它随回执一起交回来，段不自存"最近一次的名单"。
+    afterClean: (outcome, report) => {
       if (!outcome.ok) {
-        return { failure: t('trash.orphans.failure', { message: outcome.failure.message }) }
+        return { plan: { failure: t('trash.orphans.failure', { message: outcome.failure.message }) } }
       }
-      // 回执判读只住 `receipt.ts`（三态判读与 partial 的累加语义都在那里）；这里只消费摘要。
-      // 请求名单用**这一趟**点击那一刻的报告：状态机把它随回执一起交回来，段不自存"最近一次的名单"。
       const { summary } = summarizeReceipt(readReceipt('orphan-clean', report.roots, outcome.value))
+      const plan: { notice?: string; failure?: string; secondaryNotice?: string | null } = {}
       // 这一趟顺带清的图片副本也是用户要看见的后果：与孤儿附件段同一套回执句子。
       if (summary.attachmentCleanup !== undefined) {
-        setOrphanAttachmentNotice(attachmentCleanupNotice(summary.attachmentCleanup, t))
+        plan.secondaryNotice = attachmentCleanupNotice(summary.attachmentCleanup, t)
       }
-      const plan: { notice?: string; failure?: string } = {}
       if (summary.neutralIds.length > 0) {
         plan.notice = t('trash.orphans.cleanGone', { count: summary.neutralIds.length })
       }
       const firstFailed = summary.failed[0]
       if (firstFailed !== undefined) plan.failure = orphanCleanFailureSentence(summary, firstFailed, t)
-      return plan
+      return { plan }
     },
   })
 
   /* ── 孤儿附件段：`GET /attachment-orphans` 读 + 聚合的 `POST /attachment-clean` 写 ── */
   const attachments = useMaintenanceSection<AttachmentOrphanReportWire, AttachmentCleanupWire>({
-    scan: () => callRemote(() => deps.scanAttachmentOrphans()),
-    clean: (report) => (report.count === 0 ? null : callRemote(() => deps.cleanAttachmentOrphans())),
-    beforeRescan: (outcome) => {
-      if (!outcome.ok) return null
-      // 清理成功后旧报告已经过期：重查还在飞时先收成 0，别让旧横幅冒充"没清"；
-      // 重查回来再落真实的 0/剩余数（若重查失败则走失败块，不保留旧读数）。
+    scan: async () => scanText(
+      await deps.scanAttachmentOrphans(),
+      (message) => t('maintenance.attachments.scanFailed', { message }),
+    ),
+    clean: (report) => report.count === 0
+      ? null
+      : deps.cleanAttachmentOrphans(),
+    // 一次判读、两处落地：成功且没有跳过/失败时，重查飞着时先收成 0（旧报告已过期）；
+    // 重查回来再落真实读数（若重查失败则走失败块，不保留旧读数）。
+    afterClean: (outcome) => {
+      if (!outcome.ok) {
+        // 清理顶层失败没有"件数"可说：本地化前缀 + 服务端原文（引用源读不出、盘上忙…）。
+        return { plan: { failure: t('maintenance.attachments.cleanError', { message: outcome.failure.message }) } }
+      }
       const receipt = outcome.value
-      return receipt.failed === 0 && receipt.skipped === undefined
-        ? { count: 0, totalBytes: 0, items: [] }
-        : null
+      const plan: MaintenanceSettlePlan = { notice: attachmentCleanupNotice(receipt, t) }
+      const cleared = receipt.failed === 0 && receipt.skipped === undefined
+      return cleared
+        ? { preset: { count: 0, totalBytes: 0, items: [] }, plan }
+        : { plan }
     },
-    scanFailureText: (message) => t('maintenance.attachments.scanFailed', { message }),
-    settle: (outcome) => outcome.ok
-      // 清理顶层失败没有"件数"可说：本地化前缀 + 服务端原文（引用源读不出、盘上忙…）。
-      ? { notice: attachmentCleanupNotice(outcome.value, t) }
-      : { failure: t('maintenance.attachments.cleanError', { message: outcome.failure.message }) },
   })
 
-  return { orphans: { ...orphans, attachmentNotice: orphanAttachmentNotice }, attachments }
+  return { orphans, attachments }
 }

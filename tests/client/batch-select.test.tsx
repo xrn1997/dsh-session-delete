@@ -5,17 +5,16 @@ import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton, BatchPickCheckbox, fetchCounts } from '../../src/client/batch-select.js'
-import { readVisibleSelectableRows, resetHostRows } from '../../src/client/host-rows.js'
-import { enterSelection, getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
+import { readVisibleSelectableRows } from '../../src/client/host-rows.js'
+import { enterSelection, getPicks, togglePick } from '../../src/client/batch-selection-store.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
-  resetSelection()
-  resetHostRows()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetSelection()
-  resetHostRows()
+  resetClientState()
 })
 
 describe('多选态的渲染门', () => {
@@ -105,7 +104,7 @@ describe('多选态行首勾选框', () => {
 
 describe('子会话计数', () => {
   it('fetchCounts：缺一条回执 ⇒ null（不拿假数）', async () => {
-    const deps = { applyOutcomes: vi.fn(async () => []) }
+    const deps = { applyOutcomes: vi.fn(async () => ({ ok: true as const, value: [] })) }
     await expect(fetchCounts(deps, ['a'])).resolves.toBeNull()
   })
 })

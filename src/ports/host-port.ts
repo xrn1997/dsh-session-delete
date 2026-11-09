@@ -1,6 +1,7 @@
 import { captureAgentHandles } from './agent-handles.js'
 // 闭包与 bare 归一的唯一实现在领域纯部件里（见其头注）：端口只保留「一层一次宿主调用」的 adapter 职责。
 import { bareSessionId, closureOf, sessionIdShapes } from '../domain/closure.js'
+import { NO_CWD_PROJECT_DIR, escapeProjectKey } from '../shared/project-key.js'
 
 /** 摘内存的三种落地（见 {@link HostPort.evictLive}）：`not-live` / `evicted` 都意味着**宿主列表已经不含它**；
  *  `unknown` 意味着读不到或摘不掉，**不能**据此通告客户端（发了就是假话，重连后那一行会自己长回来）。 */
@@ -17,8 +18,11 @@ export interface HostIdentityPort {
    *  header 走公开 live/持久化读面；与 `workspaceOf` 同一口径：**未命中是正常的 no-op，不是故障**
    *  （存储真故障照抛）。 */
   projectDirOf(sessionId: string): Promise<string | undefined>
-  /** 删除时**尽力**取的会话标题；取不到返回空串，绝不因此让删除失败。
-   *  标题只存在于宿主自己的账本/缓存里（`FsPort` 不直读文件）⇒ 取数面归宿主端口，接官方投影缓存 API；
+  /** 删除时**尽力**取的会话显示名，**与宿主工作中同名**：子会话（`subagent` 投影有 label）取 label
+   *  （委派 `subagent` 时的 `description`），其余取 `title` 投影；取不到返回空串，绝不因此让删除失败。
+   *  为什么子会话不按 `title` 投影起名：那是主会话那套起名法（LLM 标题 / 首句提示词截断兜底），
+   *  同批子会话会撞成同名分不清（ADR-0058）。
+   *  名字只存在于宿主自己的账本/缓存里（`FsPort` 不直读文件）⇒ 取数面归宿主端口，接官方投影缓存 API；
    *  header 与 `projectDirOf` 走同一个公开读面。 */
   titleOf(sessionId: string): Promise<string>
   isLive(sessionId: string): Promise<boolean>
@@ -161,10 +165,19 @@ async function headerOf(host: HostCtxLike, sessionId: string): Promise<{ readonl
 }
 
 /** 会话标题的投影缓存读面；可选服务，按 `ctx.get` 读，不进 inject。
- *  出处：asar `dsh-api-session-controller/lib/index.js` 的 `projectionsFor`（`cachedSnapshot ?? cachedPredecessorTitle`）。 */
+ *  出处：asar `dsh-api-session-controller/lib/index.js` 的 `projectionsFor`（`cachedSnapshot ?? cachedPredecessorTitle`）。
+ *  `title` 与 `subagent` 两个投影行都在同一份 checkpoint 里：`subagent` 行的 `label` 是宿主子智能体
+ *  面给子会话的显示名（`dsh-client-ui-subagent` 读 `projectionValues.subagent.label`），见 {@link HostIdentityPort.titleOf}。 */
 interface ProjectionCacheLike {
   cachedSnapshot(header: unknown, keys?: readonly string[]): { readonly values: Record<string, unknown> } | undefined
   cachedPredecessorTitle(header: unknown): { readonly values: Record<string, unknown> } | undefined
+}
+
+/** `subagent` 投影行里的 label：形状不符 / 空串一律当没有（降级，不响亮失败）。 */
+function subagentLabelOf(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return ''
+  const label = (value as { label?: unknown }).label
+  return typeof label === 'string' ? label : ''
 }
 
 /** 端口实际读到的 ctx 面（一次强转的落点）。 */
@@ -260,7 +273,7 @@ async function descendantsByParent(
       seen.add(bare)
       const cwd = record.header.cwd
       const descendant: SubagentMember = {
-        sessionId: id, projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
+        sessionId: id, projectDir: projectDirOfCwd(cwd),
       }
       const parentBare = bareSessionId(parent)
       const siblings = children.get(parentBare)
@@ -296,33 +309,21 @@ interface SessionListLike {
   list(signal?: unknown): Promise<unknown>
 }
 
-/** 无 cwd 的会话落在 `_no-cwd/`；`projectDirOf` 与回收站对账共用这个字面量。
- *  出处：asar `dsh-session-persistence-jsonl/lib/index.js` 的 `projectDir`（`if (cwd === void 0) return join(root, "_no-cwd");`）。 */
-export const NO_CWD_PROJECT_DIR = '_no-cwd'
-
-/** 宿主 `projectKey(cwd)` 的逐字镜像：跨插件不能 import，宿主也没把它暴露成服务。
- *  出处：asar `dsh-session-persistence-jsonl/lib/index.js` 的 `projectKey`；调用链
- *  `locate` → `logPath` → `projectDir` → `projectKey`。本机实测 `D:/develop/GitHub/dsh-session-delete`
- *  → `--D-develop-GitHub-dsh-session-delete--`。`projectDirOf` 与回收站对账重建共用这一份；
+/** 宿主 `projectKey(cwd)` 的逐字镜像：编码与解码配对住在 `src/shared/project-key.ts`
+ *  （字母表只有一份；解码给浏览器半渲染回收站组头）。`projectDirOf` 与回收站对账重建共用这一份；
  *  宿主换代先复核算法。 */
-export function projectKey(cwd: string): string {
-  let readable = ''
-  let separatorRun = false
-  for (let i = 0; i < cwd.length; i++) {
-    const code = cwd.charCodeAt(i)
-    const ch = String.fromCharCode(code)
-    if (ch === '/' || ch === '\\' || ch === ':') {
-      if (!separatorRun) readable += '-'
-      separatorRun = true
-    } else if (ch !== '~' && /^[A-Za-z0-9._-]$/.test(ch)) {
-      readable += ch
-      separatorRun = false
-    } else {
-      readable += `~${code.toString(16).toUpperCase().padStart(4, '0')}`
-      separatorRun = false
-    }
-  }
-  return `--${(readable.replace(/^-+/, '') || 'root').slice(0, 251)}--`
+export const projectKey = escapeProjectKey
+
+/**
+ * cwd（可缺席）→ 会话落盘的项目目录名：**只有缺席**（`undefined`）落 `_no-cwd`；
+ * 空串照常编码——`''` 不是"没有这一格"，它是读到了一个空路径。宿主的 `projectDir`
+ * （`cwd === void 0` 才走 `_no-cwd`）就是这一支。
+ *
+ * 删除计划、会话列表投影与对账重建**共用这一处**：三处各自写一遍三元式，`''` 迟早有一处
+ * 落成 `_no-cwd`，同一条会话在删除、恢复与孤儿扫描里就会指向两个目录。
+ */
+export function projectDirOfCwd(cwd: string | undefined): string {
+  return cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd)
 }
 
 /** 投影缓存服务的最小方法面判据（按方法面判，不按 `constructor.name` 判）。 */
@@ -391,16 +392,24 @@ export function createHostPort(ctx: unknown): HostPort {
     async projectDirOf(sessionId) {
       const header = await headerOf(host, sessionId)
       if (header === undefined) return undefined
-      return header.cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(header.cwd)
+      return projectDirOfCwd(header.cwd)
     },
 
-    /** 标题走宿主投影缓存；header 来自公开的 live/持久化读面，尽力取，取不到返回空串。 */
+    /** 显示名走宿主投影缓存（与工作中同名）：子会话取 `subagent` 投影的 label，其余取 `title` 行的
+     *  **视图值**（缓存整条未命中才回落 predecessor 标题）。header 来自公开的 live/持久化读面，
+     *  尽力取，取不到返回空串。 */
     async titleOf(sessionId) {
       try {
         const header = await headerOf(host, sessionId)
         if (header === undefined) return ''
         const cache = projectionCacheOf(host)
-        const block = cache?.cachedSnapshot(header, ['title']) ?? cache?.cachedPredecessorTitle(header)
+        const snapshot = cache?.cachedSnapshot(header, ['title', 'subagent'])
+        const label = subagentLabelOf(snapshot?.values.subagent)
+        if (label !== '') return label
+        // 回落沿用旧口径：**缓存这一格缺席**（不是"有行但值是 null"）才换 predecessor 标题那一问。
+        const block = snapshot !== undefined && snapshot.values.title !== undefined
+          ? snapshot
+          : cache?.cachedPredecessorTitle(header)
         const title = block?.values.title
         return typeof title === 'string' ? title : ''
       } catch {
@@ -535,7 +544,7 @@ export function createHostPort(ctx: unknown): HostPort {
         out.push({
           sessionId: id,
           ...(typeof parent === 'string' && parent !== '' ? { parentSessionId: parent } : {}),
-          projectDir: cwd === undefined ? NO_CWD_PROJECT_DIR : projectKey(cwd),
+          projectDir: projectDirOfCwd(cwd),
           subagent: record.header?.origin === 'subagent',
         })
       }

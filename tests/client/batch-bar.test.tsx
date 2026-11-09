@@ -3,36 +3,25 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton } from '../../src/client/batch-select.js'
 import { BatchBar } from '../../src/client/batch-bar.js'
-import { BatchConfirmHost, resetBatchConfirm } from '../../src/client/batch-confirm.js'
-import { resetHostRows } from '../../src/client/host-rows.js'
+import { BatchConfirmHost } from '../../src/client/batch-confirm.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
-import { resetTrashStore } from '../../src/client/trash-store.js'
-import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 import { createFakeRemote } from './support/fake-remote.js'
 import {
   enterSelection,
   getPicks,
   isSelecting,
-  resetSelection,
   togglePick,
 } from '../../src/client/batch-selection-store.js'
 import { countOutcomes } from './support/outcomes.js'
 import { pick } from '../support/fixture.js'
 
 beforeEach(() => {
-  resetSelection()
-  resetHostRows()
-  resetBatchConfirm()
-  resetUndoNotice()
-  resetTrashStore()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetSelection()
-  resetHostRows()
-  resetBatchConfirm()
-  resetUndoNotice()
-  resetTrashStore()
+  resetClientState()
   document.body.replaceChildren()
 })
 

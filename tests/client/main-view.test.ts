@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClientContextLike } from '../../src/client/context.js'
 import { afterDelete, afterRestore, bindMainView, forgetMainView, resetMainView } from '../../src/client/main-view.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 /** 只给 `get('uiWorkspace')` 的窄 ctx（`slots` 在这一层用不到）。 */
 function ctxWith(ui: unknown): ClientContextLike {
@@ -38,8 +39,8 @@ function listStore(getById: () => Record<string, unknown>) {
   }
 }
 
-beforeEach(() => resetMainView())
-afterEach(() => resetMainView())
+beforeEach(() => resetClientState())
+afterEach(() => resetClientState())
 
 describe('删除/恢复时主视图的收尾', () => {
   it('afterDelete 关掉当前会话并记住它；afterRestore 重开它', () => {

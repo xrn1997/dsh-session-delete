@@ -9,18 +9,24 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { ConfigSettings } from '../../src/client/config-settings.js'
+import type { RemoteOutcome } from '../../src/client/remote.js'
 import { DEFAULT_CONFIG } from '../../src/config.js'
 import type { SessionDeleteConfigWire } from '../../src/shared/wire.js'
 
 function deps(over: Partial<{
-  config: () => Promise<SessionDeleteConfigWire>
-  saveConfig: (next: SessionDeleteConfigWire) => Promise<SessionDeleteConfigWire>
+  config: () => Promise<RemoteOutcome<SessionDeleteConfigWire>>
+  saveConfig: (next: SessionDeleteConfigWire) => Promise<RemoteOutcome<SessionDeleteConfigWire>>
 }> = {}) {
   return {
-    config: vi.fn(async (): Promise<SessionDeleteConfigWire> => ({ ...DEFAULT_CONFIG })),
-    saveConfig: vi.fn(async (next: SessionDeleteConfigWire): Promise<SessionDeleteConfigWire> => ({ ...next })),
+    config: vi.fn(async (): Promise<RemoteOutcome<SessionDeleteConfigWire>> => ({ ok: true, value: { ...DEFAULT_CONFIG } })),
+    saveConfig: vi.fn(async (next: SessionDeleteConfigWire): Promise<RemoteOutcome<SessionDeleteConfigWire>> =>
+      ({ ok: true, value: { ...next } })),
     ...over,
   }
+}
+
+function failure(message: string): RemoteOutcome<SessionDeleteConfigWire> {
+  return { ok: false, failure: { code: 'client/unknown', message } }
 }
 
 describe('可调项卡', () => {
@@ -50,8 +56,8 @@ describe('可调项卡', () => {
 
   it('保存在飞时再提交一次不会发第二趟（回车与按钮共用这条路）', async () => {
     let release: ((value: SessionDeleteConfigWire) => void) | undefined
-    const saveConfig = vi.fn((next: SessionDeleteConfigWire) => new Promise<SessionDeleteConfigWire>((resolve) => {
-      release = () => resolve({ ...next })
+    const saveConfig = vi.fn((next: SessionDeleteConfigWire) => new Promise<RemoteOutcome<SessionDeleteConfigWire>>((resolve) => {
+      release = () => resolve({ ok: true, value: { ...next } })
     }))
     render(<ConfigSettings deps={{ ...deps(), saveConfig }} />)
 
@@ -93,7 +99,7 @@ describe('可调项卡', () => {
   })
 
   it('读失败：原文上屏，重试再读一次', async () => {
-    const config = vi.fn(async (): Promise<SessionDeleteConfigWire> => { throw new Error('打不通') })
+    const config = vi.fn(async (): Promise<RemoteOutcome<SessionDeleteConfigWire>> => failure('打不通'))
     render(<ConfigSettings deps={{ config, saveConfig: vi.fn() }} />)
 
     expect(await screen.findByRole('alert')).toHaveTextContent('读取失败：打不通')
@@ -102,7 +108,7 @@ describe('可调项卡', () => {
   })
 
   it('保存失败：状态行带出服务端原文', async () => {
-    const saveConfig = vi.fn(async (): Promise<SessionDeleteConfigWire> => { throw new Error('被更高层覆盖') })
+    const saveConfig = vi.fn(async (): Promise<RemoteOutcome<SessionDeleteConfigWire>> => failure('被更高层覆盖'))
     render(<ConfigSettings deps={{ ...deps(), saveConfig }} />)
 
     const input = await screen.findByLabelText('孤儿附件预览条数')

@@ -3,7 +3,7 @@
  *
  * 这里钉两件事：delete / restore / purge 各自的固定顺序，以及 `anySuccess` 这道门。
  * 跨槽位（main-view 收尾、回收站失效）在信封成功时就跑，逐条全失败也跑；呈现钩子
- * （撤销通告、熄灭横幅、遗忘主视图、清详情缓存）只在至少一条落地时跑，delete 的撤销另要求
+ * （撤销通告、熄灭横幅、遗忘主视图、清详情账本）只在至少一条落地时跑，delete 的撤销另要求
  * 落地名单非空。
  *
  * 恢复有两个座位：外部恢复（撤销横幅）由 settlement 调 `afterRestore` 重开；面板恢复用
@@ -62,7 +62,7 @@ describe('settleWrite', () => {
     expect(mocks.calls).toEqual(['afterDelete:', 'invalidate'])
   })
 
-  it('restore（外部座位）：afterRestore → invalidate → 熄灭撤销 / 清缓存；already-gone 由查找兜底', () => {
+  it('restore（外部座位）：afterRestore → invalidate → 熄灭撤销 / 清账本；already-gone 由查找兜底', () => {
     mocks.calls.length = 0
     const { summary } = summarizeReceipt(
       readReceipt('restore', ['e1', 'e2'], [
@@ -74,14 +74,14 @@ describe('settleWrite', () => {
     settleWrite(settled({ action: 'restore', ids: ['e1', 'e2'], summary }), {
       invalidate: () => mocks.calls.push('invalidate'),
       dismissUndo: (ids) => mocks.calls.push(`dismiss:${ids.join(',')}`),
-      clearDetailCache: (ids) => mocks.calls.push(`cache:${ids.join(',')}`),
+      forgetTrashDetails: (ids) => mocks.calls.push(`ledger:${ids.join(',')}`),
     })
     expect(mocks.calls).toEqual([
-      'afterRestore:s1,s2', 'invalidate', 'dismiss:e1,e2', 'cache:e1,e2',
+      'afterRestore:s1,s2', 'invalidate', 'dismiss:e1,e2', 'ledger:e1,e2',
     ])
   })
 
-  it('restore（面板座位）：panelSeat 明说 ⇒ 只遗忘 / 清缓存，不重开主视图', () => {
+  it('restore（面板座位）：panelSeat 明说 ⇒ 只遗忘 / 清账本，不重开主视图', () => {
     mocks.calls.length = 0
     const { summary } = summarizeReceipt(
       readReceipt('restore', ['e1', 'e2'], [
@@ -93,10 +93,10 @@ describe('settleWrite', () => {
     settleWrite(settled({ action: 'restore', ids: ['e1', 'e2'], summary }), {
       panelSeat: true,
       dismissUndo: (ids) => mocks.calls.push(`dismiss:${ids.join(',')}`),
-      clearDetailCache: (ids) => mocks.calls.push(`cache:${ids.join(',')}`),
+      forgetTrashDetails: (ids) => mocks.calls.push(`ledger:${ids.join(',')}`),
     })
     expect(mocks.calls).toEqual([
-      'dismiss:e1,e2', 'forget:s1,s2', 'cache:e1,e2',
+      'dismiss:e1,e2', 'forget:s1,s2', 'ledger:e1,e2',
     ])
   })
 
@@ -105,27 +105,27 @@ describe('settleWrite', () => {
     settleWrite(settled({ action: 'restore', ids: ['e1'], summary: writeOutcome('restore', ['e1']).summary }), {
       invalidate: () => mocks.calls.push('invalidate'),
       dismissUndo: () => mocks.calls.push('dismiss'),
-      clearDetailCache: () => mocks.calls.push('cache'),
+      forgetTrashDetails: () => mocks.calls.push('ledger'),
     })
     expect(mocks.calls).toEqual(['afterRestore:', 'invalidate'])
   })
 
-  it('purge：anySuccess 时熄灭撤销 → 清详情缓存；全失败不碰呈现钩子', () => {
+  it('purge：anySuccess 时熄灭撤销 → 清详情账本；全失败不碰呈现钩子', () => {
     mocks.calls.length = 0
     const { summary } = summarizeReceipt(readReceipt('purge', ['e1'], [
       { id: 'e1', action: 'purge', ok: true, value: { removed: 1, freedBytes: 1 } },
     ]))
     settleWrite(settled({ action: 'purge', ids: ['e1'], summary }), {
       dismissUndo: (ids) => mocks.calls.push(`dismiss:${ids.join(',')}`),
-      clearDetailCache: (ids) => mocks.calls.push(`cache:${ids.join(',')}`),
+      forgetTrashDetails: (ids) => mocks.calls.push(`ledger:${ids.join(',')}`),
     })
-    expect(mocks.calls).toEqual(['dismiss:e1', 'cache:e1'])
+    expect(mocks.calls).toEqual(['dismiss:e1', 'ledger:e1'])
 
-    // 逐条全失败：撤销横幅与详情缓存都不许动——没有落点，清缓存只会让下一次详情白读。
+    // 逐条全失败：撤销横幅与详情账本都不许动——没有落点，清账本只会让下一次详情白读。
     mocks.calls.length = 0
     settleWrite(settled({ action: 'purge', ids: ['e1'], summary: writeOutcome('purge', ['e1']).summary }), {
       dismissUndo: (ids) => mocks.calls.push(`dismiss:${ids.join(',')}`),
-      clearDetailCache: (ids) => mocks.calls.push(`cache:${ids.join(',')}`),
+      forgetTrashDetails: (ids) => mocks.calls.push(`ledger:${ids.join(',')}`),
     })
     expect(mocks.calls).toEqual([])
 

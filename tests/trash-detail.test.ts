@@ -10,6 +10,7 @@ import {
   PAGE_BLOCK_LIMIT,
   PAGE_CHAR_LIMIT,
   PER_BLOCK_CHAR_CAP,
+  PROMPT_PREVIEW_LIMIT,
   SUBAGENT_SUMMARY_LIMIT,
   readTrashDetail,
   type DetailDeps,
@@ -251,6 +252,9 @@ it('附件总量用尽后，纯附件块被挤成空块 ⇒ 整块不出线（�
   expect(detail.blocks).toHaveLength(10)
   expect(detail.blocks.every((block) => block.kind === 'tool' || block.text !== '' || block.attachments.length > 0)).toBe(true)
   expect(detail.userMessageCount).toBe(11)
+  // 被页级附件闸收掉的块（这里全是纯附件提问）也不进提问索引：轨上留一格却永远跳不过去
+  // 比没有这一格更坏。它们仍在正文里（滚到就是），只是不占刻度。
+  expect(detail.prompts).toEqual([])
 })
 
 it('单块超限：正文、工具参数、工具结果各自截断并标 truncated', async () => {
@@ -617,6 +621,7 @@ it('父条目详情带子会话摘要：清册原序、完整清册行形状、�
   expect(detail.subagents?.map((child) => child.id)).toEqual([kid2Id, kidId])
   expect(detail.subagents?.[1]).toMatchObject({ id: kidId, sessionId: 'session-kid', title: '孩子', sizeBytes: 55, parentEntryId: id })
   expect(detail.subagentsTotal).toBeUndefined()
+  expect(detail.subagentsSizeBytes).toBe(121)
 })
 
 it('孩子自己的详情没有 subagents 这一格（它不是组根）', async () => {
@@ -630,7 +635,7 @@ it('折不进这一条的下一代不进展详情段（中间行自己占清单�
   const rootDetail = await readTrashDetail(deps)(id)
   // 根只接住直接孩子；孙辈的父本身也是孩子，折不进根
   expect(rootDetail.subagents?.map((child) => child.id)).toEqual([kidId])
-  // 中间行不是组根：孙辈自己占清单行，详情不再重复给入口（ADR-0029 否掉的双入口）
+  // 中间行不是组根：孙辈自己占清单行，详情不再重复给入口（ADR-0055 否掉的双入口）
   const childDetail = await readTrashDetail(deps)(kidId)
   expect(childDetail.subagents).toBeUndefined()
 })
@@ -638,6 +643,7 @@ it('折不进这一条的下一代不进展详情段（中间行自己占清单�
 it('没有孩子的条目缺席这一格（缺席不是空数组）', async () => {
   const detail = await readTrashDetail(makeDeps(body(userLine(13, '独白'))).deps)(id)
   expect(detail.subagents).toBeUndefined()
+  expect(detail.subagentsSizeBytes).toBeUndefined()
 })
 
 it('取更早一页（before 游标）时 subagents 仍在', async () => {
@@ -655,4 +661,174 @@ it('子会话摘要过条数闸：只过线前 N 条，总数另走 subagentsTot
   })(id)
   expect(detail.subagents).toHaveLength(1)
   expect(detail.subagentsTotal).toBe(2)
+  // 合计按全量孩子算：已列只有 1 条，大小仍是 66 + 55。
+  expect(detail.subagentsSizeBytes).toBe(121)
+})
+
+it('子会话行补 label：日志 `subagent/catalog` 的 label 按 bare id 配到孩子行（与工作中同名）', async () => {
+  // 真机判据（2026-11-03 本机回收站）：清册标题是主会话那套起名法，同批子会话撞成同名分不清；
+  // label 是委派时的 description，父日志的 `subagent/catalog` 事件逐孩子记着它（可与清册写法不同代）。
+  const log = body(
+    userLine(13, '父的话'),
+    { type: 'subagent/catalog', time: 14, data: { version: 0, childId: 'kid-2', childCreatedAt: 12, mode: 'continuable', label: 'Standards 轴全仓审查' } },
+    { type: 'subagent/catalog', time: 15, data: { version: 0, childId: 'session-kid', childCreatedAt: 11, mode: 'continuable', label: 'Spec 轴文档对账审查' } },
+  )
+  const { deps } = makeDeps(log, { rows: [entry(), kid2(), kid()] })
+  const detail = await readTrashDetail(deps)(id)
+  expect(detail.subagents?.map((child) => child.label)).toEqual(['Standards 轴全仓审查', 'Spec 轴文档对账审查'])
+})
+
+it('没有 catalog label 的孩子行不带 label 这一格（缺席 ≠ 空串，回落清册标题）', async () => {
+  const log = body(
+    userLine(13, '父的话'),
+    // 空 label 不许冒充名字；没登记过的孩子（老宿主的 fork 孩子）整条不配 label
+    { type: 'subagent/catalog', time: 14, data: { version: 0, childId: 'session-kid', childCreatedAt: 11, mode: 'one-shot', label: '' } },
+  )
+  const { deps } = makeDeps(log, { rows: [entry(), kid2(), kid()] })
+  const detail = await readTrashDetail(deps)(id)
+  expect(detail.subagents?.[0]).not.toHaveProperty('label')
+  expect(detail.subagents?.[1]).not.toHaveProperty('label')
+})
+
+it('独立子会话（没有父详情可兜）从自己的 `subagent/descriptor` 取 label，随详情过线', async () => {
+  // 这是删除时清册标题已经起错、父条目又不在回收站里的存量条目：父日志的 catalog 读不到，
+  // 但子会话自己的日志第一帧就有 `subagent/descriptor`，label 与工作中同名（ADR-0058 的边界）。
+  const log = body(
+    { type: 'subagent/descriptor', time: 12, data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'Standards 轴全仓审查' } },
+    userLine(13, '孩子自己的话'),
+  )
+  const { deps } = makeDeps(log)
+  const detail = await readTrashDetail(deps)(id)
+  expect(detail.label).toBe('Standards 轴全仓审查')
+})
+
+it('独立 fork 子会话（header 有 parentSession、无 descriptor）用自己日志的 session/title 兜底', async () => {
+  // 旧宿主的 fork 子会话没有 `subagent/descriptor`；清册标题是删除时按主会话那套起名法留下的
+  // （这里故意等于父会话标题），它自己日志里的当前标题才是工作里的名字。
+  const log = frame(
+    rec({ type: 'session', version: 4, id: 'session-x', createdAt: 10, cwd: 'C:/develop/x', parentSession: 'session-parent', isSeeded: true }),
+    rec({ type: 'session/title', time: 11, data: { title: '在吗问候 (1)', messageSeqs: [] } }),
+  )
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+  expect(detail.label).toBe('在吗问候 (1)')
+})
+
+it('fork 孩子的清册标题和父/兄弟撞名时，父详情读它自己的日志标题补 label', async () => {
+  const parentLog = body(userLine(13, '父的话'))
+  const forkKidId = makeEntryId(DELETED_AT, 'session-fork-kid')
+  const childLog = frame(
+    rec({ type: 'session', version: 4, id: 'session-fork-kid', createdAt: 10, cwd: 'C:/develop/x', parentSession: 'session-x', isSeeded: true }),
+    rec({ type: 'session/title', time: 11, data: { title: '在吗问候 (1)', messageSeqs: [] } }),
+  )
+  const fs = {
+    exists: vi.fn(async () => true),
+    listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+    readFile: vi.fn(async (path: string) => path.includes(forkKidId) ? childLog : parentLog),
+  }
+  const rows = createMemoryManifest([
+    entry(),
+    trashEntry(forkKidId, { sessionId: 'session-fork-kid', parentEntryId: id, deletedAt: DELETED_AT, title: '清册标题', sizeBytes: 55 }),
+  ])
+  const detail = await readTrashDetail({ fs, rows: () => rows.list(), home: '/h' })(id)
+  expect(fs.readFile).toHaveBeenCalledTimes(2)
+  expect(detail.subagents?.[0]?.label).toBe('在吗问候 (1)')
+})
+
+it('fork 孩子的日志读不出：父详情照常出，孩子行回落清册标题', async () => {
+  const parentLog = body(userLine(13, '父的话'))
+  const forkKidId = makeEntryId(DELETED_AT, 'session-fork-kid')
+  const fs = {
+    exists: vi.fn(async () => true),
+    listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+    readFile: vi.fn(async (path: string) => {
+      if (path.includes(forkKidId)) throw new Error('EACCES')
+      return parentLog
+    }),
+  }
+  const rows = createMemoryManifest([
+    entry(),
+    trashEntry(forkKidId, { sessionId: 'session-fork-kid', parentEntryId: id, deletedAt: DELETED_AT, title: '清册标题', sizeBytes: 55 }),
+  ])
+  const detail = await readTrashDetail({ fs, rows: () => rows.list(), home: '/h' })(id)
+  expect(detail.subagents?.[0]).not.toHaveProperty('label')
+})
+
+it('descriptor 的 label 后写覆盖前写；空 label 是重置，不冒充名字', async () => {
+  // fork 种子可能先带祖先的 descriptor，子会话自己的 descriptor 必须覆盖它；坏/空的后写按宿主
+  // 投影的同一语义重置，不保留祖先 label。
+  const overridden = body(
+    { type: 'subagent/descriptor', time: 11, data: { version: 3, mode: 'continuable', provider: 'spawn', label: '祖先的名字' } },
+    { type: 'subagent/descriptor', time: 12, data: { version: 3, mode: 'continuable', provider: 'spawn', label: 'Standards 轴全仓审查' } },
+  )
+  const first = await readTrashDetail(makeDeps(overridden).deps)(id)
+  expect(first.label).toBe('Standards 轴全仓审查')
+
+  const reset = body(
+    { type: 'subagent/descriptor', time: 11, data: { version: 3, mode: 'continuable', provider: 'spawn', label: '祖先的名字' } },
+    { type: 'subagent/descriptor', time: 12, data: { version: 3, mode: 'one-shot', provider: 'spawn' } },
+  )
+  const second = await readTrashDetail(makeDeps(reset).deps)(id)
+  expect(second).not.toHaveProperty('label')
+})
+
+// ── 提问索引（详情右缘的提问轨用它导航） ────────────────────────────────────────
+// 它是**整条会话**的提问，不是这一页的：id 必须是块在整条日志里的序号（跟着分页走的那一格），
+// 否则点一句老提问既跳不到位、也补不到那一页。
+
+it('首次读带整条会话的提问索引：id 是块序号、按日志顺序、覆盖未进本页的老提问', async () => {
+  const log = body(
+    userLine(13, '第一问'),
+    asstLine(14, [{ type: 'text', text: '答一' }]),
+    userLine(16, '第二问'),
+    asstLine(17, [{ type: 'text', text: '答二' }]),
+  )
+  // 只留最后两块：第二问与答二。第一问在更早的页里，但索引里必须有它。
+  const detail = await readTrashDetail(makeDeps(log).deps, {
+    perBlockChars: PER_BLOCK_CHAR_CAP, pageBlocks: 2,
+  })(id)
+  expect(detail.blocks.map((block) => block.kind)).toEqual(['user', 'assistant'])
+  expect(detail.olderCursor).toBe(2)
+  expect(detail.prompts).toEqual([
+    { id: '0', at: 13, preview: '第一问' },
+    { id: '2', at: 16, preview: '第二问' },
+  ])
+})
+
+it('提问索引的 id 与同一条详情里那块 user 块的 id 是同一格', async () => {
+  const log = body(userLine(13, '第一问'), asstLine(14, [{ type: 'text', text: '答一' }]), userLine(16, '第二问'))
+  const detail = await readTrashDetail(makeDeps(log).deps)(id)
+  const userIds = detail.blocks.filter((block) => block.kind === 'user').map((block) => block.id)
+  expect(detail.prompts?.map((prompt) => prompt.id)).toEqual(userIds)
+})
+
+it('提问索引的预览有界：空白折叠，超长带省略号', async () => {
+  const long = `第一行\n\n第二行 ${'很长的正文'.repeat(40)}`
+  const detail = await readTrashDetail(makeDeps(body(userLine(13, long))).deps)(id)
+  const preview = detail.prompts?.[0]?.preview ?? ''
+  expect(preview.length).toBe(PROMPT_PREVIEW_LIMIT)
+  expect(preview.endsWith('…')).toBe(true)
+  expect(preview).not.toContain('\n')
+})
+
+it('预览按码点截断：代理对（emoji）不会被切成半个', async () => {
+  // 79 个码点处正好跨着 emoji：按 UTF-16 码元 `slice(0, 79)` 会留下孤立的高位代理，
+  // 过线后轨的预览里就是一个替换字符。
+  const text = `${'a'.repeat(PROMPT_PREVIEW_LIMIT - 2)}😀bc`
+  const detail = await readTrashDetail(makeDeps(body(userLine(13, text))).deps)(id)
+  const preview = detail.prompts?.[0]?.preview ?? ''
+  expect(preview.endsWith('😀…')).toBe(true)
+  // 80 个码点里有一个补充平面字符 ⇒ UTF-16 长度 81；被切坏时只剩 80（末位是孤立代理）。
+  expect(preview.length).toBe(PROMPT_PREVIEW_LIMIT + 1)
+})
+
+it('带 before 的翻页不重复搬提问索引（它不随分页变化）', async () => {
+  const log = body(userLine(13, '第一问'), asstLine(14, [{ type: 'text', text: '答一' }]), userLine(16, '第二问'))
+  const { deps } = makeDeps(log)
+  const older = await readTrashDetail(deps)(id, 2)
+  expect(older.prompts).toBeUndefined()
+})
+
+it('没有用户提问的会话：提问索引是空数组，不是缺席', async () => {
+  const detail = await readTrashDetail(makeDeps(body(asstLine(14, [{ type: 'text', text: '只有回答' }]))).deps)(id)
+  expect(detail.prompts).toEqual([])
 })

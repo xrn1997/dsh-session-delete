@@ -12,7 +12,7 @@
  */
 import path from 'node:path'
 import { isAbsentPath } from '../ports/fs-port.js'
-import type { FsPort } from '../ports/fs-port.js'
+import type { FsReferenceScanPort, FsReferenceScanRemovalPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
 import { TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
 import { isCanonicalSessionLogName, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
@@ -142,13 +142,13 @@ function scanImageIdsInLog(raw: Buffer): LogImageIds {
 }
 
 export interface AttachmentReadDeps {
-  fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile' | 'realpath'>
+  fs: FsReferenceScanPort
   home: string
   config: Pick<SessionDeleteConfig, 'maxJsonRefBytes'>
 }
 
 export interface AttachmentRemovalDeps extends AttachmentReadDeps {
-  fs: Pick<FsPort, 'exists' | 'listFiles' | 'listDirs' | 'readFile' | 'statFile' | 'realpath' | 'removeFile'>
+  fs: FsReferenceScanRemovalPort
 }
 
 /** 宿主写日志时的临时名：`session.vN.jsonl.zstd.<hash>.tmp`（内容写完后才 rename 成规范名）。 */

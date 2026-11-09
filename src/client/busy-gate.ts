@@ -10,25 +10,30 @@
  */
 import { useCallback, useMemo, useRef, useState } from 'react'
 
+/** 一次过闸的落地面：**没跑**与**跑了**在类型面就是两支，不靠 `undefined` 兼职。 */
+export type GateRun<T> =
+  | { readonly kind: 'blocked' }
+  | { readonly kind: 'ran'; readonly value: T }
+
 export interface BusyGate {
   readonly busy: boolean
   /** 把一次任务整个包进「这一趟还算忙」；落地与抛错都放回 false。
-   *  同一枚闸已有任务在飞时这一次**不执行**（同步判重），立即回 `undefined`。类型里带上 `undefined`
-   *  不是将就，是判据：挡回的那一趟什么都没跑，把它伪装成一枚 `T` 就是把「没跑」当成「跑完且结果是
-   *  那个值」——消费返回值的调用方（写入座位、清空）会照着编出失败原文或宣布成功。怎么收尾由调用方
-   *  定：这一趟的界面后果归在飞的那一趟，挡回来的那一份什么都不该改。 */
-  around: <T>(task: () => Promise<T>) => Promise<T | undefined>
+   *  同一枚闸已有任务在飞时这一次**不执行**（同步判重），立即回 `{ kind: 'blocked' }`。
+   *  挡回的那一趟什么都没跑——把它伪装成一枚 `T` 就是把「没跑」当成「跑完且结果是那个值」，
+   *  消费返回值的调用方（写入座位、清空）会照着编出失败原文或宣布成功。挡回来那一份的界面后果
+   *  归在飞的那一趟，调用方按 `kind` 分派，写不出「拿没跑当跑完」。 */
+  around: <T>(task: () => Promise<T>) => Promise<GateRun<T>>
 }
 
 export function useBusyGate(): BusyGate {
   const [busy, setBusy] = useState(false)
   const flying = useRef(false)
-  const around = useCallback(async <T,>(task: () => Promise<T>): Promise<T | undefined> => {
-    if (flying.current) return undefined
+  const around = useCallback(async <T,>(task: () => Promise<T>): Promise<GateRun<T>> => {
+    if (flying.current) return { kind: 'blocked' }
     flying.current = true
     setBusy(true)
     try {
-      return await task()
+      return { kind: 'ran', value: await task() }
     } finally {
       flying.current = false
       setBusy(false)

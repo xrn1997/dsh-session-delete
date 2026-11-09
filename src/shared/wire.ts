@@ -21,10 +21,16 @@ export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
  */
 export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREFIX}`
 
-/** 十段段名（相对前缀）。**每项 `{ path, method }` 两键**：某段用什么方法也是线上形状的一部分
- *  （ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影（`ROUTES.x.method`），
- *  浏览器半的 GET 段同样投影、写段把 `ROUTES.x.method` 交给 `src/client/remote.ts` 的 `post()`，
- *  两半都不逐段手写一份。
+/** 请求体的线上形状。`none` = 没有字段（GET，或只带空对象的 POST）；`query` = GET 查询串（二进制段）；
+ *  其余是 JSON 体的字段组。**读这一格的是 Node 半**：`src/api/route-table.ts` 的 `bodyOf` 据此决定
+ *  分发器要不要预读 JSON。浏览器半的入参形状由 `src/client/remote.ts` 的 interface 签名决定，只投影
+ *  这一格的**配对事实**（有 JSON 字段的段必然是 POST），配对由 `tests/wire-shape.test.ts` 钉住。 */
+export type RouteBody = 'none' | 'query' | 'config' | 'entry' | 'apply'
+
+/** 十段段名（相对前缀）。**每项 `{ path, method, body }` 三键**：某段用什么方法、带什么请求体也是线上
+ *  形状的一部分（ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影
+ *  （`ROUTES.x.method` / `bodyOf(ROUTES.x)`），浏览器半的取数通道（`src/client/remote.ts`）从同一格
+ *  投影路径与方法，两半都不逐段手写一份字面量。
  *  写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
  *  单条就是长度为 1 的批量，仓里不留第二条执行路径。
  *  - `list`：对账并读清单（`session-trash/` 里的目录是准）。
@@ -34,30 +40,30 @@ export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREF
  *  - `empty`：清空回收站（聚合回执，不按条回）。
  *  - `orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
  *    这一段只负责"有多少、在哪、多大"。
- *  - `attachment`：附件原始字节（全仓唯一的二进制响应段；失败仍回 JSON 信封）。
+ *  - `attachment`：附件原始字节（全仓唯一的二进制响应段；按查询串寻址，失败仍回 JSON 信封）。
  *  - `attachmentOrphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。
  *  - `attachmentClean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。
  *  - `config`：三只可调项的读/写共用一段——空体读当前值，带字段写回 profile 的 patch 层。 */
 export const ROUTES = {
-  list: { path: '/list', method: 'GET' },
+  list: { path: '/list', method: 'GET', body: 'none' },
   /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
-  ping: { path: '/ping', method: 'GET' },
+  ping: { path: '/ping', method: 'GET', body: 'none' },
   /** 可调项：空体读（与 `/detail` 同法，用 POST 表达一个读）；带字段写，写必须进到达序链。 */
-  config: { path: '/config', method: 'POST' },
+  config: { path: '/config', method: 'POST', body: 'config' },
   /** 单条详情（读回收站目录里那条会话自己的日志）。 */
-  detail: { path: '/detail', method: 'POST' },
+  detail: { path: '/detail', method: 'POST', body: 'entry' },
   /** 一组 id 上的同一个动作；删除确认框那句「含 N 个子会话」也走这里（`action: 'count'`，纯读语义）。 */
-  apply: { path: '/apply', method: 'POST' },
+  apply: { path: '/apply', method: 'POST', body: 'apply' },
   /** 清空回收站。 */
-  empty: { path: '/empty', method: 'POST' },
+  empty: { path: '/empty', method: 'POST', body: 'none' },
   /** 纯读：扫描回收站之外的无主子会话（父已不在语料/清册）。 */
-  orphans: { path: '/orphans', method: 'GET' },
-  /** 附件字节（图片/普通文件）：全仓唯一的二进制响应段，读的是宿主附件库。 */
-  attachment: { path: '/attachment', method: 'GET' },
+  orphans: { path: '/orphans', method: 'GET', body: 'none' },
+  /** 附件字节（图片/普通文件）：全仓唯一的二进制响应段，按查询串寻址。 */
+  attachment: { path: '/attachment', method: 'GET', body: 'query' },
   /** 纯读：扫全部引用源与附件库 `objects`，报无引用图片的数量、字节与预览清单。 */
-  attachmentOrphans: { path: '/attachment-orphans', method: 'GET' },
+  attachmentOrphans: { path: '/attachment-orphans', method: 'GET', body: 'none' },
   /** 聚合清理：只删 `objects` 下无引用的图片，回 `AttachmentCleanupWire`。 */
-  attachmentClean: { path: '/attachment-clean', method: 'POST' },
+  attachmentClean: { path: '/attachment-clean', method: 'POST', body: 'none' },
 } as const
 
 /** 段名 → 那一段的路径。从结构化段名表派生：加一段只在上面加一项，`Record<RouteName, …>` 类型闸
@@ -122,6 +128,13 @@ export interface TrashEntryWire {
   title: string
   sizeBytes: number
   parentEntryId?: string
+  /** **子会话的显示名**（委派 `subagent` 时的 `description`，与宿主工作中同名；ADR-0058）。
+   *  只在详情 `subagents` 行过线：它是**日志里读出来的事实**——通常是父日志 `subagent/catalog`
+   *  的 label；没有 catalog 登记、清册标题又和父/兄弟撞名的 fork 孩子，是它自己日志的当前标题
+   *  （fork 没有 descriptor）。清册里没有这格——`/list` 的 `toWire` 不发它（缺席 = 没读到名字，
+   *  界面回落 `title`）。与 `logTitle` 同一类兜底：清册标题是删除那一刻的快照，label 补的是
+   *  快照起错名的存量条目。 */
+  label?: string
 }
 
 /**
@@ -213,6 +226,18 @@ export type TrashDetailBlockWire =
   | TrashDetailInjectionBlockWire
   | TrashDetailToolBlockWire
 
+/** 详情右缘「提问轨」的一行：**整条会话**里的一句用户提问，与当前分页窗口无关。
+ *
+ *  `id` 就是那块在整条日志里的序号（与 `blocks[].id` 同一套），所以「跳到这句」在已加载窗口里
+ *  按它直接找；没加载就照 `olderCursor` 一页页往回补到它进窗（`src/client/use-prompt-rail.ts`
+ *  的跳转循环），不另发一次定向读。`preview` 有界（空白折叠、超长带省略号）：它是导航用的标签，
+ *  不是正文的第二份抄本。 */
+export interface TrashDetailPromptWire {
+  id: string
+  at: number
+  preview: string
+}
+
 /** 回收站单条详情的线上形状（`POST /detail`）。
  *
  *  正文按块分页：`blocks` 是当前这一页（从新往旧取），`olderCursor` 指向更早一页的边界；
@@ -225,6 +250,12 @@ export interface TrashDetailWire {
   lastActivity: number
   /** 日志内 `session/title` 那条记录；清册标题为空串时客户端拿它兜底。 */
   logTitle: string
+  /** **这条会话自己的显示名**（与宿主工作中同名）。只在详情读时从被读的这条日志折出：
+   *  子会话取 `subagent/descriptor` 的 `label`（值来自委派 `description`）；fork 子会话没有 descriptor，header 有
+   *  `parentSession` 时取它自己日志的当前 `session/title`。它补的是没有父详情可兜的独立子会话
+   *  ——那种条目的清册 `title` 是主会话那套起名法，`logTitle` 单看也是错的。
+   *  缺席 = 主会话、或没有 descriptor 也没有 `parentSession` 的会话，界面回落清册标题。 */
+  label?: string
   models: string[]
   turnCount: number
   userMessageCount: number
@@ -236,6 +267,9 @@ export interface TrashDetailWire {
   blocks: TrashDetailBlockWire[]
   /** 更早一页的块序号；`null` = 已经到顶。把它原样回传给 `POST /detail` 的 `before`。 */
   olderCursor: number | null
+  /** 整条会话的提问索引，按日志顺序；**只在首次读（不带 `before`）时出线**——它不随分页变化，
+   *  跟着详情账本走，后续翻页不重复搬。没有用户提问时是空数组（缺席 = 这一读没带，不是"没有"）。 */
+  prompts?: TrashDetailPromptWire[]
   /** 跟着这条父条目一起进回收站、并**折进这一行**的孩子（清册里 `parentEntryId` 指向它，
    *  且组语义接得住——折的判据复用 `src/trash/groups.ts` 的 `visibleGroups`），按清册原序。
    *  确有孩子时出线；**缺席 = 没有孩子**，不是空数组。孩子的详情仍按 `entryId` 走同一个 `/detail`。
@@ -245,6 +279,9 @@ export interface TrashDetailWire {
   subagents?: TrashEntryWire[]
   /** 子会话总数；**只在 `subagents` 被条数闸截断时出线**（缺席 = 上面就是全部）。 */
   subagentsTotal?: number
+  /** **全部**折进来的孩子的清册 `sizeBytes` 合计；有孩子时出线（即使未被条数闸截断）。
+   *  摘要条报「清册大小合计」用它——不要拿 `subagents` 已列行自己求和，那只是前 N 条。 */
+  subagentsSizeBytes?: number
 }
 
 /** 一次永久删除顺带、或一次孤儿附件清理的附件读数。`skipped` 有值 = 这一轮**部分或整体没清**：
@@ -347,8 +384,11 @@ export type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: Remot
  * 位名与判法取自宿主网关客户端面的原文：
  * `if (typeof value === "object" && value !== null && value.isDSHRemoteError === true && typeof value.code === "string") return value`。
  *
- * 线上递过来的是**一段 JSON**（标记位不跟着过线）⇒ 落到哪一端，由那端的构造处就地补上标记：
- * 浏览器半是 `src/client/remote.ts` 的 `throwRemoteFailure`。
+ * 线上递过来的是**一段 JSON**（标记位不跟着过线）⇒ 标记位只由**宿主服务抛出的 `RemoteError`** 自带，
+ * 本仓生产侧不造它：Node 半的 `toRemoteFailure`（`src/remote/map-error.ts`）只**消费**它，产出的
+ * `RemoteFailure` 是普通过线对象；浏览器半的取数通道**不抛失败、也不补标记**——信封原样当数据交回
+ * （`RemoteOutcome`），通道自己造的诊断（打不通 / 非信封 / 401·403）是普通失败对象，不进这条判别；
+ * 测试假件同样只消费（`tests/client/support/fake-remote.ts` 的 `failureOf`）。
  */
 export function isDSHRemoteError(value: unknown): value is RemoteFailure {
   if (typeof value !== 'object' || value === null) return false
@@ -429,21 +469,3 @@ export const TRASH_DIR_NAME = 'session-trash'
 
 /** 页脚/文案里带尾斜杠的那一版（`splitOn` 按它切一刀再把目录名包成 code）。 */
 export const TRASH_DIR_LABEL = `${TRASH_DIR_NAME}/`
-
-/**
- * 宿主 `projectKey` 的 **`~XXXX` 转义还原**。
- *
- * 编码那一半在 Node 侧（`src/ports/host-port.ts` 的 `projectKey`，逐字镜像宿主实现）；这里放与它配对的
- * 解码，客户端渲染回收站组头用它——**字母表只有这一份**，两边不会各自漂移（配对关系由
- * `tests/assembly.test.ts` 的往返用例钉住）。
- *
- * **只还原可还原的那部分**：不在 `[A-Za-z0-9._-]` 里、又不是 `~` 的字符编成 `~` + 4 位大写十六进制码元，
- * 字面 `~` 自己编成 `~007E` ⇒ `~XXXX` 不含歧义。而**分隔符（`/` `\` `:`）被折成一个 `-`，那一段是有损的**，
- * 这里还原不回来——调用方按"尽力显示"用它，别拿它反推真实路径。
- */
-export function unescapeProjectKey(encoded: string): string {
-  return encoded.replace(
-    /~([0-9A-F]{4})/g,
-    (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)),
-  )
-}

@@ -17,7 +17,7 @@ Status: accepted
 1. **正文从“消息”改成“块”**：`TrashDetailWire.messages` 换成 `blocks` 判别联合——`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`user/message` 按 `source.kind` 分 user / injection；`assistant/message.content` 按 `text` / `reasoning` 拆块，附件并进相邻的文字块；`tool/call` 建工具块、`tool/result` 按 `callId` 回填（成功 / 失败 / 未完成三态）；`system/message` 与 `compaction/summary` 各成一块。turn/step/job/request 这类簿记事件不进正文。
 2. **分页是游标，不是总量闸**：一次只回尾部一页（块数上限住 `src/trash/detail.ts` 的 `PAGE_BLOCK_LIMIT`，正文总量上限住 `PAGE_CHAR_LIMIT`；单块超字符闸时仍保留一块，游标才能前进），`olderCursor` 指页首；`POST /detail` 的 body 多一格可选 `before`，客户端把游标原样回传取更早一页。每块另有单块字符闸（`PER_BLOCK_CHAR_CAP`，正文与工具参数/结果各自算），超了标 `truncated`。计数是整条日志的，不受分页影响。
 3. **块构建只留当前页**：走日志时用有界缓冲只保留当前页的块（块数与正文字符双闸），不把整条日志的正文堆在内存里；工具结果可能落在游标之后，仍会回填到页内那个调用块——不能把“已完成”误报成“未完成”。
-4. **界面按宿主 Chat 的折叠语法画**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给标签 + 首行摘要（工具另给状态与工具名）；可逐块开合。连续过程块的呈现按四档（简洁 / 标准 / 详细 / 完全展开）投影，逐档判据与简洁档的分页联动见 ADR-0047。有更早页时正文工具栏出「加载更早」，prepend 后按滚动高度差补偿位置。
+4. **界面按宿主 Chat 的折叠语法画**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给标签 + 首行摘要（工具另给状态与工具名）；可逐块开合。连续过程块的呈现按四档（简洁 / 标准 / 详细 / 完全展开）投影，逐档判据与简洁档的分页联动见 ADR-0057 的「沿用」节。有更早页时正文工具栏出「加载更早」，点一次按游标取下一页，prepend 后按滚动高度差补偿位置（分页入口与提问轨的关系见 ADR-0057）。
 5. **注入不再只报“未显示”**：它成为可折叠的 injection 块，`sourceKind` 原样过线、界面映射来源标签；条数进详情的计量行。这是对宿主 Chat 的**产品选择**（不是受约束偏离）——宿主隐藏普通注入，而这里的目标是“删之前看全”。
 
 ## 边界
@@ -25,7 +25,7 @@ Status: accepted
 - **受约束偏离：详情自己读盘、自己画**：宿主的聊天视图是 `@deepseek-ai/dsh-client-ui-chat`，浏览器半禁止 import 任何 `@deepseek-ai/*` 客户端包；槽位表没有「给一个会话 id、只读渲染」的官方座位；已删会话不在 `sessionQuery`（`traceSession` 报 `SESSION_QUERY_SESSION_NOT_FOUND`）。所以正文只能由插件读 `session-trash` 的日志、按块投影并自绘。这是受约束偏离，不是偏好；证据见「背景」与 `tests/trash-detail.test.ts`。上游请求：一个只读的会话渲染槽位，或让 `sessionQuery` 能读 `session-trash`。
 - **产品选择，不是受约束偏离**：注入块常显/可折叠与「不做 Trajectory 全量表」是产品取舍（宿主 Chat 隐藏普通注入，这里的目标是删前看全），不是宿主面缺失逼出来的。
 - **不做 Trajectory 全量表**：turn/step、job、request、permission、sandbox、approval、goal、workspace changes、重试与 compaction 的 start/end 都不铺进正文；要逐事件全量是另一个视图，另行设计。
-- **子会话详情另篇裁决**：这篇只定单条详情的正文形状；孩子的查看入口与导航见 ADR-0029（issue #7）。
+- **子会话详情另篇裁决**：这篇只定单条详情的正文形状；孩子的查看入口与导航见 ADR-0055 的「沿用」节（issue #7）。
 - **不做“查看完整单块”的第二条请求**：单块超过上限只标「已截断」；要一字不差就看恢复后的宿主。
 - **不重建工具富媒体卡片**：工具参数/结果走等宽纯文本，附件仍走现有图片/文件条；宿主工具视图的 terminal / diff / 搜索卡片不在这次范围。
 - **计数口径**：`assistantMessageCount` 数每一条 assistant/message（含只带 reasoning / tool-call 的）；`injectedCount` 数建了块的注入；`toolCallCount` 数每一条 tool/call；三者都不受分页与单块闸影响。

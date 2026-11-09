@@ -8,7 +8,7 @@ describe('busy 闸', () => {
     expect(result.current.busy).toBe(false)
     let release: () => void = () => {}
     const task = new Promise<void>((resolve) => { release = resolve })
-    let running: Promise<void> | undefined
+    let running: Promise<unknown> | undefined
     act(() => { running = result.current.around(() => task) })
     expect(result.current.busy).toBe(true)
     await act(async () => { release(); await running })
@@ -28,16 +28,18 @@ describe('busy 闸', () => {
     let release: () => void = () => {}
     const task = new Promise<void>((resolve) => { release = resolve })
     const second = vi.fn(async () => 'second')
-    let running: Promise<void> | undefined
+    let running: Promise<unknown> | undefined
     act(() => { running = result.current.around(() => task) })
     // setState 要等下一拍，busy 读数拦不住同一 tick 的第二次；判重在同步这一侧。
-    await act(async () => { await result.current.around(second) })
+    await act(async () => { await expect(result.current.around(second)).resolves.toEqual({ kind: 'blocked' }) })
     expect(second).not.toHaveBeenCalled()
     expect(result.current.busy).toBe(true)
     await act(async () => { release(); await running })
     expect(result.current.busy).toBe(false)
     // 落地之后闸重新可用。
-    await act(async () => { expect(await result.current.around(async () => 'ok')).toBe('ok') })
+    await act(async () => {
+      await expect(result.current.around(async () => 'ok')).resolves.toEqual({ kind: 'ran', value: 'ok' })
+    })
   })
 
   it('两枚闸互不影响', async () => {

@@ -6,7 +6,8 @@
  * 同一次 diff 里互相踩。搬成同级 module 之后，开框的那一面只负责"什么时候开哪一张"（面板开回收站
  * 的两张，插件设置页维护卡开 `OrphanConfirm`），框自己负责"点之前把话说完"。
  *
- * 两张**不共壳**：`TrashConfirm` 的两个形状说的都是"这一批要去哪"（回盘 / 进回收站），而
+ * 两张**只共页脚壳**（`confirm-dialog.tsx`，ADR-0052），正文与判据不合并：`TrashConfirm` 的两个形状说的
+ * 都是"这一批要去哪"（回盘 / 进回收站），而
  * `OrphanConfirm` 的"去哪"是**没有去处**——盘上那些会话目录直接消失，回收站里从来不会有它们那一行。
  * 所以它摆的是**在哪、多大、几条**（按项目目录一组一行），外加两句服务端已经明写的边界：
  * 正在运行的会被拒绝（不是被强删），以及这一趟只清会话目录与会话独占的图片附件副本
@@ -18,14 +19,12 @@
  * - **`busy` 期间取消与关闭都拦住**：一次批量在飞时关掉框，用户会以为"没动"，而它其实正在动。
  */
 import type { CSSProperties } from 'react'
+import { ConfirmDialog } from './confirm-dialog.js'
 import { absoluteText, splitOn, type Translate } from './copy.js'
 import type { OrphanReportWire, TrashEntryLike } from './remote.js'
-import { Button } from './ui/Button.js'
 import { fileSizeText } from './ui/format.js'
 import { ELLIPSIS } from './ui/recipe.js'
-import { Modal } from './ui/Modal.js'
-import { BULK_DANGER, CARD, projectLabel } from './trash-view.js'
-import { useIdleClose } from './confirm-close.js'
+import { CARD, projectLabel } from './trash-view.js'
 import type { PendingAction } from './use-trash-panel-controller.js'
 
 /** 弹出的一批卡片（逐条说清这一批有哪些）：长清单在框内滚，标题与动作行留在框里。 */
@@ -61,24 +60,16 @@ export function TrashConfirm({
   onConfirmPurge: () => void
   onConfirmRestore: (ids: readonly string[]) => void
 }) {
-  const { close, closeDisabled } = useIdleClose(busy, onCancel)
   if (pending.kind === 'restore') {
     return (
-      <Modal
-        open
-        onClose={close}
+      <ConfirmDialog
         title={t('trash.confirm.restore', { count: pending.ids.length })}
         closeLabel={t('common.close')}
-        footer={
-          <>
-            <Button variant="outline" disabled={closeDisabled} onClick={close}>
-              {t('common.cancel')}
-            </Button>
-            <Button variant="primary" disabled={busy} onClick={() => onConfirmRestore(pending.ids)}>
-              {t('trash.confirm.restoreNow')}
-            </Button>
-          </>
-        }
+        cancelLabel={t('common.cancel')}
+        confirmLabel={t('trash.confirm.restoreNow')}
+        busy={busy}
+        onCancel={onCancel}
+        onConfirm={() => onConfirmRestore(pending.ids)}
       >
         {restoreEntries.length === 0 ? null : (
           <div style={CARD_LIST}>
@@ -101,7 +92,7 @@ export function TrashConfirm({
           </div>
         )}
         <p>{t('trash.confirm.restore.body')}</p>
-      </Modal>
+      </ConfirmDialog>
     )
   }
 
@@ -112,21 +103,15 @@ export function TrashConfirm({
   const strong = t('trash.confirm.body.strong')
   const body = splitOn(t('trash.confirm.body', { strong }), strong)
   return (
-    <Modal
-      open
-      onClose={close}
+    <ConfirmDialog
       title={title}
       closeLabel={t('common.close')}
-      footer={
-        <>
-          <Button variant="outline" disabled={closeDisabled} onClick={close}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirmPurge}>
-            {t('trash.confirm.purge')}
-          </Button>
-        </>
-      }
+      cancelLabel={t('common.cancel')}
+      confirmLabel={t('trash.confirm.purge')}
+      busy={busy}
+      onCancel={onCancel}
+      onConfirm={onConfirmPurge}
+      danger
     >
       {pending.kind === 'entry' ? (
         <div
@@ -159,7 +144,7 @@ export function TrashConfirm({
         <b style={{ color: 'var(--dsw-alias-state-error-primary)' }}>{body[1]}</b>
         {body[2]}
       </p>
-    </Modal>
+    </ConfirmDialog>
   )
 }
 
@@ -177,21 +162,16 @@ export function OrphanConfirm({
   onCancel: () => void
   onConfirm: () => void
 }) {
-  const { close, closeDisabled } = useIdleClose(busy, onCancel)
   return (
-    <Modal
-      open
-      onClose={close}
+    <ConfirmDialog
       title={t('trash.orphans.confirm', { count: report.totalSessions })}
       closeLabel={t('common.close')}
-      footer={
-        <>
-          <Button variant="outline" disabled={closeDisabled} onClick={close}>{t('common.cancel')}</Button>
-          <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirm}>
-            {t('trash.orphans.clean')}
-          </Button>
-        </>
-      }
+      cancelLabel={t('common.cancel')}
+      confirmLabel={t('trash.orphans.clean')}
+      busy={busy}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+      danger
     >
       {report.groups.length === 0 ? null : (
         <div style={CARD_LIST}>
@@ -217,6 +197,6 @@ export function OrphanConfirm({
       <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
         {t('trash.orphans.cacheNote')}
       </p>
-    </Modal>
+    </ConfirmDialog>
   )
 }

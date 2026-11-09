@@ -20,7 +20,7 @@ Status: accepted
 
 ## 决定
 
-1. **官方通道唯一**：`connection.fetch.register` 可用时，十段注册到 `/api${SESSION_DELETE_API_PREFIX}${ROUTES.<name>.path}`（即 `/api/dsh-session-delete-api/<segment>`）；方法、body 声明、纯度、读面、deps 切片仍从 `src/api/route-table.ts` 投影；body 的字节闸 / JSON 解析、响应头与 `Response` 构造、失败信封的落地都归适配器。
+1. **官方通道唯一**：`connection.fetch.register` 可用时，十段注册到 `/api${SESSION_DELETE_API_PREFIX}${ROUTES.<name>.path}`（即 `/api/dsh-session-delete-api/<segment>`）；段名、方法与请求体形状住 `src/shared/wire.ts` 的 `ROUTES`（ADR-0003），方法、body 的预读投影（`bodyOf`）、纯度、读面、deps 切片从 `src/api/route-table.ts` 取；body 的字节闸 / JSON 解析、响应头与 `Response` 构造、失败信封的落地都归适配器。
 2. **`connection` 是硬依赖**：`inject` 用 `connection` 替代 `webServer`；服务缺席时插件停在 pending（`inject` 不会激活它），服务在场但 `connection.fetch.register` 形状不符时激活失败（响亮）。两种情况都不静默注册零条路由。插件不再直接注册 `webServer` 前缀——exact route 仍由宿主的 `connection` 挂在其 `/api` 前缀上。
 3. **客户端只探 `/api/dsh-session-delete-api/ping`**：只有**成功信封**（`ping` 回 `pong`）才注册入口；401/403、失败信封、404、非信封都按不可用处理（入口不出现）。401/403 在宿主 `/api` 是纯文本，客户端映射为固定中文原文；两条原文住 `src/client/remote.ts`。
 4. **路由 / 线上形状不变**：`ROUTES` 的段名、方法、body、纯度、读面、deps 切片与信封形状不动；单条仍是长度为 1 的批量。

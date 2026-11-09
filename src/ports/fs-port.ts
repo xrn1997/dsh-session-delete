@@ -42,8 +42,61 @@ export interface FsPort {
   removeFile: (p: string) => Promise<void>
 }
 
-/** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0027）。 */
-export type CoreFsPort = Omit<FsPort, 'removeDir' | 'removeFile'>
+/** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0027）。
+ *  名单是运行期收窄的**唯一依据**（ADR-0032）：`src/api/dispatch.ts` 的 `coreDepsOf` 按它挑方法，
+ *  所以「基础面不含删除」既在类型上、也在运行期成立。 */
+export const FS_CORE_METHODS = [
+  'exists',
+  'ensureDir',
+  'rename',
+  'sizeOfDir',
+  'listFiles',
+  'listDirs',
+  'realpath',
+  'readFile',
+  'statFile',
+] as const
+
+/** 删除能力（目录 / 单文件）：只挂在 `RemovalDeps` 与孤儿附件清理段上。 */
+export const FS_REMOVAL_METHODS = ['removeDir', 'removeFile'] as const
+
+/** 附件渲染：读一个文件的大小与字节。 */
+export const FS_ATTACHMENT_METHODS = ['statFile', 'readFile'] as const
+
+/** 详情读取：目录在不在、挑日志文件、读日志。 */
+export const FS_DETAIL_METHODS = ['exists', 'listFiles', 'readFile'] as const
+
+/** 附件引用扫描（读侧）。 */
+export const FS_REFERENCE_SCAN_METHODS = [
+  'exists',
+  'listFiles',
+  'listDirs',
+  'readFile',
+  'statFile',
+  'realpath',
+] as const
+
+/** 附件引用扫描 + 清孤儿图片（聚合写）。 */
+export const FS_REFERENCE_SCAN_REMOVAL_METHODS = [
+  ...FS_REFERENCE_SCAN_METHODS,
+  'removeFile',
+] as const
+
+export type CoreFsPort = Pick<FsPort, (typeof FS_CORE_METHODS)[number]>
+export type RemovalFsPort = CoreFsPort & Pick<FsPort, (typeof FS_REMOVAL_METHODS)[number]>
+export type FsAttachmentPort = Pick<FsPort, (typeof FS_ATTACHMENT_METHODS)[number]>
+export type FsDetailPort = Pick<FsPort, (typeof FS_DETAIL_METHODS)[number]>
+export type FsReferenceScanPort = Pick<FsPort, (typeof FS_REFERENCE_SCAN_METHODS)[number]>
+export type FsReferenceScanRemovalPort = Pick<FsPort, (typeof FS_REFERENCE_SCAN_REMOVAL_METHODS)[number]>
+
+/** 按名单从全量端口切一片（复制方法引用；端口方法都是属性、不读 `this`）。
+ *  **运行期真的只带这些方法**：ADR-0032 的收窄不是类型投影。 */
+export function fsSlice<const K extends readonly (keyof FsPort)[]>(
+  port: FsPort,
+  keys: K,
+): Pick<FsPort, K[number]> {
+  return Object.fromEntries(keys.map((key) => [key, port[key]])) as Pick<FsPort, K[number]>
+}
 
 /** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
  *  `this` 变成 undefined）。所以端口只做转发，递归在模块作用域里自调。 */

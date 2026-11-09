@@ -9,7 +9,7 @@ import { APPLY_ACTIONS, ROUTE_TABLE, routeOf, type JsonRouteSpec, type SliceDeps
 import { ROUTES } from '../src/shared/wire.js'
 import type { ApplyAction } from '../src/shared/wire.js'
 
-/** 段名表的十个路径（`ROUTES` 每项 `{ path, method }`，键集比对只认 path 这一格）。 */
+/** 段名表的十个路径（`ROUTES` 每项 `{ path, method, body }`，键集比对只认 path 这一格）。 */
 const SEGMENTS = Object.values(ROUTES).map((seg) => seg.path)
 
 /**

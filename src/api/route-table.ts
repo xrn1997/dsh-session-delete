@@ -8,10 +8,10 @@
  * - 切片声明宽了 ⇒ 危险能力（删目录 / 时钟）漏进读段的 run；窄了 ⇒ 写段的处理编译不过。
  *
  * 这张表不放 shared/wire.ts：处理函数会 import 动词与 node:fs，而浏览器半要 import wire.ts。
- * 段名、方法与动作仍住 wire.ts（`ROUTES` 每项 `{ path, method }`，本表的 method 只投影、不写第二份字面量）；
- * 这张表只回答“怎么处理”。
+ * 段名、方法与请求体形状住 wire.ts（`ROUTES` 每项 `{ path, method, body }`，本表的 method / body 只投影、
+ * 不写第二份字面量）；这张表只回答“怎么处理”。
  */
-import { PARAMS, ROUTES, type ApplyAction, type RouteName } from '../shared/wire.js'
+import { PARAMS, ROUTES, type ApplyAction, type RouteBody, type RouteName } from '../shared/wire.js'
 import type { ConfigEditorLike, CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
 import type { AttachmentsPort } from '../ports/attachments-port.js'
 import type { TrashEntry } from '../trash/entry.js'
@@ -28,6 +28,23 @@ import { assembleTrashRows } from './trash-rows.js'
 
 /** 请求体：`json` 才读下来（GET 一律不读；读两遍会把流消费掉）。 */
 export type BodyKind = 'none' | 'json'
+
+/** 段名表那一格 → 分发器要不要预读 JSON。`satisfies` 让每个 `RouteBody` 值都必须在这里有
+ *  明确的一格：以后加一种 body，缺了映射就是编译错，不会被默认折成 JSON 预读。 */
+const BODY_KIND = {
+  none: 'none',
+  query: 'none',
+  config: 'json',
+  entry: 'json',
+  apply: 'json',
+} as const satisfies Record<RouteBody, BodyKind>
+
+/** 读的是 wire 那一格（`ROUTES.x.body`），本表不写第二份：无字段与查询串段不读；
+ *  带 JSON 字段的段（config / entry / apply）读一次。 */
+function bodyOf(route: { readonly body: RouteBody }): BodyKind {
+  return BODY_KIND[route.body]
+}
+
 /** 到达序：`pure` 不进链；`chained` 进链；函数形式给 `/apply` 用（`count` 是纯读）。 */
 export type Purity = 'pure' | 'chained' | ((body: JsonBody) => 'pure' | 'chained')
 /** 清册读面：`none` = 不读；`list` = 真相读（先对账）；`raw` = 索引快照（不对账）。
@@ -163,7 +180,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.list.path]: {
     slice: 'core',
     method: ROUTES.list.method,
-    body: 'none',
+    body: bodyOf(ROUTES.list),
     purity: 'chained',
     read: 'list',
     response: 'json',
@@ -174,7 +191,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.ping.path]: {
     slice: 'core',
     method: ROUTES.ping.method,
-    body: 'none',
+    body: bodyOf(ROUTES.ping),
     purity: 'pure',
     read: 'none',
     response: 'json',
@@ -186,7 +203,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.config.path]: {
     slice: 'config',
     method: ROUTES.config.method,
-    body: 'json',
+    body: bodyOf(ROUTES.config),
     // 空体是读（与 detail 同法用 POST 表达一个读），只有写才进到达序链：`configEditor.edit`
     // 会让这一行重启，不能和删除 / 恢复交错。判据与动词共用 `src/verbs/config.ts` 的 `configPatchOf`。
     purity: (body) => configPatchOf(body) === undefined ? 'pure' : 'chained',
@@ -198,7 +215,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.attachment.path]: {
     slice: 'attachment',
     method: ROUTES.attachment.method,
-    body: 'none',
+    body: bodyOf(ROUTES.attachment),
     purity: 'pure',
     read: 'none',
     response: 'binary',
@@ -212,7 +229,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.attachmentOrphans.path]: {
     slice: 'core',
     method: ROUTES.attachmentOrphans.method,
-    body: 'none',
+    body: bodyOf(ROUTES.attachmentOrphans),
     purity: 'pure',
     read: 'none',
     response: 'json',
@@ -223,7 +240,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.attachmentClean.path]: {
     slice: 'removal',
     method: ROUTES.attachmentClean.method,
-    body: 'none',
+    body: bodyOf(ROUTES.attachmentClean),
     purity: 'chained',
     read: 'none',
     response: 'json',
@@ -234,7 +251,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.orphans.path]: {
     slice: 'core',
     method: ROUTES.orphans.method,
-    body: 'none',
+    body: bodyOf(ROUTES.orphans),
     purity: 'pure',
     read: 'raw',
     response: 'json',
@@ -246,7 +263,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.apply.path]: {
     slice: 'full',
     method: ROUTES.apply.method,
-    body: 'json',
+    body: bodyOf(ROUTES.apply),
     purity: (body) => {
       // 与动作拒否（requireAction）同一个识别器：纯度认不得的动作判 chained（不插队先跑），
       // 交给 run 那一步响亮拒掉——两侧不许各解析一遍。
@@ -264,7 +281,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.empty.path]: {
     slice: 'removal',
     method: ROUTES.empty.method,
-    body: 'none',
+    body: bodyOf(ROUTES.empty),
     purity: 'chained',
     read: 'list',
     response: 'json',
@@ -279,12 +296,12 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
   [ROUTES.detail.path]: {
     slice: 'core',
     method: ROUTES.detail.method,
-    body: 'json',
+    body: bodyOf(ROUTES.detail),
     purity: 'pure',
     read: 'raw',
     response: 'json',
     // 读单条详情也走 POST：`requireString`、请求栅栏、错误映射这一整套都挂在同一张路由表上
-    // （`body:'json'` 决定它在处理前预读一次请求体）；改成 GET query 只是把同一道栅栏再写一遍
+    // （`bodyOf(ROUTES.detail)` 决定它在处理前预读一次请求体）；改成 GET query 只是把同一道栅栏再写一遍
     // （栅栏只写一遍——纯度 / 读面 / body 就住这张表，方法投影自 wire 的段名表，ADR-0004）。
     // 读的是清册 **raw 索引**（`read` 的 raw 面），**不对账**：本段声明为 pure、不进到达序链，而对账会写
     // 清册行（写动作必须排在链上）。行在 raw 里而目录不在时详情自己判 `io`，不靠对账把行摘掉。

@@ -16,6 +16,7 @@ import {
   TRASH_DIR_LABEL,
   TRASH_DIR_NAME,
   VERB_CODES,
+  isDSHRemoteError,
   isRemoteResult,
   type TrashRowWire,
 } from '../src/shared/wire.js'
@@ -158,7 +159,7 @@ describe('两半共用同一份形状（不是两份互相镜像）', () => {
 
 describe('响应信封的运行期判形（isRemoteResult）', () => {
   // 中间层（反代 / SPA 兜底）会回非信封 JSON：判形不过就该走「回的不是信封」诊断，
-  // 而不是把垃圾喂给 unwrapRemoteResult 炸出 TypeError / "undefined"（issue #8 第 1 条）。
+  // 而不是把垃圾喂给 `requestOutcome` 的信封解析炸出 TypeError / "undefined"（issue #8 第 1 条）。
   it('非信封一律判 false：空对象、ok 非布尔、两臂缺格、error 是字符串或 null、数组、null', () => {
     expect(isRemoteResult({})).toBe(false)
     expect(isRemoteResult({ ok: 'yes' })).toBe(false)
@@ -181,14 +182,42 @@ describe('响应信封的运行期判形（isRemoteResult）', () => {
   })
 })
 
-describe('段名表 `ROUTES` 是结构化常量（路径与方法各一格，ADR-0004 就地订正后的家）', () => {
-  // 一条 wire 事实（某段的 path + method）只住这一张表；键集漂了（多一格、少一格、
+describe('段名表 `ROUTES` 是结构化常量（路径 / 方法 / 请求体形状各一格，ADR-0004 就地订正后的家）', () => {
+  // 一条 wire 事实（某段的 path + method + body）只住这一张表；键集漂了（多一格、少一格、
   // 某段退化回纯字符串）两半的投影就会静默分叉——这类漂移运行期不报错，只有键集比对抓得住。
-  it('每项恰有 path / method 两键，且 path 以 / 开头', () => {
+  it('每项恰有 path / method / body 三键，且 path 以 / 开头、body 在册', () => {
     for (const [name, seg] of Object.entries(ROUTES)) {
-      expect(`${name}:${Object.keys(seg).sort().join('+')}`).toBe(`${name}:method+path`)
+      expect(`${name}:${Object.keys(seg).sort().join('+')}`).toBe(`${name}:body+method+path`)
       expect(`${name}:${seg.path.startsWith('/')}`).toBe(`${name}:true`)
+      expect(`${name}:${['none', 'query', 'config', 'entry', 'apply'].includes(seg.body)}`).toBe(`${name}:true`)
     }
+  })
+
+  // `body` 与方法是**同一件事的两格**：带 JSON 字段的段只能是 POST（GET 不带体），查询串段只能是
+  // GET。这条配对是浏览器半唯一读得见的判据（它只投影 path / method，请求字段由 interface 签名决定），
+  // 配对漂了就意味着某一格的投影不再描述真实线上形状。
+  it('body 与方法配对：JSON 字段段是 POST，GET 段只带 none / query，查询串段是 GET', () => {
+    for (const [name, seg] of Object.entries(ROUTES)) {
+      const carriesJson = seg.body === 'config' || seg.body === 'entry' || seg.body === 'apply'
+      const readableByGet = seg.body === 'none' || seg.body === 'query'
+      if (carriesJson) expect(`${name}:${seg.method}`, '带 JSON 字段的段必须是 POST').toBe(`${name}:POST`)
+      if (seg.method === 'GET') expect(`${name}:${readableByGet}`, 'GET 段不带 JSON 字段').toBe(`${name}:true`)
+      if (seg.body === 'query') expect(`${name}:${seg.method}`, '查询串段必须是 GET').toBe(`${name}:GET`)
+    }
+  })
+})
+
+describe('失败的运行期判别（isDSHRemoteError）', () => {
+  // 消费这一判别的是 Node 半（`src/remote/map-error.ts` 的 `toRemoteFailure`）：浏览器半不抛失败、
+  // 也不补标记，所以判别按它自己的家测，不挂在某一端的用例文件里。
+  it('官方标记位才认失败；普通 {code,message} 对象不算', () => {
+    expect(isDSHRemoteError(Object.assign(new Error('x'), { code: 'sessiondelete/io', isDSHRemoteError: true }))).toBe(true)
+    // 这正是上一版自造鸭子判别的地方：普通 `{code, message}`（不是官方 RemoteError 实例）不认。
+    expect(isDSHRemoteError({ code: 'sessiondelete/io', message: 'x' })).toBe(false)
+    expect(isDSHRemoteError({ isDSHRemoteError: true })).toBe(false)
+    expect(isDSHRemoteError(new Error('x'))).toBe(false)
+    expect(isDSHRemoteError(null)).toBe(false)
+    expect(isDSHRemoteError('sessiondelete/io')).toBe(false)
   })
 })
 

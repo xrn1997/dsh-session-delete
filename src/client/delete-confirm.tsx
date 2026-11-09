@@ -7,12 +7,10 @@
  */
 import { useEffect, useState } from 'react'
 import { useBusyGate } from './busy-gate.js'
-import { useIdleClose } from './confirm-close.js'
+import { ConfirmDialog } from './confirm-dialog.js'
 import { zhTranslate, type Translate } from './copy.js'
-import { applyOne, callRemote, type DeleteConfirmDeps } from './remote.js'
+import { applyOne, type OneShotDeps } from './remote.js'
 import { createStore } from './store.js'
-import { Button } from './ui/Button.js'
-import { Modal } from './ui/Modal.js'
 import { Tag } from './ui/Tag.js'
 import { deleteSessionFromMenu } from './write-seats.js'
 
@@ -65,11 +63,11 @@ export function resetDeleteRequest(): void {
  * 常驻的确认框宿主。挂 `shell.overlay`（框架级浮层；槽位说明原文 "a toast stack or a status
  * pill all belong here"）：没有待确认的删除时什么都不渲染。
  */
-export function DeleteConfirmHost({ deps, t = zhTranslate }: { deps: DeleteConfirmDeps; t?: Translate }) {
+export function DeleteConfirmHost({ deps, t = zhTranslate }: { deps: OneShotDeps; t?: Translate }) {
   const current = useDeleteRequest()
   if (current === null) return null
   // `key` 跟着 seq 走：新的一条请求是一个全新的对话框（官方 `Toast` 的 `key={seq}` 同一口径）。
-  return <ConfirmDialog key={current.seq} request={current} deps={deps} t={t} />
+  return <DeleteConfirmDialog key={current.seq} request={current} deps={deps} t={t} />
 }
 
 /**
@@ -78,18 +76,17 @@ export function DeleteConfirmHost({ deps, t = zhTranslate }: { deps: DeleteConfi
  * 失败面**不吞**：原文以 `Tag tone="danger"` 摆进对话框，且**确认失败后不关框**，
  * 用户可以再点一次（不是一次失败就永久锁死）。
  */
-function ConfirmDialog({
+function DeleteConfirmDialog({
   request: current,
   deps,
   t,
 }: {
   request: DeleteRequest
-  deps: DeleteConfirmDeps
+  deps: OneShotDeps
   t: Translate
 }) {
   /** 这一趟的闸：写入座位把 apply → 收尾 → 重读整趟包在里面，`busy` 期间主按钮按住。 */
   const gate = useBusyGate()
-  const { close, closeDisabled } = useIdleClose(gate.busy, clearDeleteRequest)
   const [failure, setFailure] = useState<string | null>(null)
   /**
    * 这条会话在盘上带着多少个后代。删除是按组走的（组语义见 `src/trash/groups.ts`），而宿主的客户端本来就把孩子那几行
@@ -101,49 +98,42 @@ function ConfirmDialog({
   useEffect(() => {
     let alive = true
     void (async () => {
-      const outcome = await callRemote(() => applyOne(deps, 'count', current.sessionId).then((item) => item.value))
+      const outcome = await applyOne(deps, 'count', current.sessionId)
       // 读不到就**不说那半句**（0 也是"没说"）：它是加法，一次取数失败不许锁死删除按钮，
       // 也不许把"读不出"写成"它没有子会话"那种假话。
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `alive` 由 effect 的清理闭包写成 false，TS 看不见闭包写入；删了会让卸载后的取数写回已销毁的框。
-      if (alive) setSubagents(outcome.ok ? outcome.value : 0)
+      if (alive) setSubagents(outcome.ok ? outcome.value.value : 0)
     })()
     return () => { alive = false }
   }, [deps, current.sessionId])
 
   const confirm = async (): Promise<void> => {
     setFailure(null)
-    const failure = await deleteSessionFromMenu(
+    const run = await deleteSessionFromMenu(
       deps,
       { sessionId: current.sessionId, title: current.title },
       gate,
     )
-    // `undefined` 是闸把这一趟挡回来了（连点的第二下）：这一趟没跑 ⇒ 框不收、这里不再追加失败
+    // `blocked` 是闸把这一趟挡回来了（连点的第二下）：这一趟没跑 ⇒ 框不收、这里不再追加失败
     // （进入时清旧失败那一下已在同一动作里发生），界面后果全归在飞那一趟（收了就会把那一趟的
     // 失败原文丢在已经卸载的框上）。
-    if (failure === undefined) return
-    if (failure !== null) {
-      setFailure(failure)
+    if (run.kind === 'blocked') return
+    if (run.value !== null) {
+      setFailure(run.value)
       return
     }
     clearDeleteRequest()
   }
 
   return (
-    <Modal
-      open
-      onClose={close}
+    <ConfirmDialog
       title={t('dialog.title')}
       closeLabel={t('common.close')}
-      footer={
-        <>
-          <Button variant="outline" disabled={closeDisabled} onClick={close}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="primary" disabled={gate.busy} onClick={() => void confirm()}>
-            {t('dialog.confirm')}
-          </Button>
-        </>
-      }
+      cancelLabel={t('common.cancel')}
+      confirmLabel={t('dialog.confirm')}
+      busy={gate.busy}
+      onCancel={clearDeleteRequest}
+      onConfirm={() => void confirm()}
     >
       <div style={TARGET_CARD}>
         <div
@@ -163,6 +153,6 @@ function ConfirmDialog({
       {subagents === 0 ? null : <p>{t('dialog.subagents', { n: subagents })}</p>}
       <p>{t('dialog.hint')}</p>
       {failure === null ? null : <Tag tone="danger">{failure}</Tag>}
-    </Modal>
+    </ConfirmDialog>
   )
 }

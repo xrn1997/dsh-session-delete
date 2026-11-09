@@ -8,7 +8,7 @@
  * （`bg-layer-2` + `border-l4` + `radius-lg`），清单行不铺底不描边、选中态只换宿主"选中"那一档底色。
  */
 import type { CSSProperties } from 'react'
-import { unescapeProjectKey } from '../shared/wire.js'
+import { NO_CWD_PROJECT_DIR, unescapeProjectKey } from '../shared/project-key.js'
 import type { Translate } from './copy.js'
 import type { TrashEntryLike } from './remote.js'
 
@@ -69,11 +69,12 @@ export const BULK_DANGER = {
  * 项目名怎么念：宿主的 `projectKey` 把 cwd 里的 `/`、`\`、`:` 全折成**一个** `-` ⇒ 分隔符那部分有损、
  * 拆不回真实路径；但**非分隔符那部分可逆**（`~XXXX` 十六进制码元，字面 `~` 编成 `~007E`）。
  * 摘掉 `--…--` 裹边、还原这些转义，剩下的原样摆出来，完整串交给组头 `title`。
- * 字母表只有一份：还原走 `shared/wire.ts`。
+ * 字母表只有一份：还原走 `src/shared/project-key.ts` 的 `unescapeProjectKey`；无 cwd 的目录名
+ * 也认同一个共享字面量（`NO_CWD_PROJECT_DIR`），不在浏览器半另写一份 `_no-cwd`。
  */
 export function projectLabel(projectDir: string, t: Translate): string {
   const bare = unescapeProjectKey(projectDir.replace(/^--/, '').replace(/--$/, ''))
-  return bare === '' || bare === '_no-cwd' ? t('trash.project.unknown') : bare
+  return bare === '' || bare === NO_CWD_PROJECT_DIR ? t('trash.project.unknown') : bare
 }
 
 /** 清单上的一个项目组（组头 + 组内的条目，组内按删除时间倒序）。 */

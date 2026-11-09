@@ -1,6 +1,8 @@
 import { act, fireEvent, render, renderHook, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { useIdleClose } from '../../src/client/confirm-close.js'
+import { ConfirmDialog } from '../../src/client/confirm-dialog.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { OrphanReportWire, TrashEntryLike } from '../../src/client/remote.js'
 import { OrphanConfirm, TrashConfirm } from '../../src/client/trash-confirm.js'
@@ -137,6 +139,86 @@ describe('各张确认框都走同一条关框规则', () => {
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+// 壳只共这一层（ADR-0052）：四件文案 + 两颗键的材质 + 关框规则。各框的正文与状态机不在这里判。
+describe('共用的确认框页脚壳', () => {
+  function shell(props: {
+    readonly danger?: boolean
+    readonly busy?: boolean
+    readonly onCancel?: () => void
+  } = {}): ReactElement {
+    return (
+      <ConfirmDialog
+        title="壳的标题"
+        closeLabel="关闭对话框"
+        cancelLabel="取消这一次"
+        confirmLabel="确认这一次"
+        busy={props.busy ?? false}
+        onCancel={props.onCancel ?? noop}
+        onConfirm={noop}
+        {...(props.danger === undefined ? {} : { danger: props.danger })}
+      >
+        <p>壳里的正文</p>
+      </ConfirmDialog>
+    )
+  }
+
+  it('标题、关闭钮、两颗页脚键与正文都来自调用方，两颗键各走自己的回调', () => {
+    const onCancel = vi.fn()
+    const onConfirm = vi.fn()
+    render(
+      <ConfirmDialog
+        title="壳的标题"
+        closeLabel="关闭对话框"
+        cancelLabel="取消这一次"
+        confirmLabel="确认这一次"
+        busy={false}
+        onCancel={onCancel}
+        onConfirm={onConfirm}
+      >
+        <p>壳里的正文</p>
+      </ConfirmDialog>,
+    )
+    expect(screen.getByRole('dialog')).toHaveTextContent('壳的标题')
+    expect(screen.getByRole('dialog')).toHaveTextContent('壳里的正文')
+    fireEvent.click(screen.getByRole('button', { name: '关闭对话框' }))
+    expect(onCancel).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: '取消这一次' }))
+    expect(onCancel).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByRole('button', { name: '确认这一次' }))
+    expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('危险层级是一个旋钮：给了才换主按钮的材质，没给是普通 primary', () => {
+    const plain = render(shell())
+    const normal = screen.getByRole('button', { name: '确认这一次' })
+    expect(normal.getAttribute('style') ?? '').not.toContain('--sd-button-primary-fill')
+    plain.unmount()
+
+    render(shell({ danger: true }))
+    const danger = screen.getByRole('button', { name: '确认这一次' })
+    expect(danger.getAttribute('style') ?? '').toContain('--sd-button-primary-fill')
+  })
+
+  it('busy 时两颗键一起按住（关框规则仍只有 `useIdleClose` 一个调用点）', () => {
+    render(shell({ busy: true }))
+    expect(screen.getByRole('button', { name: '取消这一次' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '确认这一次' })).toBeDisabled()
+  })
+
+  it('busy 时遮罩点击也关不掉框；非 busy 时遮罩照常关框', () => {
+    // `Modal` 的遮罩 / 关闭钮 / Esc 都走同一个 `onClose`（`useIdleClose` 交出的 `close`）；
+    // 只钉两颗键的 disabled 证明不了这条——遮罩是另一条入口。
+    const onCancel = vi.fn()
+    const view = render(shell({ busy: true, onCancel }))
+    fireEvent.click(document.querySelector('.sd-modal-mask') as Element)
+    expect(onCancel).not.toHaveBeenCalled()
+
+    view.rerender(shell({ busy: false, onCancel }))
+    fireEvent.click(document.querySelector('.sd-modal-mask') as Element)
     expect(onCancel).toHaveBeenCalledTimes(1)
   })
 })

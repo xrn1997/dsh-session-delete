@@ -75,16 +75,16 @@ function ConfigCard({ config, saveConfig, t }: ConfigCardProps): ReactElement {
     setFailure(null)
     setSaved(false)
     void config()
-      .then((value) => {
+      .then((outcome) => {
         if (!alive) return
-        setCurrent(value)
-        setDraft(draftOf(value))
+        if (!outcome.ok) {
+          setPhase('failed')
+          setFailure(outcome.failure.message)
+          return
+        }
+        setCurrent(outcome.value)
+        setDraft(draftOf(outcome.value))
         setPhase('ready')
-      })
-      .catch((error: unknown) => {
-        if (!alive) return
-        setPhase('failed')
-        setFailure(error instanceof Error ? error.message : String(error))
       })
     return () => {
       alive = false
@@ -102,13 +102,14 @@ function ConfigCard({ config, saveConfig, t }: ConfigCardProps): ReactElement {
     setFailure(null)
     setSaved(false)
     void saveConfig(parsed.value)
-      .then((value) => {
-        setCurrent(value)
-        setDraft(draftOf(value))
+      .then((outcome) => {
+        if (!outcome.ok) {
+          setFailure(outcome.failure.message)
+          return
+        }
+        setCurrent(outcome.value)
+        setDraft(draftOf(outcome.value))
         setSaved(true)
-      })
-      .catch((error: unknown) => {
-        setFailure(error instanceof Error ? error.message : String(error))
       })
       .finally(() => {
         setSaving(false)

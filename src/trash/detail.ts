@@ -23,16 +23,20 @@
  * "少了几张图"与"这块被截断"不是同一件事，拿一个数兼报会让两个数都对不上。
  */
 import { entryWire, trashDirOf, type TrashEntry } from './entry.js'
-import type { FsPort } from '../ports/fs-port.js'
+import type { FsDetailPort } from '../ports/fs-port.js'
+import { bareSessionId } from '../domain/closure.js'
 import type {
   TrashDetailAttachmentWire,
   TrashDetailBlockWire,
   TrashDetailInjectionBlockWire,
+  TrashDetailPromptWire,
   TrashDetailTextBlockWire,
   TrashDetailToolBlockWire,
   TrashDetailWire,
+  TrashEntryWire,
 } from '../shared/wire.js'
 import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { descriptorLabelOf, displayNameOfLog } from './display-name.js'
 import { attachmentsInContent } from './attachments.js'
 import { visibleGroups } from './groups.js'
 import { trashEmpty, verbError } from '../verbs/errors.js'
@@ -43,6 +47,8 @@ export const PER_BLOCK_CHAR_CAP = 16_000
 export const PAGE_BLOCK_LIMIT = 30
 /** 一页正文的总字符上限（块按日志顺序累计；单块超闸时仍保留一块）。 */
 export const PAGE_CHAR_LIMIT = 500_000
+/** 提问轨预览的字符上限：它是导航标签，不是正文的第二份抄本。 */
+export const PROMPT_PREVIEW_LIMIT = 80
 /** 一块最多带多少张附件上线。 */
 const MAX_ATTACHMENTS_PER_BLOCK = 20
 /** 一页最多带多少张附件上线。 */
@@ -54,7 +60,7 @@ export type TrashDetail = TrashDetailWire
 
 export type DetailDeps = {
   /** 详情自己直接要的三件（判目录在不在、挑日志、读日志）。对账不在这条路上，所以不需要 `listDirs`。 */
-  fs: Pick<FsPort, 'exists' | 'listFiles' | 'readFile'>
+  fs: FsDetailPort
   /** 路由交来的清册 **raw 行**：`/detail` 声明为 pure，读一次不能顺手对账——对账会写清册行，那是写动作，
    *  必须排在到达序链上。读面由路由记录选好（`read: 'raw'`），这里只消费行，不再自己挑 `list()` / `raw()`。
    *  代价是有意的：只有目录、清册还没这一行的手工搬入条目读不到（`/list` 对账后可见）。 */
@@ -121,6 +127,17 @@ function clip(text: string, cap: number): { text: string; truncated: boolean } {
  *  渲染侧因此不必、也不许再兜空块。 */
 function hasContent(text: string, attachments: readonly TrashDetailAttachmentWire[]): boolean {
   return text !== '' || attachments.length > 0
+}
+
+/** 提问索引的预览：空白折叠、超长带省略号。Markdown 记号不清——这是标签，读者要能一眼认出原句。
+ *
+ *  **按码点截断**，不按 UTF-16 码元：`slice` 会把代理对（emoji 等）切成孤立的一半，过线后
+ *  显示成替换字符——预览是读者认出这一句的唯一线索，不该在这里坏掉。 */
+function promptPreview(text: string): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  const chars = Array.from(normalized)
+  if (chars.length <= PROMPT_PREVIEW_LIMIT) return normalized
+  return `${chars.slice(0, PROMPT_PREVIEW_LIMIT - 1).join('').trimEnd()}…`
 }
 
 /** 一块的正文：没内容 ⇒ 这块不建；否则过单块闸截一刀。 */
@@ -210,16 +227,19 @@ class PageBuilder {
     this.pageChars = pageChars
   }
 
-  /** 追加一块：id 用整条日志的块序号盖，页内只留最后 `limit` 块 / `pageChars` 字符。 */
-  add(block: TrashDetailBlockWire): void {
+  /** 追加一块并回它在整条日志里的序号：id 用这个序号盖，页内只留最后 `limit` 块 / `pageChars` 字符。
+   *  返回值**不管这块进没进页**都给（提问索引要拿它当游标），所以调用方不能拿返回值为空当"没入页"。 */
+  add(block: TrashDetailBlockWire): string {
     const index = this.nextIndex++
-    if (index >= this.end) return
-    block.id = String(index)
-    const chars = blockChars(block)
-    this.buffer.push({ index, block, chars })
-    this.chars += chars
-    this.trim()
-    if (block.kind === 'tool') this.hook(block)
+    if (index < this.end) {
+      block.id = String(index)
+      const chars = blockChars(block)
+      this.buffer.push({ index, block, chars })
+      this.chars += chars
+      this.trim()
+      if (block.kind === 'tool') this.hook(block)
+    }
+    return String(index)
   }
 
   /** 挤出页首：块数超限，或正文超字符闸（但至少留一块，游标才能前进）。 */
@@ -315,6 +335,23 @@ class PageBuilder {
   }
 }
 
+/**
+ * 一条孩子的**自己日志**里的显示名：descriptor label 优先，其次最后一条 `session/title`。
+ * 只给父详情里没有 catalog 登记、标题又撞名的 fork 孩子用（它们没有 label，清册标题是删除时的
+ * 快照）；读不出就返回 `undefined`，绝不让父详情失败——看不见那个名字比整条详情打不开轻。
+ */
+async function childDisplayNameOf(deps: DetailDeps, entry: TrashEntry): Promise<string | undefined> {
+  try {
+    const dir = trashDirOf(entry.id, deps.home)
+    const logName = pickSessionLog(await deps.fs.listFiles(dir))
+    if (logName === undefined) return undefined
+    const { label, title } = displayNameOfLog(await deps.fs.readFile(`${dir}/${logName}`))
+    return label !== '' ? label : title !== '' ? title : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT_LIMITS) {
   return async function readTrashDetail(entryId: string, before?: number): Promise<TrashDetail> {
     const all = await deps.rows()
@@ -342,6 +379,18 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
       injectedCount: 0, blocks: [], olderCursor: null,
     }
     const models = new Set<string>()
+    /** 子会话的显示名（bare id → label）：父日志的 `subagent/catalog` 事件逐孩子记着委派时的
+     *  `description`（与宿主工作中同名）。清册标题是删除那一刻的快照，起错名的存量条目靠它兜（ADR-0058）。 */
+    const subagentLabels = new Map<string, string>()
+    /** 这条会话**自己**的 descriptor label（独立子会话没有父日志可查时的兜底）。
+     *  与宿主 `subagent` 投影同一语义：每遇一条 descriptor 就覆盖，空 label 重置——fork 种子里的
+     *  祖先 descriptor 必须被子会话自己的那条覆盖，坏/空的后写不保留祖先的名字。 */
+    let ownLabel = ''
+    /** 这条会话的 header 带 `parentSession`：它是子会话（fork / subagent），自己的日志标题才是
+     *  当前名字；主会话没有这一格，仍按清册快照优先。 */
+    let ownParentSession = false
+    /** 整条会话的提问索引：与分页无关，只在首次读时过线（见 `TrashDetailWire.prompts`）。 */
+    const prompts: TrashDetailPromptWire[] = []
     // 游标的合法性（非负整数）只在契约那一处判（`src/api/route-table.ts` 的 `optionalCursor` ⇒ 400）；
     // 这里再兜一层就是同一判据的第二份抄本。
     const end = before ?? Number.POSITIVE_INFINITY
@@ -363,10 +412,27 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
             // `cwd` / `createdAt` 挂在**记录根**上（实测逐字：`{"type":"session","version":4,"id":…,"createdAt":…,"cwd":"…"}`）
             if (typeof r.cwd === 'string') detail.cwd = r.cwd
             if (typeof r.createdAt === 'number') detail.createdAt = r.createdAt
+            if (typeof r.parentSession === 'string' && r.parentSession !== '') ownParentSession = true
             return
           }
           case 'session/title': {
             if (typeof data.title === 'string') detail.logTitle = data.title
+            return
+          }
+          case 'subagent/catalog': {
+            // 孩子显示名的登记：`childId` 两代写法都可能（bare / `session-` 前缀），按 bare 归一配行。
+            // 空 label 不是名字（one-shot 可以不给 description），缺席就让孩子行回落清册标题。
+            const childId = data.childId
+            const label = data.label
+            if (typeof childId === 'string' && childId !== '' && typeof label === 'string' && label !== '') {
+              subagentLabels.set(bareSessionId(childId), label)
+            }
+            return
+          }
+          case 'subagent/descriptor': {
+            // 自己的显示名：独立子会话（父条目不在）靠自己日志的这条事件；后写覆盖前写、空 label
+            // 重置，与宿主 `subagent` 投影的折叠语义一致（父日志的 catalog 是另一份来源）。
+            ownLabel = descriptorLabelOf(data)
             return
           }
           case 'turn/start': {
@@ -383,7 +449,14 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
               const block = textBlock('user', time, text, attachments, limits.perBlockChars)
               if (block !== undefined) {
                 detail.userMessageCount += 1
-                page.add(block)
+                // 序号来自 `add`（这块不一定进本页，但序号是整条日志的那一格）：提问轨拿它当锚点。
+                // 索引只在首次读时过线（`before` 的翻页到不了 `detail.prompts`，见文件尾）：翻页时连建都不建。
+                const id = page.add(block)
+                // 只有**带正文**的提问入轨：页级附件闸（`PageBuilder.finish` 的 200 张）可能把
+                // 「只有附件、没有正文」的 user 块挤成空块并整块不出线，轨上留一格却永远跳不过去。
+                // 跨页也判不出哪一块会被收（每块只出现在一页里），所以判据只能取"有没有正文"。
+                // 这类消息仍在正文里（滚到就是），只是不占一格刻度。
+                if (before === undefined && text !== '') prompts.push({ id, at: time, preview: promptPreview(text) })
               }
               return
             }
@@ -473,14 +546,51 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
     const finished = page.finish()
     detail.blocks = finished.blocks
     detail.olderCursor = finished.olderCursor
+    // 提问索引只在首次读时过线：它不随分页变化，带 `before` 的翻页再搬一遍就是白花带宽。
+    if (before === undefined) detail.prompts = prompts
     detail.models = [...models]
+    // 自己的显示名随详情过线：descriptor label 优先；没有 descriptor 的子会话（fork）用它自己
+    // 日志的当前标题——父详情够不到它，清册标题又可能是主会话那套起名法留下的错名字。
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `ownParentSession` 由走帧闭包写入，TS 看不见闭包写入；删了 fork 子会话就只剩主会话那套快照标题。
+    const ownDisplayName = ownLabel !== '' ? ownLabel : ownParentSession ? detail.logTitle : ''
+    if (ownDisplayName !== '') detail.label = ownDisplayName
     // 子会话摘要：只列**折进这一条**的孩子——折的判据复用 `visibleGroups`（ADR-0001/0029），
     // 不在这里另写一份「parentEntryId 指向谁」。父行不在、或自己也是孩子时，下一代接不住、
     // 自己占清单行；详情不重复给它们开入口。
     const kids = visibleGroups(all).find((group) => group.root.id === record.id)?.kids ?? []
     if (kids.length > 0) {
       const limit = limits.subagents ?? SUBAGENT_SUMMARY_LIMIT
-      detail.subagents = kids.slice(0, limit).map(entryWire)
+      // 行 = `entryWire`（清册事实，与 `/list` 同一份投影）+ 可选 label（日志里读出来的显示名兜底，
+      // 两份来源不同、不混在 `entryWire` 里——它只搬清册里真有的事实）。
+      // 没有 catalog 登记、标题又和父/兄弟撞名的 fork 孩子：它没有 descriptor label，但自己的日志
+      // 标题就是工作里的名字（旧判据折进来的那条就是这么起错名的）。只读这类行——`session-` 前缀
+      // 是宿主普通/fork 会话的 id 形状，subagent 孩子是裸 UUID；不逐条读 200 个子会话日志。
+      //
+      // 读法是**串行**，不是并发：旧判据折进来的 fork 组里，孩子标题往往整组都是父标题（正是这一支
+      // 要修的存量），`ambiguous` 会同时命中整组。并发读会把最多 200 份整条日志一起压进内存
+      // （每份先 readFile 再逐帧解压），而日志大小没有上限；串行只压一份，代价是那个病态存量组
+      // 多等几次读盘。常见组（0～2 条命中）与并发没有可感差别。
+      const titleCounts = new Map<string, number>()
+      for (const kid of kids) titleCounts.set(kid.title, (titleCounts.get(kid.title) ?? 0) + 1)
+      const ambiguous = (kid: TrashEntry): boolean =>
+        kid.title === '' || kid.title === record.title || (titleCounts.get(kid.title) ?? 0) > 1
+      const listed: TrashEntryWire[] = []
+      for (const kid of kids.slice(0, limit)) {
+        const label = subagentLabels.get(bareSessionId(kid.sessionId))
+        if (label !== undefined) {
+          listed.push({ ...entryWire(kid), label })
+          continue
+        }
+        if (!kid.sessionId.startsWith('session-') || !ambiguous(kid)) {
+          listed.push(entryWire(kid))
+          continue
+        }
+        const own = await childDisplayNameOf(deps, kid)
+        listed.push(own === undefined || own === kid.title ? entryWire(kid) : { ...entryWire(kid), label: own })
+      }
+      detail.subagents = listed
+      // 合计按**全部**孩子算：摘要条报的是清册大小合计，不是已列前 N 条的和（ADR-0055）。
+      detail.subagentsSizeBytes = kids.reduce((sum, kid) => sum + kid.sizeBytes, 0)
       // 超闸只报「前 N 条 + 总数」，不静默截断：整组仍按整组释放，删前核对的合计由确认框念。
       if (kids.length > limit) detail.subagentsTotal = kids.length
     }

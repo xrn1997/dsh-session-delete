@@ -21,7 +21,7 @@ import type {
 import { useMaintenance, type Maintenance } from '../../src/client/use-maintenance.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
 import { pick } from '../support/fixture.js'
-import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
 import { failed, ok, outcomes } from './support/outcomes.js'
 
 const EMPTY: OrphanReportWire = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
@@ -47,7 +47,7 @@ const ATT_106: AttachmentOrphanReportWire = {
   items: Array.from({ length: 106 }, (_, i) => orphanItem(i)),
 }
 
-function deps(over: Partial<FakeRemote> = {}): FakeRemote {
+function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
   return createFakeRemote({
     scanOrphans: vi.fn(async () => EMPTY),
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
@@ -58,7 +58,7 @@ function deps(over: Partial<FakeRemote> = {}): FakeRemote {
   })
 }
 
-function mount(over: Partial<FakeRemote> = {}) {
+function mount(over: Partial<FakeRemoteMethods> = {}) {
   const d = deps(over)
   const view = renderHook(() => useMaintenance({ deps: d, t: zhTranslate }))
   return { d, ...view }
@@ -75,7 +75,7 @@ describe('维护编排 · 手动触发', () => {
     expect(m.orphans.report).toBeNull()
     expect(m.orphans.failure).toBeNull()
     expect(m.orphans.notice).toBeNull()
-    expect(m.orphans.attachmentNotice).toBeNull()
+    expect(m.orphans.secondaryNotice).toBeNull()
     expect(m.orphans.confirm).toBe(false)
     expect(m.orphans.busy).toBe(false)
     expect(m.orphans.phase).toBeNull()
@@ -262,7 +262,7 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
-    expect(current(result).orphans.attachmentNotice).not.toBeNull()
+    expect(current(result).orphans.secondaryNotice).not.toBeNull()
 
     let loser!: Promise<void>
     act(() => { loser = current(result).orphans.scan() })     // 先发：将被顶掉
@@ -271,10 +271,10 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
 
     // 输家落地：回执仍在（清除若放在发请求之前，这里已经被清掉了）。
     await act(async () => { resolveLoser(REPORT); await loser })
-    expect(current(result).orphans.attachmentNotice).not.toBeNull()
+    expect(current(result).orphans.secondaryNotice).not.toBeNull()
 
     await act(async () => { resolveWinner(REPORT); await winner })
-    expect(current(result).orphans.attachmentNotice).toBeNull()   // 只有赢家清
+    expect(current(result).orphans.secondaryNotice).toBeNull()   // 只有赢家清
   })
 })
 
@@ -327,12 +327,12 @@ describe('维护编排 · 孤儿会话清理', () => {
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
     expect(current(result).orphans.failure).toBeNull()
-    expect(current(result).orphans.attachmentNotice).toBe(
+    expect(current(result).orphans.secondaryNotice).toBe(
       '部分附件未清理：剩余引用源读不出（已清理 2 个）；另有 1 个附件删除失败',
     )
     // 下一次手动检查是新的只读快照：上一趟的回执收掉，不冒充这一次的读数。
     await act(async () => { await current(result).orphans.scan() })
-    expect(current(result).orphans.attachmentNotice).toBeNull()
+    expect(current(result).orphans.secondaryNotice).toBeNull()
   })
 
   it('not-found 是中性提示，不是失败；报告为空时也不冒充清理过', async () => {

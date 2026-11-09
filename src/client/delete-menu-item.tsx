@@ -12,11 +12,13 @@
  * 另外两件事说清：
  *
  * 1. **不自建菜单壳**。菜单行由宿主既有菜单容器渲染，我们只贡献一行 `MenuItemButton`
- *    （`ui/MenuItemButton.tsx`，照官方同名组件抄的），由 `index.tsx` 注册进槽位
- *    `sidebar.workspaces.session.menu.item`（该槽位只投影 `sessionId` / `displayTitle` 两个数据
+ *    （`ui/MenuItemButton.tsx`，照官方同名组件抄的）。这是 **legacy 槽位行**：0.2.2+ 的删除行是
+ *    `context-menu-actions.tsx` 的 `createSessionMenuContribution` 数据动作；只有 `contextMenus`
+ *    缺席的旧宿主才注册本组件，注册点归同文件的 `installSessionMenus`（槽位
+ *    `sidebar.workspaces.session.menu.item` 只投影 `sessionId` / `displayTitle` 两个数据
  *    加 `menuOpenState` / `shortcuts` 两个 hook，见 asar @46391872 的槽位声明原文）。
- *    菜单的**开合归 owner**：槽位把 `useMenuOpenState` 交给这一行（`index.tsx` 的 `DeleteRow` 接住后
- *    当 `dismissMenu` 传下来），按下时先发请求、再收菜单——与官方 README 的示例同序
+ *    菜单的**开合归 owner**：槽位把 `useMenuOpenState` 交给这一行（`context-menu-actions.tsx` 的
+ *    `DeleteRow` 接住后当 `dismissMenu` 传下来），按下时先发请求、再收菜单——与官方 README 的示例同序
  *    （`onSelect={() => { setMenuOpen(false); … }}`）。
  * 2. **运行中置灰**（docs/ui-spec.md「运行中」）。置灰用**原生 `disabled`**：本平台的菜单行组件
  *    `MenuItemButton` 只把 `disabled` 落在原生按钮属性上（真产物原文 `<button type="button"
@@ -38,10 +40,10 @@ export interface DeleteMenuItemProps {
   title: string
   /** 会话在跑：这一行置灰，并把原因摆在行上。 */
   live?: boolean
-  /** 上方那条发丝线；缺省 true。多选入口排在删除前面时由它带线，删除行改成 false（`index.tsx`）。 */
+  /** 上方那条发丝线；缺省 true。多选入口排在删除前面时由它带线，删除行改成 false（`context-menu-actions.tsx`）。 */
   separatorBefore?: boolean
   /**
-   * 菜单 owner 交下来的「收起菜单」——槽位注入的 `useMenuOpenState`（`index.tsx` 的 `DeleteRow` 接住）。
+   * 菜单 owner 交下来的「收起菜单」——槽位注入的 `useMenuOpenState`（`context-menu-actions.tsx` 的 `DeleteRow` 接住）。
    * 「关不关菜单是 owner 的决定」是官方对该槽位的契约；按下这一行时**先发请求、再收菜单**。
    * 缺省不动，方便单独测这一行。
    */

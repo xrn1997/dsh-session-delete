@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as plugin from '../src/index.js'
-import { createHostPort } from '../src/ports/host-port.js'
+import { createHostPort, projectDirOfCwd, projectKey } from '../src/ports/host-port.js'
 import { createMemberPresence } from '../src/verbs/member-presence.js'
 import { createHostStorageManifest } from '../src/trash/storage-manifest.js'
-import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES, unescapeProjectKey } from '../src/shared/wire.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES } from '../src/shared/wire.js'
+import { unescapeProjectKey } from '../src/shared/project-key.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
 import type { DeleteDeps } from '../src/deps.js'
 import type { TrashEntry } from '../src/trash/entry.js'
@@ -132,7 +133,7 @@ describe('宿主服务层端口的接线', () => {
     expect(await host.projectDirOf('d')).toBe('--home-dev-project--')
   })
 
-  // 编码（Node 半，逐字镜像宿主）与解码（`shared/wire.ts`，客户端用它渲染回收站组头）是**一对**：
+  // 编码（Node 半，逐字镜像宿主）与解码（`shared/project-key.ts`，客户端用它渲染回收站组头）是**一对**：
   // 只钉一边等于没钉——字母表在任一侧漂了，组头就会静默显示错。分隔符折叠是有损的，
   // 所以往返只断言**非分隔符字符**（中文、空格、字面 `~`）能原样回来。
   it('projectKey 的转义与 shared 的还原配对（往返）', async () => {
@@ -143,6 +144,20 @@ describe('宿主服务层端口的接线', () => {
     expect(back).toContain('中文')      // 多字节字符走 ~XXXX
     expect(back).toContain(' 目录')     // 空格同样走转义，还原后仍是空格
     expect(back).toContain('~literal')  // 字面 `~` 编成 ~007E，还原后不许变成别的字符
+  })
+
+  // 删除计划、列表投影与对账重建共用这一支：只有**缺席** cwd 才落 `_no-cwd`；空串是"读到了一个
+  // 空路径"，照常编码。三处各写一遍三元式时，`''` 迟早有一处落成 `_no-cwd`，同一条会话在
+  // 删除、恢复与孤儿扫描里就会指向两个目录。
+  // 期望值写绝对值，不写 `projectKey('')`：自指的断言换一份同样自洽、但与宿主漂开的算法也照样绿。
+  // 宿主那条 `projectKey` 对空串直接抛（`cannot encode an empty project path`）；这里是有意兜底
+  // （见 `src/shared/project-key.ts` 头注）。
+  it('项目目录名只有一支判据（`projectDirOfCwd`）：缺席 ⇒ `_no-cwd`，空串照常编码', () => {
+    expect(projectDirOfCwd(undefined)).toBe('_no-cwd')
+    expect(projectDirOfCwd('')).toBe('--root--')
+    expect(projectDirOfCwd('')).not.toBe('_no-cwd')
+    expect(projectDirOfCwd('D:/develop/GitHub/dsh-session-delete')).toBe('--D-develop-GitHub-dsh-session-delete--')
+    expect(projectKey('D:/develop/p')).toBe('--D-develop-p--')
   })
 
   it('projectDirOf 的 cwd 来自公开 sessionPersistence.stat（不再读私有的 readSessionHeader）', async () => {
@@ -816,6 +831,45 @@ describe('宿主服务层端口的接线', () => {
         ? { stat: async () => { throw new Error('storage fault') } }
         : boom.ctx.get(name)),
     }).titleOf('s1')).toBe('')
+  })
+
+  it('titleOf 子会话按 `subagent` 投影的 label 起名（与工作中同名）；label 缺席才回落 title 投影', async () => {
+    // 真机判据（2026-11-03 本机回收站三组实测）：子会话在工作中显示的是 subagent label
+    //（`subagent/descriptor` 的 label，值来自委派 description；宿主子智能体 UI 读 `projectionValues.subagent.label`），
+    // 而 title 投影是主会话那套起名法（LLM 标题 / 首句提示词截断兜底）——同批子会话会撞成同名。
+    const view = (values: Record<string, unknown>) => ({
+      cachedSnapshot: () => ({ values }),
+      cachedPredecessorTitle: () => ({ values }),
+    })
+
+    const labeled = makeEnv({
+      headers: { s1: { cwd: 'C:/p' } },
+      projectionCache: view({
+        title: '你是一名代码审查员，对整个',
+        subagent: { mode: 'continuable', label: 'Standards 轴全仓审查', seq: 1 },
+      }),
+    })
+    expect(await createHostPort(labeled.ctx).titleOf('s1')).toBe('Standards 轴全仓审查')
+
+    // label 缺席（one-shot 没给 label / `subagent` 行是 null）⇒ 照旧走 title 投影
+    const noLabel = makeEnv({
+      headers: { s1: { cwd: 'C:/p' } },
+      projectionCache: view({ title: '会话标题', subagent: { mode: 'one-shot', seq: 1 } }),
+    })
+    expect(await createHostPort(noLabel.ctx).titleOf('s1')).toBe('会话标题')
+
+    const nullSubagent = makeEnv({
+      headers: { s1: { cwd: 'C:/p' } },
+      projectionCache: view({ title: '会话标题', subagent: null }),
+    })
+    expect(await createHostPort(nullSubagent.ctx).titleOf('s1')).toBe('会话标题')
+
+    // label 有、title 投影缺席 ⇒ 名字就是 label（不许因为 title 空而丢名字）
+    const labelOnly = makeEnv({
+      headers: { s1: { cwd: 'C:/p' } },
+      projectionCache: view({ subagent: { mode: 'continuable', label: '调研宿主会话父子结构', seq: 2 } }),
+    })
+    expect(await createHostPort(labelOnly.ctx).titleOf('s1')).toBe('调研宿主会话父子结构')
   })
 })
 

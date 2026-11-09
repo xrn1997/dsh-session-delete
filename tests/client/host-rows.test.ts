@@ -13,7 +13,6 @@ import {
   getVisibleSelectableRowsSnapshot,
   readVisibleSelectableRows,
   registerHostRowInfo,
-  resetHostRows,
   unregisterHostRowInfo,
   updateHostRowInfo,
   useVisibleSelectableRows,
@@ -29,18 +28,16 @@ import {
   getPicks,
   getSelection,
   isSelecting,
-  resetSelection,
   togglePick,
 } from '../../src/client/batch-selection-store.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
-  resetSelection()
-  resetHostRows()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetSelection()
-  resetHostRows()
+  resetClientState()
   document.body.replaceChildren()
 })
 

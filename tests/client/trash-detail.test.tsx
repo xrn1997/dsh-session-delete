@@ -1,5 +1,5 @@
 // 回收站的详情块：四态 + 可折叠的正文块 + 分页（docs/ui-spec.md）
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate, type Translate } from '../../src/client/copy.js'
 import { TrashDetail, type DetailPager, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
@@ -110,6 +110,19 @@ function detailedMode(): void {
   fireEvent.click(screen.getByRole('button', { name: '详细' }))
 }
 
+/** 详情分页的滚动容器假件：分页只用 `scrollTop` / `scrollHeight` 做 prepend 后的位置补偿。
+ *  `listenerCount` 钉「取数不挂在滚动事件上」：滚到顶不再自动补页（ADR-0057）。 */
+function fakeScroller() {
+  const scroll = {
+    scrollHeight: 1000,
+    scrollTop: 0,
+    listenerCount: 0,
+    addEventListener: (_type: string, _listener: () => void): void => { scroll.listenerCount += 1 },
+    removeEventListener: (_type: string, _listener: () => void): void => {},
+  }
+  return scroll
+}
+
 describe('回收站详情块 · 四种状态', () => {
   it('未选中：只有引导句，没有任何动作按钮', () => {
     at({ kind: 'idle' })
@@ -141,6 +154,61 @@ describe('回收站详情块 · 四种状态', () => {
 
     const { container: widePane } = at({ kind: 'ready', entry, detail }, { wide: true })
     expect(within(widePane).queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+  })
+})
+
+describe('回收站详情块 · 详情保持', () => {
+  it('保持：画上一条的标题与正文，正文 aria-busy 且 inert，先不出提示也不出骨架', () => {
+    const { container } = at({ kind: 'holding', entry, detail })
+    expect(screen.getByText('清册标题')).toBeInTheDocument()
+    expect(screen.getByText('改动分四层')).toBeInTheDocument()
+    const body = container.querySelector('[data-dsh-session-delete="trash-detail-hold-body"]')
+    expect(body).toHaveAttribute('aria-busy', 'true')
+    expect(container.querySelector('[inert]')).not.toBeNull()
+    expect(screen.queryByText('正在读这条会话…')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('.sd-skeleton-bar')).toHaveLength(0)
+  })
+
+  it('保持超过 300ms 才出提示；提示出现后仍不换成骨架', () => {
+    vi.useFakeTimers()
+    try {
+      const { container } = at({ kind: 'holding', entry, detail })
+      expect(screen.queryByText('正在读这条会话…')).not.toBeInTheDocument()
+      act(() => { vi.advanceTimersByTime(300) })
+      expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
+      expect(screen.getByText('改动分四层')).toBeInTheDocument()
+      expect(container.querySelectorAll('.sd-skeleton-bar')).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('读数中：骨架按内容形状画（meta 行 + 正文条），条带脉冲类；不标 aria-busy', () => {
+    const { container } = at({ kind: 'loading', entry })
+    expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
+    expect(container.querySelectorAll('.sd-skeleton-bar').length).toBeGreaterThanOrEqual(6)
+    expect(container.querySelector('[aria-busy]')).toBeNull()
+  })
+
+  it('换到另一条已就绪详情：滚动容器回到顶部', () => {
+    const scrollRef = { current: null as HTMLDivElement | null }
+    const otherEntry = { ...entry, id: 'other', title: '另一条' }
+    const view = render(
+      <div ref={scrollRef}>
+        {detailElement({ kind: 'ready', entry, detail }, { scrollRef })}
+      </div>,
+    )
+    if (scrollRef.current !== null) scrollRef.current.scrollTop = 120
+
+    view.rerender(
+      <div ref={scrollRef}>
+        {detailElement(
+          { kind: 'ready', entry: otherEntry, detail: { ...detail, entryId: 'other' } },
+          { scrollRef },
+        )}
+      </div>,
+    )
+    expect(scrollRef.current?.scrollTop).toBe(0)
   })
 })
 
@@ -388,7 +456,7 @@ describe('回收站详情块 · 折叠', () => {
     expect(screen.getByRole('button', { name: /工作步骤/ })).toHaveTextContent('1 step')
   })
 
-  it('简洁档自动连翻在飞时不再说「点加载更早」：按钮此刻按不动', () => {
+  it('简洁档自动连翻在飞时不再说「这一页只有过程内容」', () => {
     render(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
       { loadingOlder: true },
@@ -414,7 +482,7 @@ describe('回收站详情块 · 折叠', () => {
     expect(screen.queryByText('这段会话只有过程内容；切到「标准」可以看到。')).not.toBeInTheDocument()
   })
 
-  it('切到简洁档时当前页全是过程块：自动连翻一页，不用先点「加载更早」', () => {
+  it('切到简洁档时当前页全是过程块：自动连翻一页，不用读者先点「加载更早」', () => {
     const onLoadOlder = vi.fn()
     render(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
@@ -539,12 +607,14 @@ describe('回收站详情块 · 折叠', () => {
     expect(screen.getByRole('button', { name: /上下文注入/ })).toHaveTextContent('**注入**')
   })
 
-  it('简洁档「加载更早」自动连翻：整页过程块被隐藏时就继续往前，直到出现对话内容', () => {
+  it('简洁档点「加载更早」补回的整页过程块被隐藏时就继续往前，直到出现对话内容', () => {
     const onLoadOlder = vi.fn()
+    const scroll = fakeScroller()
+    const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tail = [userBlock('10', 1, '尾页正文')]
     const { rerender } = render(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
-      { onLoadOlder },
+      { onLoadOlder, scrollRef },
     ))
     fireEvent.click(screen.getByRole('button', { name: '简洁' }))
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
@@ -553,31 +623,33 @@ describe('回收站详情块 · 折叠', () => {
     // 第一页全是过程块：简洁档下不可见 ⇒ 自动再翻一页。
     rerender(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
-      { onLoadOlder },
+      { onLoadOlder, scrollRef },
     ))
     expect(onLoadOlder).toHaveBeenCalledTimes(2)
 
     // 第二页带回用户提问 ⇒ 停在这一页，不再自动翻。
     rerender(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('8', 1, '更早的提问'), toolBlock('9', 1), ...tail], olderCursor: 8 } },
-      { onLoadOlder },
+      { onLoadOlder, scrollRef },
     ))
     expect(screen.getByText('更早的提问')).toBeInTheDocument()
     expect(onLoadOlder).toHaveBeenCalledTimes(2)
   })
 
-  it('详细档「加载更早」一次只翻一页（过程块本身可见，不触发自动连翻）', () => {
+  it('详细档一次只翻一页（过程块本身可见，不触发自动连翻）', () => {
     const onLoadOlder = vi.fn()
+    const scroll = fakeScroller()
+    const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tail = [userBlock('10', 1, '尾页正文')]
     const { rerender } = render(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
-      { onLoadOlder },
+      { onLoadOlder, scrollRef },
     ))
     fireEvent.click(screen.getByRole('button', { name: '详细' }))
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
     rerender(detailElement(
       { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
-      { onLoadOlder },
+      { onLoadOlder, scrollRef },
     ))
     expect(onLoadOlder).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('button', { name: /read/ })).toBeInTheDocument()
@@ -609,18 +681,35 @@ describe('回收站详情块 · 加载更早', () => {
     withBlocks([userBlock('10', 1, '尾页')])
     expect(screen.queryByRole('button', { name: '加载更早' })).not.toBeInTheDocument()
 
-    at({ kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } }, { onLoadOlder })
+    at(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } },
+      { onLoadOlder },
+    )
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
-    expect(onLoadOlder).toHaveBeenCalled()
+    expect(onLoadOlder).toHaveBeenCalledTimes(1)
   })
 
-  it('在飞时按钮变"正在加载更早…"且禁用', () => {
+  it('在飞时按钮改说"正在加载更早…"并禁用', () => {
     at({
       kind: 'ready',
       entry,
       detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 },
     }, { loadingOlder: true })
     expect(screen.getByRole('button', { name: '正在加载更早…' })).toBeDisabled()
+  })
+
+  it('滚动不取数：详情不挂 scroll 监听，滚到顶也不会替人多发一次 /detail', () => {
+    // ADR-0057：滚到顶自动补页会让顶端随每次靠近而退后一页，读者往回拖滚动条时越拉越远。
+    const onLoadOlder = vi.fn()
+    const scroll = fakeScroller()
+    const scrollRef = { current: scroll as unknown as HTMLDivElement }
+    render(detailElement(
+      { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } },
+      { onLoadOlder, scrollRef },
+    ))
+    scroll.scrollTop = 0
+    expect(scroll.listenerCount).toBe(0)
+    expect(onLoadOlder).not.toHaveBeenCalled()
   })
 
   it('加载失败原文单独上屏，已有正文不按掉', () => {
@@ -634,7 +723,8 @@ describe('回收站详情块 · 加载更早', () => {
   })
 
   it('prepend 后按滚动高度差补偿位置：正看着的那块不因上方长出新内容而跳走', () => {
-    const scroll = { scrollHeight: 1000, scrollTop: 480 }
+    const scroll = fakeScroller()
+    scroll.scrollTop = 480
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tailPage = { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 }
     const { rerender } = render(detailElement({ kind: 'ready', entry, detail: tailPage }, { scrollRef }))
@@ -653,7 +743,8 @@ describe('回收站详情块 · 加载更早', () => {
   })
 
   it('加载更早期间读者继续滚动：补偿加在当前视口上，不把人拽回点击位置', () => {
-    const scroll = { scrollHeight: 1000, scrollTop: 480 }
+    const scroll = fakeScroller()
+    scroll.scrollTop = 480
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tailPage = { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 }
     const { rerender } = render(detailElement({ kind: 'ready', entry, detail: tailPage }, { scrollRef }))
@@ -673,7 +764,8 @@ describe('回收站详情块 · 加载更早', () => {
   })
 
   it('更早一页读失败：块数没变，位置不动、补偿作废', () => {
-    const scroll = { scrollHeight: 1000, scrollTop: 480 }
+    const scroll = fakeScroller()
+    scroll.scrollTop = 480
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tailPage: TrashDetailState = { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } }
     const { rerender } = render(detailElement(tailPage, { scrollRef }))
@@ -903,37 +995,166 @@ const KID = {
 } as TrashEntryWire
 
 describe('回收站详情块 · 子会话', () => {
-  it('有 subagents 且 detailNav.onOpenChild 在场：段标题给条数与合计，逐条画出，点一条把它交出去', () => {
+  const strip = (): HTMLButtonElement =>
+    must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-toggle"]'), '子会话摘要条')
+
+  it('默认收起：只有一行摘要条（计数徽标 + 合计）与标题排徽标，不画孩子行', () => {
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild: vi.fn() } })
+    expect(strip().getAttribute('aria-expanded')).toBe('false')
+    expect(strip().textContent).toContain('子会话')
+    expect(strip().textContent).toContain('1')
+    expect(strip().textContent).toContain('2.0KB')
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagent-row"]')).toBeNull()
+    expect(screen.queryByText('孩子会话')).not.toBeInTheDocument()
+    // 标题排徽标说的是同一个数（滚进正文后的常驻入口）
+    const jump = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-jump"]'), '子会话跳转徽标')
+    expect(jump.textContent).toContain('1')
+  })
+
+  it('点摘要条原地展开：逐条画出，点一条把它交出去；导航行不借折叠头的类与 chevron', () => {
     const onOpenChild = vi.fn()
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
     at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2] } }, { detailNav: { onOpenChild } })
-    // 段上的合计是这一批孩子的清册大小（与清单行同一口径）：永久删除按整组释放，删前要能核对「几个都在这儿」
-    expect(screen.getByText('子会话（2） · 3.0KB，随本条一起恢复或删除')).toBeInTheDocument()
+    // 合计是这一批孩子的清册大小（与清单行同一口径）：永久删除按整组释放，删前要能核对「几个都在这儿」
+    expect(strip().textContent).toContain('3.0KB')
+    fireEvent.click(strip())
+    expect(strip().getAttribute('aria-expanded')).toBe('true')
     const row = screen.getByText('孩子会话')
+    const rowButton = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagent-row"]'), '子会话导航行')
+    // 语法分清：导航行不套折叠头那套类（chevron 只留给原地展开）
+    expect(rowButton.className).not.toContain('sd-disclosure-row')
+    // 导航行按内容撑开、指针光标；底色不内联（悬停底色住 layout.css，内联会压过 :hover）
+    expect(rowButton.style.cursor).toBe('pointer')
+    expect(rowButton.style.height).toBe('')
+    expect(rowButton.style.background).toBe('')
     fireEvent.click(row)
     expect(onOpenChild).toHaveBeenCalledWith(KID)
-    // 宿主类给折叠头钉死行高并裁溢出，导航行带内边距必须放开高度按内容撑开，否则裁字；
-    // 指针光标同理走内联，不借展开语义。jsdom 量不了布局，这里钉内联契约当回归哨。
-    const rowButton = document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagent-row"]')
-    expect(rowButton).not.toBeNull()
-    expect(must(rowButton, '子会话导航行').style.height).toBe('auto')
-    expect(must(rowButton, '子会话导航行').style.cursor).toBe('pointer')
   })
 
-  it('subagents 缺席：没有子会话段', () => {
+  it('子会话行按 label 显示（与工作中同名），label 缺席才回落清册标题', () => {
+    const labeled = { ...KID, label: 'Standards 轴全仓审查' }
+    at(
+      { kind: 'ready', entry, detail: { ...detail, subagents: [labeled, { ...KID, id: 'kid2', title: '孩子会话二' }] } },
+      { detailNav: { onOpenChild: vi.fn() } },
+    )
+    fireEvent.click(strip())
+    expect(screen.getByText('Standards 轴全仓审查')).toBeInTheDocument()
+    // 起了 label 的那行不再露主会话那套起名法的清册标题（分清子会话就是这一条的目的）
+    expect(screen.queryByText('孩子会话')).not.toBeInTheDocument()
+    expect(screen.getByText('孩子会话二')).toBeInTheDocument()
+  })
+
+  it('孩子视图的标题排同一条显示名规则：label 优先于清册标题', () => {
+    at({ kind: 'ready', entry: { ...KID, label: 'Standards 轴全仓审查' }, detail }, { detailNav: { onOpenChild: vi.fn() } })
+    expect(screen.getByText('Standards 轴全仓审查')).toBeInTheDocument()
+    expect(screen.queryByText('孩子会话')).not.toBeInTheDocument()
+  })
+
+  it('没有父行 label 的独立子会话：详情自己的 descriptor label 压过清册快照标题', () => {
+    // 存量条目可能只剩一条独立行（父条目不在回收站），父详情的 catalog 兜不到它；详情读自己的
+    // `subagent/descriptor` 补 label，标题排按同一条显示名次序取它，而不是清册里那串主会话标题。
+    at({
+      kind: 'ready',
+      entry: { ...entry, title: '你是一名代码审查员，对整个' },
+      detail: { ...detail, label: 'Standards 轴全仓审查' },
+    })
+    expect(screen.getByText('Standards 轴全仓审查')).toBeInTheDocument()
+    expect(screen.queryByText('你是一名代码审查员，对整个')).not.toBeInTheDocument()
+  })
+
+  it('父行交来的 label 优先于详情自己的 label（同一名字的两份来源不打架）', () => {
+    at({
+      kind: 'ready',
+      entry: { ...KID, label: '父行登记的 label' },
+      detail: { ...detail, label: '详情自己的 label' },
+    }, { detailNav: { onOpenChild: vi.fn() } })
+    expect(screen.getByText('父行登记的 label')).toBeInTheDocument()
+    expect(screen.queryByText('详情自己的 label')).not.toBeInTheDocument()
+  })
+
+  it('标题排徽标：点它展开子会话段并滚过去，段顶让开 sticky 标题排', () => {
+    const onOpenChild = vi.fn()
+    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild } })
+    const section = must(document.querySelector<HTMLDivElement>('[data-dsh-session-delete="trash-subagents"]'), '子会话段')
+    const scroll = vi.fn<(options?: ScrollIntoViewOptions | boolean) => void>()
+    section.scrollIntoView = scroll
+    const jump = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-jump"]'), '子会话跳转徽标')
+    fireEvent.click(jump)
+    expect(scroll).toHaveBeenCalledWith({ block: 'start' })
+    expect(section.style.scrollMarginTop).toBe('34px')
+    expect(strip().getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('孩子会话')).toBeInTheDocument()
+  })
+
+  it('子会话行 hover 150ms 后才预取；提前移开不读', () => {
+    vi.useFakeTimers()
+    try {
+      const onPrefetchChild = vi.fn()
+      at(
+        { kind: 'ready', entry, detail: { ...detail, subagents: [KID] } },
+        { detailNav: { onOpenChild: vi.fn(), onPrefetchChild } },
+      )
+      fireEvent.click(strip())
+      const row = screen.getByRole('button', { name: /孩子会话/ })
+
+      fireEvent.pointerOver(row)
+      act(() => { vi.advanceTimersByTime(149) })
+      expect(onPrefetchChild).not.toHaveBeenCalled()
+      act(() => { vi.advanceTimersByTime(1) })
+      expect(onPrefetchChild).toHaveBeenCalledWith(KID)
+
+      onPrefetchChild.mockClear()
+      fireEvent.pointerOut(row)
+      fireEvent.pointerOver(row)
+      fireEvent.pointerOut(row)
+      act(() => { vi.advanceTimersByTime(150) })
+      expect(onPrefetchChild).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('subagents 缺席：没有子会话段，也没有跳转徽标', () => {
     at({ kind: 'ready', entry, detail }, { detailNav: { onOpenChild: vi.fn() } })
-    expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagents"]')).toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagents-jump"]')).toBeNull()
   })
 
-  it('subagentsTotal 出线：说清只列了前几条、总数是多少', () => {
+  it('subagentsTotal 出线：摘要条徽标给总数，展开后说清只列了前几条', () => {
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
     at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { detailNav: { onOpenChild: vi.fn() } })
+    expect(strip().textContent).toContain('5')
+    fireEvent.click(strip())
     expect(screen.getByText('仅列出前 2 条，共 5 条')).toBeInTheDocument()
+  })
+
+  it('subagentsSizeBytes 出线：摘要条大小按全量合计，不按已列行', () => {
+    const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
+    at({
+      kind: 'ready',
+      entry,
+      detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5, subagentsSizeBytes: 10 * 1024 },
+    }, { detailNav: { onOpenChild: vi.fn() } })
+    expect(strip().textContent).toContain('10KB')
   })
 
   it('detailNav 不带 onOpenChild：即使有 subagents 也不画段（组件不自己造动作）', () => {
     at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } })
-    expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagents"]')).toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagents-jump"]')).toBeNull()
+  })
+
+  it('换到另一条会话：子会话段回到默认收起', () => {
+    const other = { ...entry, id: '20261014T065658Z-session-b' }
+    const view = at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild: vi.fn() } })
+    fireEvent.click(strip())
+    expect(screen.getByText('孩子会话')).toBeInTheDocument()
+    view.rerender(detailElement(
+      { kind: 'ready', entry: other, detail: { ...detail, entryId: other.id, subagents: [KID] } },
+      { detailNav: { onOpenChild: vi.fn() } },
+    ))
+    expect(strip().getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('孩子会话')).not.toBeInTheDocument()
   })
 
   it('孩子视图（parentContext 在场）：宽档也画「返回父会话」，点它交回 onBack', () => {

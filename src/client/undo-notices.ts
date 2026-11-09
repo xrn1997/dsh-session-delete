@@ -59,15 +59,15 @@ export function publishUndoBatchNotice(input: {
   }))
 }
 
-/** 整条横幅不再留：撤销成了、停留时间走完，或清空回收站把所有落点一起清了。
- *  与 `dismissUndoNotice` 的分别是「整条不再留」与「按条目匹配」——清空之后没有条目还能撤销，
- *  所以那一路不需要名单。 */
+/** 整条横幅不再留：撤销成了，或停留时间走完。
+ *  清空回收站**不走这里**：它按发起时已在回收站里的条目名单调 `dismissUndoNotice`，
+ *  免得把清空在飞期间新删除发布的那条一并误熄。 */
 export function clearUndoNotice(): void {
   noticeStore.set(null)
 }
 
 /**
- * 某个条目已经在别处恢复：把指向它的横幅熄掉。
+ * 指向这些条目的横幅熄掉：某个条目已经在别处恢复，或清空回收站把发起时在场的条目一起清了。
  * 批量里任一命中就清整条——名单少了、计数没变，留着就是一条会骗人的「撤销」动作。
  */
 export function dismissUndoNotice(entryIds: readonly string[]): void {

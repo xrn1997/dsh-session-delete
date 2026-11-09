@@ -21,7 +21,7 @@ import {
   useMemo,
   useRef,
 } from 'react'
-import { TRASH_DIR_LABEL } from '../shared/wire.js'
+import { TRASH_DIR_LABEL, type TrashDetailBlockWire, type TrashDetailPromptWire } from '../shared/wire.js'
 import { useBusyGate } from './busy-gate.js'
 import { AttachmentNotice } from './attachment-view.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
@@ -45,8 +45,11 @@ import { ELLIPSIS, TABULAR_NUMS } from './ui/recipe.js'
 import { Tooltip } from './ui/Tooltip.js'
 import { TrashConfirm } from './trash-confirm.js'
 import { useTrashPanelController } from './use-trash-panel-controller.js'
+import { intentPrefetchHandlers, useDelayedPrefetch } from './use-prefetch.js'
 import { listView, useTrashQuery } from './use-trash-query.js'
 import { useTrashSelection } from './use-trash-selection.js'
+import { PromptRail, RAIL_WIDTH } from './prompt-rail.js'
+import { usePromptRail } from './use-prompt-rail.js'
 import { BULK_DANGER, CARD, ROW, ROW_SELECTED, groupByProject } from './trash-view.js'
 
 /** 面板的依赖面：两个读（`list` / `detail`）+ **一段 `apply`** + 清空。
@@ -153,7 +156,41 @@ const DETAIL_COLUMN = {
   '--dsh-scrollbar-thumb-hover': 'var(--sd-scrollbar-hover-l2)',
 } as CSSProperties
 
-const DETAIL_INNER: CSSProperties = { minWidth: 0, maxWidth: DETAIL_TEXT_MAX_WIDTH, width: '100%' }
+/** 提问轨占的右槽宽度：轨宽（`RAIL_WIDTH`，唯一来源在 `PromptRail`）+ 它与正文之间的 14。
+ *  **无条件**留出来——轨在读数中 / 保持期会暂时不画，槽位跟着收放会让正文横向抖一下
+ *  （ADR-0050 的版面稳定判据）。 */
+const RAIL_GUTTER = RAIL_WIDTH + 14
+
+/**
+ * 提问轨的右缘：**与正文列右缘同一条线**。正文列左对齐、最宽 `DETAIL_TEXT_MAX_WIDTH`，所以
+ * 面板比它宽时 `100% - 列宽` 正好落在列右缘；面板更窄时退到离边 14px（给滚动条让位）。
+ * 列宽只有 `DETAIL_TEXT_MAX_WIDTH` 一个来源，行内交给 `PromptRail`；样式表若另写一个常量，
+ * 就与 `DETAIL_INNER` 的 `maxWidth` 成了两份 860，轨会离开正文列、间距也不再是 `RAIL_GUTTER` 那一档。
+ */
+const RAIL_RIGHT = `max(14px, calc(100% - ${DETAIL_TEXT_MAX_WIDTH}px))`
+
+const DETAIL_INNER: CSSProperties = {
+  minWidth: 0,
+  maxWidth: DETAIL_TEXT_MAX_WIDTH,
+  width: '100%',
+  paddingRight: RAIL_GUTTER,
+  boxSizing: 'border-box',
+}
+
+/**
+ * 详情栏的外壳：滚动容器 + 贴右缘的提问轨（ADR-0057）。轨是绝对定位的兄弟节点，不占正文布局。
+ */
+const DETAIL_PANE: CSSProperties = {
+  position: 'relative',
+  display: 'flex',
+  flex: '1 1 auto',
+  minWidth: 0,
+  minHeight: 0,
+}
+
+/** 没有主体时给 hook 的稳定空数组：每次新建数组会让轨的 effect 每帧重跑。 */
+const EMPTY_BLOCKS: readonly TrashDetailBlockWire[] = []
+const EMPTY_PROMPTS: readonly TrashDetailPromptWire[] = []
 
 /**
  * 视图开关（全部折叠 / 全部展开、多选）。住在面板体顶端，不进滚动容器，长清单滚到底也不会滚走。
@@ -203,7 +240,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const query = useTrashQuery({ deps, t, gate })
   const { list: listState, reload } = query
   // 清单状态的解读只住 `use-trash-query.ts`：面板不再自己从 status 反推失败/加载/空态。
-  const view = listView(listState)
+  // 第二参是「画着的行来自首帧快照、重读还在飞」：只给 `aria-busy`，不改变三态。
+  const view = listView(listState, query.refreshing)
   const entries = view.rows
 
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -252,7 +290,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   }, [])
 
   /**
-   * 选中 / 详情缓存 / 清单换版清场 / 宽档自动选中 / 写动作与失败落点，整块住在
+   * 选中 / 详情账本 / 清单换版清场 / 宽档自动选中 / 写动作与失败落点，整块住在
    * `use-trash-panel-controller.ts`。布局常量不搬进控制器：面板只交两样从布局算出来的面——
    * 屏幕上的顺序 `ordered`（只含展开的组）与"这一档要不要自动选中"（`canAutoSelect: split`）。
    */
@@ -263,6 +301,40 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     ordered,
     canAutoSelect: split,
   })
+
+  /**
+   * 详情右缘的提问轨（ADR-0057）：整条会话的提问索引随详情首次读过线，当前那句与跳转住在
+   * `use-prompt-rail.ts`。读数中 / 失败没有轨（那一帧没有正文）；保持期给上一条的轨但整条禁用
+   * ——帧还是上一条的，跳转会把别人的游标补进来。
+   */
+  const railState = controller.detail.kind === 'ready' || controller.detail.kind === 'holding'
+    ? controller.detail
+    : null
+  const railDetail = railState?.detail ?? null
+  const railDisabled = railState?.kind === 'holding'
+  const railPrompts = railDetail?.prompts ?? EMPTY_PROMPTS
+  const hasRail = railPrompts.length > 0
+  /** 详情栏的挂载判据与下面那段 JSX 同一支：宽档常驻；窄档要下钻且有选中条目才画。 */
+  const detailPaneMounted = split || (controller.drilled && controller.selected !== null)
+  const promptRail = usePromptRail({
+    prompts: hasRail ? railPrompts : null,
+    blocks: railDetail?.blocks ?? EMPTY_BLOCKS,
+    olderCursor: railDetail?.olderCursor ?? null,
+    loadingOlder: controller.loadingOlder,
+    olderFailure: controller.olderFailure,
+    onLoadOlder: () => { void controller.loadOlder() },
+    scrollRef: detailScrollRef,
+    paneMounted: detailPaneMounted,
+    disabled: railDisabled,
+  })
+  /** 已加载的块 id：轨上未加载的刻度更短更淡，预览卡里也明说「会先补页」。 */
+  const loadedPromptIds = useMemo(
+    () => new Set((railDetail?.blocks ?? EMPTY_BLOCKS).map((block) => block.id)),
+    [railDetail],
+  )
+
+  /** 清单行的意图预取：hover / focus 150ms 后才读；只热身，不动选中与当前详情。 */
+  const prefetchRow = useDelayedPrefetch(controller.prefetch)
 
   /**
    * 键盘导航（↑↓ 走环、Enter/Space、tab 落点、Esc 交还焦点）整块住在 `trash-nav.ts`。
@@ -311,6 +383,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     <div
       ref={listRef}
       data-dsh-session-delete="trash-list"
+      aria-busy={view.refreshing || undefined}
       role={gridActive ? 'grid' : undefined}
       aria-label={gridActive ? t('detail.list.label') : undefined}
       aria-colcount={gridActive ? LIST_COLUMN_COUNT : undefined}
@@ -473,6 +546,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
                   data-dsh-session-delete="trash-row"
                   data-entry-id={entry.id}
                   style={isSelected ? ROW_SELECTED : ROW}
+                  {...intentPrefetchHandlers(prefetchRow, entry)}
                   onClick={() => {
                     // 多选态下点行说的是"勾上/取消这一条"，不再切换详情：两套语义同时活在一次点击里
                     // 一定有一套是错的（docs/ui-spec.md 状态④）。
@@ -583,28 +657,43 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   )
 
   /**
-   * 孩子视图的开与回（ADR-0029 单级判据）住控制器的 `detailNav`：这里只转交，不再自己拼
+   * 孩子视图的开与回（ADR-0055 单级判据）住控制器的 `detailNav`：这里只转交，不再自己拼
    * openChild / parentContext 两个派生块——判据的第二个家会让视图与测试各自复述一遍语义。
    */
   const detailPane = (
-    <div ref={detailScrollRef} data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
-      <div style={DETAIL_INNER}>
-        <TrashDetail
-          state={controller.detail}
-          busy={controller.busy}
-          wide={split}
-          onRetry={() => controller.retry()}
-          onBack={() => controller.back()}
-          detailNav={controller.detailNav}
-          pager={{
-            loadingOlder: controller.loadingOlder,
-            olderFailure: controller.olderFailure,
-            onLoadOlder: () => { void controller.loadOlder() },
-            scrollRef: detailScrollRef,
-          }}
+    <div style={DETAIL_PANE}>
+      <div ref={detailScrollRef} className="sd-stable-scroll" data-dsh-session-delete="trash-detail" style={DETAIL_COLUMN}>
+        <div style={DETAIL_INNER}>
+          <TrashDetail
+            state={controller.detail}
+            busy={controller.busy}
+            wide={split}
+            onRetry={() => controller.retry()}
+            onBack={() => controller.back()}
+            detailNav={controller.detailNav}
+            pager={{
+              loadingOlder: controller.loadingOlder,
+              olderFailure: controller.olderFailure,
+              onLoadOlder: () => { void controller.loadOlder() },
+              scrollRef: detailScrollRef,
+            }}
+            t={t}
+          />
+        </div>
+      </div>
+      {hasRail ? (
+        <PromptRail
+          prompts={railPrompts}
+          loadedIds={loadedPromptIds}
+          activeId={promptRail.activeId}
+          busyId={promptRail.busyId}
+          notice={promptRail.notice}
+          onJump={promptRail.jump}
+          right={RAIL_RIGHT}
+          disabled={railDisabled}
           t={t}
         />
-      </div>
+      ) : null}
     </div>
   )
 
@@ -636,8 +725,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     </div>
   )
 
-  /** 清单列：宽档定宽（可拖）、窄档铺满。 */
-  const listPane = (style: CSSProperties) => <div style={style}>{list}</div>
+  /** 清单列：宽档定宽（可拖）、窄档铺满；两档都无条件预留滚动条槽（`layout.css` 的 `.sd-stable-scroll`）。 */
+  const listPane = (style: CSSProperties) => <div className="sd-stable-scroll" style={style}>{list}</div>
 
   return (
     <div
@@ -675,7 +764,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
             <span className="sd-width-handle" {...resize.handleProps} />
             {detailPane}
           </>
-        ) : controller.drilled && controller.selected !== null ? (
+        ) : detailPaneMounted ? (
           detailPane
         ) : (
           // 单列时铺满 BODY：不给 flex，这一栏会按内容宽缩在行的左边（空态时约 390px）

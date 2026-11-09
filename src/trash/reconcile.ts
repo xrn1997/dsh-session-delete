@@ -27,7 +27,7 @@
 import { isSinglePathSegment, parseEntryId, trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
 import type { FsPort } from '../ports/fs-port.js'
-import { NO_CWD_PROJECT_DIR, projectKey } from '../ports/host-port.js'
+import { projectDirOfCwd } from '../ports/host-port.js'
 import { pickSessionLog, readSessionHeader } from '../log/session-log.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 
@@ -88,11 +88,14 @@ async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry |
   }
 
   const { deletedAt, sessionDirName } = parseEntryId(id)
-  const cwd = typeof header.cwd === 'string' ? header.cwd : ''
+  // 判据与删除计划、会话列表投影**同一支**（`src/ports/host-port.ts` 的 `projectDirOfCwd`）：
+  // 只有 header 里没有 cwd 才落 `_no-cwd`，空串照常编码。删除时写进行里的 `projectDir`
+  // 就是按那一支算的，对账重建必须复现它；同一条会话在删除、恢复与孤儿扫描里不能指向两个目录。
+  const cwd = typeof header.cwd === 'string' ? header.cwd : undefined
   return {
     id,
     sessionId: typeof header.id === 'string' && header.id !== '' ? header.id : sessionDirName,
-    projectDir: cwd === '' ? NO_CWD_PROJECT_DIR : projectKey(cwd),
+    projectDir: projectDirOfCwd(cwd),
     workspaceId: '',
     wasArchived: false,
     deletedAt,

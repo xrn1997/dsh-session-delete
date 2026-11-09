@@ -8,17 +8,23 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
-import { invalidateTrash, resetTrashStore } from '../../src/client/trash-store.js'
+import {
+  writeTrashDetail,
+  reconcileTrashRows,
+  writeTrashSelection,
+} from '../../src/client/trash-snapshot.js'
+import { invalidateTrash } from '../../src/client/trash-store.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 import type { ApplyAction, ApplyOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
-import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
 import { failed, outcomes, restoreOutcomes } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
 import { must, pick } from '../support/fixture.js'
 
-// 修订号是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
+// 修订号与首帧快照都是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
 beforeEach(() => {
-  resetTrashStore()
+  resetClientState()
 })
 
 const rows = [
@@ -57,7 +63,7 @@ function outcomesOf(
   })
 }
 
-function makeDeps(over: Partial<FakeRemote> = {}): FakeRemote {
+function makeDeps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
   return createFakeRemote({
     list: vi.fn(async () => rows),
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
@@ -65,6 +71,13 @@ function makeDeps(over: Partial<FakeRemote> = {}): FakeRemote {
     detail: vi.fn(async () => detailFixture),
     ...over,
   })
+}
+
+/** 一段可以手动决定何时落地的 promise（测「保持旧详情」用）。 */
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((inResolve) => { resolve = inResolve })
+  return { promise, resolve }
 }
 
 /** 宽档：RO 交回 1100 ⇒ 左右两栏（清单默认 420 + 详情吃余下）。 */
@@ -82,6 +95,11 @@ function renderNarrow(deps: FakeRemote) {
   act(() => { observer.pump(400) })
   return { ...view, observer }
 }
+
+/* 下面那些 `await screen.findByText(标题)` 是**清单画出来了**这道就绪屏障，不判内容。宽档两栏同时在
+ * 屏上，同一个标题会出现在清单行与详情头两处（详情标题优先用清册那一份），那 10 处只能写
+ * `findAllByText`：份数不在屏障上判，各用例自己按 DOM 与 aria 断言。窄档只有一栏，照旧写严格的
+ * `findByText`——多画一份就该红。 */
 
 describe('回收站面板', () => {
   it('空回收站显示空态且没有清空按钮', async () => {
@@ -211,7 +229,7 @@ describe('回收站面板 · 两栏与下钻', () => {
     const view = renderWide(deps)
     fireEvent.click(await screen.findByRole('row', { name: /code-review/ }))
     await screen.findByText('先看改动')
-    // 变窄之后不硬塞一个"正在下的钻"：回到清单，选中留着，点一下就用缓存回来了（不重读、不重列）
+    // 变窄之后不硬塞一个"正在下的钻"：回到清单，选中留着，点一下就用账本回来了（不重读、不重列）
     act(() => { view.observer.pump(400) })
     expect(screen.getByRole('row', { name: /code-review/ })).toHaveAttribute('aria-selected', 'true')
     expect(screen.queryByText('先看改动')).not.toBeInTheDocument()
@@ -239,7 +257,7 @@ describe('回收站面板 · 两栏与下钻', () => {
     const row = screen.getByRole('row', { name: /code-review/ })
     expect(within(row).getByRole('button', { name: /^恢复/ })).toBeEnabled()
     // 「重试」只重读那一条，不牵清单
-    deps.detail.mockResolvedValue(detailFixture)
+    deps.detail.mockResolvedValue({ ok: true, value: detailFixture })
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
     expect(deps.list).toHaveBeenCalledTimes(1)
@@ -251,7 +269,7 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     kind: 'reasoning' as const, id, time: 1, text, truncated: false, attachments: [],
   })
 
-  it('点「加载更早」真的走 loadOlder：二次 /detail 带游标，早页 prepend 在尾页之前', async () => {
+  it('点「加载更早」补页：二次 /detail 带游标，早页 prepend 在尾页之前', async () => {
     const tail: TrashDetailLike = {
       ...detailFixture,
       blocks: [{ kind: 'user', id: '10', time: 1, text: '尾页正文', truncated: false, attachments: [] }],
@@ -268,7 +286,8 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     const { container } = renderWide(deps)
 
     expect(await screen.findByText('尾页正文')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
+    // 分页只由读者点按钮发起（ADR-0057）：滚动不再代劳，jsdom 里也不必伪造 scrollTop。
+    fireEvent.click(await screen.findByRole('button', { name: '加载更早' }))
     expect(await screen.findByText('更早正文')).toBeInTheDocument()
     expect(deps.detail).toHaveBeenLastCalledWith('a', 10)
 
@@ -276,6 +295,64 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
       .map((node) => node.textContent)
     expect(messages[0]).toContain('更早正文')
     expect(messages[1]).toContain('尾页正文')
+  })
+
+  it('详情带提问索引时右缘出提问轨：点已加载的那句高亮，点没加载的走补页再落位', async () => {
+    const tail: TrashDetailLike = {
+      ...detailFixture,
+      prompts: [
+        { id: '0', at: 1, preview: '先看改动' },
+        { id: '2', at: 3, preview: '更早的一句' },
+      ],
+      blocks: [{ kind: 'user', id: '0', time: 1, text: '先看改动', truncated: false, attachments: [] }],
+      olderCursor: 2,
+    }
+    const older: TrashDetailLike = {
+      ...tail,
+      blocks: [{ kind: 'user', id: '2', time: 3, text: '更早的一句', truncated: false, attachments: [] }],
+      olderCursor: null,
+    }
+    const deps = makeDeps({
+      detail: vi.fn(async (_entryId: string, before?: number) => (before === undefined ? tail : older)),
+    })
+    const { container } = renderWide(deps)
+
+    expect(await screen.findByText('先看改动')).toBeInTheDocument()
+    const marks = [...container.querySelectorAll('.sd-prompt-mark')]
+    expect(marks).toHaveLength(2)
+    // 右缘是正文列宽的函数，由面板算好以行内 `right` 交给轨——样式表里不写死列宽。
+    const rail = container.querySelector<HTMLElement>('nav.sd-prompt-rail')
+    expect(rail?.style.right).toContain('calc(100% - ')
+
+    // 已加载的那句：不发请求，直接落位（只对齐、不画落地框；jsdom 没有 scrollIntoView）。
+    fireEvent.click(marks[0] as Element)
+    expect(deps.detail).toHaveBeenCalledTimes(1)
+    expect(marks[0]).toHaveAttribute('aria-current', 'true')
+
+    // 没加载的那句：按当前游标补一页，目标进窗后落位。
+    fireEvent.click(marks[1] as Element)
+    await waitFor(() => {
+      expect(marks[1]).toHaveAttribute('aria-current', 'true')
+    })
+    expect(deps.detail).toHaveBeenLastCalledWith('a', 2)
+  })
+
+  it('窄档未下钻不画提问轨；下钻后随详情挂上，退回清单再收掉', async () => {
+    const withPrompts: TrashDetailLike = {
+      ...detailFixture,
+      prompts: [{ id: '0', at: 1, preview: '先看改动' }],
+    }
+    const { container } = renderNarrow(makeDeps({ detail: vi.fn(async () => withPrompts) }))
+    const row = await screen.findByRole('row', { name: /code-review/ })
+    // 详情栏不在 DOM 里时轨也不许提前挂——它挂在详情栏外壳上。
+    expect(container.querySelector('.sd-prompt-rail')).toBeNull()
+
+    fireEvent.click(row)
+    await screen.findByRole('button', { name: '← 返回清单' })
+    await waitFor(() => { expect(container.querySelectorAll('.sd-prompt-mark')).toHaveLength(1) })
+
+    fireEvent.click(screen.getByRole('button', { name: '← 返回清单' }))
+    expect(container.querySelector('.sd-prompt-rail')).toBeNull()
   })
 
   it('切换条目重置折叠：A 展开的块不带去 B，切回 A 也回到默认折叠', async () => {
@@ -291,7 +368,7 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
         blocks: [reasoningBlock(entryId, `${entryId} 的思考正文`)],
       })),
     })
-    renderWide(deps)
+    const { container } = renderWide(deps)
 
     // 逐块折叠的判据住在「详细」档（默认标准档把过程块收成一组）。
     fireEvent.click(await screen.findByRole('button', { name: '详细' }))
@@ -300,6 +377,13 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     expect(fold).toHaveAttribute('aria-expanded', 'true')
 
     fireEvent.click(screen.getByRole('row', { name: /第二条/ }))
+    // 换条目先保持上一条（A）的详情，正文整块 inert；等 B 的详情头出现再切档，
+    // 否则点到的是被保持住的 A 的那一颗。
+    const pane = must(
+      container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail"]'),
+      '两栏详情栏',
+    )
+    await waitFor(() => { expect(within(pane).queryByText('第二条')).not.toBeNull() })
     // 换条目重挂载详情：档位也回到默认「标准」；切到详细再验这一条的折叠是新的。
     fireEvent.click(await screen.findByRole('button', { name: '详细' }))
     await waitFor(() => expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false'))
@@ -310,8 +394,153 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
     fireEvent.click(await screen.findByRole('button', { name: '详细' }))
     await waitFor(() => expect(screen.getByText('a 的思考正文')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /思考/ })).toHaveAttribute('aria-expanded', 'false')
-    // 切回来读的是缓存，不重发 /detail。
+    // 切回来读的是账本，不重发 /detail。
     expect(deps.detail).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('回收站面板 · 切换稳定性', () => {
+  const two = [
+    { ...pick(rows, 0), id: 'a', title: '第一条' },
+    { ...pick(rows, 0), id: 'b', title: '第二条' },
+  ]
+
+  /** 按条目给一份带独立正文的详情，「A 的正文 / B 的正文」用来判断画的是哪一帧。 */
+  function detailOf(id: string, text: string): TrashDetailLike {
+    return {
+      ...detailFixture,
+      entryId: id,
+      blocks: [{ kind: 'user', id: '0', time: 1, text, truncated: false, attachments: [] }],
+    }
+  }
+
+  it('有首帧快照时首帧画旧行与旧详情，不出「正在读回收站…」', async () => {
+    reconcileTrashRows(rows)
+    writeTrashSelection('a')
+    writeTrashDetail('a', detailFixture)
+    const pending = deferred<typeof rows>()
+    const { container } = renderWide(makeDeps({ list: vi.fn(() => pending.promise) }))
+
+    // 首帧就是快照的那三份行：份数钉死（多画一份 = 快照与新一份同时在屏上）。
+    expect(screen.queryByText('正在读回收站…')).not.toBeInTheDocument()
+    expect(container.querySelectorAll('[data-dsh-session-delete="trash-row"]')).toHaveLength(rows.length)
+    expect(screen.getByText('先看改动')).toBeInTheDocument()
+    // 重读在飞只挂 `aria-busy`，不画「更新中」字样（ADR-0048 的刷新中不是第四态）。
+    expect(must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
+      .getAttribute('aria-busy')).toBe('true')
+    expect(screen.queryByText('更新中')).not.toBeInTheDocument()
+    await act(async () => { pending.resolve(rows) })
+    expect(must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
+      .hasAttribute('aria-busy')).toBe(false)
+  })
+
+  it('切到没读过的条目：上一帧详情留到新数据落地，落地后整帧换', async () => {
+    const pending = deferred<TrashDetailLike>()
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      detail: vi.fn((entryId: string) => entryId === 'a'
+        ? Promise.resolve(detailOf('a', 'A 的正文'))
+        : pending.promise),
+    })
+    renderWide(deps)
+
+    expect(await screen.findByText('A 的正文')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('row', { name: /第二条/ }))
+    expect(screen.getByText('A 的正文')).toBeInTheDocument()
+    expect(document.querySelectorAll('.sd-skeleton-bar')).toHaveLength(0)
+
+    await act(async () => { pending.resolve(detailOf('b', 'B 的正文')) })
+    expect(await screen.findByText('B 的正文')).toBeInTheDocument()
+  })
+
+  it('切到没读过的条目：保持期轨跟着上一条禁用顶住，新详情到了再恢复', async () => {
+    const pending = deferred<TrashDetailLike>()
+    const withPrompts = (id: string, text: string): TrashDetailLike => ({
+      ...detailOf(id, text),
+      prompts: [{ id: '0', at: 1, preview: `${text} 的提问` }],
+    })
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      detail: vi.fn((entryId: string) => entryId === 'a'
+        ? Promise.resolve(withPrompts('a', 'A 的正文'))
+        : pending.promise),
+    })
+    const { container } = renderWide(deps)
+    expect(await screen.findByText('A 的正文')).toBeInTheDocument()
+    const rail = (): HTMLElement | null => container.querySelector<HTMLElement>('nav.sd-prompt-rail')
+    const marks = (): HTMLButtonElement[] => [...container.querySelectorAll<HTMLButtonElement>('.sd-prompt-mark')]
+    expect(rail()?.getAttribute('data-disabled')).toBeNull()
+
+    fireEvent.click(screen.getByRole('row', { name: /第二条/ }))
+    expect(screen.getByText('A 的正文')).toBeInTheDocument()
+    expect(rail()).not.toBeNull()
+    expect(rail()?.getAttribute('data-disabled')).toBe('true')
+    expect(marks().length).toBeGreaterThan(0)
+    expect(marks().every((mark) => mark.disabled)).toBe(true)
+
+    await act(async () => { pending.resolve(withPrompts('b', 'B 的正文')) })
+    expect(await screen.findByText('B 的正文')).toBeInTheDocument()
+    expect(rail()?.getAttribute('data-disabled')).toBeNull()
+    expect(marks().every((mark) => mark.disabled)).toBe(false)
+  })
+
+  it('切到已读条目：详情滚动位置回到顶部', async () => {
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      detail: vi.fn(async (entryId: string) => detailOf(entryId, `${entryId} 的正文`)),
+    })
+    const { container } = renderWide(deps)
+    expect(await screen.findByText('a 的正文')).toBeInTheDocument()
+    const pane = container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail"]')
+    expect(pane).not.toBeNull()
+    if (pane !== null) pane.scrollTop = 120
+
+    fireEvent.click(screen.getByRole('row', { name: /第二条/ }))
+    expect(await screen.findByText('b 的正文')).toBeInTheDocument()
+    expect(pane?.scrollTop).toBe(0)
+
+    if (pane !== null) pane.scrollTop = 90
+    fireEvent.click(screen.getByRole('row', { name: /第一条/ }))
+    expect(await screen.findByText('a 的正文')).toBeInTheDocument()
+    expect(pane?.scrollTop).toBe(0)
+  })
+
+  it('两栏都无条件预留滚动条槽', async () => {
+    const { container } = renderWide(makeDeps())
+    await screen.findAllByText('/code-review')
+    expect(container.querySelectorAll('.sd-stable-scroll')).toHaveLength(2)
+  })
+
+  it('hover 一条 150ms 后才预取；提前移开不读', async () => {
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      detail: vi.fn(async (entryId: string) => detailOf(entryId, `${entryId} 的正文`)),
+    })
+    renderWide(deps)
+    expect(await screen.findByText('a 的正文')).toBeInTheDocument()
+    const calls = (): unknown[] => deps.detail.mock.calls.map((call) => call[0])
+    expect(calls()).toEqual(['a'])
+
+    const rowB = screen.getByRole('row', { name: /第二条/ })
+    fireEvent.pointerOver(rowB)
+    fireEvent.pointerOut(rowB)
+    await new Promise((resolve) => { setTimeout(resolve, 200) })
+    expect(calls()).toEqual(['a'])
+
+    fireEvent.pointerOver(rowB)
+    await waitFor(() => { expect(calls()).toEqual(['a', 'b']) })
+  })
+
+  it('键盘落到一条 150ms 后也预取', async () => {
+    const deps = makeDeps({
+      list: vi.fn(async () => two),
+      detail: vi.fn(async (entryId: string) => detailOf(entryId, `${entryId} 的正文`)),
+    })
+    renderWide(deps)
+    expect(await screen.findByText('a 的正文')).toBeInTheDocument()
+
+    fireEvent.focusIn(screen.getByRole('row', { name: /第二条/ }))
+    await waitFor(() => { expect(deps.detail.mock.calls.map((call) => call[0])).toEqual(['a', 'b']) })
   })
 })
 
@@ -517,6 +746,9 @@ describe('回收站面板 · 其余行为', () => {
     fireEvent.click(within(row).getByRole('button', { name: /^彻底删除/ }))
     expect(deps.applyOutcomes).not.toHaveBeenCalled()
     expect(screen.getByText(/没有任何副本可以恢复/)).toBeInTheDocument()
+    // 危险层级跟动作走，不跟入口大小走：单条彻底删除同样是实心红（六张框各传各的 `danger`）。
+    expect(screen.getByRole('button', { name: '彻底删除' })
+      .style.getPropertyValue('--sd-button-primary-fill')).toBe('var(--dsw-alias-state-error-primary)')
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
     await waitFor(() => expect(deps.applyOutcomes).toHaveBeenCalledWith('purge', ['a']))
   })
@@ -842,7 +1074,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
 
   it('选中那条被折叠起来时，aria-activedescendant 不指向一个不在 DOM 的 id', async () => {
     const { container } = renderWide(depsOf())
-    await screen.findByText('甲组第一条')
+    await screen.findAllByText('甲组第一条')
     const list = must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
     expect(list.getAttribute('aria-activedescendant')).toBe('sd-trash-a')
     fireEvent.click(pick(heads(container), 0))
@@ -864,7 +1096,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
   // 那一排住面板体顶端、不住清单列里：它原先在滚动容器内，长清单滚到底会把开关滚走。
   it('那一排是面板的直接子级，不在清单列的滚动容器里', async () => {
     const { container } = renderWide(depsOf())
-    await screen.findByText('甲组第一条')
+    await screen.findAllByText('甲组第一条')
     const toolbar = container.querySelector('[data-dsh-session-delete="trash-toolbar"]') as HTMLElement
     expect(toolbar.parentElement).toBe(container.querySelector('[data-dsh-session-delete="trash-panel"]'))
     expect(container.querySelector('[data-dsh-session-delete="trash-list"]')).not.toContainElement(toolbar)
@@ -880,7 +1112,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
 
   it('分隔线可拖：清单列宽跟着读数走，夹在上限里（1100 − 489 = 611）', async () => {
     const { container } = renderWide(depsOf())
-    await screen.findByText('甲组第一条')
+    await screen.findAllByText('甲组第一条')
     const handle = container.querySelector('[role="separator"]') as HTMLElement
     expect(handle.getAttribute('aria-valuemin')).toBe('330')
     expect(handle.getAttribute('aria-valuenow')).toBe('420')
@@ -898,7 +1130,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
 
   it('分隔线键盘：→ 一格 20px、Home 回默认 420', async () => {
     const { container } = renderWide(depsOf())
-    await screen.findByText('甲组第一条')
+    await screen.findAllByText('甲组第一条')
     const handle = container.querySelector('[role="separator"]') as HTMLElement
     fireEvent.keyDown(handle, { key: 'ArrowRight' })
     expect(columnOf(container).style.width).toBe('440px')
@@ -908,7 +1140,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
 
   it('折叠与拖宽互不干扰：拖过之后折叠状态与条目可见性都照旧', async () => {
     const { container } = renderWide(depsOf())
-    await screen.findByText('甲组第一条')
+    await screen.findAllByText('甲组第一条')
     fireEvent.click(pick(heads(container), 0))
     const handle = container.querySelector('[role="separator"]') as HTMLElement
     firePointer(handle, 'pointerdown', { clientX: 500 })
@@ -960,7 +1192,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
 
   it('点行 = 切换勾选；再点回退；详情那条不动', async () => {
     const { container } = renderWide(depsOf())
-    await screen.findByText('第一条')
+    await screen.findAllByText('第一条')
     const detail = () => (container.querySelector('[data-dsh-session-delete="trash-detail"]') as HTMLElement).textContent
     const before = detail()
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1108,6 +1340,9 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     expect(dialog.getByText('第二条')).toBeInTheDocument()
     expect(dialog.getByText(/原项目目录/)).toBeInTheDocument()
     expect(dialog.queryByText(/没有任何副本可以恢复/)).toBeNull()
+    // 恢复不是破坏性动作：确认键仍是普通 primary，没有危险层级的 token 覆盖。
+    expect(dialog.getByRole('button', { name: '恢复' })
+      .style.getPropertyValue('--sd-button-primary-fill')).toBe('')
     // 确认框那颗与页脚那颗不同名（「恢复」vs「恢复 2 条」，同「彻底删除」那对的形状）
     fireEvent.click(dialog.getByRole('button', { name: '恢复' }))
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
@@ -1177,7 +1412,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   it('多选态：grid 声明可多选，aria-selected 说的是勾选；退出后回到"选中看详情"那套', async () => {
     // 用宽档：窄档点行会下钻，清单整块离开 DOM，那时候量不到 grid 的 aria。
     const { container } = renderWide(depsOf())
-    await screen.findByText('第一条')
+    await screen.findAllByText('第一条')
     const list = must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
     expect(list.getAttribute('aria-multiselectable')).toBeNull()
     fireEvent.click(rowOf(container, 'a'))
@@ -1194,7 +1429,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   it('多选态下 Enter / Space 切换当前行的勾选（↑↓ 仍是移动光标）', async () => {
     // 宽档：首读完成会自动选中第一条，光标有个确定的起点（窄档没人选中，第一下 ArrowDown 是"落到第一条"）。
     const { container } = renderWide(depsOf())
-    await screen.findByText('第一条')
+    await screen.findAllByText('第一条')
     const list = must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     fireEvent.keyDown(list, { key: 'ArrowDown' })
@@ -1351,7 +1586,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
 
   it('选中之后落点跟着那一行走（其余全退回 -1，roving tabindex 只有一个）', async () => {
     const { container } = renderWide(depsOfThree())
-    await screen.findByText('甲组第一条')
+    await screen.findAllByText('甲组第一条')
     fireEvent.click(screen.getByRole('row', { name: /乙组第一条/ }))
     const rows = [...container.querySelectorAll('[data-dsh-session-delete="trash-row"]')]
     const tabStops = rows.filter((row) => (row as HTMLElement).tabIndex === 0)
@@ -1394,9 +1629,15 @@ function kidDeps(): FakeRemote {
 }
 
 describe('回收站面板 · 子会话详情', () => {
+  /** 子会话段默认收起（ui-spec 状态⑥）：点摘要条才展开出孩子行。 */
+  function openSubagents(): void {
+    fireEvent.click(must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-toggle"]'), '子会话摘要条'))
+  }
+
   it('宽档：父详情点子会话 → 孩子正文上屏，清单选中仍在父行；返回父会话可回', async () => {
     renderWide(kidDeps())
     await screen.findByText('先看改动')
+    openSubagents()
     fireEvent.click(screen.getByText('孩子会话'))
     expect(await screen.findByText('孩子的正文')).toBeInTheDocument()
     // 清单选中仍是父行（aria-selected 钉在父行的 id 上）
@@ -1410,6 +1651,7 @@ describe('回收站面板 · 子会话详情', () => {
     renderNarrow(kidDeps())
     fireEvent.click(await screen.findByText('/code-review'))
     await screen.findByText('先看改动')
+    openSubagents()
     fireEvent.click(screen.getByText('孩子会话'))
     expect(await screen.findByText('孩子的正文')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '← 返回父会话' }))
@@ -1419,7 +1661,7 @@ describe('回收站面板 · 子会话详情', () => {
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
   })
 
-  // 单级（ADR-0029）：下一层的入口只在主体是清单选中那条时交出。更深一代自己不折进父行、占清单行
+  // 单级（ADR-0055）：下一层的入口只在主体是清单选中那条时交出。更深一代自己不折进父行、占清单行
   // （判据住 `src/trash/groups.ts`），走清单可达——在孩子视图里再开一层会让那颗返回指着孙辈说话。
   it('宽档：孩子视图里不再画「子会话」段，返回仍交还清单选中那条', async () => {
     const deps = makeDeps({
@@ -1435,23 +1677,25 @@ describe('回收站面板 · 子会话详情', () => {
     })
     renderWide(deps)
     await screen.findByText('先看改动')
-    expect(screen.getByText(/^子会话（1）/)).toBeInTheDocument()
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagents-toggle"]')).not.toBeNull()
+    openSubagents()
     fireEvent.click(screen.getByText('孩子会话'))
     await screen.findByText('孩子的正文')
     expect(screen.queryByText('孙辈会话')).not.toBeInTheDocument()
-    expect(screen.queryByText(/^子会话（/)).not.toBeInTheDocument()
+    expect(document.querySelector('[data-dsh-session-delete="trash-subagents"]')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '← 返回父会话' }))
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
   })
 
   // 孩子视图不是死路：孩子的详情读失败时宽档既没有段（失败态不画正文）也没有「返回清单」，
-  // 清单行就是那一扇出口——`select` 无条件收掉孩子视图（判据住 ADR-0029 与状态⑥）。
+  // 清单行就是那一扇出口——`select` 无条件收掉孩子视图（判据住 ADR-0055 与状态⑥）。
   it('宽档：孩子详情读失败后点清单行仍能脱身', async () => {
     const deps = kidDeps()
     renderWide(deps)
     await screen.findByText('先看改动')
-    deps.detail.mockRejectedValueOnce(new Error('回收站目录不在'))
+    deps.detail.mockResolvedValueOnce({ ok: false, failure: { code: 'client/unknown', message: '回收站目录不在' } })
+    openSubagents()
     fireEvent.click(screen.getByText('孩子会话'))
     expect(await screen.findByText('回收站目录不在')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()

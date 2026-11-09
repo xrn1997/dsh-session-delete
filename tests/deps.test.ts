@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { slicesOf } from '../src/api/dispatch.js'
 import type { CoreDeps, DeleteDeps, DeleteSessionDeps, RemovalDeps } from '../src/deps.js'
+import { FS_CORE_METHODS, FS_REMOVAL_METHODS } from '../src/ports/fs-port.js'
 import type { HostPresencePort } from '../src/ports/host-port.js'
 import type { PresenceCapability } from '../src/ports/presence-port.js'
 import { createMemberPresence, type MemberPresenceHost } from '../src/verbs/member-presence.js'
@@ -88,6 +89,9 @@ it('deps 切片的收窄是运行期事实：core 没有删除能力与时钟', 
   expect(slices.core).not.toHaveProperty('attachments')
   expect(slices.core.fs).not.toHaveProperty('removeDir')
   expect(slices.core.fs).not.toHaveProperty('removeFile')
+  // 名单是收窄的唯一依据（ADR-0032）：运行期带的方法**恰好**是 `FS_CORE_METHODS` 那一串，
+  // 多给一格就是类型上说得通、盘上却递出了能力。
+  expect(Object.keys(slices.core.fs).sort()).toEqual([...FS_CORE_METHODS].sort())
   expect(slices.core.config).toBe(deps.config)
   expect(slices.attachment.attachments).toBe(deps.attachments)
   expect(slices.config.config).toBe(deps.config)
@@ -96,6 +100,11 @@ it('deps 切片的收窄是运行期事实：core 没有删除能力与时钟', 
   expect(slices.removal).not.toHaveProperty('now')
   expect(slices.removal.fs).toHaveProperty('removeDir')
   expect(slices.removal.fs).toHaveProperty('removeFile')
+  // `removal` 也是**现切**的一片（ADR-0032）：恰好是基础面 + 删除能力，不是整颗 `full.fs`。
+  expect(Object.keys(slices.removal.fs).sort()).toEqual(
+    [...FS_CORE_METHODS, ...FS_REMOVAL_METHODS].sort(),
+  )
+  expect(slices.removal.fs).not.toBe(deps.fs)
   expect(slices.full).toBe(deps)
 })
 

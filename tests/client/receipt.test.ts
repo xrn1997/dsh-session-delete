@@ -154,6 +154,17 @@ describe('summarizeReceipt', () => {
     expect(purge.summary.landedIds).toEqual([])
   })
 
+  it('count：not-found 仍算失败，且没有落地 id / 附件读数', () => {
+    const receipt = readReceipt('count', ['a'], [{
+      id: 'a', action: 'count', ok: false,
+      error: { code: SESSION_DELETE_CODES['not-found'], message: '不在了' },
+    }])
+    expect(receipt.verdicts[0]).toMatchObject({ kind: 'failed' })
+    const { summary } = summarizeReceipt(receipt)
+    expect(summary.landedIds).toEqual([])
+    expect(summary.attachmentCleanup).toBeUndefined()
+  })
+
   it('purge 回执里的附件统计聚合成摘要；跳过与失败分开保留', () => {
     const outcomes: ApplyOutcome[] = [{
       id: 'e1', action: 'purge', ok: true,

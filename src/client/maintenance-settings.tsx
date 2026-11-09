@@ -13,7 +13,7 @@
  */
 import type { ReactElement, ReactNode } from 'react'
 import { AttachmentNotice, AttachmentStrip } from './attachment-view.js'
-import { useIdleClose } from './confirm-close.js'
+import { ConfirmDialog } from './confirm-dialog.js'
 import { zhTranslate, type Translate } from './copy.js'
 import type { AttachmentOrphanItemWire, AttachmentOrphanReportWire } from '../shared/wire.js'
 import { MaintenanceBanner, MaintenanceFailure } from './maintenance-parts.js'
@@ -21,8 +21,6 @@ import { OrphanMaintenance } from './orphan-maintenance.js'
 import { settingsCardShell } from './settings-view.js'
 import { fileSizeText } from './ui/format.js'
 import { Button } from './ui/Button.js'
-import { Modal } from './ui/Modal.js'
-import { BULK_DANGER } from './trash-view.js'
 import { useMaintenance, type MaintenanceDeps } from './use-maintenance.js'
 import type { MaintenanceSectionView, MaintenancePhase } from './use-maintenance-section.js'
 
@@ -172,28 +170,21 @@ function AttachmentConfirm({
   onCancel: () => void
   onConfirm: () => void
 }): ReactElement {
-  const { close, closeDisabled } = useIdleClose(busy, onCancel)
   const attachments = items.map((item) => ({
     attachmentId: item.attachmentId,
     kind: 'image' as const,
     bytes: item.bytes,
   }))
   return (
-    <Modal
-      open
-      onClose={close}
+    <ConfirmDialog
       title={t('maintenance.attachments.confirm', { count })}
       closeLabel={t('common.close')}
-      footer={
-        <>
-          <Button variant="outline" disabled={closeDisabled} onClick={close}>
-            {t('common.cancel')}
-          </Button>
-          <Button variant="primary" style={BULK_DANGER} disabled={busy} onClick={onConfirm}>
-            {t('maintenance.attachments.clean')}
-          </Button>
-        </>
-      }
+      cancelLabel={t('common.cancel')}
+      confirmLabel={t('maintenance.attachments.clean')}
+      busy={busy}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+      danger
     >
       <p>{t('maintenance.attachments.body')}</p>
       <div style={{ maxHeight: '55vh', overflow: 'auto', margin: '10px 0', paddingRight: 4 }}>
@@ -207,7 +198,7 @@ function AttachmentConfirm({
       <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
         {t('maintenance.attachments.previewHint')}
       </p>
-    </Modal>
+    </ConfirmDialog>
   )
 }
 
@@ -237,7 +228,7 @@ export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettin
       >
         <OrphanMaintenance section={maintenance.orphans} t={t} />
         {/* 孤儿会话清理也会顺带清掉会话独占的图片副本：回执那半份读数单独一行，句子与孤儿附件段同一套。 */}
-        <AttachmentNotice message={maintenance.orphans.attachmentNotice} />
+        <AttachmentNotice message={maintenance.orphans.secondaryNotice} />
       </MaintenanceSection>
 
       <MaintenanceSection

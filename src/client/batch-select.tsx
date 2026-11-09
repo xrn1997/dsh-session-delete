@@ -16,7 +16,7 @@
 import type { ReactElement } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
 import { useHostRowRegistration } from './host-rows.js'
-import { callRemote, type SessionDeleteRemote } from './remote.js'
+import { type SessionDeleteRemote } from './remote.js'
 import { readReceipt } from './receipt.js'
 import { togglePick, useSelection } from './batch-selection-store.js'
 import { Checkbox } from './ui/Checkbox.js'
@@ -34,7 +34,7 @@ export async function fetchCounts(
   ids: readonly string[],
 ): Promise<Map<string, number> | null> {
   if (ids.length === 0) return new Map()
-  const outcome = await callRemote(() => deps.applyOutcomes('count', ids))
+  const outcome = await deps.applyOutcomes('count', ids)
   if (!outcome.ok) return null
   const receipt = readReceipt('count', ids, outcome.value)
   if (receipt.verdicts.some((verdict) => verdict.kind !== 'ok')) return null

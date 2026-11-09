@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { runWrite } from '../../src/client/write.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
+import { applyDeps } from './support/fake-remote.js'
 import { failed, ok, trashRow } from './support/outcomes.js'
 
 /** 成功支里的回收站那一行：本文件只关心它的 `id`（撤销名单取 `value.id`），造行统一走构造器。 */
@@ -21,7 +22,7 @@ describe('runWrite', () => {
     const refresh = vi.fn()
 
     const outcome = await runWrite({
-      deps: { applyOutcomes },
+      deps: applyDeps(applyOutcomes),
       action: 'delete',
       ids: ['a', 'b'],
       presentation: { publishUndo },
@@ -46,7 +47,7 @@ describe('runWrite', () => {
     const publishUndo = vi.fn(() => { order.push('settle') })
 
     const outcome = await runWrite({
-      deps: { applyOutcomes },
+      deps: applyDeps(applyOutcomes),
       action: 'delete',
       ids: ['a', 'b'],
       presentation: { publishUndo },
@@ -67,7 +68,7 @@ describe('runWrite', () => {
   it('请求了但没回：missing 原文进失败表，不当成功', async () => {
     const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [])
     const outcome = await runWrite({
-      deps: { applyOutcomes },
+      deps: applyDeps(applyOutcomes),
       action: 'restore',
       ids: ['e1'],
     })
@@ -80,7 +81,7 @@ describe('runWrite', () => {
     const publishUndo = vi.fn()
     const refresh = vi.fn()
     const outcome = await runWrite({
-      deps: { applyOutcomes }, action: 'delete', ids: ['e1'], presentation: { publishUndo }, refresh,
+      deps: applyDeps(applyOutcomes), action: 'delete', ids: ['e1'], presentation: { publishUndo }, refresh,
     })
     expect(outcome.ok).toBe(true)
     expect(outcome.ok && outcome.summary.anySuccess).toBe(false)
@@ -97,7 +98,7 @@ describe('runWrite', () => {
     ])
     const publishUndo = vi.fn()
     const outcome = await runWrite({
-      deps: { applyOutcomes }, action: 'delete', ids: ['a', 'b'], presentation: { publishUndo },
+      deps: applyDeps(applyOutcomes), action: 'delete', ids: ['a', 'b'], presentation: { publishUndo },
     })
     expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     // `b` 被同批前一条带走（幂等 null）：算条数、不算撤销落点。
@@ -111,7 +112,7 @@ describe('runWrite', () => {
     ])
     const publishUndo = vi.fn()
     const outcome = await runWrite({
-      deps: { applyOutcomes }, action: 'delete', ids: ['a', 'b'], presentation: { publishUndo },
+      deps: applyDeps(applyOutcomes), action: 'delete', ids: ['a', 'b'], presentation: { publishUndo },
     })
     expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     expect(publishUndo).not.toHaveBeenCalled()
@@ -121,7 +122,7 @@ describe('runWrite', () => {
     const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [ok('delete', 'a', null)])
     const publishUndo = vi.fn()
     const outcome = await runWrite({
-      deps: { applyOutcomes }, action: 'delete', ids: ['a'], single: true, presentation: { publishUndo },
+      deps: applyDeps(applyOutcomes), action: 'delete', ids: ['a'], single: true, presentation: { publishUndo },
     })
     expect(outcome.ok).toBe(true)
     expect(outcome.ok && outcome.summary.anySuccess).toBe(false)
@@ -136,7 +137,7 @@ describe('runWrite', () => {
       ok('delete', 'b', row('entry-b')),
     ])
     const outcome = await runWrite({
-      deps: { applyOutcomes }, action: 'delete', ids: ['a', 'b'], single: true,
+      deps: applyDeps(applyOutcomes), action: 'delete', ids: ['a', 'b'], single: true,
     })
     expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     expect(outcome.failures.has('a')).toBe(false)
@@ -145,7 +146,7 @@ describe('runWrite', () => {
   it('id 去重保序：同一 id 只请求一次、只判一条', async () => {
     const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [ok('delete', 'a', row('entry-a'))])
     const outcome = await runWrite({
-      deps: { applyOutcomes }, action: 'delete', ids: ['a', 'a'],
+      deps: applyDeps(applyOutcomes), action: 'delete', ids: ['a', 'a'],
     })
     expect(applyOutcomes).toHaveBeenCalledWith('delete', ['a'])
     expect(outcome.ok).toBe(true)

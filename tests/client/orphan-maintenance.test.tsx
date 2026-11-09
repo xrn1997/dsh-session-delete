@@ -32,6 +32,7 @@ function sectionOf(over: Partial<Section> = {}): Section {
     report: null,
     failure: null,
     notice: null,
+    secondaryNotice: null,
     confirm: false,
     phase: null,
     busy: false,

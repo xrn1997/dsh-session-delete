@@ -1,12 +1,12 @@
-# 恢复通告收成一条按 id 的方法：预取归 adapter
+# 恢复通告收成一条按 id 的方法：会话表预取归 adapter
 
 Status: accepted
 
-`HostPresencePort` 的恢复通告曾分成三条：单条发送、整批预取、整批发送；调用方必须记得先预取再发，才能避免每条一次宿主全表扫。现在只留 `announceRestored(ids)`：实现拉一次宿主会话表，按 id 逐条发 `api-session/added`；单条就是长度为 1 的批。
+`HostPresencePort` 的恢复通告曾分成三条：单条发送、整批预取**宿主会话表**、整批发送；调用方必须记得先预取再发，才能避免每条一次宿主全表扫。现在只留 `announceRestored(ids)`：实现拉一次宿主会话表，按 id 逐条发 `api-session/added`；单条就是长度为 1 的批。（这里的「预取」是 adapter 内部的会话表读数，与 ADR-0051 的「意图预取」不是一件事。）
 
 ## 决定
 
-1. 恢复通告只有 `announceRestored(ids)`；预取收进 adapter，调用方不再传 `known`。
+1. 恢复通告只有 `announceRestored(ids)`；会话表预取收进 adapter，调用方不再传 `known`。
 2. 批量恢复仍由 `src/verbs/batch.ts` 发起一次；删除组回滚与单成员归位经 `src/verbs/member-presence.ts` 调 `announceRestored([sessionId])`（长度为 1 的批）。
 3. 通告是收尾：缺席 id 不发，监听者抛错不翻动词结果。
 

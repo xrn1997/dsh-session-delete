@@ -6,29 +6,22 @@ import {
   BatchConfirmHost,
   clearDeleteBatchRequest,
   requestDeleteBatch,
-  resetBatchConfirm,
   useDeleteBatchRequest,
 } from '../../src/client/batch-confirm.js'
-import { getPicks, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
-import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
+import { getPicks, togglePick } from '../../src/client/batch-selection-store.js'
+import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
-import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 import { createFakeRemote } from './support/fake-remote.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
 import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 
 beforeEach(() => {
-  resetBatchConfirm()
-  resetSelection()
-  resetUndoNotice()
-  resetTrashStore()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetBatchConfirm()
-  resetSelection()
-  resetUndoNotice()
-  resetTrashStore()
+  resetClientState()
 })
 
 describe('模块级现场', () => {

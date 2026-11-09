@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from './support/memory-manifest.js'
 import { reconcileTrash } from '../src/trash/reconcile.js'
+import { projectDirOfCwd } from '../src/ports/host-port.js'
 import { trashEntry } from './support/world.js'
 import { must } from './support/fixture.js'
 
@@ -103,6 +104,20 @@ describe('回收站对账', () => {
     const { deps } = world({ dirs: [extra], logs: { [extra]: headerLog({ type: 'session', version: 4 }) } })
     const [entry] = await reconcileTrash(deps)
     expect(entry).toMatchObject({ sessionId: 'session-fallback', projectDir: '_no-cwd' })
+  })
+
+  // 空串 cwd 与"缺席 cwd"不是同一件事：宿主 `projectDir` 只在 `undefined` 时落 `_no-cwd`，
+  // 删除时的 `projectDir` 也按那一支算。对账重建必须复现同一条判据，否则同一条会话在删除计划、
+  // 恢复与孤儿扫描里指向两个目录。
+  it('cwd 是空串 ⇒ 照常走 projectKey（不是 `_no-cwd`），与删除时那一支同口径', async () => {
+    const extra = idOf('session-empty-cwd')
+    const { deps } = world({
+      dirs: [extra],
+      logs: { [extra]: headerLog({ type: 'session', version: 4, id: 'session-empty-cwd', cwd: '' }) },
+    })
+    const [entry] = await reconcileTrash(deps)
+    expect(entry?.projectDir).toBe(projectDirOfCwd(''))
+    expect(entry?.projectDir).not.toBe(projectDirOfCwd(undefined))
   })
 
   it('同一目录两代并存 ⇒ 读最新那代（老代是换代留底，身份与 cwd 可能都不同）', async () => {

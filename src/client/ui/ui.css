@@ -97,6 +97,7 @@ body {
   --sd-button-ghost-active-border: var(--dsw-alias-button-ghost-active-border, var(--dsw-alias-border-l2));
   --sd-markdown-code-block: var(--dsw-alias-markdown-code-block, var(--dsw-alias-bg-layer-2));
   --sd-markdown-inline-code: var(--dsw-alias-markdown-inline-code, var(--dsw-alias-bg-layer-2));
+  --sd-bg-skeleton: var(--dsw-alias-bg-skeleton, var(--dsw-alias-bg-layer-2));
   --sd-state-business-primary: var(--dsw-alias-state-business-primary, var(--dsw-alias-brand-primary));
   --sd-state-warn-label: var(--dsw-alias-state-warn-label, var(--dsw-alias-state-warn-primary));
   --sd-toast-bg: var(--dsw-alias-toast-bg, var(--dsw-alias-bg-overlay));

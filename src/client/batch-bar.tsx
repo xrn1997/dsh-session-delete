@@ -20,14 +20,11 @@ import { requestDeleteBatch } from './batch-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { areAllVisibleRowsSelected, selectAllVisible, useSelectionRowClickGuard } from './batch-pick.js'
 import { useVisibleSelectableRows } from './host-rows.js'
-import type { SessionDeleteRemote } from './remote.js'
+import type { OneShotDeps } from './remote.js'
 import { clearPicks, exitSelection, getPicks, togglePick, useSelection } from './batch-selection-store.js'
 import { createLatestWins } from './store.js'
 import { Button } from './ui/Button.js'
 import { IconCloseOutlineRegular } from './ui/icons.js'
-
-/** 浮条只需要那一个批量口（计数）；执行归确认框。 */
-export type BatchBarDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
 
 /** 勾选变化后到发问之间的等待：连勾十条不该发十次 count。 */
 const COUNT_DEBOUNCE_MS = 300
@@ -36,7 +33,7 @@ export function BatchBar({
   deps,
   t = zhTranslate,
 }: {
-  deps: BatchBarDeps
+  deps: OneShotDeps
   t?: Translate
 }): ReactElement | null {
   const { selecting, picks } = useSelection()

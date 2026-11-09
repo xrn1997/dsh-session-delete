@@ -2,14 +2,15 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchSelectMenuItem } from '../../src/client/batch-menu-item.js'
-import { getPicks, isSelecting, resetSelection, togglePick } from '../../src/client/batch-selection-store.js'
+import { getPicks, isSelecting, togglePick } from '../../src/client/batch-selection-store.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
-  resetSelection()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetSelection()
+  resetClientState()
 })
 
 describe('⋯ 菜单的多选入口', () => {

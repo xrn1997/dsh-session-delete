@@ -14,8 +14,9 @@
  * - `purity` 为 chained 的请求串行执行，避免读清册/动文件/写清册交错；整个进程共用一条到达序链。
  */
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
+import { FS_CORE_METHODS, FS_REMOVAL_METHODS, fsSlice } from '../ports/fs-port.js'
 import { routeError } from '../verbs/errors.js'
-import type { DeleteDeps } from '../deps.js'
+import type { CoreDeps, DeleteDeps } from '../deps.js'
 import {
   routeOf,
   type BinaryResponse,
@@ -60,21 +61,12 @@ function isPure(purity: Purity, body: JsonBody): boolean {
 
 /**
  * 全量面按行收窄（ADR-0032）：组合根装出的 {@link DeleteDeps} 只交给 `/apply`；每一段只拿到
- * 自己声明的那一格（路由表的 `slice`）。收窄是**运行期事实**，不是类型投影。
+ * 自己声明的那一格（路由表的 `slice`）。收窄是**运行期事实**，不是类型投影：`core` 的 fs 由
+ * `FS_CORE_METHODS` 现切，删除能力根本不在对象上。
  */
-function coreOf(full: DeleteDeps): SliceDeps['core'] {
+function coreDepsOf(full: DeleteDeps): CoreDeps {
   return {
-    fs: {
-      exists: (p) => full.fs.exists(p),
-      ensureDir: (p) => full.fs.ensureDir(p),
-      rename: (from, to) => full.fs.rename(from, to),
-      sizeOfDir: (p) => full.fs.sizeOfDir(p),
-      listFiles: (p) => full.fs.listFiles(p),
-      listDirs: (p) => full.fs.listDirs(p),
-      realpath: (p) => full.fs.realpath(p),
-      readFile: (p) => full.fs.readFile(p),
-      statFile: (p) => full.fs.statFile(p),
-    },
+    fs: fsSlice(full.fs, FS_CORE_METHODS),
     host: full.host,
     ledger: full.ledger,
     home: full.home,
@@ -83,24 +75,22 @@ function coreOf(full: DeleteDeps): SliceDeps['core'] {
   }
 }
 
-/** `removal` 保留删除能力，但不带会话删除的时钟；`full` 只给 `/apply`。 */
-function removalOf(full: DeleteDeps): SliceDeps['removal'] {
+/** `removal` 保留删除能力，但不带会话删除的时钟；`full` 只给 `/apply`。fs 与 `core` 同一条：
+ *  按 `FS_CORE_METHODS + FS_REMOVAL_METHODS` 现切——ADR-0032 的收窄是运行期事实，不是把
+ *  `full.fs` 的类型改一改。 */
+function removalOf(full: DeleteDeps, core: CoreDeps): SliceDeps['removal'] {
   return {
-    fs: full.fs,
-    host: full.host,
-    ledger: full.ledger,
-    home: full.home,
-    presence: full.presence,
-    config: full.config,
+    ...core,
+    fs: fsSlice(full.fs, [...FS_CORE_METHODS, ...FS_REMOVAL_METHODS]),
   }
 }
 
 /** 五格只建一次：收窄对象在 dispatcher 构造期固定，请求路径只做引用选择。 */
 export function slicesOf(full: DeleteDeps): SliceDeps {
-  const core = coreOf(full)
+  const core = coreDepsOf(full)
   return {
     core,
-    removal: removalOf(full),
+    removal: removalOf(full, core),
     full,
     attachment: { ...core, attachments: full.attachments },
     // `/config` 只多这两件；`exactOptionalPropertyTypes` 下用条件展开，不把 undefined 写进可选键。

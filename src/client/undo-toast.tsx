@@ -15,13 +15,11 @@ import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
 import { restoreFromUndo } from './write-seats.js'
 
-export type UndoToastDeps = OneShotDeps
-
 /**
  * 常驻的撤销提示宿主。挂 `shell.overlay`（框架级浮层；槽位说明原文 "a toast stack or a status
  * pill all belong here"）：没有待撤销的事时什么都不渲染。
  */
-export function UndoToast({ deps, t = zhTranslate }: { deps: UndoToastDeps; t?: Translate }) {
+export function UndoToast({ deps, t = zhTranslate }: { deps: OneShotDeps; t?: Translate }) {
   const current = useUndoNotice()
   if (current === null) return null
   // 每条通知一个以 seq 为 key 的躯体：闸跟着通知走——旧撤销还在飞时来了新删除，新横幅的
@@ -30,7 +28,7 @@ export function UndoToast({ deps, t = zhTranslate }: { deps: UndoToastDeps; t?: 
 }
 
 /** 一条通知的躯体：busy 生命周期归 `useBusyGate`（连点的同步判重也在闸里），这里只组合呈现。 */
-function NoticeToast({ deps, current, t }: { deps: UndoToastDeps; current: UndoNotice; t: Translate }) {
+function NoticeToast({ deps, current, t }: { deps: OneShotDeps; current: UndoNotice; t: Translate }) {
   const gate = useBusyGate()
   const { seq, failure } = current
   if (failure !== undefined) {

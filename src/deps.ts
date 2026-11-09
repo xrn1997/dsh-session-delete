@@ -1,4 +1,4 @@
-import type { CoreFsPort, FsPort } from './ports/fs-port.js'
+import type { CoreFsPort, RemovalFsPort } from './ports/fs-port.js'
 import type { HostCorePort } from './ports/host-port.js'
 import type { AttachmentsPort } from './ports/attachments-port.js'
 import type { PresenceCapability } from './ports/presence-port.js'
@@ -21,7 +21,7 @@ export interface CoreDeps {
 export type DeleteSessionDeps = CoreDeps & { now(): number }
 
 /** 永久删除的执行面：执行器及其分发拿得到 `removeDir` 与 `removeFile`；计划函数仍只收 `CoreDeps`（它们不写）。 */
-export type RemovalDeps = CoreDeps & { fs: CoreFsPort & Pick<FsPort, 'removeDir' | 'removeFile'> }
+export type RemovalDeps = CoreDeps & { fs: RemovalFsPort }
 
 /** 宿主 `configEditor` 的窄面：`edit(entry, change)` 把完整 raw config 落盘并让 Loader 重启这一行。
  *  `entry` 是 `ctx.fiber.entry`（Loader 挂在 fiber 上，Cordis 类型不声明它，组合根按窄镜像取）。 */

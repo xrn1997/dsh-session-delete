@@ -6,7 +6,7 @@
 // 1. **取数通道的探测是注册的前提**：探测通过才十一次 `slots.inject`（槽位名、插件专属 id、order、
 //    以及 `main` 的 key 与 `sidebar.panellist` 的 id 同字）；探测不过 ⇒ 零注册、零抛错、`apply` 正常返回；
 // 2. **deps 装配**：HTTP 回的是我们的信封（`{ ok: true, value }` / `{ ok: false, error }`，与官方
-//    unary 面同形），失败支必须在注入面被展开成 throw——《remote.test.ts》钉形状，这里钉**端到端的
+//    unary 面同形），浏览器半把它解析成 `RemoteOutcome`；《remote.test.ts》钉形状，这里钉**端到端的
 //    可见后果**（原文上屏 / 面板不 TypeError）；
 // 3. **两个座位的形状**：回收站入口占的全局面板是一对座位——`sidebar.panellist` 出一个只吃
 //    `{ size, active }` 的 glyph（行本体归宿主：按钮、名字、选中态、折叠 tooltip 都不归我们），
@@ -18,35 +18,29 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { type ComponentType, type ReactElement, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resetBatchConfirm } from '../../src/client/batch-confirm.js'
-import { resetDeleteRequest } from '../../src/client/delete-confirm.js'
-import { resetHostRows } from '../../src/client/host-rows.js'
 import { apply, inject } from '../../src/client/index.js'
-import { resetMainView } from '../../src/client/main-view.js'
-import type { ApplyAction, ApplyOutcome, RawSessionDeleteRemote, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
-import { enterSelection, resetSelection } from '../../src/client/batch-selection-store.js'
-import { resetUndoNotice } from '../../src/client/undo-notices.js'
+import type { ApplyAction, ApplyOutcome, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
+import { enterSelection } from '../../src/client/batch-selection-store.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 import { DEFAULT_CONFIG } from '../../src/config.js'
-import { ROUTES, OFFICIAL_SESSION_DELETE_API_PREFIX } from '../../src/shared/wire.js'
+import {
+  ROUTES,
+  OFFICIAL_SESSION_DELETE_API_PREFIX,
+  type AttachmentCleanupWire,
+  type AttachmentOrphanReportWire,
+  type OrphanReportWire,
+  type PurgeStatsWire,
+  type RemoteResult,
+  type SessionDeleteConfigWire,
+} from '../../src/shared/wire.js'
 
-// 撤销提示与删除请求都是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
+// 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
 beforeEach(() => {
-  resetUndoNotice()
-  resetDeleteRequest()
-  // 批量删除的两份模块级现场同样跨用例存活（多选模式 + 选中集、行信息登记）
-  resetSelection()
-  resetHostRows()
-  resetBatchConfirm()
-  resetMainView()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetUndoNotice()
-  resetDeleteRequest()
-  resetSelection()
-  resetHostRows()
-  resetBatchConfirm()
-  resetMainView()
+  resetClientState()
 })
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
@@ -120,8 +114,23 @@ function okOutcomes(action: ApplyAction, ids: readonly string[]): ApplyOutcome[]
   })
 }
 
-/** 一个**与实现同形**的 `RawSessionDeleteRemote`：九个 JSON 段各回一个信封（写动词全走 `apply`；附件字节段是二进制，不经这层）。 */
-function rawRemote(overrides: Partial<RawSessionDeleteRemote> = {}): RawSessionDeleteRemote {
+/** 假 `fetch` 的**线上面**：按段回信封。它不是浏览器半的通道 interface——那一条由生产实现
+ *  解析这一层；这里只模拟宿主 `/api` 真正发回来的 JSON。 */
+interface EnvelopeRemote {
+  list(): Promise<RemoteResult<TrashEntryLike[]>>
+  ping(): Promise<RemoteResult<string>>
+  config(): Promise<RemoteResult<SessionDeleteConfigWire>>
+  saveConfig(next: SessionDeleteConfigWire): Promise<RemoteResult<SessionDeleteConfigWire>>
+  orphans(): Promise<RemoteResult<OrphanReportWire>>
+  detail(entryId: string, before?: number): Promise<RemoteResult<TrashDetailLike>>
+  apply(action: ApplyAction, ids: readonly string[]): Promise<RemoteResult<ApplyOutcome[]>>
+  empty(): Promise<RemoteResult<PurgeStatsWire>>
+  attachmentOrphans(): Promise<RemoteResult<AttachmentOrphanReportWire>>
+  attachmentClean(): Promise<RemoteResult<AttachmentCleanupWire>>
+}
+
+/** 一个**与实现同形**的线上面：九个 JSON 段各回一个信封（写动词全走 `apply`；附件字节段是二进制，不经这层）。 */
+function rawRemote(overrides: Partial<EnvelopeRemote> = {}): EnvelopeRemote {
   return {
     list: async () => ({ ok: true, value: [ROW] }),
     ping: async () => ({ ok: true, value: 'pong' }),
@@ -154,7 +163,7 @@ type Channel = 'up' | 'throwing' | 'not-json'
 interface FetchCall { path: string; method: string; body: unknown }
 
 /** 假 `fetch`：只认我们自己的前缀路由，把 HTTP 一层折成"方法 + 段名 + body"。 */
-function installFetch(raw: RawSessionDeleteRemote, channel: Channel = 'up'): { calls: FetchCall[] } {
+function installFetch(raw: EnvelopeRemote, channel: Channel = 'up'): { calls: FetchCall[] } {
   const calls: FetchCall[] = []
   const handler: Record<string, (body: Record<string, unknown>) => Promise<unknown>> = {
     [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.list.path]: async () => raw.list(),
@@ -201,10 +210,10 @@ const settle = (): Promise<void> => new Promise((resolve) => setTimeout(resolve,
  * 把 inject / register 记下来。
  */
 async function bootstrap(
-  raw: RawSessionDeleteRemote = rawRemote(),
+  raw: EnvelopeRemote = rawRemote(),
   channel: Channel = 'up',
   uiWorkspace?: unknown,
-  services: { contextMenus?: unknown; sessions?: unknown } = {},
+  services: { contextMenus?: unknown; sessions?: unknown; getThrows?: boolean } = {},
 ) {
   const fetchCalls = installFetch(raw, channel).calls
   const injected: string[] = []
@@ -235,6 +244,7 @@ async function bootstrap(
       },
     },
     get: (name: string) => {
+      if (services.getThrows === true) throw new Error('动态包沙箱拒绝未放行的成员')
       if (name === 'uiWorkspace') return uiWorkspace
       if (name === 'contextMenus') return services.contextMenus
       if (name === 'sessions') return services.sessions
@@ -499,6 +509,32 @@ describe('apply 的装配面', () => {
     running = true
     const live = await contribution.resolve({ sessionId: 'session-a', displayTitle: '/code-review' })
     expect(live[1]).toMatchObject({ label: '删除（运行中）', disabled: true })
+  })
+
+  it('ctx.get 抛错按服务缺席处理：legacy 菜单行照注册，拖不垮其余座位', async () => {
+    // `ctx.get` 在动态包沙箱 / 换代宿主上可能抛（`copy.ts` / `main-view.ts` 早就按这条兜）。
+    // 它跑在任何槽位注册之前：这里若把异常放出去，整个客户端条目会零注册（页面里插件直接消失）。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const { injected, registered } = await bootstrap(rawRemote(), 'up', undefined, { getThrows: true })
+      expect(injected).toEqual([
+        MENU_SLOT,
+        MENU_SLOT,
+        LEADING_SLOT,
+        ROW_ACTION_SLOT,
+        OVERLAY_SLOT,
+        OVERLAY_SLOT,
+        OVERLAY_SLOT,
+        OVERLAY_SLOT,
+        PANEL_SLOT,
+        MAIN_SLOT,
+        SETTINGS_SLOT,
+      ])
+      expect(registered.filter((row) => row.name === MENU_SLOT)).toHaveLength(2)
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('contextMenus 注册失败时回退 legacy 菜单行，且不注册图标', async () => {

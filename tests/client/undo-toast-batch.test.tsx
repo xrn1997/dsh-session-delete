@@ -3,28 +3,25 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { afterDelete, bindMainView, resetMainView } from '../../src/client/main-view.js'
+import { afterDelete, bindMainView } from '../../src/client/main-view.js'
 import type { ApplyOutcome } from '../../src/client/remote.js'
-import { resetTrashStore, useTrashRevision } from '../../src/client/trash-store.js'
+import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
   dismissUndoNotice,
   publishUndoBatchNotice,
   publishUndoNotice,
-  resetUndoNotice,
   useUndoNotice,
 } from '../../src/client/undo-notices.js'
 import { createFakeRemote } from './support/fake-remote.js'
+import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
-  resetUndoNotice()
-  resetTrashStore()
-  resetMainView()
+  resetClientState()
 })
 
 afterEach(() => {
-  resetUndoNotice()
-  resetMainView()
+  resetClientState()
 })
 
 function restoreOutcomes(ids: readonly string[]): ApplyOutcome[] {

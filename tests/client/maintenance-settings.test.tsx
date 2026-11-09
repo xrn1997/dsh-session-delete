@@ -16,7 +16,7 @@ import type {
   OrphanReportWire,
 } from '../../src/client/remote.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
-import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
 import { ok, outcomes } from './support/outcomes.js'
 
 const EMPTY: OrphanReportWire = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
@@ -35,7 +35,7 @@ const ATT_106: AttachmentOrphanReportWire = {
   items: Array.from({ length: 106 }, (_, i) => orphanItem(i)),
 }
 
-function deps(over: Partial<FakeRemote> = {}): FakeRemote {
+function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
   return createFakeRemote({
     scanOrphans: vi.fn(async () => EMPTY),
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
@@ -46,7 +46,7 @@ function deps(over: Partial<FakeRemote> = {}): FakeRemote {
   })
 }
 
-function renderCard(over: Partial<FakeRemote> = {}) {
+function renderCard(over: Partial<FakeRemoteMethods> = {}) {
   const d = deps(over)
   const view = render(<MaintenanceSettings deps={d} />)
   const section = (slot: 'maintenance-orphans' | 'maintenance-attachments') => {

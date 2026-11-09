@@ -23,10 +23,10 @@ Status: accepted
 ## 决定
 
 1. 新增 `src/api/route-table.ts`（Node 半私有——浏览器半要 import `wire.ts`，值 import 会把 Node 半拖进 bundle）：
-   每个段名一行，字段以 `RouteSpec` 为准。其中 `method` 的字面量家在 `wire.ts` 的
-   结构化段名表（`ROUTES` 每项恰有 `{ path, method }` 两键），路由记录只投影（`method: ROUTES.x.method`）——
-   一条 wire 事实（某段用什么方法）只住一处，两半各从同一格取。
-2. `dispatch()` 读这一条记录：方法、纯度、读面、body 声明、响应形态**只有一处定义**
+   每个段名一行，字段以 `RouteSpec` 为准。其中 `method` 与 `body` 的字面量家在 `wire.ts` 的
+   结构化段名表（`ROUTES` 每项恰有 `{ path, method, body }` 三键，请求体形状归 ADR-0003），路由记录只投影
+   （`method: ROUTES.x.method`、`bodyOf(ROUTES.x)`）——一条 wire 事实（某段用什么方法、带什么请求体）只住一处，两半各从同一格取。
+2. `dispatch()` 读这一条记录：方法、纯度、读面、body 的预读判定（`bodyOf` 投影 wire 那一格）、响应形态**只有一处定义**
    （原先分居 `dispatch()` 与 `purityOf()` 两处的判断已并进这张表）；响应形态同时决定 run 的形
    （JSON 段拿 body / read，二进制段拿 query），两者仍在同一条记录里；deps 切片见 ADR-0032。
 3. `APPLY_ACTIONS` 由 `ApplyAction` **派生**（`Record<ApplyAction, …>` + `satisfies`）：
@@ -39,7 +39,7 @@ Status: accepted
 ## 边界
 
 - **不给段名做动态发现**：段名是硬契约，`wire.ts` 仍是它们的家；`route-table.ts` 只负责「怎么处理」。
-  线上方法是线上形状的一部分，按 ADR-0003 归 wire（`ROUTES` 每项 `{ path, method }`），路由记录与浏览器半都只投影。
+  线上方法与请求体形状是线上形状的一部分，按 ADR-0003 归 wire（`ROUTES` 每项 `{ path, method, body }`），路由记录与浏览器半都只投影。
 - **不在这一轮改 HTTP 状态语义**（请求本身不对 4xx / 操作失败 200 + 信封）——那是既定口径，家在这几处：鉴权归宿主 `/api` bridge（ADR-0033），状态与失败信封的落地在 `src/api/connection-route.ts`（`dispatch` 只抛带 `httpStatus` 的请求错误），错误映射在 `src/remote/map-error.ts`。
 
 ## 后果

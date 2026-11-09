@@ -117,16 +117,33 @@
   outline-offset: -1px;
 }
 
-/* 子会话导航行：与清单行同语言（边框与底色不铺，见 `trash-detail.tsx` 的 SUBAGENT_ROW）。
-   标题是主要信息，取 primary；折叠头那套类把行色钉成 tertiary，这里显式覆盖。
-   大小/时间仍由各自的 `BLOCK_META` 保持 tertiary。 */
+/* 子会话段：摘要条与标题排徽标都是按钮，底色只能写在这里——内联底色会压过 `:hover`，
+   悬停就永远不可见（判据同文件头）。摘要条里的标签/计数取主色与品牌实心徽标，颜色走内联。
+   孩子导航行同一条判据：底色不内联，悬停才有反馈。 */
+[data-dsh-session-delete="trash-subagents-toggle"],
+[data-dsh-session-delete="trash-subagents-jump"],
+[data-dsh-session-delete="trash-subagent-row"] {
+  background: transparent;
+}
+
+[data-dsh-session-delete="trash-subagents-toggle"]:hover,
+[data-dsh-session-delete="trash-subagents-jump"]:hover,
+[data-dsh-session-delete="trash-subagent-row"]:hover {
+  background: var(--sd-interactive-bg-hover);
+}
+
+[data-dsh-session-delete="trash-subagents-toggle"]:focus-visible,
+[data-dsh-session-delete="trash-subagents-jump"]:focus-visible,
+[data-dsh-session-delete="trash-subagent-row"]:focus-visible {
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: 1px;
+}
+
+/* 子会话导航行：标题是主要信息，取 primary；折叠头那套类已不套在导航行上
+   （chevron 只留给原地展开）。大小/时间仍由各自的 `BLOCK_META` 保持 tertiary。 */
 [data-dsh-session-delete="trash-subagent-row"],
 [data-dsh-session-delete="trash-subagent-row"]:hover {
   color: var(--dsw-alias-label-primary);
-}
-
-[data-dsh-session-delete="trash-subagent-row"]:hover {
-  background: var(--sd-interactive-bg-hover);
 }
 
 /*
@@ -166,5 +183,214 @@
 
   .sd-group-arrow {
     transition: none;
+  }
+}
+
+/*
+ * 清单 / 详情两栏**无条件**预留滚动条槽：宿主 composer 在视图标签之间横移过 4px
+ * （滚动条占布局，两个分支量到的宽度不同），修法就是无条件预留；`DetailDocument` 也这么做。
+ * 判据：滚动条的出现/消失不许改变正文宽度（否则切换条目时整栏文字横向重排 5px）。
+ */
+.sd-stable-scroll {
+  scrollbar-gutter: stable;
+}
+
+/*
+ * 首次读数的骨架条：颜色走 `--sd-bg-skeleton`（私有 token 带公开兜底，见 `ui.css` 别名单），
+ * 脉冲与宿主 `DetailDocument` 的 `dsh-plugin-detail-skeleton` 同档（2s，reduced-motion 关）。
+ * 换条目不再走到这里（详情保持），所以这条动画只服务"真的没有上一条"的首次。
+ */
+.sd-skeleton-bar {
+  background: var(--sd-bg-skeleton);
+  animation: sd-skeleton-pulse 2s cubic-bezier(0.36, 0, 0.64, 1) infinite;
+}
+
+@keyframes sd-skeleton-pulse {
+  0% { opacity: 1; }
+  40% { opacity: 0.6; }
+  80%, 100% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-skeleton-bar {
+    animation: none;
+  }
+}
+
+/*
+ * 提问轨（ADR-0057）：贴详情正文栏右缘常驻，一句用户提问一格；不做列表、不做弹层，零开合。
+ *
+ * 水平位置与宽度**不在这里**：右缘是正文列宽的函数（`100% - DETAIL_TEXT_MAX_WIDTH`），由
+ * `trash-panel.tsx` 算好以行内 `right` 交给 `PromptRail`；轨宽是 `PromptRail` 的 `RAIL_WIDTH`
+ * （行内 `width`）——样式表里写死任何一份，都会与面板的 `RAIL_GUTTER` / `DETAIL_INNER` 漂开。
+ * 这里只管竖直居中与叠放次序。
+ *
+ * 预览卡用 `--sd-elevation-prominent` + 边框浮在正文上；`pointer-events: none` 不挡点击。
+ */
+.sd-prompt-rail {
+  position: absolute;
+  z-index: 5;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* 轨内自己滚：条数多时不把整页带着滚，也不留可见滚动条。 */
+.sd-prompt-rail-scroll {
+  display: flex;
+  flex-direction: column;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px 0;
+  scrollbar-width: none;
+}
+
+.sd-prompt-rail-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/* 一格 = 一句提问。刻度是 20px 的短横（2px 高）：未加载更短更淡，当前那条最长最深。 */
+.sd-prompt-mark {
+  position: relative;
+  flex: none;
+  width: 100%;
+  height: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sd-prompt-mark::before {
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  width: 20px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--sd-border-l4);
+  content: "";
+  transform: translateY(-50%) scaleX(0.6);
+  transform-origin: right center;
+  transition: transform 140ms ease, background-color 140ms ease;
+}
+
+.sd-prompt-mark[data-loaded="false"]::before {
+  transform: translateY(-50%) scaleX(0.4);
+  opacity: 0.6;
+}
+
+/* 悬停与「当前这句」两档分开：悬停是次级色 0.9 长，选中才是主色满长（与宿主轮次轨同档）。
+   两档同色时选中那格淹没在悬停里，读者认不出自己刚点了哪一句。 */
+.sd-prompt-mark:hover::before {
+  transform: translateY(-50%) scaleX(0.9);
+  background: var(--sd-label-tertiary);
+}
+
+.sd-prompt-mark[aria-current="true"]::before {
+  transform: translateY(-50%) scaleX(1);
+  background: var(--dsw-alias-label-primary);
+}
+
+.sd-prompt-mark[data-loading="true"]::before {
+  animation: sd-prompt-mark-busy 1s ease-in-out infinite;
+}
+
+/* 键盘焦点比两种静止态都强：环画在格子里，避免被轨的滚动容器裁掉。 */
+.sd-prompt-mark:focus-visible {
+  outline: none;
+}
+
+.sd-prompt-mark:focus-visible::before {
+  transform: translateY(-50%) scaleX(1);
+  background: var(--dsw-alias-brand-primary);
+}
+
+.sd-prompt-mark:focus-visible::after {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 24px;
+  border-radius: var(--sd-radius-sm);
+  outline: 1px solid var(--dsw-alias-brand-primary);
+  outline-offset: -2px;
+  content: "";
+}
+
+@keyframes sd-prompt-mark-busy {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+
+/* 预览卡：跟那一格竖直居中；正文一律 3 行截断（预览本身已在服务端截到 80 字）。 */
+.sd-prompt-peek {
+  position: absolute;
+  z-index: 6;
+  right: calc(100% + 10px);
+  width: 282px;
+  padding: 9px 11px 10px;
+  border: 1px solid var(--sd-border-l3);
+  border-radius: var(--sd-radius-lg);
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-base));
+  box-shadow: var(--sd-elevation-prominent);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.sd-prompt-peek-top {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--sd-label-tertiary);
+}
+
+.sd-prompt-peek-top span:last-child {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sd-prompt-peek-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  margin-top: 3px;
+  font-size: 13px;
+  line-height: 19px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.sd-prompt-peek-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--sd-label-tertiary);
+}
+
+/* 跳转收手（「太远」）的说明挂在轨下方：它不影响正文，也不假装是分页失败。 */
+.sd-prompt-rail-notice {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 180px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--sd-label-tertiary);
+  text-align: right;
+}
+
+/* 落位只把目标行对齐，不画落地高亮框：宿主 `scrollToTurn` 也只对齐，整行套一圈环在正文里
+   就是一个大白框（ADR-0057）。目标行的让位（sticky 标题排的高度）由 `trash-detail.tsx` 的
+   `USER_ROW` 以行内 `scrollMarginTop` 消费 `JUMP_SCROLL_MARGIN_PX`，这里不写第二份像素。 */
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-prompt-mark::before {
+    transition: none;
+  }
+
+  .sd-prompt-mark[data-loading="true"]::before {
+    animation: none;
+    opacity: 1;
   }
 }

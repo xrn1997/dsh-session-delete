@@ -15,8 +15,10 @@ export interface TrashEntry {
    *  旧条目迁移用它区分“删除时被我们归档的”（false 且当前仍归档）与“用户删前自己归档的”（true）。 */
   wasArchived: boolean
   deletedAt: number
-  /** 删除时**尽力**取的会话标题（来源：宿主 projection cache 服务；底层是
-   *  `storages/session_projcache/sessions/<会话id>.json` 里的 `title` 投影）。取不到存空串，绝不因此让删除失败。 */
+  /** 删除时**尽力**取的**显示名**（与工作中同名：子会话取 `subagent` 投影的 label，其余取 `title`
+   *  投影；判据住 `src/ports/host-port.ts` 的 `titleOf`，ADR-0058。底层是
+   *  `storages/session_projcache/sessions/<会话id>.json` 里的投影行）。取不到存空串，绝不因此让删除失败。
+   *  存量条目的读时兜底（父日志 catalog / 子会话自己的日志）不回写这一格，见 `src/trash/detail.ts`。 */
   title: string
   /** 删除时用 `fs.sizeOfDir` 量到的会话目录字节数。 */
   sizeBytes: number
