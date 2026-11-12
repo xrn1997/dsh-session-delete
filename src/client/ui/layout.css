@@ -16,8 +16,10 @@
 
 /* 悬停档为什么是 `--sd-interactive-bg-hover`：判据住文件头注。
    选中态的底色写在元素上（`ROW_SELECTED`），伪类打不过它，所以选中 + 悬停同时成立时
-   看到的是选中那一档，不会在鼠标经过时闪回浅色。 */
-[data-dsh-session-delete="trash-row"]:hover {
+   看到的是选中那一档，不会在鼠标经过时闪回浅色。
+   行与组头认的是 `session-list.tsx` 交出的**类名**，不是档位的 `data-*` 值：两档吃同一份规则，
+   少写一条就只会有一档变样——2026-11 那次归档档缺焦点环、缺提亮就是这么漂出来的。 */
+.sd-session-row:hover {
   background: var(--sd-interactive-bg-hover);
 }
 
@@ -46,10 +48,10 @@
   transition: opacity 120ms ease-out, background-color 120ms ease-out, color 120ms ease-out;
 }
 
-[data-dsh-session-delete="trash-row"]:hover .sd-icon-btn,
-[data-dsh-session-delete="trash-row"]:focus-within .sd-icon-btn,
-[data-dsh-session-delete="trash-row"][aria-selected='true'] .sd-icon-btn,
-.sd-narrow [data-dsh-session-delete="trash-row"] .sd-icon-btn {
+.sd-session-row:hover .sd-icon-btn,
+.sd-session-row:focus-within .sd-icon-btn,
+.sd-session-row[aria-selected='true'] .sd-icon-btn,
+.sd-narrow .sd-session-row .sd-icon-btn {
   opacity: 1;
 }
 
@@ -63,8 +65,8 @@
 }
 
 /* 禁用态要压过上一组的提亮（那一组是 0,3,0）：写入在飞时按钮不能看起来还能点。 */
-[data-dsh-session-delete="trash-row"] .sd-icon-btn:disabled,
-.sd-narrow [data-dsh-session-delete="trash-row"] .sd-icon-btn:disabled {
+.sd-session-row .sd-icon-btn:disabled,
+.sd-narrow .sd-session-row .sd-icon-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
@@ -117,32 +119,57 @@
   outline-offset: -1px;
 }
 
+/* 面板头两档（回收站 / 归档）用大号分段：与旧版 H1 同档（16px / 600 / 24px 行高），
+   两档同尺寸；计数退一档小号等宽数字，不跟着标题一起放大。 */
+.sd-seg-lg {
+  border-radius: var(--sd-radius-md);
+}
+
+.sd-seg-lg button {
+  padding: 4px 10px;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 600;
+}
+
+.sd-seg-lg button[aria-pressed='true'] {
+  font-weight: 600;
+}
+
+.sd-seg-lg .sd-seg-count {
+  margin-left: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* 子会话段：摘要条与标题排徽标都是按钮，底色只能写在这里——内联底色会压过 `:hover`，
    悬停就永远不可见（判据同文件头）。摘要条里的标签/计数取主色与品牌实心徽标，颜色走内联。
    孩子导航行同一条判据：底色不内联，悬停才有反馈。 */
-[data-dsh-session-delete="trash-subagents-toggle"],
-[data-dsh-session-delete="trash-subagents-jump"],
-[data-dsh-session-delete="trash-subagent-row"] {
+[data-dsh-session-delete="session-subagents-toggle"],
+[data-dsh-session-delete="session-subagents-jump"],
+[data-dsh-session-delete="session-subagent-row"] {
   background: transparent;
 }
 
-[data-dsh-session-delete="trash-subagents-toggle"]:hover,
-[data-dsh-session-delete="trash-subagents-jump"]:hover,
-[data-dsh-session-delete="trash-subagent-row"]:hover {
+[data-dsh-session-delete="session-subagents-toggle"]:hover,
+[data-dsh-session-delete="session-subagents-jump"]:hover,
+[data-dsh-session-delete="session-subagent-row"]:hover {
   background: var(--sd-interactive-bg-hover);
 }
 
-[data-dsh-session-delete="trash-subagents-toggle"]:focus-visible,
-[data-dsh-session-delete="trash-subagents-jump"]:focus-visible,
-[data-dsh-session-delete="trash-subagent-row"]:focus-visible {
+[data-dsh-session-delete="session-subagents-toggle"]:focus-visible,
+[data-dsh-session-delete="session-subagents-jump"]:focus-visible,
+[data-dsh-session-delete="session-subagent-row"]:focus-visible {
   outline: 1px solid var(--dsw-alias-brand-primary);
   outline-offset: 1px;
 }
 
 /* 子会话导航行：标题是主要信息，取 primary；折叠头那套类已不套在导航行上
    （chevron 只留给原地展开）。大小/时间仍由各自的 `BLOCK_META` 保持 tertiary。 */
-[data-dsh-session-delete="trash-subagent-row"],
-[data-dsh-session-delete="trash-subagent-row"]:hover {
+[data-dsh-session-delete="session-subagent-row"],
+[data-dsh-session-delete="session-subagent-row"]:hover {
   color: var(--dsw-alias-label-primary);
 }
 
@@ -152,16 +179,16 @@
  * 鼠标经过时文件夹隐去、换成**实心三角**并旋转 90°（150ms，宿主原文的时长）。
  * 触屏没有 hover，文件夹本身就是开合状态；键盘用户的 aria-expanded 仍在按钮上。
  */
-[data-dsh-session-delete="trash-group-row"] .sd-group-chevron {
+.sd-session-group-row .sd-group-chevron {
   display: none;
 }
 
 @media (hover: hover) {
-  [data-dsh-session-delete="trash-group-row"]:hover .sd-group-chevron {
+  .sd-session-group-row:hover .sd-group-chevron {
     display: inline-flex;
   }
 
-  [data-dsh-session-delete="trash-group-row"]:hover .sd-group-folder {
+  .sd-session-group-row:hover .sd-group-folder {
     display: none;
   }
 }
@@ -221,8 +248,8 @@
  * 提问轨（ADR-0057）：贴详情正文栏右缘常驻，一句用户提问一格；不做列表、不做弹层，零开合。
  *
  * 水平位置与宽度**不在这里**：右缘是正文列宽的函数（`100% - DETAIL_TEXT_MAX_WIDTH`），由
- * `trash-panel.tsx` 算好以行内 `right` 交给 `PromptRail`；轨宽是 `PromptRail` 的 `RAIL_WIDTH`
- * （行内 `width`）——样式表里写死任何一份，都会与面板的 `RAIL_GUTTER` / `DETAIL_INNER` 漂开。
+ * `detail-pane.tsx` 算好以行内 `right` 交给 `PromptRail`；轨宽是 `PromptRail` 的 `RAIL_WIDTH`
+ * （行内 `width`）——样式表里写死任何一份，都会与 `detail-pane.tsx` 的 `RAIL_GUTTER` / `DETAIL_INNER` 漂开。
  * 这里只管竖直居中与叠放次序。
  *
  * 预览卡用 `--sd-elevation-prominent` + 边框浮在正文上；`pointer-events: none` 不挡点击。

@@ -19,6 +19,7 @@ import type { HostCorpusPort, SubagentMember } from '../ports/host-port.js'
 import { bareSessionId, firstByBare } from '../domain/closure.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/wire.js'
+import { dropDeletedSessionCache } from '../trash/projection-cache.js'
 import { verbError, rollbackReason, withRollbackFailures } from './errors.js'
 import { assertNoLive } from './live-admission.js'
 
@@ -436,6 +437,9 @@ export async function executeRemoval(
       }
       removed += 1
       await presence.memberGone(row.entry.sessionId)
+      // 只有这一行的目录/清册行确实处理完，才删**这一条会话**的投影缓存：不按计划名单批量扫，
+      // 删到一半失败时已删的照清、没删成的不动。缓存删除失败只留 warning，不翻删除。
+      await dropDeletedSessionCache(deps, row.entry.sessionId)
     }
 
     // 盘上成员：标签按调用方区分（purge 说的是"盘上后代"，orphan-clean 说的是"会话目录"）。
@@ -450,6 +454,8 @@ export async function executeRemoval(
       removed += 1
       freedSoFar += member.bytes
       await presence.memberGone(member.sessionId)
+      // 同回收站行：这一条成员目录真的删掉了，才删这一条会话的缓存。
+      await dropDeletedSessionCache(deps, member.sessionId)
     }
 
     // 附件对象最后动：会话目录已经真的没了，失败只计数、不回滚，也不改会话删除的字节。

@@ -12,6 +12,7 @@ import {
   PER_BLOCK_CHAR_CAP,
   PROMPT_PREVIEW_LIMIT,
   SUBAGENT_SUMMARY_LIMIT,
+  createDetailFold,
   readTrashDetail,
   type DetailDeps,
 } from '../src/trash/detail.js'
@@ -678,6 +679,16 @@ it('子会话行补 label：日志 `subagent/catalog` 的 label 按 bare id 配�
   expect(detail.subagents?.map((child) => child.label)).toEqual(['Standards 轴全仓审查', 'Spec 轴文档对账审查'])
 })
 
+it('`subagent/catalog` 也推进最后活动：与归档详情同一口径（日志末条不看事件类别）', async () => {
+  const log = body(
+    userLine(13, '父的话'),
+    { type: 'subagent/catalog', time: 40, data: { childId: 'kid-2', childCreatedAt: 12, mode: 'continuable', label: '子任务' } },
+  )
+  const { deps } = makeDeps(log, { rows: [entry(), kid2(), kid()] })
+  const detail = await readTrashDetail(deps)(id)
+  expect(detail.lastActivity).toBe(40)
+})
+
 it('没有 catalog label 的孩子行不带 label 这一格（缺席 ≠ 空串，回落清册标题）', async () => {
   const log = body(
     userLine(13, '父的话'),
@@ -831,4 +842,47 @@ it('带 before 的翻页不重复搬提问索引（它不随分页变化）', as
 it('没有用户提问的会话：提问索引是空数组，不是缺席', async () => {
   const detail = await readTrashDetail(makeDeps(body(asstLine(14, [{ type: 'text', text: '只有回答' }]))).deps)(id)
   expect(detail.prompts).toEqual([])
+})
+
+// ── DetailFold（折叠核心的直接用例）：回收站与归档两档共用这一份折叠，
+// 合成的 `session` 头与 raw JSONL 的头记录同形（`readArchiveDetail` 的薄适配靠这一点）。
+it('DetailFold：喂合成 session 头 + 事件流，产出 SessionDetailWire 基座（cwd/createdAt/label/计数/块/游标）', () => {
+  const fold = createDetailFold()
+  fold.add({ type: 'session', cwd: 'C:/develop/x', createdAt: 10, parentSession: 'session-p' })
+  fold.add({ type: 'session/title', time: 1, data: { title: '日志标题' } })
+  fold.add({ type: 'turn/start', time: 2 })
+  fold.add(userLine(3, '先看改动'))
+  fold.add(asstLine(4, [{ type: 'text', text: '改动分四层' }], 'm-1'))
+  fold.add(toolCallLine(5, 'call-1', 'bash', '{"cmd":"ls"}'))
+  fold.add(toolResultLine(6, 'call-1', 'ok'))
+  fold.add({ type: 'subagent/descriptor', time: 7, data: { label: '子任务名' } })
+  const core = fold.finish()
+  expect(core).toMatchObject({
+    cwd: 'C:/develop/x',
+    createdAt: 10,
+    lastActivity: 7,
+    logTitle: '日志标题',
+    label: '子任务名',
+    models: ['m-1'],
+    turnCount: 1,
+    userMessageCount: 1,
+    assistantMessageCount: 1,
+    toolCallCount: 1,
+    injectedCount: 0,
+    olderCursor: null,
+  })
+  expect(core.blocks.map((block) => block.kind)).toEqual(['user', 'assistant', 'tool'])
+  expect(core.prompts).toEqual([{ id: '0', at: 3, preview: '先看改动' }])
+})
+
+it('DetailFold.finish(before)：翻页不带 prompts', () => {
+  const fold = createDetailFold(undefined, 1)
+  fold.add({ type: 'session', cwd: 'C:/develop/x', createdAt: 10 })
+  fold.add(userLine(3, '先看改动'))
+  fold.add(asstLine(4, [{ type: 'text', text: '第二块' }]))
+  const core = fold.finish()
+  expect(core.prompts).toBeUndefined()
+  // before=1 ⇒ 只有序号 0 进页；游标指页首且页首就是第 0 块 ⇒ 到顶。
+  expect(core.blocks).toHaveLength(1)
+  expect(core.olderCursor).toBeNull()
 })

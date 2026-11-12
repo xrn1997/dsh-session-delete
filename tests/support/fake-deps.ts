@@ -22,9 +22,11 @@
 import { vi } from 'vitest'
 import type { FsPort } from '../../src/ports/fs-port.js'
 import type {
+  CorpusLogRead,
   CorpusRead,
   EvictionOutcome,
   HostPort,
+  ProjectionCacheDropResult,
   SessionIdentity,
   SubagentMember,
 } from '../../src/ports/host-port.js'
@@ -72,7 +74,8 @@ export interface FakeHostOptions extends CallLog {
   title?: string | undefined
   /** 活体判定：布尔，或按 id 判（批量用例要"这一条在跑"）。 */
   live?: boolean | ((sessionId: string) => boolean) | undefined
-  archived?: boolean | undefined
+  /** 归档集本行判定：布尔，或按 id 判（父/子分别归档的用例要"这一条在归档、那一条不在"）。 */
+  archived?: boolean | ((sessionId: string) => boolean) | undefined
   evicted?: EvictionOutcome | undefined
   workspaceExists?: boolean | undefined
   /** 父 → 盘上后代（`subagentMembersOf` 的值；缺席的父回空表，与真实 adapter 同形）。 */
@@ -85,10 +88,34 @@ export interface FakeHostOptions extends CallLog {
   membersAvailable?: boolean | undefined
   /** 整个语料（live ∪ persisted）；`undefined` = `sessionQuery` 没挂——扫描必须响亮失败。 */
   corpus?: readonly SessionIdentity[] | undefined
+  /** 子会话 label（`labelOf`）；缺省空串 = 没有 label。 */
+  label?: string | undefined
+  /** registry 归档集（`archivedSessionIds`）；缺省空集。 */
+  archivedIds?: readonly string[] | undefined
+  /** id → 日志标题（`titleSnapshots` 的 map）；缺省 = 方法缺席（`{available:false}`）。 */
+  titles?: Record<string, string> | undefined
+  /** id → 最后提问时间（`sessionActivity`）；缺省 = 服务缺席（`{available:false}`）。 */
+  activity?: Record<string, number> | undefined
+  /** id → 持久化字节（`persistedSizes`，值可缺席）；缺省 = 空表。 */
+  sizes?: Record<string, number | undefined> | undefined
+  /** `persistedSizes` 读面是否可用；缺省可用（空表）。语料与持久化都缺席的用例把它关掉。 */
+  persistedSizesAvailable?: boolean | undefined
+  /** 持久化服务是否挂载；缺省跟随 `persistedSizesAvailable`（可用 = 在场）。要模拟「服务在场但列表坏」
+   *  就显式给 `true` + `persistedSizesAvailable: false`。 */
+  persistenceMounted?: boolean | undefined
+  /** `session_projcache` 里的会话 id；缺省空表。 */
+  projectionCache?: readonly string[] | undefined
+  /** 投影缓存读面是否可用；`false` = 存储域取不到（`CorpusRead` 的显式缺席）。 */
+  projectionCacheAvailable?: boolean | undefined
+  /** `dropProjectionCache` 的替身：缺省按名单长度成功；数字 = 只给 `removed`（`failed: 0`）；
+   *  要模拟部分失败就给 `{ removed, failed }`，要模拟整批失败就给一个抛错的函数。 */
+  dropProjectionCache?: ((ids: readonly string[]) => number | ProjectionCacheDropResult | Promise<number | ProjectionCacheDropResult>) | undefined
+  /** id → 整本读（`readSession`）；缺席的 id 抛 `SESSION_QUERY_SESSION_NOT_FOUND`，整个 `logs` 缺席 = 方法缺席。 */
+  logs?: Record<string, CorpusLogRead> | undefined
 }
 
 /**
- * 内存里的 `HostPort`：15 个方法全部实现。
+ * 内存里的 `HostPort`：24 个方法全部实现。
  *
  * **声明式的只读数**（`workspaceOf` / `projectDirOf` / `title` / `live` / `archived` / `members` …）
  * 是这一份 adapter 的 interface：用例说"这个世界长什么样"，而不是"第几行会被调到"。
@@ -122,8 +149,11 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
     workspaceExists: vi.fn(async () => over.workspaceExists ?? true),
     projectDirOf: vi.fn(async (sessionId: string) => projectDirOf(sessionId)),
     titleOf: vi.fn(async () => over.title ?? '会话标题'),
+    labelOf: vi.fn(async () => over.label ?? ''),
     isLive: vi.fn(async (sessionId: string) => isLive(sessionId)),
-    isArchived: vi.fn(async () => over.archived ?? false),
+    isArchived: vi.fn(async (sessionId: string) =>
+      (typeof over.archived === 'function' ? over.archived(sessionId) : over.archived ?? false)),
+    archivedSessionIds: vi.fn(async () => over.archivedIds ?? []),
     evictLive: vi.fn(async (sessionId: string) => {
       record('evictLive', [sessionId])
       return over.evicted ?? 'not-live'
@@ -144,6 +174,33 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
       (over.membersAvailable === false
         ? { available: false }
         : { available: true, value: membersOf(parentIds) })),
+    titleSnapshots: vi.fn(async (): Promise<CorpusRead<ReadonlyMap<string, string>>> =>
+      (over.titles === undefined
+        ? { available: false }
+        : { available: true, value: new Map(Object.entries(over.titles)) })),
+    sessionActivity: vi.fn(async (): Promise<CorpusRead<ReadonlyMap<string, number>>> =>
+      (over.activity === undefined
+        ? { available: false }
+        : { available: true, value: new Map(Object.entries(over.activity)) })),
+    persistedSizes: vi.fn(async () => (over.persistedSizesAvailable === false
+      ? { available: false as const }
+      : { available: true as const, value: new Map(Object.entries(over.sizes ?? {})) })),
+    persistenceMounted: vi.fn(() => over.persistenceMounted ?? over.persistedSizesAvailable !== false),
+    projectionCacheIds: vi.fn(async (): Promise<CorpusRead<readonly string[]>> =>
+      (over.projectionCacheAvailable === false
+        ? { available: false }
+        : { available: true, value: over.projectionCache ?? [] })),
+    dropProjectionCache: vi.fn(async (ids: readonly string[]): Promise<ProjectionCacheDropResult> => {
+      record('dropProjectionCache', [ids])
+      if (over.dropProjectionCache === undefined) return { removed: ids.length, failed: 0 }
+      const raw = await over.dropProjectionCache(ids)
+      return typeof raw === 'number' ? { removed: raw, failed: 0 } : raw
+    }),
+    readSession: vi.fn(async (sessionId: string) => {
+      const read = over.logs?.[sessionId]
+      if (read !== undefined) return read
+      throw Object.assign(new Error(`session not found: ${sessionId}`), { code: 'SESSION_QUERY_SESSION_NOT_FOUND' })
+    }),
   }
   return host
 }
@@ -328,8 +385,9 @@ export type FakeDeps = Omit<DeleteDeps, 'fs' | 'host'> & {
 /**
  * 一次装配出 `{ deps, host, fs, ledger, manifest }`：**返回值就是 `DeleteDeps`，没有强转**。
  *
- * 这也是"端口窄到可以假"的量尺：这份文件比 `host-port.ts` 的 15 个方法短，说明那 15 个方法没有藏
- * 第二个概念。三个角色切面已就位（`HostIdentityPort` / `HostPresencePort` / `HostCorpusPort`，ADR-0007），
+ * 这也是"端口窄到可以假"的量尺：这份文件比 `host-port.ts` 的 24 个方法短，说明那 24 个方法没有藏
+ * 第二个概念。四个角色切面已就位（`HostIdentityPort` / `HostPresencePort` / `HostCorpusPort` /
+ * `HostProjectionPort`，ADR-0007 / ADR-0062），
  * 这份假件仍实现复合面——因为它们共用一颗 adapter，用例也只交一个 `deps`。
  *
  * **raw 清单与 `fs` 的路径树世界是两个独立的账**：过去 `dirs` 缺省从**实时**清册行集派生，

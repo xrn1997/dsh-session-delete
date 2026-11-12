@@ -15,7 +15,7 @@ import {
  *
  * 各 action 可能出现的 kind（类型面故意保持同一个联合，消费方按 action 自己收窄）：
  * - delete / restore：`ok` / `already-gone` / `failed` / `missing`
- * - count / purge：`ok` / `failed` / `missing`
+ * - count / purge / unarchive：`ok` / `failed` / `missing`
  * - orphan-clean：`ok` / `neutral` / `failed` / `missing`
  * - 单条读法（`readSingleReceipt`）：不含 `already-gone`；null 折成 `failed`
  */
@@ -56,6 +56,8 @@ const RECEIPT_SHAPE: Record<ApplyAction, ReceiptShape> = {
   purge: { neutralOnNotFound: false, attachmentCleanup: true, landed: 'none' },
   count: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'none' },
   'orphan-clean': { neutralOnNotFound: true, attachmentCleanup: true, landed: 'none' },
+  // 解除归档没有撤销/回盘座位：清单重读归归档档自己的失效链（`archive-store`）。
+  unarchive: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'none' },
 }
 
 export interface ReceiptOptions {
@@ -161,6 +163,9 @@ export interface ReceiptSummary {
    *  （回盘名单）；purge / count / orphan-clean 没有可撤销的落地 id，恒为空。
    *  两个域不混在一个数组里靠调用方猜，也不各留一个永远为空的字段。 */
   readonly landedIds: readonly string[]
+  /** 落地条目里带**已归档**标记的那些（域同 `landedIds` 的 entry 域）：已归档会话删除后
+   *  撤销是**回「归档」**不是回会话列表，撤销文案据此改口（ADR-0060 决定第 1 条）。 */
+  readonly landedArchivedIds: readonly string[]
   readonly anySuccess: boolean
   /** purge / orphan-clean 的 `ok` 回执里那半份附件读数，**按批相加**（一段 `/apply` 可能带多条 ok）。
    *  `skipped` 取第一条有的：它说的是"这一轮为什么没敢清"，不是可累加的计数。
@@ -283,6 +288,7 @@ export function summarizeReceipt<A extends ApplyAction>(
       failed,
       partial,
       landedIds,
+      landedArchivedIds: landedArchivedEntryIds(receipt),
       anySuccess: successIds.length > 0,
       // 摘要随回执上屏/落账：附件读数没有时不建键——「没有读数」是键的缺席，不是显式 undefined。
       ...(attachmentCleanup !== undefined ? { attachmentCleanup } : {}),
@@ -297,6 +303,19 @@ function isRestoreEntry(value: unknown): value is { readonly sessionId: string }
 
 function isEntryWithId(value: unknown): value is { readonly id: string } {
   return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string'
+}
+
+/** 落地条目里带**已归档**标记的那些（`wasArchived` 那一格，删除动词读 `isArchived` 记下的事实）。 */
+function landedArchivedEntryIds<A extends ApplyAction>(receipt: Receipt<A>): string[] {
+  const ids: string[] = []
+  for (const verdict of receipt.verdicts) {
+    if (verdict.kind !== 'ok') continue
+    const value: unknown = verdict.value
+    if (isEntryWithId(value) && 'wasArchived' in value && (value as { wasArchived?: unknown }).wasArchived === true) {
+      ids.push(value.id)
+    }
+  }
+  return ids
 }
 
 /**

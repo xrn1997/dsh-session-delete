@@ -44,7 +44,7 @@ export async function deleteSessionFromMenu(
     presentation: {
       invalidate: invalidateTrash,
       // N=1 只可能有一条 `ok`（单条读法把幂等空值折成协议错）；settlement 只在有落点时发布，名单非空。
-      publishUndo: ({ entryIds }) => publishUndoNotice({ entryId: entryIds[0], title: input.title }),
+      publishUndo: ({ entryIds, archived }) => publishUndoNotice({ entryId: entryIds[0], title: input.title, archived }),
     },
     gate,
   })
@@ -53,8 +53,8 @@ export async function deleteSessionFromMenu(
   return { kind: 'ran', value: run.value.failures.get(input.sessionId) ?? null }
 }
 
-/** 批量删除座位（宿主会话列表的多选 → 批量确认框）：一次 `/apply`，撤销名单只收 ok 支的条目 id（跟着组走的幂等条不单列）。
- *  只收 id：标题是浮条的呈现，不参与这一次写入。**被闸挡回时交回 `{kind:'blocked'}`**——这一趟没跑，
+/** 批量删除座位（宿主会话列表的多选浮条与面板归档档的页脚共用 → 批量确认框）：一次 `/apply`，撤销名单只收 ok 支的条目 id（跟着组走的幂等条不单列）。
+ *  只收 id：标题是发请求那一面的呈现，不参与这一次写入。**被闸挡回时交回 `{kind:'blocked'}`**——这一趟没跑，
  *  浮条与确认框都不许照着它收缩名单或关框（那会吞掉在飞那一趟的结果）。 */
 export async function deleteSessionsFromBatch(
   deps: OneShotDeps,
@@ -67,7 +67,7 @@ export async function deleteSessionsFromBatch(
     ids,
     presentation: {
       invalidate: invalidateTrash,
-      publishUndo: ({ entryIds, n }) => publishUndoBatchNotice({ entryIds, n }),
+      publishUndo: ({ entryIds, n, archived }) => publishUndoBatchNotice({ entryIds, n, archived }),
     },
     gate,
   })

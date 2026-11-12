@@ -1,5 +1,5 @@
 /**
- * 清单上的选择面（`use-trash-selection.ts`）。
+ * 清单上的选择面（`use-list-selection.ts`，通用；回收站/归档各一台实例）。
  *
  * 三条承重规矩此前只能"整块渲染面板 + 点 DOM"才够得着：
  * ① **勾选顺序 = 清单从上往下**（不是点击顺序）；
@@ -8,7 +8,7 @@
  */
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { useTrashSelection } from '../../src/client/use-trash-selection.js'
+import { useListSelection } from '../../src/client/use-list-selection.js'
 import { groupByProject } from '../../src/client/trash-view.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { TrashEntryLike } from '../../src/client/remote.js'
@@ -18,12 +18,20 @@ const row = (id: string, projectDir: string, deletedAt: number): TrashEntryLike 
   deletedAt, title: id, sizeBytes: 10, releaseBytes: 10,
 })
 
+/** 回收站档的分组键与行键；归档档传 `updatedAt`/`sessionId` 那套（判据同源，只换键）。 */
+const trashKeys = {
+  timeOf: (e: TrashEntryLike) => e.deletedAt,
+  projectDirOf: (e: TrashEntryLike) => e.projectDir,
+  ungroupedOf: (e: TrashEntryLike) => e.workspaceMissing === true,
+}
+const idOf = (e: TrashEntryLike) => e.id
+
 /** 两个项目：A 里 a1/a2（a2 更新）、B 里 b1。组间按各组最新一条倒序 ⇒ A 在前。 */
 const rows: TrashEntryLike[] = [row('a1', '--A--', 1), row('a2', '--A--', 3), row('b1', '--B--', 2)]
 
 function mount() {
-  const groups = groupByProject(rows, zhTranslate)
-  return renderHook(() => useTrashSelection({ entries: rows, groups }))
+  const groups = groupByProject(rows, zhTranslate, trashKeys)
+  return renderHook(() => useListSelection({ rows, groups, idOf }))
 }
 
 describe('选择面 · 勾选', () => {
@@ -33,6 +41,15 @@ describe('选择面 · 勾选', () => {
     act(() => { result.current.toggleCheck('a1') })
     // 屏幕顺序是 A(a2,a1 组内删除时间倒序) → B(b1)，所以 a1 在 b1 之前
     expect(result.current.checkedIds).toEqual(['a1', 'b1'])
+  })
+
+  it('checkedRows 交行本身（页脚要标题），顺序同 checkedIds、折叠组照样算在内', () => {
+    const { result } = mount()
+    act(() => { result.current.toggleGroup('--A--') })
+    act(() => { result.current.toggleCheck('b1') })
+    act(() => { result.current.toggleCheck('a2') })
+    expect(result.current.checkedRows.map((entry) => entry.id)).toEqual(['a2', 'b1'])
+    expect(result.current.checkedIds).toEqual(['a2', 'b1'])
   })
 
   it('勾选是翻转：再点一次就取消', () => {
@@ -55,7 +72,7 @@ describe('选择面 · 勾选', () => {
 describe('选择面 · 组头的三态', () => {
   it('半选 / 全选 / 勾满再点是整组取消', () => {
     const { result } = mount()
-    const groupA = { entries: rows.filter((entry) => entry.projectDir === '--A--') }
+    const groupA = { rows: rows.filter((entry) => entry.projectDir === '--A--') }
     act(() => { result.current.toggleCheck('a1') })
     expect(result.current.groupPartiallyChecked(groupA)).toBe(true)
     expect(result.current.groupFullyChecked(groupA)).toBe(false)
@@ -89,32 +106,48 @@ describe('选择面 · 折叠', () => {
 
 describe('选择面 · 清单换了', () => {
   it('已经不在清单里的勾选被剔掉（别处删掉了那一条）', () => {
-    const groups = groupByProject(rows, zhTranslate)
+    const groups = groupByProject(rows, zhTranslate, trashKeys)
     const { result, rerender } = renderHook(
-      ({ entries }) => useTrashSelection({ entries, groups: groupByProject(entries, zhTranslate) }),
-      { initialProps: { entries: rows } },
+      ({ rows: list }) => useListSelection({ rows: list, groups: groupByProject(list, zhTranslate, trashKeys), idOf }),
+      { initialProps: { rows } },
     )
     act(() => { result.current.toggleCheck('a1') })
     act(() => { result.current.toggleCheck('b1') })
-    rerender({ entries: rows.filter((entry) => entry.id !== 'a1') })
+    rerender({ rows: rows.filter((entry) => entry.id !== 'a1') })
     expect(result.current.checkedIds).toEqual(['b1'])
     void groups
   })
 
   it('清单未知（null）⇒ 勾选保留：未知只是不知道，不拿它当"没了"；读数回来再剔掉真不在的', () => {
-    // props 的类型在这一格声明：renderHook 的泛型由 initialProps 推断，裸 `{ entries: rows }` 会把 `null` 那一支丢掉
-    const initialProps: { entries: readonly TrashEntryLike[] | null } = { entries: rows }
+    // props 的类型在这一格声明：renderHook 的泛型由 initialProps 推断，裸 `{ rows }` 会把 `null` 那一支丢掉
+    const initialProps: { rows: readonly TrashEntryLike[] | null } = { rows }
     const { result, rerender } = renderHook(
-      ({ entries }: { entries: readonly TrashEntryLike[] | null }) =>
-        useTrashSelection({ entries, groups: groupByProject(entries ?? [], zhTranslate) }),
+      ({ rows: list }: { rows: readonly TrashEntryLike[] | null }) =>
+        useListSelection({ rows: list, groups: groupByProject(list ?? [], zhTranslate, trashKeys), idOf }),
       { initialProps },
     )
     act(() => { result.current.toggleCheck('a1') })
     act(() => { result.current.toggleCheck('b1') })
-    rerender({ entries: null })
+    rerender({ rows: null })
     // 未知这一拍清单不交行，`checkedIds` 自然无从派生；要看的是现场本身有没有被清掉。
     expect([...result.current.checked].sort()).toEqual(['a1', 'b1'])
-    rerender({ entries: rows.filter((entry) => entry.id !== 'a1') })
+    rerender({ rows: rows.filter((entry) => entry.id !== 'a1') })
     expect(result.current.checkedIds).toEqual(['b1'])
+  })
+})
+
+describe('选择面 · 实例独立', () => {
+  it('两台实例互不干扰（折叠集与勾选集按实例独立）', () => {
+    // 回收站档与归档档各一台实例：同一个 id 打到两台上也不许串味（折叠/勾选都按实例走）。
+    const groupsA = groupByProject(rows, zhTranslate, trashKeys)
+    const groupsB = groupByProject(rows, zhTranslate, trashKeys)
+    const a = renderHook(() => useListSelection({ rows, groups: groupsA, idOf }))
+    const b = renderHook(() => useListSelection({ rows, groups: groupsB, idOf }))
+    act(() => { a.result.current.toggleCheck('a1') })
+    act(() => { a.result.current.toggleGroup('--A--') })
+    expect(a.result.current.checkedIds).toEqual(['a1'])
+    expect(a.result.current.isCollapsed('--A--')).toBe(true)
+    expect(b.result.current.checkedIds).toEqual([])
+    expect(b.result.current.isCollapsed('--A--')).toBe(false)
   })
 })

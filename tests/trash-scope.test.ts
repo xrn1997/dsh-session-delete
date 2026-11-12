@@ -58,7 +58,7 @@ function deps(seed: TrashEntry[], over: { corpus?: readonly SessionIdentity[] } 
 }
 
 const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdentity => ({
-  sessionId, projectDir: '--p--', subagent: true, ...over,
+  sessionId, projectDir: '--p--', subagent: true, createdAt: 0, ...over,
 })
 
 describe('彻底删除', () => {

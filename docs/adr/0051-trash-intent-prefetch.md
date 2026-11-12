@@ -30,4 +30,4 @@ Status: accepted
 - **把延时调长到接近点击**：省了请求，但点下去时还没读完；150ms 是本机读数与「扫过」的交点。
 - **复用选中的上屏路径做预取**：会抢占详情上屏槽，把保持中的上一条顶成骨架。
 
-锚点：`src/client/use-prefetch.ts` 的 `useDelayedPrefetch` / `intentPrefetchHandlers`；`src/client/use-trash-detail-reader.ts` 的 `prefetch`；`src/client/use-trash-panel-controller.ts` 的 `prefetch`；`src/client/trash-panel.tsx`；`src/client/trash-detail.tsx`；`CONTEXT.md` 的「意图预取」；`tests/client/use-prefetch.test.tsx`；`tests/client/trash-panel.test.tsx` 的「切换稳定性」。相关 ADR-0049。
+锚点：`src/client/use-prefetch.ts` 的 `useDelayedPrefetch` / `intentPrefetchHandlers`；`src/client/use-trash-detail-reader.ts` 的 `prefetch`；`src/client/use-trash-panel-controller.ts` 的 `prefetch`；`src/client/trash-panel.tsx`；`src/client/subagent-section.tsx`（子会话行的意图预取）；`CONTEXT.md` 的「意图预取」；`tests/client/use-prefetch.test.tsx`；`tests/client/trash-panel.test.tsx` 的「切换稳定性」。相关 ADR-0049。

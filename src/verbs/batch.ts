@@ -117,6 +117,18 @@ async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<Apply
 }
 
 /**
+ * 解除归档（归档档的显式动作，ADR-0008 不翻案：它不是删除/恢复的副作用）。逐 id 调宿主
+ * `unarchiveSession`（未归档是幂等 no-op）；成功值固定 `1`——「这条 id 被处理成功」，不是
+ * 实际状态变化数（宿主不给返回值，也不为此多读一次 `isArchived` 去猜）。
+ */
+async function applyUnarchive(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
+  return forEachId('unarchive', ids, async (sessionId) => {
+    await deps.host.unarchive(sessionId)
+    return 1
+  })
+}
+
+/**
  * 清一组无主子会话（父已被彻底删掉、孩子还留在 `sessions/` 里的那些）。id 是**根会话 id**——
  * 界面先 `GET /orphans` 拿 `roots` 再原样带回来，所以这里的 `not-found` 说的是"这句话已经过期了"
  * （父又被人放回回收站、组已被上一个请求带走，或另一处已经把目录清掉），不是"用户打错了一个 id"。
@@ -157,5 +169,7 @@ export function applyActions(deps: DeleteDeps, action: ApplyAction, ids: readonl
       return applyCount(deps, ids)
     case 'orphan-clean':
       return applyOrphanClean(deps, ids)
+    case 'unarchive':
+      return applyUnarchive(deps, ids)
   }
 }

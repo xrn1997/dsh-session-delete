@@ -22,9 +22,14 @@ import {
 } from '../src/shared/wire.js'
 import type { PurgeResultLike, TrashDetailLike, TrashEntryLike } from '../src/client/remote.js'
 import type {
+  ArchiveDetailWire,
+  ArchiveSubagentWire,
+  ArchiveListWire,
+  ArchiveRowWire,
   AttachmentCleanupWire,
   AttachmentOrphanReportWire,
   PurgeStatsWire,
+  SessionDetailWire,
   TrashDetailAttachmentWire,
   TrashDetailWire,
 } from '../src/shared/wire.js'
@@ -155,6 +160,47 @@ describe('两半共用同一份形状（不是两份互相镜像）', () => {
       items: [{ attachmentId: `sha256:${'a'.repeat(64)}`, bytes: 4096 }],
     })
   })
+
+  it('归档三形状的键集与 ADR-0060 / wire 契约一致（缺席字段不造 0）', () => {
+    const full: ArchiveRowWire = {
+      sessionId: 'session-a', projectDir: '--p--', title: '标题', label: '子任务名',
+      updatedAt: 1, updatedAtSource: 'prompt', sizeBytes: 10, subagent: false,
+    }
+    expect(Object.keys(full).sort()).toEqual(
+      ['label', 'projectDir', 'sessionId', 'sizeBytes', 'subagent', 'title', 'updatedAt', 'updatedAtSource'].sort())
+    // 缺席 = 键不在：sizeBytes / label 都不许拿 0 或空串冒充「有读数」。
+    const sparse: ArchiveRowWire = {
+      sessionId: 'session-b', projectDir: '--p--', title: '', updatedAt: 2, updatedAtSource: 'created', subagent: true,
+    }
+    expect(Object.keys(sparse)).not.toContain('sizeBytes')
+    expect(Object.keys(sparse)).not.toContain('label')
+    const list: ArchiveListWire = { available: true, rows: [full], totalBytes: 10, missingSizeCount: 0 }
+    expect(Object.keys(list).sort()).toEqual(['available', 'missingSizeCount', 'rows', 'totalBytes'].sort())
+    const detail: ArchiveDetailWire = {
+      sessionId: 'session-a', archived: true, cwd: 'C:/p', createdAt: 1, lastActivity: 2, logTitle: '', models: [],
+      turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0, injectedCount: 0,
+      blocks: [], olderCursor: null,
+    }
+    // 归档详情 = 基座 + sessionId + 可选子会话三件；没有清册身份格。
+    const base: SessionDetailWire = detail
+    expect(base.createdAt).toBe(1)
+    expect(Object.keys(detail)).not.toContain('entryId')
+    const child: ArchiveSubagentWire = {
+      sessionId: 'kid-1', archived: false, projectDir: '--p--', title: '孩子一', label: '子任务名',
+      updatedAt: 1, updatedAtSource: 'prompt', sizeBytes: 10,
+    }
+    expect(Object.keys(child).sort()).toEqual(
+      ['archived', 'label', 'projectDir', 'sessionId', 'sizeBytes', 'title', 'updatedAt', 'updatedAtSource'].sort())
+    const withKids: ArchiveDetailWire = {
+      ...detail,
+      subagents: [child],
+      subagentsTotal: 2,
+      subagentsSizeBytes: 10,
+    }
+    expect(withKids.subagents?.[0]?.sessionId).toBe('kid-1')
+    expect(withKids.subagentsTotal).toBe(2)
+    expect(withKids.subagentsSizeBytes).toBe(10)
+  })
 })
 
 describe('响应信封的运行期判形（isRemoteResult）', () => {
@@ -189,7 +235,7 @@ describe('段名表 `ROUTES` 是结构化常量（路径 / 方法 / 请求体形
     for (const [name, seg] of Object.entries(ROUTES)) {
       expect(`${name}:${Object.keys(seg).sort().join('+')}`).toBe(`${name}:body+method+path`)
       expect(`${name}:${seg.path.startsWith('/')}`).toBe(`${name}:true`)
-      expect(`${name}:${['none', 'query', 'config', 'entry', 'apply'].includes(seg.body)}`).toBe(`${name}:true`)
+      expect(`${name}:${['none', 'query', 'config', 'entry', 'apply', 'sessionId'].includes(seg.body)}`).toBe(`${name}:true`)
     }
   })
 
@@ -198,7 +244,7 @@ describe('段名表 `ROUTES` 是结构化常量（路径 / 方法 / 请求体形
   // 配对漂了就意味着某一格的投影不再描述真实线上形状。
   it('body 与方法配对：JSON 字段段是 POST，GET 段只带 none / query，查询串段是 GET', () => {
     for (const [name, seg] of Object.entries(ROUTES)) {
-      const carriesJson = seg.body === 'config' || seg.body === 'entry' || seg.body === 'apply'
+      const carriesJson = seg.body === 'config' || seg.body === 'entry' || seg.body === 'apply' || seg.body === 'sessionId'
       const readableByGet = seg.body === 'none' || seg.body === 'query'
       if (carriesJson) expect(`${name}:${seg.method}`, '带 JSON 字段的段必须是 POST').toBe(`${name}:POST`)
       if (seg.method === 'GET') expect(`${name}:${readableByGet}`, 'GET 段不带 JSON 字段').toBe(`${name}:true`)

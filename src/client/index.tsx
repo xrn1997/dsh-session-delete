@@ -32,6 +32,7 @@ import { NEVER_SESSIONS, useSessionLive, type UseSessions } from './session-live
 import { type ClientContextLike, type SlotRegistration } from './context.js'
 import { createTranslate, type Translate } from './copy.js'
 import { DeleteConfirmHost } from './delete-confirm.js'
+import { installArchiveHostWatch } from './host-archive-watch.js'
 import { bindMainView } from './main-view.js'
 import { PLUGIN_ID } from './plugin.js'
 import { createHttpRemote, probeChannel, type SessionDeleteRemote } from './remote.js'
@@ -225,6 +226,12 @@ async function activate(client: ClientContextLike): Promise<void> {
 
   // 菜单两行有双轨协商（数据动作 / legacy + 迟到切换），归 context-menu-actions。
   installSessionMenus(client, t)
+  // A1：宿主归档集的旁路观察（可选服务 `workspaces`，窄镜像、缺席安静降级）——
+  // 归档档实时反映宿主侧归档/解除归档（不轮询；失效只戳 archive-store，重读归查询）。
+  // `effect` 与 activation 守卫同一判据：老宿主没有这一格时不许把注册后面的一整串打掉。
+  if (typeof client.effect === 'function') {
+    client.effect(() => installArchiveHostWatch(client), 'session-delete: archive host watch')
+  }
   // 其余贡献是一张表、一个注册循环（槽位 / id / order / 注入面 / 组件各一格）。
   registerContributions(client, deps, t)
 }

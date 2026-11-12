@@ -8,7 +8,7 @@ import {
   requestDeleteBatch,
   useDeleteBatchRequest,
 } from '../../src/client/batch-confirm.js'
-import { getPicks, togglePick } from '../../src/client/batch-selection-store.js'
+import { getPicks, shrinkPicksToFailures, togglePick } from '../../src/client/batch-selection-store.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
@@ -45,7 +45,7 @@ describe('模块级现场', () => {
     )
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
-    requestDeleteBatch()
+    requestDeleteBatch(getPicks(), shrinkPicksToFailures)
     const view = renderHook(() => useDeleteBatchRequest())
     render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
@@ -152,7 +152,7 @@ describe('批量确认框', () => {
     )
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
-    requestDeleteBatch()
+    requestDeleteBatch(getPicks(), shrinkPicksToFailures)
     render(
       <>
         <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
@@ -166,13 +166,43 @@ describe('批量确认框', () => {
     expect(getPicks()).toEqual([])
   })
 
+  it('不交收缩钩子那一面（归档档页脚）：全成功也不动宿主侧栏的选中集', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids),
+    )
+    togglePick({ sessionId: 'x', title: 'X' })
+    togglePick({ sessionId: 'y', title: 'Y' })
+    requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(applyOutcomes).toHaveBeenCalledWith('delete', ['a'])
+    expect(getPicks().map((item) => item.sessionId)).toEqual(['x', 'y'])
+  })
+
+  it('不交收缩钩子那一面：部分失败也只收框自己的名单，宿主侧栏勾选原样留着', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b']),
+    )
+    togglePick({ sessionId: 'x', title: 'X' })
+    requestDeleteBatch([
+      { sessionId: 'a', title: 'A' },
+      { sessionId: 'b', title: 'B' },
+    ])
+    const view = renderHook(() => useDeleteBatchRequest())
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
+    await waitFor(() => expect(view.result.current?.items.map((item) => item.sessionId)).toEqual(['b']))
+    expect(getPicks().map((item) => item.sessionId)).toEqual(['x'])
+  })
+
   it('部分失败：原文落它自己那行、按钮变「重试这 1 条」、重试只发失败 id', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
       action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b']),
     )
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
-    requestDeleteBatch()
+    requestDeleteBatch(getPicks(), shrinkPicksToFailures)
     render(
       <>
         <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
@@ -210,7 +240,7 @@ describe('批量确认框', () => {
       action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids),
     )
     togglePick({ sessionId: 'a', title: 'A' })
-    requestDeleteBatch()
+    requestDeleteBatch(getPicks(), shrinkPicksToFailures)
     const revision = renderHook(() => useTrashRevision())
     render(
       <>

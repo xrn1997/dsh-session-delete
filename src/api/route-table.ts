@@ -21,10 +21,13 @@ import { routeError } from '../verbs/errors.js'
 import { reportOrphans, loadOrphanGroups } from '../verbs/orphan-subagents.js'
 import { createTrashScope } from '../verbs/trash-scope.js'
 import { readTrashDetail } from '../trash/detail.js'
+import { readArchiveDetail } from '../trash/archive-detail.js'
 import { cleanOrphanImageAttachments } from '../trash/attachments.js'
+import { cleanProjectionCacheOrphans, reportProjectionCacheOrphans } from '../trash/projection-cache.js'
 import { readAttachmentResponse } from './attachment.js'
 import { reportAttachmentOrphans } from './attachment-orphans.js'
 import { assembleTrashRows } from './trash-rows.js'
+import { assembleArchiveRows } from './archive-rows.js'
 
 /** 请求体：`json` 才读下来（GET 一律不读；读两遍会把流消费掉）。 */
 export type BodyKind = 'none' | 'json'
@@ -37,6 +40,7 @@ const BODY_KIND = {
   config: 'json',
   entry: 'json',
   apply: 'json',
+  sessionId: 'json',
 } as const satisfies Record<RouteBody, BodyKind>
 
 /** 读的是 wire 那一格（`ROUTES.x.body`），本表不写第二份：无字段与查询串段不读；
@@ -65,7 +69,7 @@ export interface RouteRead {
   rows(): Promise<readonly TrashEntry[]>
 }
 
-/** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测五段拿基础面，`attachment` 段另多一条
+/** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测各段拿基础面，`attachment` 段另多一条
  *  宿主 `attachments` 读面，两个删盘段多删除能力，`/apply` 是唯一拿全量面的行，`/config` 只多
  *  configEditor + entry 两件（段的 run 里长出超面调用就是编译错；dispatch 也只按这一格注入，
  *  运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
@@ -91,7 +95,7 @@ interface BaseRouteSpec<S extends RouteSlice> {
   readonly fetchGate?: 'same-origin'
 }
 
-/** JSON 段：处理函数拿请求体与读面；`query` 不在这里（十行里只有二进制段需要查询串）。 */
+/** JSON 段：处理函数拿请求体与读面；`query` 不在这里（段名表里只有二进制段需要查询串）。 */
 export interface JsonRouteSpec<S extends RouteSlice = RouteSlice> extends BaseRouteSpec<S> {
   readonly response: 'json'
   /** 声明成函数属性而不是方法：方法签名是双变的，显式标注更宽的 deps 能绕过切片闸；属性按逆变校验。 */
@@ -106,7 +110,7 @@ export interface BinaryRouteSpec<S extends RouteSlice = RouteSlice> extends Base
 
 export type RouteSpec<S extends RouteSlice = RouteSlice> = JsonRouteSpec<S> | BinaryRouteSpec<S>
 
-/** 十行的并集（表的值类型）：每行由自己的 `slice` 与 `response` 字面量定型，`run` 的 deps 面随之收窄。 */
+/** 各行的并集（表的值类型）：每行由自己的 `slice` 与 `response` 字面量定型，`run` 的 deps 面随之收窄。 */
 export type AnyRouteSpec = { [S in RouteSlice]: RouteSpec<S> }[RouteSlice]
 
 /** 必填的非空字符串字段（缺、空串、类型不对都是**同一句话**：说清是哪个字段）。 */
@@ -128,8 +132,18 @@ function optionalCursor(body: JsonBody): number | undefined {
   return value
 }
 
+/** 归档详情的可选只读根：缺省 = 只按目标自己的归档状态；给了必须是非空字符串。 */
+function optionalRootSessionId(body: JsonBody): string | undefined {
+  const value = body?.[PARAMS.rootSessionId]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || value === '') {
+    throw routeError('bad-request', 400, `请求体字段 ${PARAMS.rootSessionId} 需是非空字符串`)
+  }
+  return value
+}
+
 /**
- * `/apply` 的五个动作与各自的**静态纯度**。一张表三个用途：动作名单由键派生，纯度从同一格读，
+ * `/apply` 的六个动作与各自的**静态纯度**。一张表三个用途：动作名单由键派生，纯度从同一格读，
  * 唯一识别器（`actionOf`）也只认这些键——新增动作必须同时给出纯度，漏了编译不过；
  * 新加一个纯读动作也不会再静默落进 `chained`。
  */
@@ -139,6 +153,7 @@ const APPLY_ACTION_TABLE = {
   purge: 'chained',
   count: 'pure',
   'orphan-clean': 'chained',
+  unarchive: 'chained',
 } satisfies Record<ApplyAction, 'pure' | 'chained'>
 
 export const APPLY_ACTIONS = Object.keys(APPLY_ACTION_TABLE) as readonly ApplyAction[]
@@ -173,7 +188,7 @@ function requireIdArray(body: JsonBody): string[] {
 }
 
 /**
- * 十个段名各一行。`Record<段名, AnyRouteSpec>` 是闸：`wire.ts` 加了段名而这里没加，编译不过；
+ * 段名表逐行。`Record<段名, AnyRouteSpec>` 是闸：`wire.ts` 加了段名而这里没加，编译不过；
  * 每行的 `slice` 又把该行的 `run` 钉在自己那一格 deps 上（ADR-0032）。
  */
 export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
@@ -248,6 +263,29 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
     // 不读清册（read: none）——孤儿附件与回收站行无关，`AttachmentCleanupWire` 原样回执。
     run: async (deps) => cleanOrphanImageAttachments(deps),
   },
+  [ROUTES.projectionOrphans.path]: {
+    slice: 'core',
+    method: ROUTES.projectionOrphans.method,
+    body: bodyOf(ROUTES.projectionOrphans),
+    purity: 'pure',
+    read: 'raw',
+    response: 'json',
+    // 纯读：扫投影缓存记录（`session_projcache` 的键集）−（语料/持久化 ∪ 清册 raw 行 ∪ 回收站目录）。
+    // **不动任何一个字节**；语料或缓存读面读不出 ⇒ 处理函数抛 io，不折成 0 条。
+    run: async (deps, _body, read) => reportProjectionCacheOrphans(deps, await read.rows()),
+  },
+  [ROUTES.projectionClean.path]: {
+    slice: 'removal',
+    method: ROUTES.projectionClean.method,
+    body: bodyOf(ROUTES.projectionClean),
+    purity: 'chained',
+    read: 'raw',
+    response: 'json',
+    // 写动作：按路由交来的 raw 清册行 + 回收站目录现扫（不对账、不改写清册；幽灵行也是保护面），
+    // 最后经宿主 storage domain 删记录。必须排在到达序链上，不能与删除/清空交错；
+    // 报告与清理共用同一条判据，清理不信任旧报告。
+    run: async (deps, _body, read) => cleanProjectionCacheOrphans(deps, await read.rows()),
+  },
   [ROUTES.orphans.path]: {
     slice: 'core',
     method: ROUTES.orphans.method,
@@ -273,8 +311,9 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
     read: 'none',
     response: 'json',
     // `count` 不碰清册也不动文件（它问的是**还在盘上**的会话），和详情一样走豁免；
-    // 其余四个都是写动作（`delete` / `restore` / `purge` / `orphan-clean`）——前三个动清册，
-    // `orphan-clean` 先对账、再摘归档/账本并删盘上那些没有清册行的目录——都必须排在链上。
+    // 其余五个都是写动作（`delete` / `restore` / `purge` / `orphan-clean` / `unarchive`）——前三个动清册，
+    // `orphan-clean` 先对账、再摘归档/账本并删盘上那些没有清册行的目录，`unarchive` 写 registry 归档集
+    // ——都必须排在链上。
     // 写动词的读面归动词自己（谁写谁读），路由只在读动作上选面。
     run: async (deps, body) => applyActions(deps, requireAction(body), requireIdArray(body)),
   },
@@ -309,6 +348,35 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = {
       readTrashDetail({ fs: deps.fs, rows: () => read.rows(), home: deps.home })(
         requireString(body, PARAMS.entryId),
         optionalCursor(body),
+      ),
+  },
+  [ROUTES.archiveList.path]: {
+    slice: 'core',
+    method: ROUTES.archiveList.method,
+    body: bodyOf(ROUTES.archiveList),
+    purity: 'pure',
+    read: 'none',
+    response: 'json',
+    // 纯读：归档集 ∩ 语料一次算好（标题/label/大小/最后活动的口径住 `api/archive-rows.ts`）。
+    // 不读清册、不进链；`sessionQuery` 缺席由装配层折成 `ArchiveListWire` 的 `{available:false}`。
+    run: async (deps) => assembleArchiveRows(deps),
+  },
+  [ROUTES.archiveDetail.path]: {
+    slice: 'core',
+    method: ROUTES.archiveDetail.method,
+    body: bodyOf(ROUTES.archiveDetail),
+    purity: 'pure',
+    read: 'none',
+    response: 'json',
+    // 读单条归档详情：寻址只认 `sessionId`（红线：路径字段不过线）；目标自己已归档，
+    // 或目标是可选 `rootSessionId` 那条已归档会话的 subagent 闭包成员。
+    // 栅栏与 `/detail` 同一套（`requireString` + `optionalCursor`），外加 `optionalRootSessionId`；
+    // 正文折叠复用 `DetailFold`。
+    run: async (deps, body) =>
+      readArchiveDetail(deps)(
+        requireString(body, PARAMS.sessionId),
+        optionalCursor(body),
+        optionalRootSessionId(body),
       ),
   },
 }

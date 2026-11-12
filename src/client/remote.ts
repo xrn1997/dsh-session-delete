@@ -8,12 +8,12 @@
  *   段名或方法的第二份字面量，请求字段只由上面 interface 的签名决定（`body` 那一格是给 Node 半决定
  *   「要不要预读 JSON」的，见 `src/api/route-table.ts`）。取数地址（官方 `/api` 前缀 + 文档挂载点）归
  *   `src/client/api-base.ts`（根部署下与旧版逐字相同）。
- * - 十段注册在宿主 `connection.fetch.register` 上，鉴权归宿主 `/api` bridge（ADR-0033）；
+ * - 全部段名注册在宿主 `connection.fetch.register` 上，鉴权归宿主 `/api` bridge（ADR-0033）；
  *   没有旧前缀 fallback——支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`。
  *   官方 remote.<namespace> 仍不可用（第三方拿不到 Typert 描述符的动态发现挂载点）。
  * - 写动作统一走 apply；`attachment` 是唯一二进制段，由 `src/client/attachment-view.tsx` 经同一投影
  *   拼地址，不经过本文件的 JSON 通道；`attachment-orphans`（纯读）与 `attachment-clean`（聚合写）是
- *   孤儿附件的两段。
+ *   孤儿附件的两段，`projection-orphans`（纯读）与 `projection-clean`（聚合写）是投影缓存的两段。
  * - 失败在线上是 {code,message,details?} 普通对象；本通道把它原样当数据交回，既不补标记位也不抛
  *   （标记位判别 isDSHRemoteError 的家在 src/shared/wire.ts，读它的是 Node 半），这里不 import 任何宿主客户端包。
  */
@@ -24,9 +24,13 @@ import {
   type ApplyAction,
   type ApplyOutcome,
   type ApplyValueByAction,
+  type ArchiveDetailWire,
+  type ArchiveListWire,
   type AttachmentCleanupWire,
   type AttachmentOrphanReportWire,
   type OrphanReportWire,
+  type ProjectionCacheCleanupWire,
+  type ProjectionCacheOrphanReportWire,
   type PurgeStatsWire,
   type RemoteFailure,
   type SessionDeleteConfigWire,
@@ -55,6 +59,13 @@ export type PurgeResultLike = PurgeStatsWire
  * 它们的清册事实只能随详情过线（issue #7；单级判据现由 ADR-0055 的「沿用」节承接）。
  */
 export type TrashDetailLike = TrashDetailWire
+
+/** 归档清单（`ArchiveListWire`）：形状的家同在 `shared/wire.ts`，这里只是别名。 */
+export type ArchiveListLike = ArchiveListWire
+
+/** 归档单条详情（`ArchiveDetailWire`）：基座 + sessionId，没有清册身份格（`entryId`）；
+ *  子会话段是**只读投影**（宿主闭包 + 四路读数），与回收站那份不是同一来源。 */
+export type ArchiveDetailLike = ArchiveDetailWire
 
 /* 信封（`RemoteResult`）与失败形状（`RemoteFailure`）住在 `../shared/wire.js`——两半的共同契约只有
  * 那一份家。浏览器半**不补标记位、也不抛失败**：信封原样当数据交回，所以这里没有「异常 → 失败面」
@@ -88,7 +99,17 @@ export interface SessionDeleteRemote {
   scanAttachmentOrphans(): Promise<RemoteOutcome<AttachmentOrphanReportWire>>
   /** 聚合写：只删上一条报告那一刻无引用的图片对象，回 `AttachmentCleanupWire`。 */
   cleanAttachmentOrphans(): Promise<RemoteOutcome<AttachmentCleanupWire>>
+  /** 纯读：宿主 `session_projcache` 里找不到会话痕迹的记录条数（判据住 `src/trash/projection-cache.ts`）。
+   *  读不出是失败，调用方不许把它折成"零条残留"。 */
+  scanProjectionCacheOrphans(): Promise<RemoteOutcome<ProjectionCacheOrphanReportWire>>
+  /** 聚合写：现扫一遍，只删这一刻仍找不到会话痕迹的投影缓存记录，回 `ProjectionCacheCleanupWire`。 */
+  cleanProjectionCacheOrphans(): Promise<RemoteOutcome<ProjectionCacheCleanupWire>>
   detail(entryId: string, before?: number): Promise<RemoteOutcome<TrashDetailLike>>
+  /** 纯读：归档清单。`{ available: false }` 是成功信封里的显式「语料不可见」，不是失败。 */
+  archiveList(): Promise<RemoteOutcome<ArchiveListLike>>
+  /** 纯读：归档单条详情（目标自己已归档，或是 `rootSessionId` 那条已归档会话的 subagent
+   *  闭包成员；寻址红线：只传 id）。 */
+  archiveDetail(sessionId: string, before?: number, rootSessionId?: string): Promise<RemoteOutcome<ArchiveDetailLike>>
   /** 一组 id 上的同一个动作。顶层 `ok:false` 只表示**整次调用**没办成（路由自检、栅栏之外）；
    *  单条动作的成败住在 `ApplyOutcome` 里——这是批量接口的判据，别在信封层找它。 */
   applyOutcomes(action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>>
@@ -180,9 +201,17 @@ export function createHttpRemote(): SessionDeleteRemote {
     scanOrphans: () => requestOutcome<OrphanReportWire>(ROUTES.orphans, {}),
     scanAttachmentOrphans: () => requestOutcome<AttachmentOrphanReportWire>(ROUTES.attachmentOrphans, {}),
     cleanAttachmentOrphans: () => requestOutcome<AttachmentCleanupWire>(ROUTES.attachmentClean, {}),
+    scanProjectionCacheOrphans: () => requestOutcome<ProjectionCacheOrphanReportWire>(ROUTES.projectionOrphans, {}),
+    cleanProjectionCacheOrphans: () => requestOutcome<ProjectionCacheCleanupWire>(ROUTES.projectionClean, {}),
     detail: (entryId, before) => requestOutcome<TrashDetailLike>(ROUTES.detail, {
       [PARAMS.entryId]: entryId,
       ...(before === undefined ? {} : { [PARAMS.before]: before }),
+    }),
+    archiveList: () => requestOutcome<ArchiveListLike>(ROUTES.archiveList, {}),
+    archiveDetail: (sessionId, before, rootSessionId) => requestOutcome<ArchiveDetailLike>(ROUTES.archiveDetail, {
+      [PARAMS.sessionId]: sessionId,
+      ...(before === undefined ? {} : { [PARAMS.before]: before }),
+      ...(rootSessionId === undefined ? {} : { [PARAMS.rootSessionId]: rootSessionId }),
     }),
     applyOutcomes: (action, ids) => requestOutcome<ApplyOutcome[]>(ROUTES.apply, {
       [PARAMS.action]: action,

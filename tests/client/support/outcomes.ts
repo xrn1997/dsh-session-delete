@@ -41,6 +41,8 @@ export const NEUTRAL_VALUE: ApplyValueByAction = {
   purge: { removed: 0, freedBytes: 0 },
   count: 0,
   'orphan-clean': { removed: 0, freedBytes: 0 },
+  // 「这条 id 被处理成功 = 1」是 unarchive 的完整成功语义（宿主 unarchiveSession 返回 void）。
+  unarchive: 1,
 }
 
 /** 一条成功的逐条回执（`ok` 支）。`ApplyOutcome` 的判别联合只在这一处与 `failed` 里各断言一次。 */

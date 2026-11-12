@@ -5,7 +5,7 @@
 // 请求仍被装成 `Request` 交给注册的 exact Fetch 路由，响应原样写回。
 //
 // 钉住的是**契约**，不是实现细节：
-//  ① 十个段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
+//  ① 各段名各自的方法 + 形状（GET list、GET ping、POST detail、POST apply＝一组 id 一个动作、
 //    POST empty＝清空、GET orphans＝无主子会话扫描、GET attachment＝附件原始字节、
 //    GET attachment-orphans＝孤儿附件报告、POST attachment-clean＝孤儿附件清理、
 //    POST config＝空体读 / 带字段写三只可调项）；
@@ -45,7 +45,7 @@ const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEnt
   trashEntry(entryIdOf(sessionDirName), { sessionId: sessionDirName, ...over })
 
 /**
- * 十个段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
+ * 各段名的假依赖：动词要什么给什么——**真动词 + 真清册 seam**，只有宿主与文件系统是替身
  * （`tests/support/fake-deps.ts` 里那第二个 adapter）。
  * 替身暴露出来是为了让每条用例只翻自己那一格，而不必重建整副依赖，也不必强转到 `DeleteDeps`。
  *
@@ -1098,8 +1098,8 @@ describe('路由层 · POST /apply（一组 id 上的同一个动作）', () => 
 // 扫描是**纯读**（不占到达序链、一个字都不动），清理是**写动作**（上链，且点之前先对账）。
 describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2026-10-19）', () => {
   const corpus = () => [
-    { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--p--', subagent: true },
-    { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--p--', subagent: true },
+    { sessionId: 'session-root', parentSessionId: 'session-gone', projectDir: '--p--', subagent: true, createdAt: 0 },
+    { sessionId: 'session-kid', parentSessionId: 'session-root', projectDir: '--p--', subagent: true, createdAt: 0 },
   ]
 
   it('GET /orphans 是纯读：交回闭包总数、字节、项目分组；不删任何东西', async () => {
@@ -1916,5 +1916,159 @@ describe('路由层 · 可调项（/config 空体读、带字段写）', () => {
     expect(status).toBe(200)
     expect(body).toMatchObject({ ok: false, error: { code: 'sessiondelete/io' } })
     expect((body.error as { message: string }).message).toContain('被更高层覆盖')
+  })
+})
+
+describe('路由层 · GET /archive-list 与 POST /archive-detail（归档档两段）', () => {
+  it('GET /archive-list 空集：成功信封里 available:true、rows 空', async () => {
+    const { deps, host } = makeDeps()
+    host.archivedSessionIds.mockResolvedValue([])
+    host.listSessions.mockResolvedValue({ available: true, value: [] })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.archiveList.path)
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, value: { available: true, rows: [], totalBytes: 0, missingSizeCount: 0 } })
+  })
+
+  it('GET /archive-list 有行：交集、updatedAtSource 与缺席大小都按装配口径', async () => {
+    const { deps, host } = makeDeps()
+    host.archivedSessionIds.mockResolvedValue(['session-a'])
+    host.listSessions.mockResolvedValue({
+      available: true,
+      value: [{ sessionId: 'session-a', projectDir: '--p--', subagent: false, createdAt: 42 }],
+    })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.archiveList.path)
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      ok: true,
+      value: {
+        available: true,
+        rows: [{ sessionId: 'session-a', updatedAt: 42, updatedAtSource: 'created' }],
+        totalBytes: 0,
+        missingSizeCount: 1,
+      },
+    })
+  })
+
+  it('POST /archive-detail 成功：信封值就是 ArchiveDetailWire（header 合成上屏）', async () => {
+    const { deps, host } = makeDeps()
+    host.isArchived.mockResolvedValue(true)
+    host.readSession.mockResolvedValue({
+      session: { createdAt: 10, cwd: 'C:/p' },
+      events: [{ type: 'user/message', time: 2, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '你好' }] } }],
+    })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.archiveDetail.path, {
+      method: 'POST',
+      body: { [PARAMS.sessionId]: 'session-a' },
+    })
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, value: { sessionId: 'session-a', archived: true, cwd: 'C:/p', createdAt: 10 } })
+  })
+
+  it('POST /archive-detail 未归档孩子：已归档根闭包内 ⇒ 只读放行', async () => {
+    const { deps, host } = makeDeps()
+    host.isArchived.mockImplementation(async (sessionId: string) => sessionId === 'session-a')
+    host.subagentMembersOf.mockResolvedValue({
+      available: true,
+      value: { 'session-a': [{ sessionId: 'kid-1', projectDir: '--p--' }] },
+    })
+    host.readSession.mockResolvedValue({ session: { createdAt: 10 }, events: [] })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.archiveDetail.path, {
+      method: 'POST',
+      body: { [PARAMS.sessionId]: 'kid-1', [PARAMS.rootSessionId]: 'session-a' },
+    })
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ ok: true, value: { sessionId: 'kid-1', archived: false } })
+    expect(host.readSession).toHaveBeenCalledWith('kid-1')
+  })
+
+  it('POST /archive-detail rootSessionId 形状不对 ⇒ 400', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    for (const payload of [
+      { [PARAMS.sessionId]: 'kid-1', [PARAMS.rootSessionId]: '' },
+      { [PARAMS.sessionId]: 'kid-1', [PARAMS.rootSessionId]: 7 },
+    ]) {
+      const { status, body } = await call(base, ROUTES.archiveDetail.path, { method: 'POST', body: payload })
+      expect(status).toBe(400)
+      expect(body.ok).toBe(false)
+      expect((body.error as { message: string }).message).toContain(PARAMS.rootSessionId)
+    }
+  })
+
+  it('POST /archive-detail 不在归档集 ⇒ not-found（不是 io、不读正文）', async () => {
+    const { deps, host } = makeDeps()
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.archiveDetail.path, {
+      method: 'POST',
+      body: { [PARAMS.sessionId]: 'session-ghost' },
+    })
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    expect((body.error as { code: string }).code).toBe('sessiondelete/not-found')
+    expect(host.readSession).not.toHaveBeenCalled()
+  })
+
+  it('POST /archive-detail 缺 sessionId / 空串 ⇒ 400（请求自检，与 /detail 同栅栏）', async () => {
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    for (const payload of [{}, { [PARAMS.sessionId]: '' }]) {
+      const { status, body } = await call(base, ROUTES.archiveDetail.path, { method: 'POST', body: payload })
+      expect(status).toBe(400)
+      expect(body.ok).toBe(false)
+      expect((body.error as { message: string }).message).toContain(PARAMS.sessionId)
+    }
+  })
+})
+
+describe('路由层 · 孤儿投影缓存（GET /projection-orphans、POST /projection-clean）', () => {
+  const live = { sessionId: 'session-live', projectDir: '--p--', subagent: false }
+
+  it('GET /projection-orphans：只报没有会话痕迹的缓存记录', async () => {
+    const { deps, host } = makeDeps()
+    host.listSessions.mockResolvedValue({ available: true, value: [live] })
+    host.projectionCacheIds.mockResolvedValue({ available: true, value: ['session-live', 'session-orphan'] })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.projectionOrphans.path)
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { count: 1 } })
+  })
+
+  it('GET /projection-orphans：语料缺席 ⇒ 200 + sessiondelete/io（不冒充空报告）', async () => {
+    const { deps, host } = makeDeps()
+    host.listSessions.mockResolvedValue({ available: false })
+    host.projectionCacheIds.mockResolvedValue({ available: true, value: ['session-orphan'] })
+    const base = await start(deps)
+    const failure = await failureOf(base, ROUTES.projectionOrphans.path)
+    expect(failure.status).toBe(200)
+    expect(failure.code).toBe('sessiondelete/io')
+  })
+
+  it('POST /projection-clean：删掉孤儿并按回执报 removed/failed', async () => {
+    const { deps, host } = makeDeps()
+    host.listSessions.mockResolvedValue({ available: true, value: [] })
+    host.projectionCacheIds.mockResolvedValue({ available: true, value: ['session-orphan'] })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.projectionClean.path, { method: 'POST' })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { removed: 1, failed: 0 } })
+    expect(host.dropProjectionCache).toHaveBeenCalledWith(['session-orphan'])
+  })
+
+  it('POST /projection-clean 的 raw 清册行保护幽灵行：目录不在盘上也不删它的缓存', async () => {
+    // `ledger.list()` 会把「行在、目录不在」的幽灵行摘掉；`/projection-clean` 故意用 raw 行。
+    // 这条用例把清册行留下、目录清空：若路由误走真相读，缓存就会被当作孤儿删掉。
+    const { deps, host, fs } = makeDeps({ seed: [entry('session-ghost')] })
+    fs.listDirs.mockResolvedValue([])
+    host.listSessions.mockResolvedValue({ available: true, value: [] })
+    host.projectionCacheIds.mockResolvedValue({ available: true, value: ['session-ghost'] })
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.projectionClean.path, { method: 'POST' })
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { removed: 0, failed: 0 } })
+    expect(host.dropProjectionCache).not.toHaveBeenCalled()
   })
 })

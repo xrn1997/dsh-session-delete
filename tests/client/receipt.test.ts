@@ -165,6 +165,20 @@ describe('summarizeReceipt', () => {
     expect(summary.attachmentCleanup).toBeUndefined()
   })
 
+  it('RECEIPT_SHAPE 认得 unarchive：not-found 是失败、无附件读数、没有落地 id', () => {
+    const receipt = readReceipt('unarchive', ['a', 'b'], [
+      { id: 'a', action: 'unarchive', ok: true, value: 1 },
+      {
+        id: 'b', action: 'unarchive', ok: false,
+        error: { code: SESSION_DELETE_CODES['not-found'], message: '不在了' },
+      },
+    ])
+    expect(receipt.verdicts.map((v) => v.kind)).toEqual(['ok', 'failed'])
+    const { summary } = summarizeReceipt(receipt)
+    expect(summary.landedIds).toEqual([])
+    expect(summary.attachmentCleanup).toBeUndefined()
+  })
+
   it('purge 回执里的附件统计聚合成摘要；跳过与失败分开保留', () => {
     const outcomes: ApplyOutcome[] = [{
       id: 'e1', action: 'purge', ok: true,
@@ -266,5 +280,17 @@ describe('restoredSessionIds', () => {
   it('没有兜底时 already-gone 不产生 id（撤销横幅原语义）', () => {
     const receipt = readReceipt('restore', ['a'], [restoreGone('a')])
     expect(restoredSessionIds(receipt)).toEqual([])
+  })
+})
+
+describe('landedArchivedIds', () => {
+  it('wasArchived 的落地条目单列（撤销文案据此改口「回到归档」）', () => {
+    const { summary } = summarizeReceipt(readReceipt('delete', ['a', 'b', 'c'], [
+      { id: 'a', action: 'delete', ok: true, value: { ...row('a'), wasArchived: true } },
+      { id: 'b', action: 'delete', ok: true, value: row('b') },
+      failed('c'),
+    ]))
+    expect(summary.landedArchivedIds).toEqual(['a'])
+    expect(summary.landedIds).toEqual(['a', 'b'])
   })
 })

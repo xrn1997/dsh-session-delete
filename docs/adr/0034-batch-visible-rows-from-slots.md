@@ -40,4 +40,4 @@ Status: accepted
 - **每个组件在渲染期各自 `querySelectorAll`**：同帧读数取决于副作用顺序，DOM 变了也不重渲染（ADR-0015 已否）。
 - **给守卫也套一层「官方 API」想象**：当前宿主没有这个 API；先把它记录成受约束偏离，比假装没有 DOM 更诚实。
 
-锚点：`src/client/host-rows.ts`；`src/client/batch-pick.ts`；`src/client/batch-select.tsx`；`src/client/batch-selection-store.ts`；`src/client/batch-bar.tsx`；`src/client/use-trash-selection.ts`；`tests/client/host-rows.test.ts`；`docs/ui-spec.md`；ADR-0015。
+锚点：`src/client/host-rows.ts`；`src/client/batch-pick.ts`；`src/client/batch-select.tsx`；`src/client/batch-selection-store.ts`；`src/client/batch-bar.tsx`；`src/client/use-list-selection.ts`；`tests/client/host-rows.test.ts`；`docs/ui-spec.md`；ADR-0015。

@@ -1,13 +1,14 @@
 /**
- * 插件设置页「维护」卡的手动编排：孤儿会话 + 孤儿附件两段。
+ * 插件设置页「维护」卡的手动编排：孤儿会话 + 孤儿附件 + 投影缓存三段。
  *
  * 状态机本身（报告 / 失败 / 中性提示 / 确认框 / 在飞档位 / 最新票 / 清完必重查）收在
- * `src/client/use-maintenance-section.ts` 的泛型段 module 里，两段各实例化一次；这一层只剩薄 glue：
+ * `src/client/use-maintenance-section.ts` 的泛型段 module 里，三段各实例化一次；这一层只剩薄 glue：
  * 各段自己的远程调用、"没活可干"的判据与回执拼句。三条承重规矩（没有自动扫描 / 挂载只交初始态 /
  * 没有定时器）由段 module 保证，这一层同样不挂 effect。
  *
- * 写动作走既有的两段：孤儿会话是 `/apply` 的 `orphan-clean`（回执判读复用 `receipt.ts` 的读法），
- * 孤儿附件是聚合的 `POST /attachment-clean`（回执就是 `AttachmentCleanupWire` 本身）。
+ * 写动作走既有的三段：孤儿会话是 `/apply` 的 `orphan-clean`（回执判读复用 `receipt.ts` 的读法），
+ * 孤儿附件是聚合的 `POST /attachment-clean`（回执就是 `AttachmentCleanupWire` 本身），
+ * 投影缓存是聚合的 `POST /projection-clean`（回执 `{ removed, failed }`）。
  * 面板的 `useTrashQuery` 与本 hook 互不引用：维护卡是手动面，面板是挂载即读的清单面。
  */
 import type { Translate } from './copy.js'
@@ -19,7 +20,7 @@ import {
   type RemoteOutcome,
   type SessionDeleteRemote,
 } from './remote.js'
-import type { ApplyOutcome } from '../shared/wire.js'
+import type { ApplyOutcome, ProjectionCacheCleanupWire, ProjectionCacheOrphanReportWire } from '../shared/wire.js'
 import { fileSizeText } from './ui/format.js'
 import {
   useMaintenanceSection,
@@ -28,16 +29,19 @@ import {
   type MaintenanceSettlePlan,
 } from './use-maintenance-section.js'
 
-/** 维护卡只需要这四段：两份报告 + 孤儿会话的批量写 + 孤儿附件的聚合写。 */
+/** 维护卡只需要这六段：三份报告 + 孤儿会话的批量写 + 孤儿附件/投影缓存的聚合写。 */
 export type MaintenanceDeps = Pick<
   SessionDeleteRemote,
-  'scanOrphans' | 'applyOutcomes' | 'scanAttachmentOrphans' | 'cleanAttachmentOrphans'
+  | 'scanOrphans' | 'applyOutcomes'
+  | 'scanAttachmentOrphans' | 'cleanAttachmentOrphans'
+  | 'scanProjectionCacheOrphans' | 'cleanProjectionCacheOrphans'
 >
 
 export interface Maintenance {
   /** 孤儿会话段：清理顺带清掉的附件读数在这台状态机的 `secondaryNotice` 上（第二回执）。 */
   readonly orphans: MaintenanceSectionView<OrphanReportWire>
   readonly attachments: MaintenanceSectionView<AttachmentOrphanReportWire>
+  readonly projection: MaintenanceSectionView<ProjectionCacheOrphanReportWire>
 }
 
 /**
@@ -139,5 +143,27 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
     },
   })
 
-  return { orphans, attachments }
+  /* ── 投影缓存段：`GET /projection-orphans` 读 + 聚合的 `POST /projection-clean` 写 ──
+   *  清理只删「扫描那一刻仍无会话痕迹」的记录；服务端清完重查，UI 不自己猜剩余量。 */
+  const projection = useMaintenanceSection<ProjectionCacheOrphanReportWire, ProjectionCacheCleanupWire>({
+    scan: async () => scanText(
+      await deps.scanProjectionCacheOrphans(),
+      (message) => t('maintenance.projection.scanFailed', { message }),
+    ),
+    clean: (report) => report.count === 0 ? null : deps.cleanProjectionCacheOrphans(),
+    afterClean: (outcome) => {
+      if (!outcome.ok) {
+        return { plan: { failure: t('maintenance.projection.cleanError', { message: outcome.failure.message }) } }
+      }
+      const { removed, failed } = outcome.value
+      if (failed > 0) {
+        return { plan: { failure: t('maintenance.projection.cleanFailed', { count: failed, removed }) } }
+      }
+      return removed > 0
+        ? { preset: { count: 0 }, plan: { notice: t('maintenance.projection.cleaned', { count: removed }) } }
+        : { preset: { count: 0 } }
+    },
+  })
+
+  return { orphans, attachments, projection }
 }

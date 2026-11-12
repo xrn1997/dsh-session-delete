@@ -61,7 +61,7 @@ describe('runWrite', () => {
     expect([...outcome.failures.entries()]).toEqual([['b', '删不动']])
     expect(publishUndo).toHaveBeenCalledTimes(1)
     // settlement 算好落地条目与请求名单再交座位：座位不再自己读回执。
-    expect(publishUndo).toHaveBeenCalledWith({ entryIds: ['entry-a'], n: 1 })
+    expect(publishUndo).toHaveBeenCalledWith({ entryIds: ['entry-a'], n: 1, archived: false })
     expect(order).toEqual(['settle', 'refresh'])
   })
 
@@ -102,7 +102,7 @@ describe('runWrite', () => {
     })
     expect(outcome.ok && outcome.summary.anySuccess).toBe(true)
     // `b` 被同批前一条带走（幂等 null）：算条数、不算撤销落点。
-    expect(publishUndo).toHaveBeenCalledWith({ entryIds: ['entry-a'], n: 2 })
+    expect(publishUndo).toHaveBeenCalledWith({ entryIds: ['entry-a'], n: 2, archived: false })
   })
 
   it('全部被同批前一条带走：不发布没有落点的撤销横幅', async () => {

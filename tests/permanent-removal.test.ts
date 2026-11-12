@@ -50,6 +50,8 @@ function world(over: {
   evicted?: EvictionOutcome
   logMethods?: readonly string[]
   format?: (method: string, args: readonly unknown[]) => string
+  /** 投影缓存删除替身：缺省按名单长度成功；要模拟失败就给抛错的函数。 */
+  dropProjectionCache?: (ids: readonly string[]) => number | Promise<number>
 }) {
   const sizes = over.sizes ?? {}
   const absent = new Set(over.missing ?? [])
@@ -63,6 +65,7 @@ function world(over: {
     logMethods: over.logMethods ?? [],
     // 这一格的类型面不许可写 undefined，而假件那边只按值判「有没有自定义写法」⇒ 缺省就不建键
     ...(over.format === undefined ? {} : { format: over.format }),
+    ...(over.dropProjectionCache === undefined ? {} : { dropProjectionCache: over.dropProjectionCache }),
     fs: { exists: (p) => !absent.has(p), size: 0 },
   })
   made.fs.sizeOfDir.mockImplementation(async (p: string) => sizes[p] ?? 0)
@@ -1284,6 +1287,83 @@ describe('executeRemoval：执行器', () => {
     expect(result).toEqual({ removed: 0, freedBytes: 0, attachments: NOTHING_CLEANED })
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.unarchive).not.toHaveBeenCalled()
+  })
+
+  it('逐会话删缓存：只删这一趟真删掉的会话，不按计划名单批量', async () => {
+    const root = entry('session-p')
+    const kid = entry('session-k', { parentEntryId: root.id })
+    const x = member('session-x')
+    const y = member('session-y')
+    const sizes = {
+      [trashDirOf(root.id, HOME)]: 100,
+      [trashDirOf(kid.id, HOME)]: 40,
+      [sessionDirOf('--p--', 'session-x', HOME)]: 20,
+      [sessionDirOf('--p--', 'session-y', HOME)]: 10,
+    }
+    const { deps } = execWorld({ rows: [root, kid], sizes, members: { 'session-p': [x, y] } })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
+
+    await executeRemoval(deps, plan)
+
+    // 两代写法都算同一个会话：原写法 + bare 写法一起带过去（删除面自己去重）。
+    expect(deps.host.dropProjectionCache.mock.calls.map(([ids]) => ids)).toEqual([
+      ['session-p', 'p'], ['session-k', 'k'], ['session-x', 'x'], ['session-y', 'y'],
+    ])
+  })
+
+  it('目录已不在的幽灵行：清册行摘掉后同样删它的缓存', async () => {
+    const root = entry('session-p')
+    const gone = entry('session-g', { parentEntryId: root.id })
+    const rootDir = trashDirOf(root.id, HOME)
+    const goneDir = trashDirOf(gone.id, HOME)
+    const { deps } = execWorld({ rows: [root, gone], sizes: { [rootDir]: 100 }, missing: [goneDir] })
+    const plan = await planTrashRemoval(deps, [root, gone], [root, gone])
+
+    await executeRemoval(deps, plan)
+
+    expect(deps.host.dropProjectionCache.mock.calls.map(([ids]) => ids)).toEqual([['session-p', 'p'], ['session-g', 'g']])
+  })
+
+  it('删到一半失败：只删已经删成的那些会话的缓存', async () => {
+    const root = entry('session-p')
+    const kid = entry('session-k', { parentEntryId: root.id })
+    const rootDir = trashDirOf(root.id, HOME)
+    const kidDir = trashDirOf(kid.id, HOME)
+    const { deps } = execWorld({ rows: [root, kid], sizes: { [rootDir]: 100, [kidDir]: 40 } })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
+    deps.fs.removeDir.mockImplementation(async (p: string) => {
+      if (p === kidDir) throw new Error('boom')
+    })
+
+    await failureOf(executeRemoval(deps, plan))
+
+    expect(deps.host.dropProjectionCache.mock.calls.map(([ids]) => ids)).toEqual([['session-p', 'p']])
+  })
+
+  it('盘上目录本来就不在的成员不删缓存（它不是这一趟从回收站删掉的）', async () => {
+    const { deps } = execWorld({ rows: [], sizes: {}, missing: [sessionDirOf('--p--', 'session-x', HOME)] })
+    const plan = await planOrphanRemoval(deps, [member('session-x')])
+
+    await executeRemoval(deps, plan)
+
+    expect(deps.host.dropProjectionCache).not.toHaveBeenCalled()
+  })
+
+  it('缓存删除失败不影响会话删除（收尾只 warning）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const root = entry('session-p')
+    const { deps } = execWorld({
+      rows: [root],
+      sizes: { [trashDirOf(root.id, HOME)]: 5 },
+      dropProjectionCache: () => { throw new Error('boom') },
+    })
+    const plan = await planTrashRemoval(deps, [root], [root])
+
+    await expect(executeRemoval(deps, plan)).resolves.toEqual({
+      removed: 1, freedBytes: 5, attachments: NOTHING_CLEANED,
+    })
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   })
 })
 

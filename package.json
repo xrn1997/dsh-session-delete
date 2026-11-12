@@ -29,7 +29,11 @@
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
-    "docs/screenshots"
+    "docs/screenshots",
+    "docs/DETAIL.zh.md",
+    "docs/DETAIL.md",
+    "docs/preview.zh.svg",
+    "docs/preview.svg"
   ],
   "engines": {
     "node": ">=24",
@@ -101,7 +105,8 @@
       "0.2.1-rc.2": "compatible",
       "0.2.1-rc.3": "compatible",
       "0.2.1-rc.5": "compatible",
-      "0.2.2-rc.1": "compatible"
+      "0.2.2-rc.1": "compatible",
+      "0.2.2-rc.2": "compatible"
     }
   },
   "publishConfig": {

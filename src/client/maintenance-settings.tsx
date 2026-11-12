@@ -1,7 +1,7 @@
 /**
  * 插件设置页的「维护」卡（ADR-0021）：那张槽位上的两张卡里，本文件只拥有下面这一张。
  *
- * 两段都是**手动**的：检查 → 预览 → 清理，没有挂载即扫、没有定时器。卡片的职责只有呈现：
+ * 三段都是**手动**的：检查 → 预览 → 清理，没有挂载即扫、没有定时器。卡片的职责只有呈现：
  * 状态那一行、检查按钮、以及各段自己的横幅 / 失败 / 提示 / 确认框；读数与动作全归
  * `src/client/use-maintenance.ts`。两张卡的先后与 `summary` 守卫在 `src/client/settings-cards.tsx`。
  *
@@ -9,14 +9,16 @@
  * `settingsCardShell` / `Button` / `Modal` / `fileSizeText`，所以同一张卡放在插件详情页的任意宽度下都成立。
  *
  * 孤儿会话段直接复用 `OrphanMaintenance`（警告条 / 失败 / 中性提示 / 预览确认的既有呈现）；
- * 孤儿附件段是本文件里的 `AttachmentMaintenance`（横幅 + 失败 + 回执 + 缩略图预览与清理确认）。
+ * 孤儿附件段是本文件里的 `AttachmentMaintenance`（横幅 + 失败 + 回执 + 缩略图预览与清理确认）；
+ * 投影缓存段是 `ProjectionMaintenance`（横幅 + 失败 + 回执 + 只按条数确认）。
  */
 import type { ReactElement, ReactNode } from 'react'
-import { AttachmentNotice, AttachmentStrip } from './attachment-view.js'
+import { AttachmentStrip } from './attachment-view.js'
 import { ConfirmDialog } from './confirm-dialog.js'
 import { zhTranslate, type Translate } from './copy.js'
-import type { AttachmentOrphanItemWire, AttachmentOrphanReportWire } from '../shared/wire.js'
+import type { AttachmentOrphanItemWire, AttachmentOrphanReportWire, ProjectionCacheOrphanReportWire } from '../shared/wire.js'
 import { MaintenanceBanner, MaintenanceFailure } from './maintenance-parts.js'
+import { Notice } from './notice.js'
 import { OrphanMaintenance } from './orphan-maintenance.js'
 import { settingsCardShell } from './settings-view.js'
 import { fileSizeText } from './ui/format.js'
@@ -27,14 +29,17 @@ import type { MaintenanceSectionView, MaintenancePhase } from './use-maintenance
 /** 卡片外壳：与「可调项」卡同款，只差本卡的内容节奏。 */
 const CARD_SHELL = settingsCardShell(18)
 
+/** 三段的计数文案键；段壳与状态行共用这一格，别在两处各写一份联合。 */
+type MaintenanceCountKey = 'maintenance.orphans.count' | 'maintenance.attachments.count' | 'maintenance.projection.count'
+
 interface MaintenanceSectionProps {
   /** 给测试与界面规格一个稳定的段名；也方便宿主页调试时看出是哪一段。 */
-  slot: 'maintenance-orphans' | 'maintenance-attachments'
+  slot: 'maintenance-orphans' | 'maintenance-attachments' | 'maintenance-projection'
   title: string
   hint: string
-  /** 这一段的计数（从报告里点名：孤儿会话念组数、附件念件数）；报告不在 = null。 */
+  /** 这一段的计数（从报告里点名：孤儿会话念组数、附件念件数、投影缓存念条数）；报告不在 = null。 */
   count: number | null
-  countKey: 'maintenance.orphans.count' | 'maintenance.attachments.count'
+  countKey: MaintenanceCountKey
   /** 段对象：状态行的在飞档位 / 失败与检查按钮的忙碌都从它取（busy 由段自己给，不再当 prop 传）。 */
   section: Pick<MaintenanceSectionView<unknown>, 'busy' | 'phase' | 'failure'>
   onScan: () => void
@@ -85,7 +90,7 @@ function statusText(input: {
   phase: MaintenancePhase | null
   failure: string | null
   count: number | null
-  countKey: 'maintenance.orphans.count' | 'maintenance.attachments.count'
+  countKey: MaintenanceCountKey
   t: Translate
 }): string {
   if (input.phase === 'cleaning') return input.t('maintenance.cleaning')
@@ -95,6 +100,52 @@ function statusText(input: {
   if (input.count === null) return input.t('maintenance.notScanned')
   if (input.count === 0) return input.t('maintenance.none')
   return input.t(input.countKey, { count: input.count })
+}
+
+/**
+ * 三段共用的正文骨架：横幅（报告 > 0 且在飞时不画）/ 失败块 / 回执行 / 确认框。
+ * 各段只交横幅正文与确认框；`slot` 决定 `data-dsh-session-delete` 的名字，`noticeTone` 决定回执行色调。
+ * 抽这一层是为了让「什么时候画什么」只有一份；正文与危险层级仍归各段。
+ */
+function MaintenanceSectionBody<R extends { count: number }>({
+  section,
+  slot,
+  t,
+  noticeTone = 'warning',
+  banner,
+  confirm,
+}: {
+  section: MaintenanceSectionView<R>
+  slot: string
+  t: Translate
+  noticeTone?: 'warning' | 'success'
+  banner: (report: R) => ReactNode
+  confirm: (report: R) => ReactNode
+}): ReactElement {
+  const { report, failure, notice, confirm: open, busy } = section
+  return (
+    <>
+      {!busy && report !== null && report.count > 0 ? (
+        <MaintenanceBanner slot={`${slot}-banner`} busy={busy} t={t} onOpen={() => section.openPreview()}>
+          {banner(report)}
+        </MaintenanceBanner>
+      ) : null}
+
+      {failure !== null ? (
+        <MaintenanceFailure
+          slot={`${slot}-failure`}
+          message={failure}
+          busy={busy}
+          t={t}
+          onRetry={() => void section.scan()}
+        />
+      ) : null}
+
+      <Notice message={notice} tone={noticeTone} />
+
+      {open && report !== null ? confirm(report) : null}
+    </>
+  )
 }
 
 interface AttachmentMaintenanceProps {
@@ -108,48 +159,29 @@ interface AttachmentMaintenanceProps {
  * 上一趟清理的回执单独一行（已清 / 跳过 / 逐文件失败）。确认框把三条边界说完再动手。
  */
 function AttachmentMaintenance({ section, t }: AttachmentMaintenanceProps): ReactElement {
-  const { report, failure, notice, confirm, busy } = section
   return (
-    <>
-      {!busy && report !== null && report.count > 0 ? (
-        <MaintenanceBanner
-          slot="attachment-banner"
-          busy={busy}
-          t={t}
-          onOpen={() => section.openPreview()}
-        >
-          <div style={{ fontSize: 13, lineHeight: '19px' }}>
-            {t('maintenance.attachments.count', { count: report.count })}
-            {' · '}
-            {fileSizeText(report.totalBytes)}
-          </div>
-        </MaintenanceBanner>
-      ) : null}
-
-      {failure !== null ? (
-        <MaintenanceFailure
-          slot="attachment-failure"
-          message={failure}
-          busy={busy}
-          t={t}
-          onRetry={() => void section.scan()}
-        />
-      ) : null}
-
-      {/* 回执不是检查状态：清单/报告重读读不出来，所以它单独一行、只在上一趟真的清过或跳过时出现。 */}
-      <AttachmentNotice message={notice} />
-
-      {confirm && report !== null ? (
+    <MaintenanceSectionBody
+      section={section}
+      slot="attachment"
+      t={t}
+      banner={(report) => (
+        <div style={{ fontSize: 13, lineHeight: '19px' }}>
+          {t('maintenance.attachments.count', { count: report.count })}
+          {' · '}
+          {fileSizeText(report.totalBytes)}
+        </div>
+      )}
+      confirm={(report) => (
         <AttachmentConfirm
           count={report.count}
           items={report.items}
-          busy={busy}
+          busy={section.busy}
           t={t}
           onCancel={() => section.cancel()}
           onConfirm={() => void section.clean()}
         />
-      ) : null}
-    </>
+      )}
+    />
   )
 }
 
@@ -202,15 +234,82 @@ function AttachmentConfirm({
   )
 }
 
+interface ProjectionMaintenanceProps {
+  /** 段视图：报告只有条数（缓存记录不是本插件的字节读数面）；失败、提示与确认框在同一台状态机上。 */
+  section: MaintenanceSectionView<ProjectionCacheOrphanReportWire>
+  t: Translate
+}
+
+/**
+ * 投影缓存段：报告 >0 时出横幅（条数 + 查看并清理）；检查/清理失败原位摆原文 + 重试；
+ * 上一趟清理的回执单独一行。确认框只清「没有对应会话 / 回收站条目」的派生记录，不动会话本体。
+ */
+function ProjectionMaintenance({ section, t }: ProjectionMaintenanceProps): ReactElement {
+  return (
+    <MaintenanceSectionBody
+      section={section}
+      slot="projection"
+      t={t}
+      noticeTone="success"
+      banner={(report) => (
+        <div style={{ fontSize: 13, lineHeight: '19px' }}>
+          {t('maintenance.projection.found', { count: report.count })}
+        </div>
+      )}
+      confirm={(report) => (
+        <ProjectionConfirm
+          count={report.count}
+          busy={section.busy}
+          t={t}
+          onCancel={() => section.cancel()}
+          onConfirm={() => void section.clean()}
+        />
+      )}
+    />
+  )
+}
+
+/** 投影缓存的确认框：只说清这是派生数据、可重建、不动会话本体；没有逐条预览（id 对用户没有意义）。 */
+function ProjectionConfirm({
+  count,
+  busy,
+  t,
+  onCancel,
+  onConfirm,
+}: {
+  count: number
+  busy: boolean
+  t: Translate
+  onCancel: () => void
+  onConfirm: () => void
+}): ReactElement {
+  return (
+    <ConfirmDialog
+      title={t('maintenance.projection.confirm', { count })}
+      closeLabel={t('common.close')}
+      cancelLabel={t('common.cancel')}
+      confirmLabel={t('maintenance.projection.clean')}
+      busy={busy}
+      onCancel={onCancel}
+      onConfirm={onConfirm}
+    >
+      <p>{t('maintenance.projection.body')}</p>
+      <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
+        {t('maintenance.projection.hint')}
+      </p>
+    </ConfirmDialog>
+  )
+}
+
 export interface MaintenanceSettingsProps {
-  /** 维护四件（读数与动作）；可调项两件由占用者另发给「可调项」卡。 */
+  /** 维护六件（三段读数与动作）；可调项两件由占用者另发给「可调项」卡。 */
   deps: MaintenanceDeps
   /** 文案（缺省 = 内置 zh；宿主 locale 服务缺席时也是它，见 `copy.ts`）。 */
   t?: Translate
 }
 
 export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettingsProps): ReactElement {
-  // 两个段各自一台状态机（busy / 报告 / 提示都从段对象取）；这个 hook 不自动扫描。
+  // 三个段各自一台状态机（busy / 报告 / 提示都从段对象取）；这个 hook 不自动扫描。
   const maintenance = useMaintenance({ deps, t })
   return (
     <div data-dsh-session-delete="maintenance-card" style={CARD_SHELL}>
@@ -228,7 +327,7 @@ export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettin
       >
         <OrphanMaintenance section={maintenance.orphans} t={t} />
         {/* 孤儿会话清理也会顺带清掉会话独占的图片副本：回执那半份读数单独一行，句子与孤儿附件段同一套。 */}
-        <AttachmentNotice message={maintenance.orphans.secondaryNotice} />
+        <Notice message={maintenance.orphans.secondaryNotice} gapBelow />
       </MaintenanceSection>
 
       <MaintenanceSection
@@ -242,6 +341,19 @@ export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettin
         t={t}
       >
         <AttachmentMaintenance section={maintenance.attachments} t={t} />
+      </MaintenanceSection>
+
+      <MaintenanceSection
+        slot="maintenance-projection"
+        title={t('maintenance.projection.title')}
+        hint={t('maintenance.projection.hint')}
+        count={maintenance.projection.report?.count ?? null}
+        countKey="maintenance.projection.count"
+        section={maintenance.projection}
+        onScan={() => void maintenance.projection.scan()}
+        t={t}
+      >
+        <ProjectionMaintenance section={maintenance.projection} t={t} />
       </MaintenanceSection>
     </div>
   )

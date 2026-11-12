@@ -7,6 +7,7 @@
  *
  * 只给测试用（生产没有调用点）：不引入新的运行期状态，只把各 module 已有的复位函数串起来。
  */
+import { resetArchiveStore } from './archive-store.js'
 import { resetBatchConfirm } from './batch-confirm.js'
 import { resetSelection } from './batch-selection-store.js'
 import { resetDeleteRequest } from './delete-confirm.js'
@@ -18,6 +19,7 @@ import { resetUndoNotice } from './undo-notices.js'
 
 export function resetClientState(): void {
   resetTrashStore()
+  resetArchiveStore()
   clearTrashSnapshot()
   resetSelection()
   resetHostRows()

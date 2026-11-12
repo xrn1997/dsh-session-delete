@@ -47,6 +47,7 @@ vi.mock('../../src/client/main-view.js', () => ({
 }))
 
 import type { BusyGate } from '../../src/client/busy-gate.js'
+import { useArchiveRevision } from '../../src/client/archive-store.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { TrashDetailLike } from '../../src/client/remote.js'
 import { readCachedTrashDetail, writeTrashDetail } from '../../src/client/trash-snapshot.js'
@@ -90,7 +91,7 @@ describe('删除座位', () => {
     const failure = await deleteSessionFromMenu(applyDeps(deps.applyOutcomes), { sessionId: 's1', title: '标题' }, g)
     expect(g.around).toHaveBeenCalledTimes(1)
     expect(mocks.invalidateTrash).toHaveBeenCalledTimes(1)
-    expect(mocks.publishUndoNotice).toHaveBeenCalledWith({ entryId: 'e1', title: '标题' })
+    expect(mocks.publishUndoNotice).toHaveBeenCalledWith({ entryId: 'e1', title: '标题', archived: false })
     expect(failure).toEqual({ kind: 'ran', value: null })
   })
 
@@ -102,7 +103,7 @@ describe('删除座位', () => {
       ]),
     }
     const result = await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1', 's2'], gate())
-    expect(mocks.publishUndoBatchNotice).toHaveBeenCalledWith({ entryIds: ['e1'], n: 1 })
+    expect(mocks.publishUndoBatchNotice).toHaveBeenCalledWith({ entryIds: ['e1'], n: 1, archived: false })
     // 这枚闸是新的、没被占 ⇒ 座位一定跑完并交出失败表（被挡回那一路见下面「闸在飞时」那条）。
     expect(result).toEqual({ kind: 'ran', value: new Map([['s2', '删不动']]) })
   })
@@ -314,5 +315,25 @@ describe('座位 · 闸在飞时这一趟不跑', () => {
     expect(mocks.invalidateTrash).not.toHaveBeenCalled()
     expect(mocks.publishUndoNotice).not.toHaveBeenCalled()
     expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
+  })
+})
+
+describe('删除/撤销座位 · 归档档的接线', () => {
+  it('撤销横幅带 archived 事实：已归档会话删除后，文案说「回到归档」', async () => {
+    const g = gate()
+    const archivedRow = { ...trashRow('e1', 's1'), wasArchived: true }
+    const deps = { applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [valueOf('delete', 's1', archivedRow)]) }
+    await deleteSessionFromMenu(applyDeps(deps.applyOutcomes), { sessionId: 's1', title: '标题' }, g)
+    expect(mocks.publishUndoNotice).toHaveBeenCalledWith({ entryId: 'e1', title: '标题', archived: true })
+  })
+
+  it('restoreFromUndo 成功只戳回收站修订；归档档经同一条订阅失效（不做第二路直戳）', async () => {
+    const revision = renderHook(() => useArchiveRevision())
+    const deps = { applyOutcomes: vi.fn(async (): Promise<ApplyOutcome[]> => [valueOf('restore', 'e1', trashRow('e1', 's1'))]) }
+    const notice: UndoNotice = { seq: 1, kind: 'one', entryId: 'e1', title: '标题' }
+    await restoreFromUndo(applyDeps(deps.applyOutcomes), notice, zhTranslate)
+    expect(mocks.invalidateTrash).toHaveBeenCalledTimes(1)
+    // 归档可见性随该修订经 `useArchiveQuery` 的订阅重读；座位不再直戳 archive 修订。
+    expect(revision.result.current).toBe(0)
   })
 })

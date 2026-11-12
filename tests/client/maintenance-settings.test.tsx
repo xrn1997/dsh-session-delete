@@ -34,6 +34,8 @@ const ATT_106: AttachmentOrphanReportWire = {
   totalBytes: 29_150_413,
   items: Array.from({ length: 106 }, (_, i) => orphanItem(i)),
 }
+const PROJ_3 = { count: 3 }
+const PROJ_EMPTY = { count: 0 }
 
 function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
   return createFakeRemote({
@@ -42,6 +44,8 @@ function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
       outcomes(action, ids)),
     scanAttachmentOrphans: vi.fn(async () => ATT_EMPTY),
     cleanAttachmentOrphans: vi.fn(async () => ({ removed: 0, freedBytes: 0, failed: 0 })),
+    scanProjectionCacheOrphans: vi.fn(async () => PROJ_EMPTY),
+    cleanProjectionCacheOrphans: vi.fn(async () => ({ removed: 0, failed: 0 })),
     ...over,
   })
 }
@@ -49,7 +53,7 @@ function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
 function renderCard(over: Partial<FakeRemoteMethods> = {}) {
   const d = deps(over)
   const view = render(<MaintenanceSettings deps={d} />)
-  const section = (slot: 'maintenance-orphans' | 'maintenance-attachments') => {
+  const section = (slot: 'maintenance-orphans' | 'maintenance-attachments' | 'maintenance-projection') => {
     const node = document.querySelector(`[data-dsh-session-delete="${slot}"]`)
     if (node === null) throw new Error(`没有维护段：${slot}`)
     return node as HTMLElement
@@ -58,15 +62,17 @@ function renderCard(over: Partial<FakeRemoteMethods> = {}) {
 }
 
 describe('维护卡 · 初始态', () => {
-  it('两个维护段都从「尚未检查」起，挂载不发请求', () => {
+  it('三个维护段都从「尚未检查」起，挂载不发请求', () => {
     const { d, section } = renderCard()
     expect(screen.getByText('维护')).toBeInTheDocument()
     expect(within(section('maintenance-orphans')).getByText('孤儿会话')).toBeInTheDocument()
     expect(within(section('maintenance-attachments')).getByText('孤儿附件')).toBeInTheDocument()
-    // 两段各一枚状态；不是一条整卡状态。
-    expect(screen.getAllByText('尚未检查')).toHaveLength(2)
+    expect(within(section('maintenance-projection')).getByText('投影缓存')).toBeInTheDocument()
+    // 三段各一枚状态；不是一条整卡状态。
+    expect(screen.getAllByText('尚未检查')).toHaveLength(3)
     expect(d.scanOrphans).not.toHaveBeenCalled()
     expect(d.scanAttachmentOrphans).not.toHaveBeenCalled()
+    expect(d.scanProjectionCacheOrphans).not.toHaveBeenCalled()
   })
 
   it('「检查」在飞时状态是「检查中…」、按钮按住；落地 0 条显示「没有发现」', async () => {
@@ -286,5 +292,66 @@ describe('维护卡 · 孤儿附件', () => {
     expect(await within(attachments).findByText('附件清理失败：盘上忙')).toBeInTheDocument()
     expect(within(attachments).getByText('检查失败')).toBeInTheDocument()
     expect(within(attachments).queryByText('尚未检查')).not.toBeInTheDocument()
+  })
+})
+
+describe('维护卡 · 投影缓存', () => {
+  it('检查显示条数；确认后清理并重查归零，回执单独一行', async () => {
+    let report = PROJ_3
+    const scanProjectionCacheOrphans = vi.fn(async () => report)
+    const cleanProjectionCacheOrphans = vi.fn(async () => {
+      report = PROJ_EMPTY
+      return { removed: 3, failed: 0 }
+    })
+    const { d, section } = renderCard({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
+    const projection = section('maintenance-projection')
+
+    fireEvent.click(within(projection).getByRole('button', { name: '检查' }))
+    expect(await within(projection).findByText('发现 3 条没有对应会话的投影缓存记录')).toBeInTheDocument()
+    expect(within(projection).getByText('3 条')).toBeInTheDocument()
+
+    fireEvent.click(within(projection).getByRole('button', { name: '查看并清理' }))
+    const dialog = await screen.findByRole('dialog', { name: '清理 3 条投影缓存记录？' })
+    expect(
+      within(dialog).getByText('这些是宿主会话投影的派生缓存；清理不会动会话本体、清册或附件。'),
+    ).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: '清理这些记录' }))
+
+    expect(within(projection).getByText('清理中…')).toBeInTheDocument()
+    await waitFor(() => expect(cleanProjectionCacheOrphans).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(scanProjectionCacheOrphans).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(within(projection).getByText('没有发现')).toBeInTheDocument())
+    expect(within(projection).getByText('已清理 3 条投影缓存记录')).toBeInTheDocument()
+    // 另两段各扫各的，不被这段的清理带着走。
+    expect(d.scanOrphans).not.toHaveBeenCalled()
+    expect(d.scanAttachmentOrphans).not.toHaveBeenCalled()
+  })
+
+  it('检查失败：原因上屏、状态是「检查失败」，不退回「尚未检查」', async () => {
+    const scanProjectionCacheOrphans = vi.fn(async () => {
+      throw Object.assign(new Error('投影缓存读面不可用'), { code: 'sessiondelete/io' })
+    })
+    const { section } = renderCard({ scanProjectionCacheOrphans })
+    const projection = section('maintenance-projection')
+
+    fireEvent.click(within(projection).getByRole('button', { name: '检查' }))
+    expect(await within(projection).findByText('检查失败：投影缓存读面不可用')).toBeInTheDocument()
+    expect(within(projection).getByText('检查失败')).toBeInTheDocument()
+    expect(within(projection).queryByText('尚未检查')).not.toBeInTheDocument()
+  })
+
+  it('清理部分失败：未清条数与已清条数都在句里，状态行是「检查失败」', async () => {
+    const scanProjectionCacheOrphans = vi.fn(async () => PROJ_3)
+    const cleanProjectionCacheOrphans = vi.fn(async () => ({ removed: 1, failed: 2 }))
+    const { section } = renderCard({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
+    const projection = section('maintenance-projection')
+
+    fireEvent.click(within(projection).getByRole('button', { name: '检查' }))
+    await within(projection).findByText('发现 3 条没有对应会话的投影缓存记录')
+    fireEvent.click(within(projection).getByRole('button', { name: '查看并清理' }))
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: '清理这些记录' }))
+
+    expect(await within(projection).findByText('2 条投影缓存记录未能清理（已清理 1 条）')).toBeInTheDocument()
+    expect(within(projection).getByText('检查失败')).toBeInTheDocument()
   })
 })

@@ -23,14 +23,13 @@ const ZH = {
   'common.ago': '{n}{unit}前',
   'common.retry': '重试',
 
+  'panel.tabs.label': '面板档位',
   'trash.title': '回收站',
   'trash.loading': '正在读回收站…',
   'trash.readFailed': '回收站读不到',
   'trash.empty.title': '回收站是空的',
   'trash.empty.hint': '在会话条目的「…」菜单里选「删除」，会话会先进到这里，随时可以恢复。',
   'trash.summary': '{count} 个会话 · 可释放 {size}',
-  'trash.group.count': '{count} 个会话',
-  'trash.group.ungrouped': '未分组',
   'trash.project.unknown': '未记录项目',
   'trash.row.deletedNow': '刚刚删除',
   'trash.row.deletedAgo': '删除于 {n}{unit}前',
@@ -54,26 +53,31 @@ const ZH = {
   'trash.confirm.all': '清空回收站？',
   'trash.confirm.one': '彻底删除 1 个会话？',
   'trash.confirm.one.meta': '{project} · 删除于 {at} · {size}',
-  // 只清 `.dsh` 里的副本：用户磁盘上的原图/原文件不进任何删除链路（`src/trash/attachments.ts` 的两条红线）。
+  // 只清 `.dsh` 里的副本与这些会话自己的缓存记录：用户磁盘上的原图/原文件不进任何删除链路
+  // （`src/trash/attachments.ts` 的两条红线；缓存判据住 `src/trash/projection-cache.ts`）。
   'trash.confirm.body':
-    '这会从回收站移除文件，{strong}。只清理会话独占的图片附件副本（共享副本保留）；宿主投影缓存与你磁盘上的原图不受影响。',
+    '这会从回收站移除文件，{strong}。只清理会话独占的图片附件副本（共享副本保留）；这些会话自己的投影缓存记录也会一并清理，其他会话的缓存与你磁盘上的原图不受影响。',
   'trash.confirm.body.strong': '之后没有任何副本可以恢复',
   'trash.confirm.purge': '彻底删除',
 
-  // 清单那一排的视图开关（组折叠 / 拖分栏）。「折叠」管组内（项目名那一行以下）。
-  'trash.toolbar.collapseAll': '全部折叠',
-  'trash.toolbar.expandAll': '全部展开',
-  'trash.divider.label': '调整左右分栏宽度',
-  'trash.select.group': '勾选「{project}」这 {count} 条会话',
+  // 两档共用的清单文案（回收站档与归档档读同一份键）：组头计数与折叠、分栏把手、整组勾选。
+  // 「条目」专属的那几句仍留在 `trash.*`——共用键不许带档名（CONTEXT 的「条目」专指回收站一行）。
+  'list.group.count': '{count} 个会话',
+  'list.group.ungrouped': '未分组',
+  'list.group.collapseAll': '全部折叠',
+  'list.group.expandAll': '全部展开',
+  'list.divider.label': '调整左右分栏宽度',
+  'list.select.group': '勾选「{project}」这 {count} 条会话',
 
-  // 多选与批量动作。批量恢复与批量彻底删除共用这些文案；恢复是加法，但一批条目多，
+  // 多选态的入口与读数（两档 + 宿主侧栏的浮条与菜单共用这一份）。批量恢复与批量彻底删除
+  // 那两句是回收站专属，归档档的对应两句在 `archive.select.*`。恢复是加法，但一批条目多，
   // 去向是各自的原项目目录，点之前也要过一道确认框。单行恢复仍直接执行。
-  'trash.toolbar.select': '多选',
-  'trash.toolbar.selectExit': '退出多选',
-  'trash.select.count': '已选 {count} 条',
+  'list.select.enter': '多选',
+  'list.select.exit': '退出多选',
+  'list.select.count': '已选 {count} 条',
+  'list.select.needOne': '先勾选要处理的会话',
   'trash.select.purge': '彻底删除 {count} 条',
   'trash.select.restore': '恢复 {count} 条',
-  'trash.select.needOne': '先勾选要处理的会话',
   'trash.select.row': '勾选「{title}」',
   'trash.confirm.bulk': '彻底删除 {count} 个会话？',
   'trash.confirm.restore': '恢复 {count} 个会话？',
@@ -89,9 +93,9 @@ const ZH = {
   'trash.orphans.open': '查看并清理',
   'trash.orphans.confirm': '清理 {count} 个无主子会话？',
   'trash.orphans.body':
-    '这些子会话的父会话已经不在会话列表或回收站里，清理后不可恢复。正在运行的子会话会被拒绝，不会被删除。只清理会话独占的图片附件副本（共享副本保留）；宿主投影缓存与你磁盘上的原图不受影响。若剩余引用源读不出，本次附件清理会跳过（会话目录仍会删除）。',
+    '这些子会话的父会话已经不在会话列表或回收站里，清理后不可恢复。正在运行的子会话会被拒绝，不会被删除。只清理会话独占的图片附件副本（共享副本保留）与这些会话自己的投影缓存记录；其他会话的缓存与你磁盘上的原图不受影响。若剩余引用源读不出，本次附件清理会跳过（会话目录仍会删除）。',
   'trash.orphans.group': '{project} · {count} 个 · {size}',
-  'trash.orphans.cacheNote': '本次会一并清理会话独占的图片附件副本；宿主投影缓存不包含在内。若剩余引用源读不出，本次附件清理会跳过（会话目录仍会删除）。',
+  'trash.orphans.cacheNote': '本次会一并清理会话独占的图片附件副本与这些会话自己的投影缓存记录；其他会话的缓存不受影响。若剩余引用源读不出，本次附件清理会跳过（会话目录仍会删除）。',
   'trash.orphans.clean': '清理',
   'trash.orphans.failure': '残留检查/清理失败：{message}',
   'trash.orphans.cleanFailed': '{count} 组未清理：{message}',
@@ -126,11 +130,11 @@ const ZH = {
   'config.invalid': '需为 {min}–{max} 的整数',
   'config.unchanged': '没有改动',
 
-  // 插件设置页的「维护」卡：两段都是手动触发（检查 → 预览 → 清理），没有自动扫描也没有定时器。
+  // 插件设置页的「维护」卡：三段都是手动触发（检查 → 预览 → 清理），没有自动扫描也没有定时器。
   // 状态行六档：尚未检查 / 检查中 / 清理中 / 检查失败 / 没有发现 / N——在飞的动作优先于一切，
   // 检查/清理失败优先于「尚未检查」（失败不是"还没查"）。孤儿会话段复用 `trash.orphans.*` 的呈现文案，
   // 清理回执里的附件读数复用 `trash.attachments.skipped*` 那对句子；孤儿附件段的确认句必须把三条
-  // 边界说完（只清 `.dsh` 内无引用图片副本、源文件不动、共享引用保留）。
+  // 边界说完（只清 `.dsh` 内无引用图片副本、源文件不动、共享引用保留）；投影缓存段只念条数。
   'maintenance.title': '维护',
   'maintenance.orphans.title': '孤儿会话',
   'maintenance.orphans.hint': '父会话已不在会话列表或回收站里的子会话。检查只读，不会自动运行。',
@@ -154,6 +158,18 @@ const ZH = {
   'maintenance.attachments.previewTruncated': '仅预览前 {shown} 个；清理会处理全部 {total} 个。',
   'maintenance.attachments.previewHint': '点图片可放大；关闭这个框不会删除任何东西。',
   'maintenance.attachments.clean': '清理这些附件',
+  // 投影缓存段：宿主的派生数据，只清「已经找不到会话」的记录；会话本体、清册与附件都不动。
+  'maintenance.projection.title': '投影缓存',
+  'maintenance.projection.hint': '宿主 session_projcache 里已经找不到对应会话或回收站条目的记录。检查只读，清理只动这些派生记录。',
+  'maintenance.projection.count': '{count} 条',
+  'maintenance.projection.found': '发现 {count} 条没有对应会话的投影缓存记录',
+  'maintenance.projection.scanFailed': '检查失败：{message}',
+  'maintenance.projection.confirm': '清理 {count} 条投影缓存记录？',
+  'maintenance.projection.body': '这些是宿主会话投影的派生缓存；清理不会动会话本体、清册或附件。',
+  'maintenance.projection.clean': '清理这些记录',
+  'maintenance.projection.cleaned': '已清理 {count} 条投影缓存记录',
+  'maintenance.projection.cleanFailed': '{count} 条投影缓存记录未能清理（已清理 {removed} 条）',
+  'maintenance.projection.cleanError': '投影缓存清理失败：{message}',
 
   // 详情那一层（docs/ui-spec.md）。键前缀与 `trash.` 分开：那是清单的，这是单条的。
   'detail.notSelected': '选中一条会话，看它讲了什么',
@@ -174,6 +190,34 @@ const ZH = {
   'detail.field.sessionId': '会话 id',
   'detail.field.trashDir': '回收站目录',
   'detail.field.wasArchived': '原本归档',
+  'archive.unnamed': '未命名 · {id}',
+  'archive.tab': '归档',
+  'archive.summary': '{count} 个已归档会话 · 合计 {size}',
+  'archive.summary.missingSize': ' · {count} 条大小缺席',
+  'archive.loading': '正在读归档…',
+  'archive.readFailed': '归档读不到',
+  'archive.empty.title': '没有已归档的会话',
+  'archive.empty.hint': '在宿主会话列表里归档的会话会出现在这里。',
+  'archive.corpusMissing.title': '语料不可见',
+  'archive.corpusMissing.hint': '宿主的会话查询服务不可用，归档清单读不出来。',
+  'archive.row.lastActivity': '最后活动',
+  'archive.row.created': '创建于',
+  'archive.row.timeAbsent': '时间未知',
+  'archive.row.unarchive': '解除归档',
+  'archive.row.delete': '删除',
+  'archive.row.subagent': '子代理',
+  // 行右那颗垃圾桶画的是「删除」，可恢复这件事要说出口：与回收站档同位置的图标（彻底删除）不是一个后果。
+  'archive.row.deleteHint': '删除后进入回收站，可恢复。',
+  'archive.select.unarchive': '解除所选 {count} 条',
+  'archive.select.delete': '删除所选 {count} 条',
+  'archive.size.absent': '—',
+  'archive.detail.lastEvent': '日志末条',
+  'archive.detail.statusLabel': '状态',
+  'archive.detail.status': '已归档',
+  'archive.detail.statusChild': '随归档父会话查看',
+  'archive.subagents.note': '子会话随归档父会话只读查看；它们不会随之归档或取消归档。',
+  'undo.movedArchived': '{title} 已移入回收站；其中已归档的，撤销后回到「归档」',
+  'undo.movedBatchArchived': '{n} 条会话已移入回收站；其中已归档的，撤销后回到「归档」',
   'detail.value.yes': '是',
   'detail.value.no': '否',
   'detail.value.spanLessThanHour': '不足 1 小时',
@@ -258,7 +302,7 @@ const ZH = {
 
   // 宿主列表批量删除。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
   // `dialog.subagents`（汇总），n=1 的标题复用 `dialog.title`，运行中原因复用 `menu.live`，
-  // 「多选/退出多选」复用回收站工具栏的 `trash.toolbar.select` / `selectExit`——不造第二句。
+  // 「多选/退出多选」复用清单那两句 `list.select.enter` / `list.select.exit`——不造第二句。
   'batch.row.pick': '勾选「{title}」以批量删除',
   'batch.bar.count': '已选 {n} 条',
   'batch.bar.pickHint': '点击会话行选择',
@@ -292,6 +336,7 @@ const EN: Record<CopyKey, string> = {
   'common.ago': '{n}{unit} ago',
   'common.retry': 'Retry',
 
+  'panel.tabs.label': 'Panel views',
   'trash.title': 'Trash',
   'trash.loading': 'Reading the trash…',
   'trash.readFailed': 'Could not read the trash',
@@ -299,8 +344,6 @@ const EN: Record<CopyKey, string> = {
   'trash.empty.hint':
     'Pick Delete in a session’s “…” menu; the session lands here first and can be restored at any time.',
   'trash.summary': '{count} sessions · {size} reclaimable',
-  'trash.group.count': '{count} sessions',
-  'trash.group.ungrouped': 'Ungrouped',
   'trash.project.unknown': 'Unrecorded project',
   'trash.row.deletedNow': 'Deleted just now',
   'trash.row.deletedAgo': 'Deleted {n}{unit} ago',
@@ -322,21 +365,23 @@ const EN: Record<CopyKey, string> = {
   'trash.confirm.one': 'Delete this session permanently?',
   'trash.confirm.one.meta': '{project} · deleted {at} · {size}',
   'trash.confirm.body':
-    'This removes the files from the trash; {strong}. Only session-exclusive image attachment copies are cleaned (shared copies are kept); host projection caches and your original files are untouched.',
+    'This removes the files from the trash; {strong}. Only session-exclusive image attachment copies are cleaned (shared copies are kept); these sessions’ own projection-cache records are cleaned up too, while other sessions’ caches and your original files are untouched.',
   'trash.confirm.body.strong': 'no copy remains to restore it',
   'trash.confirm.purge': 'Delete permanently',
 
-  'trash.toolbar.collapseAll': 'Collapse all',
-  'trash.toolbar.expandAll': 'Expand all',
-  'trash.divider.label': 'Adjust the width of the list column',
-  'trash.select.group': 'Select all {count} sessions under “{project}”',
+  'list.group.count': '{count} sessions',
+  'list.group.ungrouped': 'Ungrouped',
+  'list.group.collapseAll': 'Collapse all',
+  'list.group.expandAll': 'Expand all',
+  'list.divider.label': 'Adjust the width of the list column',
+  'list.select.group': 'Select all {count} sessions under “{project}”',
 
-  'trash.toolbar.select': 'Select',
-  'trash.toolbar.selectExit': 'Done selecting',
-  'trash.select.count': '{count} selected',
+  'list.select.enter': 'Select',
+  'list.select.exit': 'Done selecting',
+  'list.select.count': '{count} selected',
+  'list.select.needOne': 'Pick the sessions to work on first',
   'trash.select.purge': 'Delete {count} permanently',
   'trash.select.restore': 'Restore {count}',
-  'trash.select.needOne': 'Pick the sessions to work on first',
   'trash.select.row': 'Select “{title}”',
   'trash.confirm.bulk': 'Delete these {count} sessions permanently?',
   'trash.confirm.restore': 'Restore these {count} sessions?',
@@ -349,10 +394,10 @@ const EN: Record<CopyKey, string> = {
   'trash.orphans.open': 'Review and clean',
   'trash.orphans.confirm': 'Clean {count} orphan subagent sessions?',
   'trash.orphans.body':
-    'Their parent sessions are no longer in the session list or the trash; this cannot be undone. Running sessions are refused and left untouched. Only session-exclusive image attachment copies are cleaned (shared copies are kept); host projection caches and your original files are untouched. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
+    'Their parent sessions are no longer in the session list or the trash; this cannot be undone. Running sessions are refused and left untouched. Only session-exclusive image attachment copies are cleaned (shared copies are kept), together with these sessions’ own projection-cache records; other sessions’ caches and your original files are untouched. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
   'trash.orphans.group': '{project} · {count} sessions · {size}',
   'trash.orphans.cacheNote':
-    'Session-exclusive image attachment copies inside .dsh are cleaned as well; host projection caches are not included. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
+    'Session-exclusive image attachment copies inside .dsh and these sessions’ own projection-cache records are cleaned as well; other sessions’ caches are untouched. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
   'trash.orphans.clean': 'Clean',
   'trash.orphans.failure': 'Orphan check/cleanup failed: {message}',
   'trash.orphans.cleanFailed': '{count} groups were not cleaned: {message}',
@@ -407,6 +452,19 @@ const EN: Record<CopyKey, string> = {
     'Only the first {shown} are previewed; cleanup handles all {total}.',
   'maintenance.attachments.previewHint': 'Click an image to enlarge it; closing this dialog deletes nothing.',
   'maintenance.attachments.clean': 'Clean these attachments',
+  'maintenance.projection.title': 'Projection cache',
+  'maintenance.projection.hint':
+    'Records in the host session_projcache with no matching session or trash entry. Checking only reads; cleanup touches only these derived records.',
+  'maintenance.projection.count': '{count}',
+  'maintenance.projection.found': 'Found {count} projection-cache records with no matching session',
+  'maintenance.projection.scanFailed': 'Check failed: {message}',
+  'maintenance.projection.confirm': 'Clean {count} projection-cache records?',
+  'maintenance.projection.body':
+    'These are derived projection caches; cleanup does not touch sessions, the trash ledger, or attachments.',
+  'maintenance.projection.clean': 'Clean these records',
+  'maintenance.projection.cleaned': 'Cleaned {count} projection-cache records',
+  'maintenance.projection.cleanFailed': '{count} projection-cache records could not be cleaned ({removed} cleaned)',
+  'maintenance.projection.cleanError': 'Projection-cache cleanup failed: {message}',
 
   'detail.notSelected': 'Select a session to see what it was about',
   'detail.loading': 'Reading this session…',
@@ -426,6 +484,33 @@ const EN: Record<CopyKey, string> = {
   'detail.field.sessionId': 'Session id',
   'detail.field.trashDir': 'Trash folder',
   'detail.field.wasArchived': 'Was archived',
+  'archive.unnamed': 'Untitled · {id}',
+  'archive.tab': 'Archive',
+  'archive.summary': '{count} archived sessions · {size} total',
+  'archive.summary.missingSize': ' · {count} without size',
+  'archive.loading': 'Loading archive…',
+  'archive.readFailed': 'Archive unavailable',
+  'archive.empty.title': 'No archived sessions',
+  'archive.empty.hint': 'Sessions archived in the host session list appear here.',
+  'archive.corpusMissing.title': 'Corpus not visible',
+  'archive.corpusMissing.hint': 'The host session-query service is unavailable; the archive list cannot be read.',
+  'archive.row.lastActivity': 'Last active',
+  'archive.row.created': 'Created',
+  'archive.row.timeAbsent': 'Time unknown',
+  'archive.row.unarchive': 'Unarchive',
+  'archive.row.delete': 'Delete',
+  'archive.row.subagent': 'Subagent',
+  'archive.row.deleteHint': 'Deletion moves it to the trash; restorable.',
+  'archive.select.unarchive': 'Unarchive {count} selected',
+  'archive.select.delete': 'Delete {count} selected',
+  'archive.size.absent': '—',
+  'archive.detail.lastEvent': 'Last log event',
+  'archive.detail.statusLabel': 'Status',
+  'archive.detail.status': 'Archived',
+  'archive.detail.statusChild': 'Read-only via archived parent',
+  'archive.subagents.note': 'Subagents of an archived session open here read-only; they are not archived or unarchived with the parent.',
+  'undo.movedArchived': '{title} was moved to the trash; archived ones return to Archive on undo',
+  'undo.movedBatchArchived': '{n} sessions were moved to the trash; archived ones return to Archive on undo',
   'detail.value.yes': 'Yes',
   'detail.value.no': 'No',
   'detail.value.spanLessThanHour': '< 1 h',

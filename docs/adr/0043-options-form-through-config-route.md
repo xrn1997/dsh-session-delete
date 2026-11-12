@@ -28,7 +28,7 @@ ADR-0037 决定 `Config` 走本地 Standard Schema，代价是 `Config.listConfi
 
 - README「可调项」同时写 patch 与设置页卡两条路；`cordis.patch.yml` 仍是默认值与覆盖的家。
 - `src/config.ts` 多一个 wire 别名与 `CONFIG_LIMITS` 的引用；`DeleteDeps` 多 `configEditor` / `entry` 两格，路由表多一个 `config` 切片（`CoreDeps & { configEditor?, entry? }`）。
-- 新增测试：`tests/api.test.ts` 的 `/config` 用例、`tests/client/config-settings.test.tsx`、`tests/route-table.test.ts` 的段名 / 纯度 / 切片行、`tests/connection-route.test.ts` 的十段表。
+- 新增测试：`tests/api.test.ts` 的 `/config` 用例、`tests/client/config-settings.test.tsx`、`tests/route-table.test.ts` 的段名 / 纯度 / 切片行、`tests/connection-route.test.ts` 的全部段名表。
 - 宿主的字段表单仍不出现；用户若在插件页保存，这一行会重启一次（与直接改 patch 后宿主重启这一行的语义相同）。
 
 ## 被否掉的替代

@@ -209,12 +209,12 @@ describe('面板控制器 · 选中与详情账本', () => {
     expect(m.deps.detail).toHaveBeenCalledWith('a')
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.selected).toEqual(A)
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
 
     await act(async () => {
       pending.resolve(detailA)
     })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailA })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailA })
   })
 
   it('同一条在飞时不重复发 /detail（宽档双击不会打两条）', async () => {
@@ -234,7 +234,7 @@ describe('面板控制器 · 选中与详情账本', () => {
       await first
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(1)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
   })
 
   it('在飞时切走再切回：回执落地后详情块是 ready（不会卡在 loading）', async () => {
@@ -257,13 +257,13 @@ describe('面板控制器 · 选中与详情账本', () => {
     await act(async () => {
       pendingB.resolve(detailOf('b'))
     })
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
 
     await act(async () => {
       pendingA.resolve(detailOf('a'))
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
   })
 
   it('命中账本：切走再切回不重读，也不经过 loading', async () => {
@@ -280,7 +280,7 @@ describe('面板控制器 · 选中与详情账本', () => {
       void m.result.current.select(A)
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
   })
 
   it('A 的读数晚到不盖掉 B（成功支也不抢）', async () => {
@@ -294,14 +294,14 @@ describe('面板控制器 · 选中与详情账本', () => {
     await act(async () => {
       await m.result.current.select(B)
     })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
 
     await act(async () => {
       slowA.resolve(detailOf('a'))
       await readA
     })
     expect(m.result.current.selectedId).toBe('b')
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
   })
 
   it('A 的读数晚到失败也不把 B 按成 failed', async () => {
@@ -321,7 +321,7 @@ describe('面板控制器 · 选中与详情账本', () => {
       await readA
     })
     expect(m.result.current.selectedId).toBe('b')
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
   })
 
   it('命中账本再下钻：直接进 drilled，不重读也不经过 loading', async () => {
@@ -334,7 +334,7 @@ describe('面板控制器 · 选中与详情账本', () => {
     })
     expect(m.result.current.drilled).toBe(true)
     expect(m.deps.detail).toHaveBeenCalledTimes(1)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
   })
 
   it('读失败：原文进 failed；失败不记账，切走再回来会重读', async () => {
@@ -346,7 +346,7 @@ describe('面板控制器 · 选中与详情账本', () => {
     })
     expect(m.result.current.detail).toEqual({
       kind: 'failed',
-      entry: A,
+      subject: A,
       message: '读会话日志失败：第 2 帧解压失败',
     })
 
@@ -374,7 +374,7 @@ describe('面板控制器 · 选中与详情账本', () => {
     act(() => {
       m.result.current.retry()
     })
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
     expect(m.reload).toHaveBeenCalledTimes(refreshBefore)
 
@@ -392,7 +392,7 @@ describe('面板控制器 · 首帧快照与预取', () => {
     writeTrashDetail('b', detailOf('b'))
     const m = mount({ entries: [A, B] })
     expect(m.result.current.selectedId).toBe('b')
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'b' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'b' } })
     expect(m.deps.detail).not.toHaveBeenCalled()
   })
 
@@ -414,7 +414,7 @@ describe('面板控制器 · 首帧快照与预取', () => {
     const before = m.deps.detail.mock.calls.length
     act(() => { m.result.current.prefetch(B) })
     expect(m.result.current.selectedId).toBe('a')
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'a' } })
     await waitFor(() => { expect(m.deps.detail).toHaveBeenCalledWith('b') })
     expect(m.deps.detail.mock.calls.length).toBe(before + 1)
   })
@@ -443,7 +443,7 @@ describe('面板控制器 · 首帧快照与预取', () => {
 
     m.deps.detail.mockImplementationOnce(async () => detailOf('kid'))
     await act(async () => {
-      await m.result.current.openChild(KID)
+      await m.result.current.openChild(KID.id)
     })
     expect(m.result.current.detailNav.onPrefetchChild).toBeUndefined()
   })
@@ -479,12 +479,12 @@ describe('面板控制器 · 详情保持', () => {
     const pending = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => pending.promise)
     act(() => { void m.result.current.select(B) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
 
     await act(async () => {
       pending.resolve(detailOf('b'))
     })
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'b' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'b' } })
   })
 
   it('预取别的条目不打断当前详情的保持', async () => {
@@ -499,19 +499,19 @@ describe('面板控制器 · 详情保持', () => {
       entryId === 'b' ? readB.promise : readC.promise
     ))
     act(() => { void m.result.current.select(B) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
 
     // 预取 C 只热身账本，不占用详情上屏槽：保持中的 A 一帧都不许塌。
     act(() => { m.result.current.prefetch(C) })
     expect(m.deps.detail).toHaveBeenCalledWith('c')
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
 
     await act(async () => { readC.resolve(detailOf('c')) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
     expect(readCachedTrashDetail('c')?.entryId).toBe('c')
 
     await act(async () => { readB.resolve(detailOf('b')) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'b' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'b' } })
   })
 
   it('prefetch 失败不把当前详情打成 failed；该条仍未进账本', async () => {
@@ -523,7 +523,7 @@ describe('面板控制器 · 详情保持', () => {
     m.deps.detail.mockRejectedValueOnce(new Error('第 2 帧解压失败'))
     act(() => { m.result.current.prefetch(B) })
     await waitFor(() => { expect(readCachedTrashDetail('b')).toBeUndefined() })
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'a' } })
   })
 
   it('一条读失败后换下一条：上一条已就绪详情仍可保持（骨架只给首次）', async () => {
@@ -535,16 +535,16 @@ describe('面板控制器 · 详情保持', () => {
     await act(async () => {
       await m.result.current.select(B)
     })
-    expect(m.result.current.detail).toMatchObject({ kind: 'failed', entry: { id: 'b' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'failed', subject: { id: 'b' } })
 
     const pending = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => pending.promise)
     act(() => { void m.result.current.select(C) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
     await act(async () => {
       pending.resolve(detailOf('c'))
     })
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'c' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'c' } })
   })
 
   it('孩子视图不 hold：childView 开着时直接 loading', async () => {
@@ -555,8 +555,8 @@ describe('面板控制器 · 详情保持', () => {
     })
     const pending = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => pending.promise)
-    act(() => { void m.result.current.openChild(KID) })
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: KID })
+    act(() => { void m.result.current.openChild(KID.id) })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: KID })
     await act(async () => {
       pending.resolve(detailOf('kid'))
     })
@@ -570,17 +570,17 @@ describe('面板控制器 · 详情保持', () => {
     const pending = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => pending.promise)
     act(() => { void m.result.current.select(B) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
 
     // `inert` 挡指针，挡不住键盘 / 合成事件：保持期这一层自己也不要接受导航。
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     expect(m.result.current.childView).toBeNull()
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
 
     const reads = m.deps.detail.mock.calls.length
     await act(async () => { await m.result.current.loadOlder() })
     expect(m.deps.detail.mock.calls.length).toBe(reads)
-    expect(m.result.current.detail).toMatchObject({ kind: 'holding', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'holding', subject: { id: 'a' } })
 
     await act(async () => { pending.resolve(detailOf('b')) })
   })
@@ -605,7 +605,7 @@ describe('面板控制器 · 详情分页', () => {
     expect(m.deps.detail).toHaveBeenLastCalledWith('a', 10)
     expect(m.result.current.detail).toEqual({
       kind: 'ready',
-      entry: A,
+      subject: A,
       detail: { ...tail, blocks: [userBlock('早', '0'), userBlock('尾', '10')], olderCursor: null },
     })
     // 合并后的更早页也要写回首帧快照：面板重挂后不能丢页。
@@ -670,7 +670,7 @@ describe('面板控制器 · 详情分页', () => {
     })
     expect(m.result.current.detail).toEqual({
       kind: 'ready',
-      entry: A,
+      subject: A,
       detail: { ...tailA, blocks: [userBlock('A早', '0'), userBlock('A尾', '7')], olderCursor: null },
     })
     expect(m.result.current.loadingOlder).toBe(false)
@@ -712,7 +712,7 @@ describe('面板控制器 · 详情分页', () => {
     })
     expect(m.result.current.detail).toEqual({
       kind: 'ready',
-      entry: A,
+      subject: A,
       detail: { ...tailA, blocks: [userBlock('A早', '0'), userBlock('A尾', '7')], olderCursor: null },
     })
     expect(m.result.current.loadingOlder).toBe(false)
@@ -730,7 +730,7 @@ describe('面板控制器 · 详情分页', () => {
     await act(async () => {
       await m.result.current.loadOlder()
     })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: tail })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: tail })
     expect(m.result.current.olderFailure).toBe('更早的页读不出来')
     expect(m.result.current.loadingOlder).toBe(false)
 
@@ -775,7 +775,7 @@ describe('面板控制器 · 详情分页', () => {
     })
 
     expect(m.result.current.selectedId).toBe('b')
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
     expect(m.result.current.olderFailure).toBeNull()
     expect(m.result.current.loadingOlder).toBe(false)
   })
@@ -818,7 +818,7 @@ describe('面板控制器 · 清单换版后的清场', () => {
     })
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.drilled).toBe(true)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: freshA, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: freshA, detail: detailOf('a') })
     expect(m.deps.detail).toHaveBeenCalledTimes(1)
   })
 
@@ -839,7 +839,7 @@ describe('面板控制器 · 清单换版后的清场', () => {
     await act(async () => {
       await m.result.current.select(A)
     })
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'a' } })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'a' } })
 
     // 真实失败支会同时丢掉快照与详情账本（`clearTrashSnapshot`）；控制器只剩选中 id。
     clearTrashSnapshot()
@@ -852,7 +852,7 @@ describe('面板控制器 · 清单换版后的清场', () => {
       m.update({ entries: [A] })
     })
     await waitFor(() => {
-      expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: { id: 'a' } })
+      expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: { id: 'a' } })
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
   })
@@ -872,7 +872,7 @@ describe('面板控制器 · 清单换版后的清场', () => {
       void m.result.current.select(A)
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(1)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
   })
 })
 
@@ -962,10 +962,10 @@ describe('面板控制器 · 孩子视图', () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.childView).toEqual(KID)
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: KID })
     expect(m.deps.detail).toHaveBeenCalledWith('kid')
   })
 
@@ -973,12 +973,12 @@ describe('面板控制器 · 孩子视图', () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     const calls = m.deps.detail.mock.calls.length
     act(() => { m.result.current.closeChild() })
     expect(m.result.current.childView).toBeNull()
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: A })
-    await act(async () => { await m.result.current.openChild(KID) })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: A })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     expect(m.deps.detail.mock.calls.length).toBe(calls)
   })
 
@@ -986,10 +986,10 @@ describe('面板控制器 · 孩子视图', () => {
     const m = mount({ entries: [A, B] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     await act(async () => { await m.result.current.select(B) })
     expect(m.result.current.childView).toBeNull()
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: B })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: B })
   })
 
   // 「看不见≠没有」落到孩子视图这一侧：清场只跟着**选中父行真的没了**这一条判据。
@@ -999,24 +999,24 @@ describe('面板控制器 · 孩子视图', () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
 
     m.update({ list: { status: 'unknown', failure: '清单读不出来' } })
     expect(m.result.current.childView).toEqual(KID)
     expect(m.result.current.selectedId).toBe('a')
     expect(m.result.current.selected).toBeNull()
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: KID })
 
     m.update({ list: { status: 'ready', rows: [A] } })
     expect(m.result.current.childView).toEqual(KID)
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: KID })
   })
 
   it('父从清单消失（写后重读）：孩子视图与选中一并清场', async () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     m.update({ entries: [] })
     await waitFor(() => { expect(m.result.current.childView).toBeNull() })
     expect(m.result.current.detail).toEqual({ kind: 'idle' })
@@ -1026,7 +1026,7 @@ describe('面板控制器 · 孩子视图', () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A, { drill: true }) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     act(() => { m.result.current.back() })
     expect(m.result.current.childView).toBeNull()
     expect(m.result.current.drilled).toBe(true)
@@ -1041,11 +1041,11 @@ describe('面板控制器 · 孩子视图', () => {
       return detailWithKids(id)
     })
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
-    expect(m.result.current.detail).toMatchObject({ kind: 'failed', entry: KID })
+    await act(async () => { await m.result.current.openChild(KID.id) })
+    expect(m.result.current.detail).toMatchObject({ kind: 'failed', subject: KID })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { m.result.current.retry() })
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: KID })
     expect(m.result.current.selectedId).toBe('a')
   })
 
@@ -1062,7 +1062,7 @@ describe('面板控制器 · 孩子视图', () => {
       return before === undefined ? kidPage1 : kidPage2
     })
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     await act(async () => { await m.result.current.loadOlder() })
     expect(m.deps.detail).toHaveBeenCalledWith('kid', 9)
     const state = m.result.current.detail
@@ -1080,7 +1080,7 @@ describe('面板控制器 · 孩子视图', () => {
     const kidTail: TrashDetailLike = { ...detailOf('kid'), blocks: [userBlock('晚', '9')], olderCursor: 9 }
     m.deps.detail.mockImplementation(async (id: string) => (id === 'kid' ? kidTail : detailWithKids(id)))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
 
     const slow = deferred<TrashDetailLike>()
     m.deps.detail.mockImplementationOnce(() => slow.promise)
@@ -1090,7 +1090,7 @@ describe('面板控制器 · 孩子视图', () => {
     await act(async () => { slow.reject(new Error('更早的页读不出来')) })
     expect(m.result.current.loadingOlder).toBe(false)
     expect(m.result.current.olderFailure).toBe('更早的页读不出来')
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: KID })
 
     act(() => { m.result.current.closeChild() })
     expect(m.result.current.olderFailure).toBeNull()
@@ -1109,22 +1109,28 @@ describe('面板控制器 · detailNav（单级判据一个家）', () => {
     expect(typeof m.result.current.detailNav.onOpenChild).toBe('function')
     expect(m.result.current.detailNav.parentContext).toBeUndefined()
 
-    await act(async () => { m.result.current.detailNav.onOpenChild?.(KID) })
+    await act(async () => { m.result.current.detailNav.onOpenChild?.(KID.id) })
     expect(m.result.current.childView).toEqual(KID)
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: KID })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: KID })
+
+    // id 是这一面的身份语言：不在父详情孩子表里的 id 不制造第二个主体（视图不必先查出清册行）。
+    await act(async () => { m.result.current.closeChild() })
+    await act(async () => { m.result.current.detailNav.onOpenChild?.('kid-不在这一条的孩子里') })
+    expect(m.result.current.childView).toBeNull()
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: A })
   })
 
   it('openChild 之后：onOpenChild 缺席；parentContext.onBack 收孩子回父详情，title 是选中行标题原文', async () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
 
     expect(m.result.current.detailNav.onOpenChild).toBeUndefined()
     expect(m.result.current.detailNav.parentContext?.title).toBe('A')
     act(() => { m.result.current.detailNav.parentContext?.onBack() })
     expect(m.result.current.childView).toBeNull()
-    expect(m.result.current.detail).toMatchObject({ kind: 'ready', entry: A })
+    expect(m.result.current.detail).toMatchObject({ kind: 'ready', subject: A })
   })
 
   // title 交**原文**（ADR-0055 判据住控制器，控制器不碰翻译）：未命名兜底由视图按 t 处理。
@@ -1133,7 +1139,7 @@ describe('面板控制器 · detailNav（单级判据一个家）', () => {
     const m = mount({ entries: [untitled] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(untitled) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
 
     expect(m.result.current.detailNav.parentContext?.title).toBe('')
   })
@@ -1142,7 +1148,7 @@ describe('面板控制器 · detailNav（单级判据一个家）', () => {
     const m = mount({ entries: [A] })
     m.deps.detail.mockImplementation(async (id: string) => detailWithKids(id))
     await act(async () => { await m.result.current.select(A) })
-    await act(async () => { await m.result.current.openChild(KID) })
+    await act(async () => { await m.result.current.openChild(KID.id) })
     m.update({ entries: [] })
 
     await waitFor(() => { expect(m.result.current.childView).toBeNull() })
@@ -1214,14 +1220,14 @@ describe('面板控制器 · 恢复与确认动作', () => {
       void m.result.current.select(A)
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
 
     await act(async () => {
       fresh.resolve({ ...detailOf('a'), turnCount: 7 })
     })
     expect(m.result.current.detail).toEqual({
       kind: 'ready',
-      entry: A,
+      subject: A,
       detail: { ...detailOf('a'), turnCount: 7 },
     })
   })
@@ -1454,7 +1460,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
       void m.result.current.select(A)
     })
     expect(m.deps.detail).toHaveBeenCalledTimes(2)
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
   })
 
   it('confirmApply 请求里的 id 没回：那条落 missing 原文，不静默', async () => {

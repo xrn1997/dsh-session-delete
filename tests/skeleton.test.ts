@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -34,7 +34,7 @@ const manifest = JSON.parse(
 }
 
 /** 本插件真跑过的宿主代次（桌面版实测）。新增一代先在这里落账，再同步 dshReleases。 */
-const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.1']
+const TESTED_HOST_GENERATIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5', '0.2.2-rc.1', '0.2.2-rc.2']
 
 /** 完整功能的最低宿主代次（2026-10-19 **CLI 台架**实测：四个槽位齐全、激活零错误、ping 通）。
  *  它只决定 `engines.dsh` 的地板——**台架读数不进 `dshReleases`**（那份只收真机跑过的代次）。
@@ -262,13 +262,43 @@ describe('宿主要求声明与浏览器半声明', () => {
     expect(manifest.scripts.build).toBe('tsdown && tsc -p tsconfig.build.json')
   })
 
-  it('展示元信息：locale 两套语言、图标与 README 截图都进了发布清单', () => {
+  it('展示元信息：locale 两套语言、图标与真机截图都进了发布清单', () => {
     expect(manifest.exports['./locale/*.json']).toBe('./locale/*.json')
     expect(manifest.files).toContain('locale')
     expect(manifest.files).toContain('icon.svg')
     expect(manifest.icon).toBe('./icon.svg')
-    // README 是插件详情页的详情文档；相对图片从**包内**读，截图不进包就是三张破图。
+    // 真机截图是 README 的插图；相对图片从**包内**读，截图不进包就是破图。
     expect(manifest.files).toContain('docs/screenshots')
+  })
+
+  // 详情页渲染的长描述是各语言 locale `meta.detail` 点名的 Markdown，缺省才回退整篇 README（太长）。
+  // 宿主契约里声明了却形状不对或文件缺失是 `invalid` 报错、**不回退**（文档顺序住宿主的插件详情库），
+  // 装好的包少了这份文件或它的插图同样读不到——所以每个语言都钉四条：声明在场、路径形状合规、
+  // 文件进发布清单、文档里的本地插图也进发布清单。
+  it('每个 locale 的 meta.detail 都指向进发布清单的详情文档', () => {
+    const dir = fileURLToPath(new URL('../locale', import.meta.url))
+    const languages = readdirSync(dir).filter((name) => name.endsWith('.json'))
+    expect(languages.length, 'locale 目录没有扫到任何语言').toBeGreaterThan(0)
+    for (const name of languages) {
+      const locale = JSON.parse(readFileSync(join(dir, name), 'utf8')) as { meta?: { detail?: string } }
+      const detail = locale.meta?.detail
+      expect(detail, `${name} 没有 meta.detail：详情页会渲染整篇 README`).toBeDefined()
+      if (detail === undefined) continue
+      expect(detail, `${name} 的 meta.detail 不是包根相对、/ 分隔的 .md 路径`)
+        .toMatch(/^[^\s:\\]+(?:\/[^\s:\\]+)*\.(?:md|markdown)$/)
+      expect(detail.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..'),
+        `${name} 的 meta.detail 含非法路径段`).toBe(true)
+      expect(existsSync(fileURLToPath(new URL(`../${detail}`, import.meta.url))),
+        `${name} 的 meta.detail 指向不存在的文件`).toBe(true)
+      expect(manifest.files, `${name} 的详情文档不进发布清单，装好的包读不到`).toContain(detail)
+      const markdown = readFileSync(fileURLToPath(new URL(`../${detail}`, import.meta.url)), 'utf8')
+      for (const match of markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)) {
+        const image = pick(match, 1)
+        if (/^(?:https?:|data:)/.test(image)) continue
+        const imagePath = `${detail.slice(0, detail.lastIndexOf('/') + 1)}${image}`
+        expect(manifest.files, `${name} 的插图 ${imagePath} 不进发布清单，详情页就是一张破图`).toContain(imagePath)
+      }
+    }
   })
 
   it('插件卡片图标随宿主主题换色：两档颜色取自 label-primary', () => {
@@ -339,7 +369,7 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
   it('文件头点名的七条自造规则真在表里（声明与实现对上）', () => {
     expect(css).toContain('.sd-resizing {')
     // 2026-10-16 补的第二条：清单行是 role="row" 的可聚焦 div，键盘焦点必须有可见描边
-    expect(css).toContain('[data-dsh-session-delete="trash-row"]:focus-visible {')
+    expect(css).toContain('.sd-session-row:focus-visible {')
     // 2026-10-17 补的第三条：官方那颗 iconButton 只有常态与 hover，勾选开关要按下/禁用两档
     expect(css).toContain(".sd-rowaction-button[aria-pressed='true'] {")
     // 第四条：宿主没有"浮条"这件控件
@@ -353,8 +383,9 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     expect(css).toContain('.sd-toast-action:disabled {')
     expect(/七处不是抄本/.test(css)).toBe(true)
     // 组头 reset 是文件头点名的例外，七项必须全在**组头那一块**的 inline 样式里（不能只 reset text-align）。
-    const panel = readFileSync(fileURLToPath(new URL('../src/client/trash-panel.tsx', import.meta.url)), 'utf8')
-    const headStyle = /trash-group-head[\s\S]*?style=\{\{([\s\S]*?)\}\}/.exec(panel)?.[1] ?? ''
+    // 组头的 DOM 现在只由 `session-list.tsx` 拼一次（两档共用），所以钉那一处的配方。
+    const list = readFileSync(fileURLToPath(new URL('../src/client/session-list.tsx', import.meta.url)), 'utf8')
+    const headStyle = /const GROUP_HEAD: CSSProperties = \{([^}]*)\}/.exec(list)?.[1] ?? ''
     expect(headStyle, '没找到组头的 inline style').not.toBe('')
     for (const prop of ["background: 'none'", "border: 'none'", 'padding: 0', "font: 'inherit'", "textAlign: 'start'", "'1 1 auto'", 'gap: 6']) {
       expect(headStyle, `组头 reset 缺 ${prop}`).toContain(prop)
@@ -383,7 +414,7 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     // 选中态 token 走本插件的别名层（`--sd-*`），别名解析到的仍是宿主那枚
     // `--dsw-alias-button-ghost-active-border`（见 ui.css 头注：私有 token 带公开兜底）。
     expect(css).toMatch(
-      /\[data-dsh-session-delete="trash-row"\]:focus-visible\s*\{\s*outline:\s*0\.5px solid var\(--sd-button-ghost-active-border\)/,
+      /\.sd-session-row:focus-visible\s*\{\s*outline:\s*0\.5px solid var\(--sd-button-ghost-active-border\)/,
     )
   })
 })

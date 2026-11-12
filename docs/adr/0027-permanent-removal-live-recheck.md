@@ -27,7 +27,7 @@ ADR-0006 把永久删除收成两半，结束了三件事各说各话：
 
 - 不改组语义（`src/trash/groups.ts`，ADR-0001）：`planTrashRemoval` 的 `targets` 由调用方选好，计划只量、只筛、只查活体。
 - 批量语义不变（组、收缩与回执仍归 `src/verbs/batch.ts`，ADR-0002）：`orphan-clean` 只把字节测量收窄到请求点名的根；线上形状（`src/shared/wire.ts`，ADR-0003）不动，不新增段名或动作。
-- 不碰投影缓存；附件只按 ADR-0020 清独占的图片副本，计划与执行的其余边界照旧。
+- 投影缓存记录随被删会话一起清（逐条、删成一条清一条，ADR-0062）；附件只按 ADR-0020 清独占的图片副本，计划与执行的其余边界照旧。
 - **计划与执行之间的 live 窗口**：计划期准入发生在附件引用扫描之前，大 home 上一次扫描可达数秒；期间用户 resume 的会话，计划看不见。`executeRemoval` 在任何写之前用 `plan.unarchive` 再查一次 `isLive` 补上这个缺口——失败时仍然零写入。这一查只补窗口，不替代计划期准入。
 - `sessionQuery` 缺席仍按原降级：purge 只清清册那部分，计划回空 members、不抛。盘上残留要等 `sessionQuery` 在时由 `GET /orphans` 兜底——`/orphans` 自己也缺 `sessionQuery` 时**响亮失败**（`io`），绝不拿零条假报告冒充。
 

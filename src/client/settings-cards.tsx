@@ -12,7 +12,7 @@ import type { ConfigDeps } from './remote.js'
 import type { MaintenanceDeps } from './use-maintenance.js'
 
 export interface SettingsCardsProps {
-  /** 维护四件 + 可调项两件；只造维护四件的测试替身会让「可调项」卡整体缺席。 */
+  /** 维护六件 + 可调项两件；只造维护六件的测试替身会让「可调项」卡整体缺席。 */
   deps: MaintenanceDeps & Partial<ConfigDeps>
   /** 文案（缺省 = 内置 zh；宿主 locale 服务缺席时也是它，见 `copy.ts`）。 */
   t?: Translate
@@ -22,7 +22,7 @@ export interface SettingsCardsProps {
 
 export function SettingsCards({ deps, t = zhTranslate, view }: SettingsCardsProps): ReactElement | null {
   // 槽位契约给占用者两个视图：`page` 是插件详情页，`summary` 是插件列表行的一行摘要。
-  // 两张卡都是整页卡片，放摘要位会顶掉那一行、还会把保存按钮与两个手动扫描按钮带进列表；所以只认 `page`。
+  // 两张卡都是整页卡片，放摘要位会顶掉那一行、还会把保存按钮与维护段的检查按钮带进列表；所以只认 `page`。
   // 当前宿主只以 `page` 派发这个 key（ADR-0021），这条守卫是对契约的防线，不是死代码。
   if (view === 'summary') return null
   return (

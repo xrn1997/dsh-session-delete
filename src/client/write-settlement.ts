@@ -16,7 +16,8 @@
  *   `summary.successIds.length` 作条数，组成 `{ entryIds, n }` 交给座位，座位只决定发布哪一形
  *   （单条带标题、批量带条数）——那句文案与它的键住 `undo-toast.tsx` 与 `copy.ts`；purge 支在
  *   `anySuccess` 时熄灭指向这些条目的横幅——留着就是一条注定失败的「撤销」。
- * - **`count` 不结算**；`orphan-clean` 没有跨槽位收尾（维护卡的 `use-maintenance.ts` 清完自己重查）。
+ * - **`count` 不结算**；`orphan-clean` / `unarchive` 没有跨槽位收尾（维护卡的 `use-maintenance.ts` 清完自己重查；
+ *   归档档的清单重读归调用方的 `refresh`，失效链住 `archive-store`）。
  *   不直接读 DOM、不问宿主：主视图收尾只经 `main-view.ts` 的 `afterDelete` / `afterRestore`
  *   （服务缺席或抛错都静默退回）；重读仍归各调用方的 `refresh`（面板那侧的最新票在 `use-trash-query.ts`）。
  */
@@ -43,8 +44,9 @@ export type WritePresentationByAction = {
     /** 外部写入座位：让回收站面板重读。面板写不传（自己的清单重读 `reload` 不走这条通告）。 */
     invalidate?(): void
     /** 撤销发布：settlement 从回执摘要取出落地条目 id 与请求名单、组好形之后交来；名单**非空**——
-     *  全被同批前一条带走时没有落点，settlement 不发布没有可撤销动作的横幅。座位只决定发布哪一形与那一形带的标题。 */
-    publishUndo?(landed: { readonly entryIds: readonly [string, ...string[]]; readonly n: number }): void
+     *  全被同批前一条带走时没有落点，settlement 不发布没有可撤销动作的横幅。座位只决定发布哪一形
+     *  与那一形带的标题。`archived` = 落地条目里有已归档会话（撤销回「归档」，文案据此改口）。 */
+    publishUndo?(landed: { readonly entryIds: readonly [string, ...string[]]; readonly n: number; readonly archived: boolean }): void
   }
   restore: {
     invalidate?(): void
@@ -59,12 +61,14 @@ export type WritePresentationByAction = {
   }
   count: Record<string, never>
   'orphan-clean': Record<string, never>
+  /** 解除归档：没有跨槽位收尾，归档档的清单重读归调用方的 `refresh`（失效链住 `archive-store`）。 */
+  unarchive: Record<string, never>
 }
 
 export type WritePresentation<A extends ApplyAction> = WritePresentationByAction[A]
 
 const NO_PRESENTATION: WritePresentationByAction = {
-  delete: {}, restore: {}, purge: {}, count: {}, 'orphan-clean': {},
+  delete: {}, restore: {}, purge: {}, count: {}, 'orphan-clean': {}, unarchive: {},
 }
 
 /** 没有呈现材质的座位用它：抛掉按 action 的联合，调用点不用各自造一个空对象字面量。 */
@@ -88,7 +92,11 @@ export function settleWrite<A extends ApplyAction>(
         // 全部被同批前一条带走时没有落点：不发布一条没有可撤销动作的横幅。
         if (first !== undefined) {
           const entryIds: [string, ...string[]] = [first, ...rest]
-          seat.publishUndo?.({ entryIds, n: success.summary.successIds.length })
+          seat.publishUndo?.({
+            entryIds,
+            n: success.summary.successIds.length,
+            archived: success.summary.landedArchivedIds.length > 0,
+          })
         }
       }
       return
@@ -116,6 +124,7 @@ export function settleWrite<A extends ApplyAction>(
     }
     case 'count':
     case 'orphan-clean':
+    case 'unarchive':
       return
     default: {
       // 穷尽闸：`ApplyAction` 多出一个动作时，这里编译不过——新动作不许悄悄跳过 settlement。

@@ -190,10 +190,13 @@ describe('附件相关文案', () => {
     // skipped 与 failed 同时出现时，失败件数追加在句尾；前缀自带分隔符，拼接处不留空。
     expect(zhTranslate('trash.attachments.alsoFailed', { count: 2 })).toBe('；另有 2 个附件删除失败')
     expect(zhTranslate('trash.confirm.body', { strong: '之后没有任何副本可以恢复' })).toContain('原图不受影响')
+    expect(zhTranslate('trash.confirm.body', { strong: '之后没有任何副本可以恢复' })).toContain('投影缓存记录也会一并清理')
     expect(zhTranslate('trash.orphans.body')).toContain('原图不受影响')
+    expect(zhTranslate('trash.orphans.body')).toContain('投影缓存记录')
     // 清理不是"一定清"：剩余引用源读不出时跳过附件，但会话目录照删。
     expect(zhTranslate('trash.orphans.body')).toContain('剩余引用源读不出')
     expect(zhTranslate('trash.orphans.body')).toContain('会话目录仍会删除')
+    expect(zhTranslate('trash.orphans.cacheNote')).toContain('投影缓存记录')
     expect(zhTranslate('trash.orphans.cacheNote')).toContain('剩余引用源读不出')
     expect(zhTranslate('trash.orphans.cacheNote')).toContain('会话目录仍会删除')
   })
@@ -229,12 +232,16 @@ describe('附件相关文案', () => {
     expect(en('trash.confirm.body', { strong: 'no copy remains to restore it' })).toContain(
       'your original files are untouched',
     )
+    expect(en('trash.confirm.body', { strong: 'no copy remains to restore it' })).toContain(
+      'projection-cache records are cleaned up too',
+    )
     expect(en('trash.orphans.body')).toContain('your original files are untouched')
+    expect(en('trash.orphans.body')).toContain('projection-cache records')
     expect(en('trash.orphans.body')).toContain('remaining reference source cannot be read')
     expect(en('trash.orphans.body')).toContain('session directories are still deleted')
-    // 这句是状语从句，不能写成「cleaned along」那种未完成句；同时不能漏掉"不包含投影缓存"那半句。
+    // 这句是状语从句，不能写成「cleaned along」那种未完成句；同时必须把「这些会话自己的缓存」说清。
     expect(en('trash.orphans.cacheNote')).toBe(
-      'Session-exclusive image attachment copies inside .dsh are cleaned as well; host projection caches are not included. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
+      'Session-exclusive image attachment copies inside .dsh and these sessions’ own projection-cache records are cleaned as well; other sessions’ caches are untouched. If a remaining reference source cannot be read, attachment cleanup is skipped for that run (session directories are still deleted).',
     )
     expect(dicts.en['trash.orphans.cacheNote']).not.toMatch(/cleaned along/)
   })
@@ -385,5 +392,15 @@ describe('splitOn（整句一个键，按内嵌段切开渲染）', () => {
 
   it('找不到内嵌段时整句进第一段（不静默丢字）', () => {
     expect(splitOn('整句话', '不在里面')).toEqual(['整句话', '', ''])
+  })
+})
+
+describe('归档档文案键', () => {
+  it('archive.* 与 undo.movedArchived 在 zh/en 双份镜像里都出话（键集由 Record<CopyKey, string> 编译闸盯住）', () => {
+    expect(zhTranslate('archive.tab')).toBe('归档')
+    expect(zhTranslate('archive.summary', { count: 3, size: '1 KB' })).toBe('3 个已归档会话 · 合计 1 KB')
+    expect(zhTranslate('archive.detail.status')).toBe('已归档')
+    expect(zhTranslate('undo.movedArchived', { title: '会话' }))
+      .toBe('会话 已移入回收站；其中已归档的，撤销后回到「归档」')
   })
 })

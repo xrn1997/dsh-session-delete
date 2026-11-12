@@ -30,4 +30,4 @@ Status: accepted
 - **按条目记住滚动位置**：多一份跨挂载状态，且条目被写动作清掉后还要清账；本版先回顶。
 - **用淡入淡出遮住重排**：重排发生在布局层，淡出不能阻止宽度与偏移变化，只会把空窗拉长。
 
-锚点：`src/client/ui/layout.css` 的 `.sd-stable-scroll`；`src/client/trash-detail.tsx` 的滚动复位；`src/client/use-trash-panel-controller.ts` 的自动选中；`docs/ui-spec.md` §3；`tests/layout-css.test.ts`；`tests/client/trash-detail.test.tsx`；`tests/client/trash-panel.test.tsx` 的「切换稳定性」。相关 ADR-0048、ADR-0049。
+锚点：`src/client/ui/layout.css` 的 `.sd-stable-scroll`；`src/client/session-detail.tsx` 的滚动复位；`src/client/use-panel-selection.ts` 的自动选中与清场（回收站档与归档档共用同一份，layout 阶段收口）；`docs/ui-spec.md` §3；`tests/layout-css.test.ts`；`tests/client/use-panel-selection.test.tsx`；`tests/client/trash-detail.test.tsx`；`tests/client/trash-panel.test.tsx` 的「切换稳定性」。相关 ADR-0048、ADR-0049。

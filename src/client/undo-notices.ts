@@ -17,6 +17,8 @@ export type UndoNotice = {
   seq: number
   /** 撤销失败时把原因顶上来：这时不再有「撤销」动作，只剩原文。 */
   failure?: string
+  /** 这次移走的里有**已归档**会话：撤销后它们回到「归档」（不是回到会话列表），文案追加一句。 */
+  archived?: boolean
 } & (
   | {
       kind: 'one'
@@ -37,12 +39,13 @@ export type UndoNotice = {
 const noticeStore = createStore<UndoNotice | null>(null)
 
 /** 删除成功后发布一条撤销提示（单条）。 */
-export function publishUndoNotice(input: { entryId: string; title: string }): void {
+export function publishUndoNotice(input: { entryId: string; title: string; archived?: boolean }): void {
   noticeStore.publish((seq) => ({
     seq,
     kind: 'one',
     entryId: input.entryId,
     title: input.title,
+    ...(input.archived === undefined ? {} : { archived: input.archived }),
   }))
 }
 
@@ -50,12 +53,14 @@ export function publishUndoNotice(input: { entryId: string; title: string }): vo
 export function publishUndoBatchNotice(input: {
   entryIds: readonly string[]
   n: number
+  archived?: boolean
 }): void {
   noticeStore.publish((seq) => ({
     seq,
     kind: 'batch',
     entryIds: input.entryIds,
     n: input.n,
+    ...(input.archived === undefined ? {} : { archived: input.archived }),
   }))
 }
 

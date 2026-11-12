@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
+  <style>text{font-family:'WenQuanYi Zen Hei','PingFang SC','Noto Sans SC','Microsoft YaHei','Segoe UI',sans-serif}</style>
+  <rect width="640" height="300" fill="#F5F6FC"/>
+  <!-- 回收站面板 -->
+  <rect x="28" y="22" width="584" height="256" rx="14" fill="#FFFFFF" stroke="#E6EBF7"/>
+  <!-- 头部：回收站 | 归档 平级分段 -->
+  <text x="48" y="50" font-size="13" font-weight="600" fill="#1F2A44">回收站 12</text>
+  <rect x="46" y="57" width="68" height="3" rx="1.5" fill="#4D6BFE"/>
+  <text x="128" y="50" font-size="13" fill="#ACB5CF">归档 3</text>
+  <line x1="44" y1="68" x2="248" y2="68" stroke="#EDF1F9"/>
+  <!-- 左列：按项目分组的会话行 -->
+  <path d="M47 78h6l2 2h7v8H47z" fill="#ACB5CF"/>
+  <text x="65" y="88" font-size="11" fill="#7A859E">产品官网</text>
+  <rect x="40" y="94" width="210" height="26" rx="8" fill="#EEF2FF"/>
+  <text x="52" y="111" font-size="12" fill="#1F2A44">与设计的评审会</text>
+  <rect x="40" y="124" width="210" height="26" rx="8" fill="#FFFFFF"/>
+  <text x="52" y="141" font-size="12" fill="#38425A">重构落地页文案</text>
+  <path d="M47 160h6l2 2h7v8H47z" fill="#ACB5CF"/>
+  <text x="65" y="170" font-size="11" fill="#7A859E">CLI 工具</text>
+  <rect x="40" y="176" width="210" height="26" rx="8" fill="#FFFFFF"/>
+  <text x="52" y="193" font-size="12" fill="#38425A">发布脚本排查</text>
+  <rect x="40" y="206" width="210" height="26" rx="8" fill="#FFFFFF"/>
+  <text x="52" y="223" font-size="12" fill="#38425A">文案本地化</text>
+  <!-- 行右：恢复 / 彻底删除图标按钮 -->
+  <g fill="none" stroke="#7A859E" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="206" cy="107" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M210 106h-5.6q-2.6 0-2.6 2.8"/>
+    <path d="M200.2 107.2l1.6 1.8 1.6-1.8"/>
+    <circle cx="228" cy="107" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M225 105.5h6M226.4 105.5v-.8h3.2v.8M225.8 105.5l.5 4h3.4l.5-4"/>
+    <circle cx="206" cy="137" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M210 136h-5.6q-2.6 0-2.6 2.8"/>
+    <path d="M200.2 137.2l1.6 1.8 1.6-1.8"/>
+    <circle cx="228" cy="137" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M225 135.5h6M226.4 135.5v-.8h3.2v.8M225.8 135.5l.5 4h3.4l.5-4"/>
+    <circle cx="206" cy="189" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M210 188h-5.6q-2.6 0-2.6 2.8"/>
+    <path d="M200.2 189.2l1.6 1.8 1.6-1.8"/>
+    <circle cx="228" cy="189" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M225 187.5h6M226.4 187.5v-.8h3.2v.8M225.8 187.5l.5 4h3.4l.5-4"/>
+    <circle cx="206" cy="219" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M210 218h-5.6q-2.6 0-2.6 2.8"/>
+    <path d="M200.2 219.2l1.6 1.8 1.6-1.8"/>
+    <circle cx="228" cy="219" r="8" fill="#F5F6FC" stroke="none"/>
+    <path d="M225 217.5h6M226.4 217.5v-.8h3.2v.8M225.8 217.5l.5 4h3.4l.5-4"/>
+  </g>
+  <!-- 分栏线 -->
+  <line x1="262" y1="22" x2="262" y2="278" stroke="#EDF1F9"/>
+  <!-- 右栏：会话信息与工作步骤 -->
+  <text x="284" y="52" font-size="15" font-weight="600" fill="#1F2A44">与设计的评审会</text>
+  <text x="284" y="80" font-size="11" fill="#7A859E">项目</text>
+  <text x="352" y="80" font-size="11" fill="#38425A">产品官网</text>
+  <text x="284" y="100" font-size="11" fill="#7A859E">模型</text>
+  <text x="352" y="100" font-size="11" fill="#38425A">DeepSeek-V3</text>
+  <text x="284" y="120" font-size="11" fill="#7A859E">创建</text>
+  <text x="352" y="120" font-size="11" fill="#38425A">11-08 14:02</text>
+  <text x="284" y="140" font-size="11" fill="#7A859E">回收站目录</text>
+  <text x="352" y="140" font-size="11" fill="#38425A">~/.dsh/session-trash</text>
+  <!-- 工作步骤折叠条 -->
+  <rect x="284" y="154" width="306" height="26" rx="6" fill="#F5F6FC"/>
+  <text x="298" y="171" font-size="11" fill="#38425A">工作步骤 · 3 步</text>
+  <path d="M568 164l4 4 4-4" fill="none" stroke="#ACB5CF" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 对话预览 -->
+  <rect x="284" y="192" width="200" height="22" rx="7" fill="#E8EDFF"/>
+  <text x="296" y="207" font-size="10.5" fill="#38425A">帮我改一下发布脚本</text>
+  <rect x="284" y="222" width="306" height="20" rx="7" fill="#F5F6FC"/>
+  <text x="296" y="236" font-size="10" fill="#7A859E">已更新三处配置，并补了回滚说明…</text>
+  <!-- 页脚：整页唯一的实心红按钮 -->
+  <rect x="486" y="244" width="104" height="28" rx="8" fill="#E5484D"/>
+  <text x="538" y="262" font-size="11" fill="#FFFFFF" text-anchor="middle">清空回收站…</text>
+</svg>

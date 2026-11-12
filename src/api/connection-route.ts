@@ -1,5 +1,5 @@
 /**
- * 现代宿主的 exact Fetch 路由适配器：把十段注册到 `connection.fetch.register`，
+ * 现代宿主的 exact Fetch 路由适配器：把全部段名注册到 `connection.fetch.register`，
  * 由宿主 `/api` bridge 做 Host/Origin/浏览器认证（ADR-0033）。
  *
  * 为什么路径必须带 `/api`：宿主 `assertFetchRoute` 用 `endpointFromPath('/api', path)` 校验，
@@ -176,7 +176,7 @@ function toResponse(result: ApiResult): Response {
   return new Response(JSON.stringify(result.body), {
     status: result.status,
     // 与附件段同一道缓存闸：回收站清单/详情是**当下读数**，代理或浏览器的启发式缓存会把
-    // 「刚删的那条」留在屏上。九段 JSON 都不该被任何中间层留存。
+    // 「刚删的那条」留在屏上。其余各段 JSON 都不该被任何中间层留存。
     headers: {
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'private, no-store',
@@ -185,7 +185,7 @@ function toResponse(result: ApiResult): Response {
 }
 
 /**
- * 注册十段 exact Fetch 路由。返回一个组合 disposer；调用方把它挂在自己的 effect 上。
+ * 注册全部段名 exact Fetch 路由。返回一个组合 disposer；调用方把它挂在自己的 effect 上。
  * `connection` 是插件的硬依赖（web UI / 桌面端都装 `client-connection`）；`fetch.register`
  * 缺席属于宿主形状漂移，直接抛——静默返回空 disposer 会让插件「在但没有入口」。
  * `dispatch` 与分发器同源。

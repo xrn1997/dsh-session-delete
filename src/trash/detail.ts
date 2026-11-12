@@ -26,6 +26,7 @@ import { entryWire, trashDirOf, type TrashEntry } from './entry.js'
 import type { FsDetailPort } from '../ports/fs-port.js'
 import { bareSessionId } from '../domain/closure.js'
 import type {
+  SessionDetailWire,
   TrashDetailAttachmentWire,
   TrashDetailBlockWire,
   TrashDetailInjectionBlockWire,
@@ -352,6 +353,194 @@ async function childDisplayNameOf(deps: DetailDeps, entry: TrashEntry): Promise<
   }
 }
 
+/**
+ * 逐记录折叠详情基座：块 / 分页 / 计数 / label / 提问索引的**唯一实现**——回收站与归档两档共用
+ * （`readTrashDetail` 从 raw JSONL 喂它，`readArchiveDetail` 从 `readSession` 的事件流喂它）。
+ * 策略判据（②③④，见文件头注）全在这一处；喂进来的 `session` 头记录可以是合成的
+ * （归档读路把 `readSession` 的 header 拼成 raw 里同形的那一条，`case 'session'` 因此两档通吃）。
+ * `subagent/catalog` 不在这里：孩子显示名的登记只服务回收站子会话段，归 `readTrashDetail` 的 walk 拦截。
+ */
+export interface DetailFold {
+  /** 喂一条记录（含合成的 `session` 头；顺序 = 日志顺序）。 */
+  add(record: SessionRecord): void
+  /** 收尾：分页裁剪、models、label、提问索引（只在构造时 `before` 缺席才带上）。 */
+  finish(): SessionDetailWire
+}
+
+/**
+ * 折叠核心的工厂。**`before` 在构造时给**：它决定分页窗口的右边界（`PageBuilder.end`），
+ * 只在收尾才说就晚了——所以 `finish` 不再收参数。
+ */
+export function createDetailFold(limits: DetailLimits = DEFAULT_LIMITS, before?: number): DetailFold {
+  const detail: SessionDetailWire = {
+    cwd: '', createdAt: 0, lastActivity: 0, logTitle: '', models: [],
+    turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
+    injectedCount: 0, blocks: [], olderCursor: null,
+  }
+  const models = new Set<string>()
+  /** 这条会话**自己**的 descriptor label（独立子会话没有父日志可查时的兜底）。
+   *  与宿主 `subagent` 投影同一语义：每遇一条 descriptor 就覆盖，空 label 重置——fork 种子里的
+   *  祖先 descriptor 必须被子会话自己的那条覆盖，坏/空的后写不保留祖先的名字。 */
+  let ownLabel = ''
+  /** 这条会话的 header 带 `parentSession`：它是子会话（fork / subagent），自己的日志标题才是
+   *  当前名字；主会话没有这一格，仍按清册快照优先。 */
+  let ownParentSession = false
+  /** 整条会话的提问索引：与分页无关，只在首次读时过线（见 `SessionDetailWire.prompts`）。 */
+  const prompts: TrashDetailPromptWire[] = []
+  // 游标的合法性（非负整数）只在契约那一处判（`src/api/route-table.ts` 的 `optionalCursor` ⇒ 400）；
+  // 这里再兜一层就是同一判据的第二份抄本。
+  const end = before ?? Number.POSITIVE_INFINITY
+  const page = new PageBuilder(
+    end,
+    Math.max(1, limits.pageBlocks),
+    limits.perBlockChars,
+    Math.max(1, limits.pageChars ?? PAGE_CHAR_LIMIT),
+  )
+
+  return {
+    add(r: SessionRecord): void {
+      if (typeof r.time === 'number' && r.time > detail.lastActivity) detail.lastActivity = r.time
+      const data = (r.data ?? {}) as Record<string, unknown>
+      const time = r.time ?? 0
+      switch (r.type) {
+        case 'session': {
+          // `cwd` / `createdAt` 挂在**记录根**上（实测逐字：`{"type":"session","version":4,"id":…,"createdAt":…,"cwd":"…"}`）
+          if (typeof r.cwd === 'string') detail.cwd = r.cwd
+          if (typeof r.createdAt === 'number') detail.createdAt = r.createdAt
+          if (typeof r.parentSession === 'string' && r.parentSession !== '') ownParentSession = true
+          return
+        }
+        case 'session/title': {
+          if (typeof data.title === 'string') detail.logTitle = data.title
+          return
+        }
+        case 'subagent/descriptor': {
+          // 自己的显示名：独立子会话（父条目不在）靠自己日志的这条事件；后写覆盖前写、空 label
+          // 重置，与宿主 `subagent` 投影的折叠语义一致（父日志的 catalog 是另一份来源）。
+          ownLabel = descriptorLabelOf(data)
+          return
+        }
+        case 'turn/start': {
+          detail.turnCount += 1
+          return
+        }
+        case 'user/message': {
+          const source = (data.source ?? {}) as Record<string, unknown>
+          // `source.kind` 原样过线（缺席就是空串），标签由界面映射：这里不自造哨兵值。
+          const sourceKind = typeof source.kind === 'string' ? source.kind : ''
+          const text = textOf(data.content)
+          const attachments = attachmentWires(data.content)
+          if (sourceKind === 'user') {
+            const block = textBlock('user', time, text, attachments, limits.perBlockChars)
+            if (block !== undefined) {
+              detail.userMessageCount += 1
+              // 序号来自 `add`（这块不一定进本页，但序号是整条日志的那一格）：提问轨拿它当锚点。
+              // 索引只在首次读时过线（`before` 的翻页到不了 `detail.prompts`，见文件尾）：翻页时连建都不建。
+              const id = page.add(block)
+              // 只有**带正文**的提问入轨：页级附件闸（`PageBuilder.finish` 的 200 张）可能把
+              // 「只有附件、没有正文」的 user 块挤成空块并整块不出线，轨上留一格却永远跳不过去。
+              // 跨页也判不出哪一块会被收（每块只出现在一页里），所以判据只能取"有没有正文"。
+              // 这类消息仍在正文里（滚到就是），只是不占一格刻度。
+              if (before === undefined && text !== '') prompts.push({ id, at: time, preview: promptPreview(text) })
+            }
+            return
+          }
+          const block = injectionBlock(time, sourceKind, text, attachments, limits.perBlockChars)
+          if (block !== undefined) {
+            detail.injectedCount += 1
+            page.add(block)
+          }
+          return
+        }
+        case 'assistant/message': {
+          // 每一条 assistant/message 都算；正文块可能一条都没有（只带 tool-call 的那种）。
+          detail.assistantMessageCount += 1
+          const message = (data.message ?? {}) as Record<string, unknown>
+          const source = (message.source ?? {}) as Record<string, unknown>
+          if (typeof source.model === 'string') models.add(source.model)
+          const parts = Array.isArray(message.content) ? (message.content as Array<ContentPart | null>) : []
+          let pendingText: string[] = []
+          let pendingAttachments: TrashDetailAttachmentWire[] = []
+          const flush = (): void => {
+            const block = textBlock('assistant', time, pendingText.join('\n'), pendingAttachments, limits.perBlockChars)
+            if (block !== undefined) page.add(block)
+            pendingText = []
+            pendingAttachments = []
+          }
+          for (const part of parts) {
+            if (part?.type === 'text' && typeof part.text === 'string') {
+              pendingText.push(part.text)
+              continue
+            }
+            if (part?.type === 'reasoning' && typeof part.text === 'string') {
+              flush()
+              const block = textBlock('reasoning', time, part.text, [], limits.perBlockChars)
+              if (block !== undefined) page.add(block)
+              continue
+            }
+            if (part?.type === 'image' || part?.type === 'file') {
+              pendingAttachments.push(...attachmentWires([part]))
+              continue
+            }
+            // tool-call 段不在这里建块：工具行由 `tool/call` 建，结果由 `tool/result` 回填。
+          }
+          flush()
+          return
+        }
+        case 'tool/call': {
+          detail.toolCallCount += 1
+          const callId = typeof data.callId === 'string' ? data.callId : ''
+          const name = typeof data.name === 'string' ? data.name : ''
+          // 真实日志里 `arguments` 是 JSON 字符串；不认对象形态，别把未知形状硬编码成 [object Object]。
+          const args = clip(typeof data.arguments === 'string' ? data.arguments : '', limits.perBlockChars)
+          page.add({
+            kind: 'tool', id: '', time, callId, name, status: 'unfinished',
+            args: args.text, argsTruncated: args.truncated,
+            result: '', resultTruncated: false, attachments: [],
+          })
+          return
+        }
+        case 'tool/result': {
+          const message = (data.message ?? {}) as Record<string, unknown>
+          const callId = typeof message.toolCallId === 'string' ? message.toolCallId : ''
+          if (callId === '') return
+          page.result(callId, textOf(message.content), message.isError === true, attachmentWires(message.content))
+          return
+        }
+        case 'system/message': {
+          const message = (data.message ?? {}) as Record<string, unknown>
+          const block = textBlock('system', time, textOf(message.content), attachmentWires(message.content), limits.perBlockChars)
+          if (block !== undefined) page.add(block)
+          return
+        }
+        case 'compaction/summary': {
+          const block = textBlock('compaction', time, textOf(data.summary), [], limits.perBlockChars)
+          if (block !== undefined) page.add(block)
+          return
+        }
+        default:
+          // 其余 type（step/*、job/*、request/*、permission/*、deliverables/*…）一律不参与，也不报错：
+          // 宿主日志的词汇表随代次变，认不出来的只增不减，认得出多少就摆多少。
+          return
+      }
+    },
+    finish(): SessionDetailWire {
+      const finished = page.finish()
+      detail.blocks = finished.blocks
+      detail.olderCursor = finished.olderCursor
+      // 提问索引只在首次读时过线：它不随分页变化，带 `before` 的翻页再搬一遍就是白花带宽。
+      if (before === undefined) detail.prompts = prompts
+      detail.models = [...models]
+      // 自己的显示名随详情过线：descriptor label 优先；没有 descriptor 的子会话（fork）用它自己
+      // 日志的当前标题——父详情够不到它，清册标题又可能是主会话那套起名法留下的错名字。
+      // `ownParentSession` 由 `add`（走帧）写入；删了这条 fork 兜底，子会话就只剩主会话那套快照标题。
+      const ownDisplayName = ownLabel !== '' ? ownLabel : ownParentSession ? detail.logTitle : ''
+      if (ownDisplayName !== '') detail.label = ownDisplayName
+      return detail
+    },
+  }
+}
+
 export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT_LIMITS) {
   return async function readTrashDetail(entryId: string, before?: number): Promise<TrashDetail> {
     const all = await deps.rows()
@@ -373,187 +562,33 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
       throw verbError('io', `读会话日志失败：${String(error)}`, error)
     }
 
-    const detail: TrashDetail = {
-      entryId: record.id, cwd: '', createdAt: 0, lastActivity: 0, logTitle: '', models: [],
-      turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
-      injectedCount: 0, blocks: [], olderCursor: null,
-    }
-    const models = new Set<string>()
+    const fold = createDetailFold(limits, before)
     /** 子会话的显示名（bare id → label）：父日志的 `subagent/catalog` 事件逐孩子记着委派时的
-     *  `description`（与宿主工作中同名）。清册标题是删除那一刻的快照，起错名的存量条目靠它兜（ADR-0058）。 */
+     *  `description`（与宿主工作中同名）。清册标题是删除那一刻的快照，起错名的存量条目靠它兜（ADR-0058）。
+     *  登记住这里、不住折叠核心：它只服务回收站子会话段。 */
     const subagentLabels = new Map<string, string>()
-    /** 这条会话**自己**的 descriptor label（独立子会话没有父日志可查时的兜底）。
-     *  与宿主 `subagent` 投影同一语义：每遇一条 descriptor 就覆盖，空 label 重置——fork 种子里的
-     *  祖先 descriptor 必须被子会话自己的那条覆盖，坏/空的后写不保留祖先的名字。 */
-    let ownLabel = ''
-    /** 这条会话的 header 带 `parentSession`：它是子会话（fork / subagent），自己的日志标题才是
-     *  当前名字；主会话没有这一格，仍按清册快照优先。 */
-    let ownParentSession = false
-    /** 整条会话的提问索引：与分页无关，只在首次读时过线（见 `TrashDetailWire.prompts`）。 */
-    const prompts: TrashDetailPromptWire[] = []
-    // 游标的合法性（非负整数）只在契约那一处判（`src/api/route-table.ts` 的 `optionalCursor` ⇒ 400）；
-    // 这里再兜一层就是同一判据的第二份抄本。
-    const end = before ?? Number.POSITIVE_INFINITY
-    const page = new PageBuilder(
-      end,
-      Math.max(1, limits.pageBlocks),
-      limits.perBlockChars,
-      Math.max(1, limits.pageChars ?? PAGE_CHAR_LIMIT),
-    )
 
     // 解压或帧边界一旦不对，**整条判失败**：半截正文比"读不出来"更坏（用户会照着它决定删不删）
     try {
       walkSessionLog(raw, (r: SessionRecord) => {
-        if (typeof r.time === 'number' && r.time > detail.lastActivity) detail.lastActivity = r.time
-        const data = (r.data ?? {}) as Record<string, unknown>
-        const time = r.time ?? 0
-        switch (r.type) {
-          case 'session': {
-            // `cwd` / `createdAt` 挂在**记录根**上（实测逐字：`{"type":"session","version":4,"id":…,"createdAt":…,"cwd":"…"}`）
-            if (typeof r.cwd === 'string') detail.cwd = r.cwd
-            if (typeof r.createdAt === 'number') detail.createdAt = r.createdAt
-            if (typeof r.parentSession === 'string' && r.parentSession !== '') ownParentSession = true
-            return
+        if (r.type === 'subagent/catalog') {
+          const data = (r.data ?? {}) as Record<string, unknown>
+          const childId = data.childId
+          const label = data.label
+          if (typeof childId === 'string' && childId !== '' && typeof label === 'string' && label !== '') {
+            subagentLabels.set(bareSessionId(childId), label)
           }
-          case 'session/title': {
-            if (typeof data.title === 'string') detail.logTitle = data.title
-            return
-          }
-          case 'subagent/catalog': {
-            // 孩子显示名的登记：`childId` 两代写法都可能（bare / `session-` 前缀），按 bare 归一配行。
-            // 空 label 不是名字（one-shot 可以不给 description），缺席就让孩子行回落清册标题。
-            const childId = data.childId
-            const label = data.label
-            if (typeof childId === 'string' && childId !== '' && typeof label === 'string' && label !== '') {
-              subagentLabels.set(bareSessionId(childId), label)
-            }
-            return
-          }
-          case 'subagent/descriptor': {
-            // 自己的显示名：独立子会话（父条目不在）靠自己日志的这条事件；后写覆盖前写、空 label
-            // 重置，与宿主 `subagent` 投影的折叠语义一致（父日志的 catalog 是另一份来源）。
-            ownLabel = descriptorLabelOf(data)
-            return
-          }
-          case 'turn/start': {
-            detail.turnCount += 1
-            return
-          }
-          case 'user/message': {
-            const source = (data.source ?? {}) as Record<string, unknown>
-            // `source.kind` 原样过线（缺席就是空串），标签由界面映射：这里不自造哨兵值。
-            const sourceKind = typeof source.kind === 'string' ? source.kind : ''
-            const text = textOf(data.content)
-            const attachments = attachmentWires(data.content)
-            if (sourceKind === 'user') {
-              const block = textBlock('user', time, text, attachments, limits.perBlockChars)
-              if (block !== undefined) {
-                detail.userMessageCount += 1
-                // 序号来自 `add`（这块不一定进本页，但序号是整条日志的那一格）：提问轨拿它当锚点。
-                // 索引只在首次读时过线（`before` 的翻页到不了 `detail.prompts`，见文件尾）：翻页时连建都不建。
-                const id = page.add(block)
-                // 只有**带正文**的提问入轨：页级附件闸（`PageBuilder.finish` 的 200 张）可能把
-                // 「只有附件、没有正文」的 user 块挤成空块并整块不出线，轨上留一格却永远跳不过去。
-                // 跨页也判不出哪一块会被收（每块只出现在一页里），所以判据只能取"有没有正文"。
-                // 这类消息仍在正文里（滚到就是），只是不占一格刻度。
-                if (before === undefined && text !== '') prompts.push({ id, at: time, preview: promptPreview(text) })
-              }
-              return
-            }
-            const block = injectionBlock(time, sourceKind, text, attachments, limits.perBlockChars)
-            if (block !== undefined) {
-              detail.injectedCount += 1
-              page.add(block)
-            }
-            return
-          }
-          case 'assistant/message': {
-            // 每一条 assistant/message 都算；正文块可能一条都没有（只带 tool-call 的那种）。
-            detail.assistantMessageCount += 1
-            const message = (data.message ?? {}) as Record<string, unknown>
-            const source = (message.source ?? {}) as Record<string, unknown>
-            if (typeof source.model === 'string') models.add(source.model)
-            const parts = Array.isArray(message.content) ? (message.content as Array<ContentPart | null>) : []
-            let pendingText: string[] = []
-            let pendingAttachments: TrashDetailAttachmentWire[] = []
-            const flush = (): void => {
-              const block = textBlock('assistant', time, pendingText.join('\n'), pendingAttachments, limits.perBlockChars)
-              if (block !== undefined) page.add(block)
-              pendingText = []
-              pendingAttachments = []
-            }
-            for (const part of parts) {
-              if (part?.type === 'text' && typeof part.text === 'string') {
-                pendingText.push(part.text)
-                continue
-              }
-              if (part?.type === 'reasoning' && typeof part.text === 'string') {
-                flush()
-                const block = textBlock('reasoning', time, part.text, [], limits.perBlockChars)
-                if (block !== undefined) page.add(block)
-                continue
-              }
-              if (part?.type === 'image' || part?.type === 'file') {
-                pendingAttachments.push(...attachmentWires([part]))
-                continue
-              }
-              // tool-call 段不在这里建块：工具行由 `tool/call` 建，结果由 `tool/result` 回填。
-            }
-            flush()
-            return
-          }
-          case 'tool/call': {
-            detail.toolCallCount += 1
-            const callId = typeof data.callId === 'string' ? data.callId : ''
-            const name = typeof data.name === 'string' ? data.name : ''
-            // 真实日志里 `arguments` 是 JSON 字符串；不认对象形态，别把未知形状硬编码成 [object Object]。
-            const args = clip(typeof data.arguments === 'string' ? data.arguments : '', limits.perBlockChars)
-            page.add({
-              kind: 'tool', id: '', time, callId, name, status: 'unfinished',
-              args: args.text, argsTruncated: args.truncated,
-              result: '', resultTruncated: false, attachments: [],
-            })
-            return
-          }
-          case 'tool/result': {
-            const message = (data.message ?? {}) as Record<string, unknown>
-            const callId = typeof message.toolCallId === 'string' ? message.toolCallId : ''
-            if (callId === '') return
-            page.result(callId, textOf(message.content), message.isError === true, attachmentWires(message.content))
-            return
-          }
-          case 'system/message': {
-            const message = (data.message ?? {}) as Record<string, unknown>
-            const block = textBlock('system', time, textOf(message.content), attachmentWires(message.content), limits.perBlockChars)
-            if (block !== undefined) page.add(block)
-            return
-          }
-          case 'compaction/summary': {
-            const block = textBlock('compaction', time, textOf(data.summary), [], limits.perBlockChars)
-            if (block !== undefined) page.add(block)
-            return
-          }
-          default:
-            // 其余 type（step/*、job/*、request/*、permission/*、deliverables/*…）一律不参与，也不报错：
-            // 宿主日志的词汇表随代次变，认不出来的只增不减，认得出多少就摆多少。
-            return
+          // 不在这里 `return`：折叠核心对该 type 不建块，但 `add` 会推进 `lastActivity`——
+          // 归档详情走同一个 `add`，两档的「日志末条」口径必须一致（ADR-0060）。
         }
+        fold.add(r)
       })
     } catch (error) {
       throw verbError('io', error instanceof Error ? `读回收站日志失败：${error.message}` : `读回收站日志失败：${String(error)}`, error)
     }
 
-    const finished = page.finish()
-    detail.blocks = finished.blocks
-    detail.olderCursor = finished.olderCursor
-    // 提问索引只在首次读时过线：它不随分页变化，带 `before` 的翻页再搬一遍就是白花带宽。
-    if (before === undefined) detail.prompts = prompts
-    detail.models = [...models]
-    // 自己的显示名随详情过线：descriptor label 优先；没有 descriptor 的子会话（fork）用它自己
-    // 日志的当前标题——父详情够不到它，清册标题又可能是主会话那套起名法留下的错名字。
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `ownParentSession` 由走帧闭包写入，TS 看不见闭包写入；删了 fork 子会话就只剩主会话那套快照标题。
-    const ownDisplayName = ownLabel !== '' ? ownLabel : ownParentSession ? detail.logTitle : ''
-    if (ownDisplayName !== '') detail.label = ownDisplayName
+    const detail: TrashDetail = { entryId: record.id, ...fold.finish() }
+
     // 子会话摘要：只列**折进这一条**的孩子——折的判据复用 `visibleGroups`（ADR-0001/0029），
     // 不在这里另写一份「parentEntryId 指向谁」。父行不在、或自己也是孩子时，下一代接不住、
     // 自己占清单行；详情不重复给它们开入口。

@@ -49,9 +49,13 @@ function NoticeToast({ deps, current, t }: { deps: OneShotDeps; current: UndoNot
       key={seq}
       tone="success"
       text={
+        // 已归档会话删除后撤销是回「归档」，不是回会话列表——整句一个键，不在 JSX 里拼标点
+        // （ADR-0060 决定第 1 条）。
         current.kind === 'one'
-          ? t('undo.moved', { title: current.title === '' ? t('undo.session') : current.title })
-          : t('undo.movedBatch', { n: current.n })
+          ? t(current.archived === true ? 'undo.movedArchived' : 'undo.moved', {
+            title: current.title === '' ? t('undo.session') : current.title,
+          })
+          : t(current.archived === true ? 'undo.movedBatchArchived' : 'undo.movedBatch', { n: current.n })
       }
       holdMs={UNDO_HOLD_MS}
       // 撤销在飞时横幅不自动熄灭：失败原文要落回这一条，先收掉就只剩一条「失败被吞」。

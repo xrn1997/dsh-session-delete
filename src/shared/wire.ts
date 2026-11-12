@@ -1,5 +1,5 @@
 /**
- * 跨半 wire 契约：前缀、十个端点、请求/响应形状与失败码。
+ * 跨半 wire 契约：前缀、端点、请求/响应形状与失败码。
  * Node 半（src/api/dispatch.ts）与浏览器半（src/client/remote.ts）共用这一份，不各写字面量。
  *
  * 构建约束：本文件零运行时依赖、无 import；浏览器半把整个文件 inline 进 bundle。
@@ -7,7 +7,7 @@
  */
 
 /**
- * 插件专属前缀（十段相对它命名）。
+ * 插件专属前缀（段名相对它命名）。
  *
  * 为什么必须带插件名：宿主 `connection.fetch.register` 对**重复的精确路径**直接抛错
  * （`connection: exact Fetch route "…" is already registered`），撞了就是整棵插件树 boot 失败——
@@ -16,7 +16,7 @@
 export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
 
 /**
- * 唯一的取数基础路径：宿主 `/api` + 插件前缀。十段 exact Fetch 路由、客户端探测与附件 URL
+ * 唯一的取数基础路径：宿主 `/api` + 插件前缀。全部段名 exact Fetch 路由、客户端探测与附件 URL
  * 都从它起；`SESSION_DELETE_API_PREFIX` 只作为段名的相对前缀与错误原文。
  */
 export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREFIX}`
@@ -25,9 +25,9 @@ export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREF
  *  其余是 JSON 体的字段组。**读这一格的是 Node 半**：`src/api/route-table.ts` 的 `bodyOf` 据此决定
  *  分发器要不要预读 JSON。浏览器半的入参形状由 `src/client/remote.ts` 的 interface 签名决定，只投影
  *  这一格的**配对事实**（有 JSON 字段的段必然是 POST），配对由 `tests/wire-shape.test.ts` 钉住。 */
-export type RouteBody = 'none' | 'query' | 'config' | 'entry' | 'apply'
+export type RouteBody = 'none' | 'query' | 'config' | 'entry' | 'apply' | 'sessionId'
 
-/** 十段段名（相对前缀）。**每项 `{ path, method, body }` 三键**：某段用什么方法、带什么请求体也是线上
+/** 段名表（相对前缀）。**每项 `{ path, method, body }` 三键**：某段用什么方法、带什么请求体也是线上
  *  形状的一部分（ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影
  *  （`ROUTES.x.method` / `bodyOf(ROUTES.x)`），浏览器半的取数通道（`src/client/remote.ts`）从同一格
  *  投影路径与方法，两半都不逐段手写一份字面量。
@@ -36,14 +36,18 @@ export type RouteBody = 'none' | 'query' | 'config' | 'entry' | 'apply'
  *  - `list`：对账并读清单（`session-trash/` 里的目录是准）。
  *  - `ping`：最便宜的在/不在（不碰清册、不碰盘、不进链），供客户端探测。
  *  - `detail`：单条详情（用 POST 表达一个读，判据在 `src/api/route-table.ts` 的 detail 行）。
- *  - `apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean`），逐条回 `ApplyOutcome`。
+ *  - `apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean` / `unarchive`），逐条回 `ApplyOutcome`。
  *  - `empty`：清空回收站（聚合回执，不按条回）。
  *  - `orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
  *    这一段只负责"有多少、在哪、多大"。
  *  - `attachment`：附件原始字节（全仓唯一的二进制响应段；按查询串寻址，失败仍回 JSON 信封）。
  *  - `attachmentOrphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。
  *  - `attachmentClean`：清掉报告那一刻无引用的图片对象（聚合回执 `AttachmentCleanupWire`）。
- *  - `config`：三只可调项的读/写共用一段——空体读当前值，带字段写回 profile 的 patch 层。 */
+ *  - `projectionOrphans`：无会话痕迹的投影缓存记录扫描报告（纯读；只念条数）。
+ *  - `projectionClean`：清掉清理那一刻现扫出的无会话痕迹投影缓存记录（聚合回执 `ProjectionCacheCleanupWire`）。
+ *  - `config`：三只可调项的读/写共用一段——空体读当前值，带字段写回 profile 的 patch 层。
+ *  - `archiveList`：归档清单（registry 归档集 ∩ 语料，服务端一次算好行投影，纯读）。
+ *  - `archiveDetail`：归档单条详情（POST 表达一个读；目标自己已归档，或是已归档根的 subagent 闭包成员，寻址只认 id）。 */
 export const ROUTES = {
   list: { path: '/list', method: 'GET', body: 'none' },
   /** 通道的"在不在"专用：没有入参、没有副作用、没有磁盘读。 */
@@ -64,6 +68,16 @@ export const ROUTES = {
   attachmentOrphans: { path: '/attachment-orphans', method: 'GET', body: 'none' },
   /** 聚合清理：只删 `objects` 下无引用的图片，回 `AttachmentCleanupWire`。 */
   attachmentClean: { path: '/attachment-clean', method: 'POST', body: 'none' },
+  /** 纯读：宿主 `session_projcache` 里找不到会话痕迹（语料/持久化、清册 raw 行与回收站目录都不认）的记录条数。 */
+  projectionOrphans: { path: '/projection-orphans', method: 'GET', body: 'none' },
+  /** 聚合清理：按 raw 行 + 目录名现扫（不对账、不改写清册），只删这一刻仍找不到会话痕迹的记录（不信任旧报告）。 */
+  projectionClean: { path: '/projection-clean', method: 'POST', body: 'none' },
+  /** 纯读：归档清单（registry 归档集 ∩ 语料，服务端一次算好行投影）。 */
+  archiveList: { path: '/archive-list', method: 'GET', body: 'none' },
+  /** 归档单条详情（POST 表达一个读，判据在 `src/api/route-table.ts` 的 archiveDetail 行）：
+   *  目标自己仍在归档集，**或**目标是 `rootSessionId` 那条已归档会话的 subagent 闭包成员；
+   *  不是通用会话正文通道。 */
+  archiveDetail: { path: '/archive-detail', method: 'POST', body: 'sessionId' },
 } as const
 
 /** 段名 → 那一段的路径。从结构化段名表派生：加一段只在上面加一项，`Record<RouteName, …>` 类型闸
@@ -89,23 +103,26 @@ export const CONFIG_LIMITS = {
   maxJsonRefBytes: { min: 1, max: 100 * 1024 * 1024 },
 } as const satisfies Record<keyof SessionDeleteConfigWire, { readonly min: number; readonly max: number }>
 
-/** `/apply` 的五个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean` 是**宿主会话 id**
- *  （前两个还没进回收站，第三个压根没有回收站行），`restore`/`purge` 是**回收站条目 id**。
+/** `/apply` 的六个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean`/`unarchive` 是**宿主会话 id**
+ *  （前两个还没进回收站，第三个压根没有回收站行，`unarchive` 写的是 registry 归档集），`restore`/`purge` 是**回收站条目 id**。
  *  两域都是 string（线上形状）；这里不引入品牌类型——错域不靠类型拦，交给各动词在运行期按自己的
  *  语义处理，批处理不猜格式。 */
-export type ApplyAction = 'delete' | 'restore' | 'purge' | 'count' | 'orphan-clean'
+export type ApplyAction = 'delete' | 'restore' | 'purge' | 'count' | 'orphan-clean' | 'unarchive'
 
 /** 每个动作的成功值：`count` 是一个数（拿不到就是 0，界面上那半句整句不出现）；
  *  `delete`/`restore` 是回收站那一行（`null` = 这一条已被**同批前一条**带走，幂等 no-op）；
  *  `purge` 是这一组的聚合回执（同批已带走 ⇒ `{removed:0,freedBytes:0}`）；
  *  `orphan-clean` 删的是**盘上目录**（不进回收站），所以清册那一行给不出 `null` 这种幂等 no-op——
- *  组已经不在了就是 `not-found`，见 `verbs/batch.ts`。 */
+ *  组已经不在了就是 `not-found`，见 `verbs/batch.ts`；
+ *  `unarchive` 给一个数，语义固定「这条 id 被处理成功 = 1」——**不是**实际状态变化数
+ *  （宿主 `unarchiveSession` 返回 void，未归档是幂等 no-op，不为此多读一次 `isArchived` 去猜）。 */
 export type ApplyValueByAction = {
   delete: TrashEntryWire | null
   restore: TrashEntryWire | null
   purge: PurgeStatsWire
   count: number
   'orphan-clean': OrphanCleanStatsWire
+  unarchive: number
 }
 
 /** 一条动作的落地：原始输入 id 一律回带，成败各按信封（成功 `value` / 失败 `error`）。
@@ -238,23 +255,22 @@ export interface TrashDetailPromptWire {
   preview: string
 }
 
-/** 回收站单条详情的线上形状（`POST /detail`）。
+/** 会话详情的**公共基座**：回收站与归档两档共用的线上读数（块/分页/计数/日志读数）。
  *
  *  正文按块分页：`blocks` 是当前这一页（从新往旧取），`olderCursor` 指向更早一页的边界；
  *  计数是**整条日志**的，不受分页影响。 */
-export interface TrashDetailWire {
-  entryId: string
+export interface SessionDetailWire {
   /** 日志 header 里的原串（**无损**，比从 `projectKey` 反推那一路强；组头怎么念项目名见 `src/client/trash-view.ts` 的 `projectLabel`，那是另一回事）。 */
   cwd: string
   createdAt: number
   lastActivity: number
-  /** 日志内 `session/title` 那条记录；清册标题为空串时客户端拿它兜底。 */
+  /** 日志内 `session/title` 那条记录；清单标题为空串时客户端拿它兜底。 */
   logTitle: string
   /** **这条会话自己的显示名**（与宿主工作中同名）。只在详情读时从被读的这条日志折出：
    *  子会话取 `subagent/descriptor` 的 `label`（值来自委派 `description`）；fork 子会话没有 descriptor，header 有
    *  `parentSession` 时取它自己日志的当前 `session/title`。它补的是没有父详情可兜的独立子会话
-   *  ——那种条目的清册 `title` 是主会话那套起名法，`logTitle` 单看也是错的。
-   *  缺席 = 主会话、或没有 descriptor 也没有 `parentSession` 的会话，界面回落清册标题。 */
+   *  ——那种条目的清单 `title` 是主会话那套起名法，`logTitle` 单看也是错的。
+   *  缺席 = 主会话、或没有 descriptor 也没有 `parentSession` 的会话，界面回落清单标题。 */
   label?: string
   models: string[]
   turnCount: number
@@ -265,11 +281,16 @@ export interface TrashDetailWire {
   /** 宿主注入的上下文块数（空文本且无附件的注入不建块，也不计）。 */
   injectedCount: number
   blocks: TrashDetailBlockWire[]
-  /** 更早一页的块序号；`null` = 已经到顶。把它原样回传给 `POST /detail` 的 `before`。 */
+  /** 更早一页的块序号；`null` = 已经到顶。把它原样回传给详情段的 `before`。 */
   olderCursor: number | null
   /** 整条会话的提问索引，按日志顺序；**只在首次读（不带 `before`）时出线**——它不随分页变化，
    *  跟着详情账本走，后续翻页不重复搬。没有用户提问时是空数组（缺席 = 这一读没带，不是"没有"）。 */
   prompts?: TrashDetailPromptWire[]
+}
+
+/** 回收站单条详情的线上形状（`POST /detail`）：基座 + 清册身份 + 子会话段。 */
+export interface TrashDetailWire extends SessionDetailWire {
+  entryId: string
   /** 跟着这条父条目一起进回收站、并**折进这一行**的孩子（清册里 `parentEntryId` 指向它，
    *  且组语义接得住——折的判据复用 `src/trash/groups.ts` 的 `visibleGroups`），按清册原序。
    *  确有孩子时出线；**缺席 = 没有孩子**，不是空数组。孩子的详情仍按 `entryId` 走同一个 `/detail`。
@@ -281,6 +302,72 @@ export interface TrashDetailWire {
   subagentsTotal?: number
   /** **全部**折进来的孩子的清册 `sizeBytes` 合计；有孩子时出线（即使未被条数闸截断）。
    *  摘要条报「清册大小合计」用它——不要拿 `subagents` 已列行自己求和，那只是前 N 条。 */
+  subagentsSizeBytes?: number
+}
+
+/** 归档清单里的一行（`GET /archive-list`）。大小与时间的口径和回收站行**不是一个数**：
+ *  这里念宿主持久化日志工件字节与「最后活动」，回收站行念清册删除时的目录实测与删除时间。 */
+export interface ArchiveRowWire {
+  sessionId: string
+  projectDir: string
+  /** 日志标题（`readTitleSnapshots` 折出的 `session/title`；缺席 = 空串）。 */
+  title: string
+  /** 子会话的宿主 `subagent` 投影 label；空串/缺席 = 没有。显示名按 label 非空优先，否则 title。 */
+  label?: string
+  /** 最后活动；缺席 = 宿主既没给提问时间、身份记录也没有创建时间（时间未知，不拿 0 冒充 1970）。 */
+  updatedAt?: number
+  /** `updatedAt` 的口径；与 `updatedAt` 同进同退。 */
+  updatedAtSource?: 'prompt' | 'created'
+  /** 宿主持久化日志工件字节；缺席 = 这一行没有可信读数（不是 0）。 */
+  sizeBytes?: number
+  /** `origin:'subagent'`；行上要带「子代理」标签。 */
+  subagent: boolean
+}
+
+/** 归档清单的线上形状：**显式缺席**——`sessionQuery` 缺席时是 `{available:false}`（成功信封里的
+ *  「语料不可见」），不是空列表、不是 `io`。`totalBytes` 只加已知 `sizeBytes`；`missingSizeCount > 0`
+ *  时副标题必须说 N 条大小缺席。 */
+export type ArchiveListWire =
+  | { available: true; rows: ArchiveRowWire[]; totalBytes: number; missingSizeCount: number }
+  | { available: false }
+
+/** 归档详情里的一个子会话（宿主 `subagentMembersOf` 的闭包 + 标题/时间/大小的只读投影）。
+ *  它**不是**清册行：没有条目 id、没有删除时间、也不带 `parentEntryId`。 */
+export interface ArchiveSubagentWire {
+  sessionId: string
+  /** 这个孩子**自己**的归档态（宿主归档集，精确判据与 `isArchived` / 归档清单交集同一条，
+   *  id 原样）。清单行不必带这一格（进了归档清单就是已归档的定义）；闭包行不是清单行，
+   *  所以必须显式——状态行与开行路由都认这一格，**不拿「清单在不在场」冒充归档态**
+   *  （清单会失败/缺席，看不见 ≠ 未归档）。 */
+  archived: boolean
+  projectDir: string
+  title: string
+  /** 宿主 `subagent` 投影 label；空串/缺席 = 没有，显示名回落 title。 */
+  label?: string
+  /** 最后活动；缺席 = 宿主列表没给（不拿 0 冒充）。 */
+  updatedAt?: number
+  /** `updatedAt` 的口径：真有提问时间才标 `prompt`。 */
+  updatedAtSource?: 'prompt' | 'created'
+  /** 宿主持久化日志工件字节；缺席 = 没有可信读数（不是 0）。 */
+  sizeBytes?: number
+}
+
+/** 归档单条详情（`POST /archive-detail`）：基座 + 会话 id + **只读子会话段**。
+ *  子会话来自宿主闭包（`archiveSession` 本身不带闭包）。目标自己已归档，或是请求里
+ *  `rootSessionId` 那条已归档会话的 subagent 闭包成员 ⇒ 可读；孩子正文仍只走这一条只读通道，
+ *  不提供随父归档/恢复。**仅凭根放行（主体自己未归档）时不装配子会话段**：孩子视图单级，
+ *  客户端对这种主体整段不画（判据住 `src/trash/archive-detail.ts`）。 */
+export interface ArchiveDetailWire extends SessionDetailWire {
+  sessionId: string
+  /** 主体**自己**的归档态（这一读的权威判据）：`true` = 自己已归档；`false` = 仅凭已归档根的
+   *  闭包放行的只读孩子。状态行认这一格，不认客户端快照或导航道。 */
+  archived: boolean
+  /** 主体自己已归档且有孩子时出线；**缺席 = 没有孩子，或这一条是仅凭根放行的孩子读**，
+   *  不是空数组。最多过线 `SUBAGENT_SUMMARY_LIMIT` 条。 */
+  subagents?: ArchiveSubagentWire[]
+  /** 子会话总数；**只在 `subagents` 被条数闸截断时出线**。 */
+  subagentsTotal?: number
+  /** **全部**孩子里已知 `sizeBytes` 的合计；没有任何已知读数时缺席（不拿 0 冒充）。 */
   subagentsSizeBytes?: number
 }
 
@@ -317,6 +404,21 @@ export interface PurgeStatsWire {
   attachments?: AttachmentCleanupWire
 }
 
+/** 孤儿投影缓存报告（`GET /projection-orphans`）：条数。
+ *  只念条数不猜体积——缓存记录的落盘字节不是本插件的读数面，报告不为它多引一条 stat 路径。
+ *  读不出会话语料或投影缓存读面时**不返回这一形状**，而是 `io` 失败——不拿 0 冒充"没有孤儿"。 */
+export interface ProjectionCacheOrphanReportWire {
+  count: number
+}
+
+/** 孤儿投影缓存清理回执（`POST /projection-clean`）：删掉的条数与没能删掉的条数。
+ *  `failed` 是删除失败的条数：批量写链整批失败按请求名单计；旧宿主逐条删除时是真实的部分失败。
+ *  清完重查会把真实剩余量再报一次。 */
+export interface ProjectionCacheCleanupWire {
+  removed: number
+  failed: number
+}
+
 /** 无主子会话扫描里**一个项目目录**的汇总（界面上那条"哪一家还剩多少"的读数）。 */
 export interface OrphanProjectGroupWire {
   projectDir: string
@@ -346,6 +448,11 @@ export interface OrphanCleanStatsWire {
  *  附件段是 **query 参数**（GET 二进制响应，没有请求体）。 */
 export const PARAMS = {
   entryId: 'entryId',
+  /** `/archive-detail` 的寻址键（红线：路径字段不过线）。 */
+  sessionId: 'sessionId',
+  /** 归档详情的**只读根**：看未归档子会话时带上那条已归档父会话的 id。
+   *  目标自己已归档时不需要；给了也只用于校验目标在该根的 subagent 闭包里。 */
+  rootSessionId: 'rootSessionId',
   /** `/detail` 的分页游标：只取这个块序号之前的块。缺省 = 从尾部取。 */
   before: 'before',
   action: 'action',

@@ -196,13 +196,13 @@ function ConfigCard({ config, saveConfig, t }: ConfigCardProps): ReactElement {
 }
 
 export interface ConfigSettingsProps {
-  /** 整套 remote 的切片；测试可以只给维护那四件（缺这两件时本卡不渲染）。 */
+  /** 整套 remote 的切片；测试可以只给维护那六件（缺这两件时本卡不渲染）。 */
   readonly deps: Partial<ConfigDeps>
   readonly t?: Translate
 }
 
 /**
- * 卡片入口：两个方法都在才渲染。`useMaintenance` 与 `MaintenanceSettings` 的测试替身只造维护四件，
+ * 卡片入口：两个方法都在才渲染。`useMaintenance` 与 `MaintenanceSettings` 的测试替身只造维护六件，
  * 所以在那些用例里本卡整体缺席——不让"没给配置 deps"变成一次假渲染。
  */
 export function ConfigSettings({ deps, t = zhTranslate }: ConfigSettingsProps): ReactElement | null {

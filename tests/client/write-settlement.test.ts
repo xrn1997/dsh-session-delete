@@ -135,4 +135,36 @@ describe('settleWrite', () => {
     settleWrite(settled({ action: 'count', ids: ['s1'], summary: writeOutcome('count', ['s1']).summary }), noPresentation('count'))
     expect(mocks.calls).toEqual([])
   })
+
+  it('settleWrite 对 unarchive 不做跨槽位收尾（穷尽分支在场）', () => {
+    mocks.calls.length = 0
+    const { summary } = summarizeReceipt(readReceipt('unarchive', ['s1'], [ok('unarchive', 's1', 1)]))
+    // 类型面：unarchive 的呈现材质只有空记录（noPresentation 可编译），钩子给不出。
+    settleWrite(settled({ action: 'unarchive', ids: ['s1'], summary }), noPresentation('unarchive'))
+    expect(mocks.calls).toEqual([])
+  })
+})
+
+describe('settleWrite · 撤销发布带 archived 事实', () => {
+  it('delete 支的 publishUndo 带 archived：落地条目里有 wasArchived ⇒ true', () => {
+    const { summary } = summarizeReceipt(readReceipt('delete', ['e1'], [
+      { id: 'e1', action: 'delete', ok: true, value: { ...trashRow('e1', 's1'), wasArchived: true } },
+    ]))
+    const landed: Array<{ entryIds: readonly [string, ...string[]]; n: number; archived: boolean }> = []
+    settleWrite(settled({ action: 'delete', ids: ['s1'], summary }), {
+      publishUndo: (payload) => { landed.push(payload) },
+    })
+    expect(landed).toEqual([{ entryIds: ['e1'], n: 1, archived: true }])
+  })
+
+  it('落地条目都不是归档 ⇒ archived: false（文案不提归档）', () => {
+    const { summary } = summarizeReceipt(readReceipt('delete', ['e1'], [
+      { id: 'e1', action: 'delete', ok: true, value: trashRow('e1', 's1') },
+    ]))
+    let archived: boolean | undefined
+    settleWrite(settled({ action: 'delete', ids: ['s1'], summary }), {
+      publishUndo: (payload) => { archived = payload.archived },
+    })
+    expect(archived).toBe(false)
+  })
 })

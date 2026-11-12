@@ -89,7 +89,7 @@ describe('详情读路 · 账本与在飞', () => {
     const m = mount({ subject: A })
     await act(async () => { await m.result.current.ensure('a') })
     expect(m.detail).not.toHaveBeenCalled()
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
 
     const m2 = mount({ subject: B })
     await act(async () => { await m2.result.current.ensure('b') })
@@ -107,7 +107,7 @@ describe('详情读路 · 账本与在飞', () => {
     let second!: Promise<void>
     act(() => { second = m.result.current.ensure('a') })
     expect(detail).toHaveBeenCalledTimes(1)
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: A })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
 
     await act(async () => { pending.resolve(detailOf('a')); await first; await second })
     expect(m.result.current.detail.kind).toBe('ready')
@@ -119,7 +119,7 @@ describe('详情读路 · 账本与在飞', () => {
       .mockResolvedValueOnce(detailOf('a'))
     const m = mount({ subject: A, detail })
     await act(async () => { await m.result.current.ensure('a') })
-    expect(m.result.current.detail).toEqual({ kind: 'failed', entry: A, message: '读不出来' })
+    expect(m.result.current.detail).toEqual({ kind: 'failed', subject: A, message: '读不出来' })
     expect(readCachedTrashDetail('a')).toBeUndefined()
 
     await act(async () => { m.result.current.retry() })
@@ -136,14 +136,14 @@ describe('详情读路 · 账本与在飞', () => {
     expect(m.result.current.detail.kind).toBe('ready')
 
     act(() => { m.result.current.prefetch('b') })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
     await act(async () => { pending.resolve(detailOf('b')) })
     await act(async () => { await Promise.resolve() })
 
     m.rerender({ deps: m.deps, subject: B, topLevel: true, present: () => true })
     await act(async () => { await m.result.current.ensure('b') })
     expect(detail).toHaveBeenCalledTimes(1)
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
   })
 
   it('prefetch 成功不清掉已上屏的失败块；换成正文要等显式重试', async () => {
@@ -152,17 +152,17 @@ describe('详情读路 · 账本与在飞', () => {
       .mockResolvedValueOnce(detailOf('a'))
     const m = mount({ subject: A, detail })
     await act(async () => { await m.result.current.ensure('a') })
-    expect(m.result.current.detail).toEqual({ kind: 'failed', entry: A, message: '读不出来' })
+    expect(m.result.current.detail).toEqual({ kind: 'failed', subject: A, message: '读不出来' })
 
     await act(async () => { m.result.current.prefetch('a') })
     await act(async () => { await Promise.resolve() })
     // 账本热了，但失败是用户已经看见的结论：预取不许替用户把它换成正文（ADR-0051）。
     expect(readCachedTrashDetail('a')?.entryId).toBe('a')
-    expect(m.result.current.detail).toEqual({ kind: 'failed', entry: A, message: '读不出来' })
+    expect(m.result.current.detail).toEqual({ kind: 'failed', subject: A, message: '读不出来' })
 
     await act(async () => { m.result.current.retry() })
     await act(async () => { await Promise.resolve() })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
     expect(detail).toHaveBeenCalledTimes(2)
   })
 
@@ -173,7 +173,7 @@ describe('详情读路 · 账本与在飞', () => {
     await act(async () => { m.result.current.prefetch('b') })
     await act(async () => { await Promise.resolve() })
     expect(readCachedTrashDetail('b')).toBeUndefined()
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: detailOf('a') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: detailOf('a') })
   })
 
   it('预取在飞时点中它：预取那次请求的失败落该条自己的失败块，不卡成永久 loading', async () => {
@@ -190,7 +190,7 @@ describe('详情读路 · 账本与在飞', () => {
     expect(detail).toHaveBeenCalledTimes(1)
 
     await act(async () => { pending.reject(new Error('读不出来')); await Promise.resolve() })
-    expect(m.result.current.detail).toEqual({ kind: 'failed', entry: B, message: '读不出来' })
+    expect(m.result.current.detail).toEqual({ kind: 'failed', subject: B, message: '读不出来' })
     expect(readCachedTrashDetail('b')).toBeUndefined()
   })
 
@@ -249,11 +249,11 @@ describe('详情读路 · 保持（holding）', () => {
     m.rerender({ deps: m.deps, subject: B, topLevel: true, present: () => true })
     act(() => { void m.result.current.ensure('b') })
     expect(m.result.current.detail).toEqual({
-      kind: 'holding', entry: A, detail: detailOf('a'),
+      kind: 'holding', subject: A, detail: detailOf('a'),
     })
 
     await act(async () => { pending.resolve(detailOf('b')) })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: B, detail: detailOf('b') })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
   })
 
   it('上一条已不在清单里 ⇒ 不 holding，走 loading', () => {
@@ -263,7 +263,7 @@ describe('详情读路 · 保持（holding）', () => {
     const m = mount({ subject: A, detail })
     m.rerender({ deps: m.deps, subject: B, topLevel: true, present: () => false })
     act(() => { void m.result.current.ensure('b') })
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: B })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: B })
   })
 
   it('孩子视图（topLevel=false）不 holding', () => {
@@ -273,7 +273,7 @@ describe('详情读路 · 保持（holding）', () => {
     const m = mount({ subject: A, detail })
     m.rerender({ deps: m.deps, subject: B, topLevel: false, present: () => true })
     act(() => { void m.result.current.ensure('b') })
-    expect(m.result.current.detail).toEqual({ kind: 'loading', entry: B })
+    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: B })
   })
 })
 
@@ -289,7 +289,7 @@ describe('详情读路 · 更早一页', () => {
     expect(detail).toHaveBeenCalledWith('a', 10)
     expect(m.result.current.detail).toEqual({
       kind: 'ready',
-      entry: A,
+      subject: A,
       detail: { ...tail, blocks: [block('0', '早'), block('10', '尾')], olderCursor: null },
     })
     expect(readCachedTrashDetail('a')?.olderCursor).toBeNull()
@@ -327,7 +327,7 @@ describe('详情读路 · 更早一页', () => {
     const detail = vi.fn(async () => { throw new Error('读不出更早的页') })
     const m = mount({ subject: A, detail })
     await act(async () => { await m.result.current.loadOlder() })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', entry: A, detail: tail })
+    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: A, detail: tail })
     expect(m.result.current.olderFailure).toBe('读不出更早的页')
 
     act(() => { m.result.current.clearOlderFailure() })

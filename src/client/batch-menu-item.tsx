@@ -5,7 +5,7 @@
  * 模式内才渲染勾选框、才把整行点击变成"勾/取消"（守卫在 `host-rows.ts`）。
  * 菜单的开关归 owner（与 `delete-menu-item.tsx` 同一条契约）：按下后先切模式、再收菜单。
  *
- * 文案复用回收站工具栏那两句（`trash.toolbar.select` / `selectExit`）——同一个"多选/退出多选"
+ * 文案复用清单那两句（`list.select.enter` / `list.select.exit`）——同一个"多选/退出多选"
  * 不造第二个键。
  */
 import type { ReactElement } from 'react'
@@ -36,7 +36,7 @@ export function BatchSelectMenuItem({
         dismissMenu?.()
       }}
     >
-      {selecting ? t('trash.toolbar.selectExit') : t('trash.toolbar.select')}
+      {selecting ? t('list.select.exit') : t('list.select.enter')}
     </MenuItemButton>
   )
 }

@@ -9,7 +9,7 @@ import { APPLY_ACTIONS, ROUTE_TABLE, routeOf, type JsonRouteSpec, type SliceDeps
 import { ROUTES } from '../src/shared/wire.js'
 import type { ApplyAction } from '../src/shared/wire.js'
 
-/** 段名表的十个路径（`ROUTES` 每项 `{ path, method, body }`，键集比对只认 path 这一格）。 */
+/** 段名表的各路径（`ROUTES` 每项 `{ path, method, body }`，键集比对只认 path 这一格）。 */
 const SEGMENTS = Object.values(ROUTES).map((seg) => seg.path)
 
 /**
@@ -30,12 +30,12 @@ async function runApply(body: Record<string, unknown>): Promise<unknown> {
   }
 }
 
-describe('路由表 · 十个段名各一行', () => {
+describe('路由表 · 段名表逐行', () => {
   it('段名表与路由表逐键对齐（`wire.ts` 加了段名而这里没加 ⇒ 编译不过，这条是运行期的同一件事）', () => {
     expect(Object.keys(ROUTE_TABLE).sort()).toEqual([...SEGMENTS].sort())
   })
 
-  it('方法：十段的 method 逐条投影自 `wire.ts` 的段名表（方法字面量只住那一处，路由记录不再自写）', () => {
+  it('方法：各段的 method 逐条投影自 `wire.ts` 的段名表（方法字面量只住那一处，路由记录不再自写）', () => {
     for (const [name, seg] of Object.entries(ROUTES)) {
       const method = routeOf(seg.path)?.method
       // 先钉「这一段有路由行、方法在场」：段名表未结构化时 `seg.path` 掉成 undefined，
@@ -67,26 +67,48 @@ describe('路由表 · 十个段名各一行', () => {
     expect(clean?.purity).toBe('chained')
     expect(clean?.read).toBe('none')
     expect(clean?.response).toBe('json')
+
+    // 投影缓存两段都用 raw 清册行：报告只读；清理用 raw 行 + 目录名保护（不对账、不改写清册，
+    // 幽灵行也是保护面）。
+    const projectionReport = routeOf(ROUTES.projectionOrphans.path)
+    expect(`${projectionReport?.method}:${projectionReport?.body}:${String(projectionReport?.purity)}:${projectionReport?.read}`)
+      .toBe('GET:none:pure:raw')
+    const projectionClean = routeOf(ROUTES.projectionClean.path)
+    expect(`${projectionClean?.method}:${projectionClean?.body}:${String(projectionClean?.purity)}:${projectionClean?.read}`)
+      .toBe('POST:none:chained:raw')
   })
 
-  it('response：只有附件段是 binary，其余九段都是 json', () => {
+  it('response：只有附件段是 binary，其余各段都是 json', () => {
     for (const segment of SEGMENTS) {
       expect(`${segment}:${routeOf(segment)?.response}`)
         .toBe(`${segment}:${segment === ROUTES.attachment.path ? 'binary' : 'json'}`)
     }
   })
 
-  it('body：POST 里的 apply / detail / config 需要 JSON 体，GET 一律不读（流只能消费一次）', () => {
+  it('body：POST 里的 apply / detail / config / archiveDetail 需要 JSON 体，GET 一律不读（流只能消费一次）', () => {
     for (const segment of SEGMENTS) {
-      const expectsBody = segment === ROUTES.apply.path || segment === ROUTES.detail.path || segment === ROUTES.config.path
+      const expectsBody = segment === ROUTES.apply.path || segment === ROUTES.detail.path
+        || segment === ROUTES.config.path || segment === ROUTES.archiveDetail.path
       expect(`${segment}:${routeOf(segment)?.body}`).toBe(`${segment}:${expectsBody ? 'json' : 'none'}`)
     }
   })
 
-  it('纯度：`list` / `empty` / `attachment-clean` 必须进到达序链（它们先对账或先扫引用源、再动盘与清册）', () => {
+  it('归档两段：archiveList（GET / none / pure / read none）与 archiveDetail（POST / sessionId / pure / read none）', () => {
+    const list = routeOf(ROUTES.archiveList.path)
+    expect(`${list?.method}:${list?.body}:${list?.read}`).toBe('GET:none:none')
+    expect(list?.purity).toBe('pure')
+    const detail = routeOf(ROUTES.archiveDetail.path)
+    expect(`${detail?.method}:${detail?.body}:${detail?.read}`).toBe('POST:json:none')
+    expect(detail?.purity).toBe('pure')
+    // 段名表那格的 body 是线上形状 `sessionId`；路由记录按 BODY_KIND 投影成 json（不写第二份）。
+    expect(ROUTES.archiveDetail.body).toBe('sessionId')
+  })
+
+  it('纯度：`list` / `empty` / `attachment-clean` / `projection-clean` 必须进到达序链（它们先对账或现扫，再动盘、清册与缓存记录）', () => {
     expect(routeOf(ROUTES.list.path)?.purity).toBe('chained')
     expect(routeOf(ROUTES.empty.path)?.purity).toBe('chained')
     expect(routeOf(ROUTES.attachmentClean.path)?.purity).toBe('chained')
+    expect(routeOf(ROUTES.projectionClean.path)?.purity).toBe('chained')
   })
 
   it('纯度：探测 / 扫描 / 详情 / 附件读取不进链（一次探测或大正文读不该把删除按钮堵在身后）', () => {
@@ -95,13 +117,15 @@ describe('路由表 · 十个段名各一行', () => {
     expect(routeOf(ROUTES.detail.path)?.purity).toBe('pure')
     expect(routeOf(ROUTES.attachment.path)?.purity).toBe('pure')
     expect(routeOf(ROUTES.attachmentOrphans.path)?.purity).toBe('pure')
+    expect(routeOf(ROUTES.projectionOrphans.path)?.purity).toBe('pure')
   })
 
-  it('纯度：`apply` 里只有 count 是纯读，其余四个动作都进链', () => {
+  it('纯度：`apply` 里只有 count 是纯读，其余五个动作都进链', () => {
     const purity = routeOf(ROUTES.apply.path)?.purity
     expect(typeof purity).toBe('function')
     const of = purity as (body: Record<string, unknown> | null) => string
     expect(of({ action: 'count' })).toBe('pure')
+    expect(of({ action: 'unarchive' })).toBe('chained')
     for (const action of APPLY_ACTIONS.filter((item) => item !== 'count')) {
       expect(`${action}:${of({ action })}`).toBe(`${action}:chained`)
     }
@@ -146,8 +170,8 @@ describe('路由表 · 十个段名各一行', () => {
 })
 
 describe('路由表 · `/apply` 的动作表由类型派生', () => {
-  it('运行期那五个动作就是 `ApplyAction` 的五项（少一个编译不过，多一个也是）', () => {
-    const expected: ApplyAction[] = ['delete', 'restore', 'purge', 'count', 'orphan-clean']
+  it('运行期那六个动作就是 `ApplyAction` 的六项（少一个编译不过，多一个也是）', () => {
+    const expected: ApplyAction[] = ['delete', 'restore', 'purge', 'count', 'orphan-clean', 'unarchive']
     expect([...APPLY_ACTIONS].sort()).toEqual(expected.sort())
   })
 
@@ -178,8 +202,11 @@ describe('路由表 · `/apply` 的动作表由类型派生', () => {
 })
 
 describe('路由表 · 按段声明 deps 切片', () => {
-  it('读与探测五段声明 core：它们只要基础面（不删盘、不读时钟）', () => {
-    const core: readonly string[] = [ROUTES.list.path, ROUTES.ping.path, ROUTES.attachmentOrphans.path, ROUTES.orphans.path, ROUTES.detail.path]
+  it('读与探测各段声明 core：它们只要基础面（不删盘、不读时钟）', () => {
+    const core: readonly string[] = [
+      ROUTES.list.path, ROUTES.ping.path, ROUTES.attachmentOrphans.path, ROUTES.orphans.path,
+      ROUTES.detail.path, ROUTES.archiveList.path, ROUTES.archiveDetail.path, ROUTES.projectionOrphans.path,
+    ]
     for (const segment of core) {
       expect(`${segment}:${routeOf(segment)?.slice}`).toBe(`${segment}:core`)
     }
@@ -189,8 +216,8 @@ describe('路由表 · 按段声明 deps 切片', () => {
     expect(routeOf(ROUTES.attachment.path)?.slice).toBe('attachment')
   })
 
-  it('两个删盘段声明 removal：只多删除能力（removeDir / removeFile），仍不读时钟', () => {
-    const removal: readonly string[] = [ROUTES.attachmentClean.path, ROUTES.empty.path]
+  it('三个写段声明 removal：两个删盘段 + 投影缓存清理（只走缓存写链，不多删盘能力）', () => {
+    const removal: readonly string[] = [ROUTES.attachmentClean.path, ROUTES.empty.path, ROUTES.projectionClean.path]
     for (const segment of removal) {
       expect(`${segment}:${routeOf(segment)?.slice}`).toBe(`${segment}:removal`)
     }

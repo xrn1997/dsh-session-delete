@@ -38,7 +38,7 @@ async function failureMessage(run: Promise<RemoteOutcome<unknown>>): Promise<str
 }
 
 describe('createHttpRemote · 文档挂载点', () => {
-  it('九个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
+  it('十三个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
     vi.spyOn(document, 'baseURI', 'get').mockReturnValue('http://host/dsh/')
     const paths: string[] = []
     vi.stubGlobal('fetch', async (path: string) => {
@@ -56,7 +56,11 @@ describe('createHttpRemote · 文档挂载点', () => {
     await remote.scanOrphans()
     await remote.scanAttachmentOrphans()
     await remote.cleanAttachmentOrphans()
+    await remote.scanProjectionCacheOrphans()
+    await remote.cleanProjectionCacheOrphans()
     await remote.detail('e1')
+    await remote.archiveList()
+    await remote.archiveDetail('session-a')
     await remote.applyOutcomes('purge', ['e1'])
     await remote.emptyTrash()
 
@@ -68,7 +72,11 @@ describe('createHttpRemote · 文档挂载点', () => {
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.orphans.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentOrphans.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.attachmentClean.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.projectionOrphans.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.projectionClean.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.detail.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.archiveList.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.archiveDetail.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`,
     ])
@@ -100,7 +108,7 @@ describe('createHttpRemote · config 读/写共用一段', () => {
   })
 })
 
-describe('createHttpRemote · detail 那一趟（十段里的 `POST /detail`）', () => {
+describe('createHttpRemote · detail 那一趟（各段里的 `POST /detail`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
@@ -214,7 +222,7 @@ describe('createHttpRemote · 非信封 JSON 的诊断（issue #8 第 1 条）',
   })
 })
 
-describe('createHttpRemote · orphans 那一趟（十段里的 `GET /orphans`）', () => {
+describe('createHttpRemote · orphans 那一趟（各段里的 `GET /orphans`）', () => {
   const report = {
     roots: ['session-root'],
     totalSessions: 2,
@@ -252,7 +260,7 @@ describe('createHttpRemote · orphans 那一趟（十段里的 `GET /orphans`）
 
 // 2026-10-27 孤儿附件：报告是纯读（GET），清理是聚合写（POST）。两段都回 JSON 信封，
 // 失败按 `RemoteOutcome` 交回调用方（ADR-0053）——与其余段同一条契约。
-describe('createHttpRemote · 孤儿附件两段（十段里的 `GET /attachment-orphans` / `POST /attachment-clean`）', () => {
+describe('createHttpRemote · 孤儿附件两段（各段里的 `GET /attachment-orphans` / `POST /attachment-clean`）', () => {
   const envelope = (value: unknown) =>
     new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
 
@@ -448,5 +456,46 @@ describe('取数通道探测：一次往返 + 5s 上限', () => {
     expect(ping).toHaveBeenCalledTimes(1)
     expect(ping.mock.calls[0]?.[0]?.aborted).toBe(true)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('打不通'), expect.any(Error))
+  })
+})
+
+describe('createHttpRemote · 归档两趟（`GET /archive-list` / `POST /archive-detail`）', () => {
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+
+  it('archiveList 趟：GET /archive-list，无体', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope({ available: true, rows: [], totalBytes: 0, missingSizeCount: 0 })
+    })
+    await expect(createHttpRemote().archiveList()).resolves.toMatchObject({ ok: true })
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.archiveList.path}`)
+    expect(pick(calls, 0).init?.method).toBe('GET')
+    expect(pick(calls, 0).init?.body).toBeUndefined()
+    vi.unstubAllGlobals()
+  })
+
+  it('archiveDetail 趟：POST /archive-detail，体带 sessionId、可选 before 与只读根', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope({ sessionId: 'session-a', blocks: [], olderCursor: null })
+    })
+    await expect(createHttpRemote().archiveDetail('session-a')).resolves.toMatchObject({ ok: true })
+    await expect(createHttpRemote().archiveDetail('session-a', 7)).resolves.toMatchObject({ ok: true })
+    await expect(createHttpRemote().archiveDetail('kid-1', undefined, 'session-a')).resolves.toMatchObject({ ok: true })
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.archiveDetail.path}`)
+    expect(pick(calls, 0).init?.method).toBe('POST')
+    const firstBody = pick(calls, 0).init?.body
+    if (typeof firstBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof firstBody}`)
+    expect(JSON.parse(firstBody)).toEqual({ [PARAMS.sessionId]: 'session-a' })
+    const secondBody = pick(calls, 1).init?.body
+    if (typeof secondBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof firstBody}`)
+    expect(JSON.parse(secondBody)).toEqual({ [PARAMS.sessionId]: 'session-a', [PARAMS.before]: 7 })
+    const thirdBody = pick(calls, 2).init?.body
+    if (typeof thirdBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof firstBody}`)
+    expect(JSON.parse(thirdBody)).toEqual({ [PARAMS.sessionId]: 'kid-1', [PARAMS.rootSessionId]: 'session-a' })
+    vi.unstubAllGlobals()
   })
 })

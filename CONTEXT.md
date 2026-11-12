@@ -6,7 +6,7 @@
 
 ## 这是什么
 
-在宿主里**删除会话**：删除 = 移入回收站（可恢复），另设显式的彻底删除；回收站之外还有两类**手动**维护的存量：**无主子会话**与**孤儿附件**。两半：**Node 半**（动盘、动清册、动宿主服务）与**浏览器半**（槽位里的界面）。
+在宿主里**删除会话**：删除 = 移入回收站（可恢复），另设显式的彻底删除；回收站之外还有三类**手动**维护的存量：**无主子会话**、**孤儿附件**与**孤儿投影缓存**。两半：**Node 半**（动盘、动清册、动宿主服务）与**浏览器半**（槽位里的界面）。
 
 ## 名词
 
@@ -36,7 +36,7 @@ _Avoid_: 缓存（它是宿主持久副本；派生请求缓存在 `cache/attach
 _唯一实现_: `src/trash/attachments.ts` 的 `attachmentsInContent`。
 
 **同源取数闸（same-origin fetch gate）**:
-只挂附件字节段的浏览器取数约束：拒 `Sec-Fetch-Site` 为 same-site / cross-site 的请求，以及与 Host 头不同 authority 的 http(s) Origin / Referer；桌面壳的 `dsh-app:` 来源与三头全缺的非浏览器客户端放行。拒绝回 403 + 失败信封。只挂这一段是因为只有它的响应能被别的页面当 `<img>` 渲染（字节 oracle）；其余九段是 JSON，跨源读不到。
+只挂附件字节段的浏览器取数约束：拒 `Sec-Fetch-Site` 为 same-site / cross-site 的请求，以及与 Host 头不同 authority 的 http(s) Origin / Referer；桌面壳的 `dsh-app:` 来源与三头全缺的非浏览器客户端放行。拒绝回 403 + 失败信封。只挂这一段是因为只有它的响应能被别的页面当 `<img>` 渲染（字节 oracle）；其余各段是 JSON，跨源读不到。
 _唯一实现_: `src/api/connection-route.ts` 的 `isSameOriginFetch`；声明住 `src/api/route-table.ts` 的 `fetchGate`。
 _Avoid_: 请求栅栏（旧概念已随 ADR-0033 删除；这里只收字节 oracle，不做身份 / 归属判定）。
 
@@ -57,6 +57,11 @@ _唯一实现_: `src/trash/attachments.ts` 的 `planImageAttachmentRemoval`。
 `$DSH_HOME/attachments/v1/objects` 下、任何引用源（全部会话日志 + 全部 `session-trash` 目录 + `storages` / `cache` JSON）都不再引用的图片对象。只由插件设置页的维护卡手动检查与清理；只删这些 `.dsh` 内的图片副本，源文件与共享引用不在其中。
 _唯一实现_: `src/trash/attachments.ts` 的 `scanOrphanImageAttachments` / `cleanOrphanImageAttachments`。
 _Avoid_: 无主附件（父会话不在的是「无主子会话」；孤儿附件说的是"没有任何引用"）。
+
+**孤儿投影缓存（orphan projection cache）**:
+宿主 `session_projcache` 域里、既没有对应会话（语料 / 持久化）也没有清册行或 `session-trash/` 目录的记录。只由插件设置页的维护卡手动检查与清理；永久删除会在逐条删掉会话时顺手删掉**这一条**的缓存。「看不见 ≠ 没有」在这一段是硬判据：任何一环读不出都整体失败，不折成 0 条——归一、保护面与失败关闭的口径见 ADR-0062。
+_唯一实现_: `src/trash/projection-cache.ts` 的 `orphanProjectionCacheIds` / `cleanProjectionCacheOrphans`。
+_Avoid_: 投影缓存清理（那是动作不是存量）、缓存目录（那是介质不是判据）。
 
 **附件清理（attachment cleanup）**:
 永久删除或孤儿附件清理时，按计划删掉 `.dsh` 内独占 / 无引用的图片副本；不碰源文件、普通文件与共享引用。
@@ -81,22 +86,23 @@ _Avoid_: 垃圾桶、删除列表（会把它说成一个 UI 或一个临时缓�
 _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 
 **条目显示名（entry display name）**:
-条目行、详情标题排与子会话行显示的那个名字。次序：子会话的显示名（父日志 `subagent/catalog` 的 label；独立子会话自己日志的 `subagent/descriptor` label；fork 子会话自己日志的 `session/title`）→ 清册 `title` → 日志 `session/title` 兜底 → 未命名兜底。删除那一刻的取名判据住 `src/ports/host-port.ts` 的 `titleOf`（起名就按 label 优先）；存量条目的读时兜底由 `src/trash/detail.ts` 的 `subagentLabels` / `ownLabel` 与 `src/trash/display-name.ts` 的 `displayNameOfLog` 从日志折出，显示次序住 `src/client/trash-detail.tsx` 的 `rowName` / `headerName`。裁决见 ADR-0058。
+清单行（回收站档与归档档）、详情标题排与子会话行显示的那个名字。次序：子会话的显示名（父日志 `subagent/catalog` 的 label；独立子会话自己日志的 `subagent/descriptor` label；fork 子会话自己日志的 `session/title`）→ 清册 `title` → 日志 `session/title` 兜底 → 未命名兜底。删除那一刻的取名判据住 `src/ports/host-port.ts` 的 `titleOf`（起名就按 label 优先）；存量条目的读时兜底由 `src/trash/detail.ts` 的 `subagentLabels` / `ownLabel` 与 `src/trash/display-name.ts` 的 `displayNameOfLog` 从日志折出。
+_唯一实现_: 次序的前两格（`label` 非空优先 → 日志标题）住 `src/client/trash-view.ts` 的 `preferredNameOf`；兜底那句各归其面——子会话行 `src/client/subagent-section.tsx` 的 `rowName`、归档行 `src/client/trash-view.ts` 的 `displayNameOf`。回收站详情标题排另有四源次序（父行 label → 详情自己的 label → 清册标题 → 日志标题），住 `src/client/trash-detail.tsx` 的 `headerName`。裁决见 ADR-0058。
 _Avoid_: 拿主会话的 `title` 投影给子会话起名（同批会撞名，ADR-0058 就是为防它）。
 
 **详情块（detail block）**:
-回收站详情正文的一格，判别联合：`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`tool` 由 `tool/call` 建块、`tool/result` 按 `callId` 回填；turn/step/job/request 这类簿记事件不成块。每次只回尾部一页，页有块数与正文总量两道闸（单块另有字符闸）；`olderCursor` 是块在日志里的序号（分页边界），不是时间戳。
-_唯一实现_: `src/trash/detail.ts` 的 `readTrashDetail` / `PageBuilder`；线上形状住 `src/shared/wire.ts` 的 `TrashDetailBlockWire`。
+详情正文的一格（回收站档与归档档同一份），判别联合：`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`tool` 由 `tool/call` 建块、`tool/result` 按 `callId` 回填；turn/step/job/request 这类簿记事件不成块。每次只回尾部一页，页有块数与正文总量两道闸（单块另有字符闸）；`olderCursor` 是块在日志里的序号（分页边界），不是时间戳。
+_唯一实现_: `src/trash/detail.ts` 的 `createDetailFold`（内含 `PageBuilder`）——两档喂它：`readTrashDetail` 从 raw JSONL、`readArchiveDetail` 从 `readSession` 的事件流 + 合成 `session` 头；线上形状住 `src/shared/wire.ts` 的 `TrashDetailBlockWire`。
 _Avoid_: 消息（消息是日志里的 `user/message` / `assistant/message`；一条消息可以拆成多个块，工具块来自 `tool/call` 而不是 assistant content）。
 
 **工作步骤展示（work steps view）**:
-回收站详情的阅读档位：简洁 / 标准 / 详细 / 完全展开。它是同一份详情块的四种投影，不是四套渲染器：简洁只画用户与助手块；标准把**连续**过程块收成「工作步骤」组，点开仍逐条折叠；详细逐条列出、各自折叠；完全展开 = 详细 + 一次铺开当前页。档位与展开状态只活在当前条目，切条目重挂载后回到默认，不跨会话记住、也不写进配置。
-_唯一实现_: `src/client/trash-detail.tsx` 的 `ViewMode`；`src/client/detail-blocks.ts` 的 `threadItems`；自动连翻预算住 `src/client/use-detail-pager.ts` 的 `AUTO_OLDER_PAGE_LIMIT`。
+详情的阅读档位（回收站档与归档档同一份）：简洁 / 标准 / 详细 / 完全展开。它是同一份详情块的四种投影，不是四套渲染器：简洁只画用户与助手块；标准把**连续**过程块收成「工作步骤」组，点开仍逐条折叠；详细逐条列出、各自折叠；完全展开 = 详细 + 一次铺开当前页。档位与展开状态只活在当前主体，切主体重挂载后回到默认，不跨会话记住、也不写进配置。
+_唯一实现_: `src/client/session-detail.tsx` 的 `ViewMode`；`src/client/detail-blocks.ts` 的 `threadItems`；自动连翻预算住 `src/client/use-detail-pager.ts` 的 `AUTO_OLDER_PAGE_LIMIT`。
 _Avoid_: 全部展开 / 全部折叠（旧的单开关已删）；筛选、过滤（没有第二套读法）。
 
 **提问轨（prompt rail）**:
 详情右缘那道常驻的提问导航：一句用户提问一格，悬停 / 键盘聚焦出预览，点一下跳到那句。它不占正文布局、不设开合；整条会话的提问索引随详情首次读过线，未加载的那句点了先按游标补页到它进窗再落位。
-_唯一实现_: `src/client/prompt-rail.tsx` 的 `PromptRail`；当前哪句与补页循环住 `src/client/use-prompt-rail.ts` 的 `usePromptRail`；索引由 `src/trash/detail.ts` 的 `readTrashDetail` 产出（线上形状 `src/shared/wire.ts` 的 `TrashDetailPromptWire`）。
+_唯一实现_: `src/client/prompt-rail.tsx` 的 `PromptRail`；当前哪句与补页循环住 `src/client/use-prompt-rail.ts` 的 `usePromptRail`；**两档共用的接线**（从一台详情读路状态算出 prompts / 已加载块 / 有没有轨 / 保持期顶住）住 `src/client/use-detail-rail.ts` 的 `useDetailRail`；索引由 `src/trash/detail.ts` 的 `createDetailFold` 产出（两档同一份；线上形状 `src/shared/wire.ts` 的 `TrashDetailPromptWire`）。
 _Avoid_: 轮次轨 / turn rail（宿主按 turn 分格；这里按用户提问分格，一轮可能有多句）；时间线（那是回收站清单的说法）。
 
 **未分组（ungrouped）**:
@@ -145,7 +151,7 @@ _Avoid_: 传递闭包、bare id 去重（算法名与实现细节可以出现在
 _唯一实现_: `src/verbs/permanent-removal.ts` 的 `planTrashRemoval`（`PlannedTrashRow` 的 `strandedCount`）。
 
 **无主子会话（orphan subagent）**:
-`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录与会话独占的图片附件副本（投影缓存不在范围内；共享图片保留，判据见 ADR-0020）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。根闭包组的纯核心在「会话闭包」（`src/domain/closure.ts` 的 `orphanRootsOf`）——`orphanGroupsOf` 是按语料对象映射的薄包装，归堆与去重两边都去 `session-` 前缀。组内后代同样只收 `origin:'subagent'` 的会话；闭包不穿过普通 fork（ADR-0038）。
+`origin:"subagent"`、且父**既不在语料也不在清册**的会话。清理是**永久删除**——不搬进回收站、**不自动**跑，且只清会话目录、会话独占的图片附件副本与这些会话自己的投影缓存记录（共享图片保留，判据见 ADR-0020 与 ADR-0062）；检查与清理只由插件设置页的维护卡手动触发，回收站面板不再扫描它（ADR-0021）。根闭包组的纯核心在「会话闭包」（`src/domain/closure.ts` 的 `orphanRootsOf`）——`orphanGroupsOf` 是按语料对象映射的薄包装，归堆与去重两边都去 `session-` 前缀。组内后代同样只收 `origin:'subagent'` 的会话；闭包不穿过普通 fork（ADR-0038）。
 _唯一实现_: `src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrphanGroups`。
 
 **活体（live session）**:
@@ -172,6 +178,11 @@ _唯一实现_: `src/verbs/member-presence.ts` 的 `createMemberPresence`（动�
 **归档（archive）**:
 宿主「从分组面藏掉」那一档，只反映**用户自己**的归档状态；**回收站不使用它**（删除不调 `archiveSession`，见 ADR-0008）。旧版本删除留下的归档态条目在恢复时迁移式取消归档；`wasArchived` 只记删除前的事实。
 _Avoid_: 隐藏、回收站（归档不是删除，回收站也不是归档）。
+
+**归档档（archive tab）**:
+回收站面板内与回收站**平级**的一档（形态 A，ADR-0060）：只读展示已归档会话 + 显式解除归档 + 删除进回收站，覆盖"藏-找-扔"。清单 / 选中 / 详情与回收站档**完全独立**（键 = 会话 id，回收站档键 = 条目 id），不进首帧快照；`corpus-missing` 是「语料不可见」的显式缺席态，不是空清单，也不是通用失败。这一档各格的归属见 `docs/architecture.md` §4。
+_唯一实现_: `src/client/trash-panel.tsx` 的 `switchTab`（档位分段）与 `src/client/archive-pane.tsx` 的 `ArchiveList` / `ArchiveToolbar` / `ArchiveFooter`。
+_Avoid_: 归档面板、归档列表（档不是侧栏第二个面板；清单/选中/详情各是这一档自己的实例）。
 
 **通告（announce）**:
 让客户端**当场**删掉/加回一行的两条宿主事件（`api-session/removed` / `api-session/added`）。冷会话没有活体可摘，通告照样必须发。
@@ -202,24 +213,39 @@ _Avoid_: 弹窗（太泛；这里专指名单上那两类与「最上层」判�
 _唯一实现_: `src/client/use-trash-query.ts`。
 _Avoid_: 缓存、空清单（`unknown` 不是空，`ready([])` 才是空）。
 
+**行读数装配（session row reads）**:
+Node 半把一批会话 id 读成「一行里那几格」的一次预读：标题、最后活动、大小、子会话 label。四路的**缺席与失败落点**住这里（批量面缺席 ⇒ 逐条回退；大小服务缺席 ⇒ 逐行缺；大小读面抛错 ⇒ 按调用方策略要么整档 `io`、要么逐行缺）；「读哪一批 id、哪几格过线、时间读不到回落什么」归调用方。
+_唯一实现_: `src/trash/session-rows.ts` 的 `projectSessionRows` / `sizeTotals`。
+_Avoid_: 清册行（那是删除时落盘的事实，`src/trash/entry.ts`）；列表投影（那是路由那侧的交集与过线，`src/api/archive-rows.ts`）。
+
+**清单分组列（project group column）**:
+两档清单共用的那一列 DOM：grid 容器与它的一串 aria（只有真有行才挂）、项目组的组头、一行的三格（勾选 / 读数 / 动作）与底色，外加非就绪那一档的三张卡。调用方只交**行读数**与**那一排动作**，不各拼一份壳。
+_唯一实现_: `src/client/session-list.tsx` 的 `SessionList`（`ListLoading` / `ListNotice` / `ListEmpty` 三张卡同在）。
+_Avoid_: 行模板（这里不只是一行，容器与组头的挂载判据也在同一份里）；状态页（本仓的「页」指插件设置页与面板）。
+
+**面板选中面（panel selection）**:
+清单上「选中了哪一行」的那一面：选中行从**全量行**里找（折叠组只收掉清单那一列）、清单换版把已经不存在的选中行清掉、宽档首读后自动接住屏幕上第一条、动作失败原文按行存。回收站档与归档档**各持一份状态、读同一份实现**（ADR-0060 分的是状态，不是判据）。
+_唯一实现_: `src/client/use-panel-selection.ts` 的 `usePanelSelection`。
+_Avoid_: 选择面（勾选集合、多选态与折叠组住 `src/client/use-list-selection.ts`）；详情账本（那一行没了要作废哪些读数，由各档控制器经 `onGone` 自己决定）。
+
 **首帧快照（first-paint snapshot）**:
 面板跨挂载留下的**上一次成功读数**：清单、选中与详情账本；挂载首帧先画它，随后静默重读，重读失败整份丢掉。只活在进程内、不订阅、不持久化；折叠集、列宽、孩子视图不进快照。
 _唯一实现_: `src/client/trash-snapshot.ts` 的 `readTrashSnapshot` / `reconcileTrashRows` / `writeTrashSelection`。
 _Avoid_: 缓存（本仓已有「附件引用缓存」与「渲染侧快照」两个主）、持久化（重启即无）。
 
 **详情账本（detail ledger）**:
-按条目 id 记下的**已成功读到的详情**，与首帧快照同一模块；面板卸载后仍留着，挂载时详情与清单、选中一起续上。读取失败不记账，选中该条时重读；清单重读失败、清空成功、恢复或彻底删除成功都会丢掉相应条目或整份账本。清单成功重读只修剪上一份清单里出现过的顶部条目；孩子详情从不在清单行里，保留。
-_唯一实现_: `src/client/trash-snapshot.ts` 的 `readCachedTrashDetail` / `writeTrashDetail` / `forgetTrashDetail` / `forgetTrashDetails`。
+按行身份记下的**已成功读到的详情**，两档各持一份、互不读写：回收站那本键 = 条目 id、模块级、与首帧快照同一模块（面板卸载后仍留着，挂载时详情与清单、选中一起续上）；归档那本键 = 会话 id、只活在挂载内、不进首帧快照。读取失败不记账，选中该行时重读；回收站那本在清单重读失败、清空成功、恢复或彻底删除成功时丢掉相应条目或整份，清单成功重读只修剪上一份清单里出现过的顶部条目（孩子详情从不在清单行里，保留）。容量与淘汰两档同一条口径。
+_唯一实现_: 容量与淘汰住 `src/client/detail-ledger.ts` 的 `DETAIL_LEDGER_LIMIT` / `writeDetail`（账本 seam `DetailLedger` 也在这里）；回收站那本的读写住 `src/client/trash-snapshot.ts` 的 `readCachedTrashDetail` / `writeTrashDetail` / `forgetTrashDetail` / `forgetTrashDetails`，归档那本住 `src/client/use-archive-detail-reader.ts` 的挂载内 Map。
 _Avoid_: 详情缓存（「缓存」在本仓专指附件引用缓存；这里记的是已读事实）、旧详情（那是详情保持）。
 
 **详情保持（detail hold）**:
 换到一条还没读过的条目时，详情先继续画上一条已就绪的那一帧（正文 `inert` + `aria-busy`，右缘提问轨跟着顶住但整条禁用，超过静默窗口才在标题排出「正在读这条会话…」），新详情到了整帧换掉、失败换该条失败块；孩子视图不保持（导航面会串）。一条读失败不丢上一条已就绪的详情，下一条切换仍由它顶住。
-_唯一实现_: `src/client/trash-detail.tsx` 的 `TrashDetailState.holding` 与 `src/client/use-trash-detail-reader.ts` 的 `useTrashDetailReader`。
+_唯一实现_: `src/client/use-detail-reader.ts` 的 `DetailState`（`holding` 那一支，两档共用）；回收站实例对外的别名是 `src/client/trash-detail.tsx` 的 `TrashDetailState`。
 _Avoid_: 旧详情缓存（它不是缓存，是当前画着的那一帧）、骨架（保持期不出骨架）。
 
 **意图预取（intent prefetch）**:
 清单行与父详情里的子会话行在 hover / focus 停留一段预设延时（`PREFETCH_DELAY_MS`，档位见 ADR-0051）后，先把该条详情读进账本；划过不读、连续划过只认最后一次。它不改选中、不占详情上屏槽，也不把当前画面打成 loading——只为随后点击时命中账本。它只碰账本与在飞登记：成功不清已上屏的失败块（要等显式重试），失败不记账本、也不上屏（唯一例外：预取在飞时这一条被选中，选中的读路借的是那次请求，那次的失败就是它的失败块，见 ADR-0051 决定 3）。
-_唯一实现_: `src/client/use-prefetch.ts` 的 `useDelayedPrefetch` / `intentPrefetchHandlers`；账本与去重归 `src/client/use-trash-detail-reader.ts` 的 `prefetch`。
+_唯一实现_: `src/client/use-prefetch.ts` 的 `useDelayedPrefetch` / `intentPrefetchHandlers`；账本与去重归 `src/client/use-detail-reader.ts` 的 `prefetch`（两档各一台实例）。
 _Avoid_: 预加载（太泛，含资源预载）、悬停缓存（漏掉键盘 focus，且把账本说成缓存）。
 
 **可调项卡（options card）**:
@@ -228,7 +254,7 @@ _唯一实现_: `src/client/config-settings.tsx` 的 `ConfigSettings`；线上�
 _Avoid_: 宿主配置页（宿主的字段投影不认本插件的 Standard Schema）、设置面板。
 
 **维护卡（maintenance card）**:
-插件设置页（`plugins.bundle.config`，按 bundle 包名寻址）里「维护」那张卡，装两段手动维护：孤儿会话与孤儿附件。检查只读、清理过确认框、清完自动重查；挂载不发请求，没有定时器。
+插件设置页（`plugins.bundle.config`，按 bundle 包名寻址）里「维护」那张卡，装三段手动维护：孤儿会话、孤儿附件与孤儿投影缓存。检查只读、清理过确认框、清完自动重查；挂载不发请求，没有定时器。
 _唯一实现_: `src/client/maintenance-settings.tsx` 的 `MaintenanceSettings`（读数与动作住 `src/client/use-maintenance.ts` 的 `useMaintenance`）。
 _Avoid_: 设置面板、清理任务（「面板」专指回收站面板；这里没有自动任务）。
 
@@ -248,8 +274,8 @@ _唯一实现_: `src/client/use-trash-panel-controller.ts`。
 _Avoid_: 确认框状态（框只管呈现；开合与关框规则不在视图里）。
 
 **孩子视图（child view）**:
-回收站详情正在看某个子条目时的离清单导航态：详情主体切到孩子（同一套会话信息、正文与分页），清单选中仍在父行，组动作仍按整组；单级，返回回到清单选中那条的详情。入口是父详情的「子会话」段（裁决见 ADR-0055 的「沿用」节）。
-_唯一实现_: `src/client/use-trash-panel-controller.ts` 的 `childView`。
+两档详情正在看某个孩子时的离清单导航态：详情主体切到孩子（同一套会话信息、正文与分页），清单选中仍在父行；单级，返回回到清单选中那条的详情。回收站档的孩子是清册行，入口是父详情的「子会话」段（裁决见 ADR-0055 的「沿用」节）；归档档的孩子是宿主闭包行，未归档孩子随已归档父会话只读查看（裁决见 ADR-0061）。两档各持一份状态，只共用视图层。
+_唯一实现_: `src/client/use-trash-panel-controller.ts` 的 `childView`；`src/client/use-archive-panel-controller.ts` 的 `ArchiveChildView`。
 _Avoid_: 下钻（下钻专指窄档清单→详情那一层，孩子视图在详情内部）；子会话详情页（不是新页面或新段，只是详情主体换人）。
 
 **后发读赢（latest-wins）**:

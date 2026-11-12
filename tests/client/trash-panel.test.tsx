@@ -8,17 +8,23 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
+import { DeleteConfirmHost } from '../../src/client/delete-confirm.js'
+import { UndoToast } from '../../src/client/undo-toast.js'
 import {
+  readCachedTrashDetail,
+  readTrashSnapshot,
   writeTrashDetail,
   reconcileTrashRows,
   writeTrashSelection,
 } from '../../src/client/trash-snapshot.js'
 import { invalidateTrash } from '../../src/client/trash-store.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
-import type { ApplyAction, ApplyOutcome, TrashDetailLike } from '../../src/client/remote.js'
+import type { ApplyAction, ApplyOutcome, ArchiveDetailLike, TrashDetailLike } from '../../src/client/remote.js'
+import type { ArchiveListWire } from '../../src/shared/wire.js'
+import type { ArchiveRowWire } from '../../src/shared/wire.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
 import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
-import { failed, outcomes, restoreOutcomes } from './support/outcomes.js'
+import { failed, ok, outcomes, restoreOutcomes, trashRow } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
 import { must, pick } from '../support/fixture.js'
 
@@ -1631,7 +1637,7 @@ function kidDeps(): FakeRemote {
 describe('回收站面板 · 子会话详情', () => {
   /** 子会话段默认收起（ui-spec 状态⑥）：点摘要条才展开出孩子行。 */
   function openSubagents(): void {
-    fireEvent.click(must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-toggle"]'), '子会话摘要条'))
+    fireEvent.click(must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="session-subagents-toggle"]'), '子会话摘要条'))
   }
 
   it('宽档：父详情点子会话 → 孩子正文上屏，清单选中仍在父行；返回父会话可回', async () => {
@@ -1677,12 +1683,12 @@ describe('回收站面板 · 子会话详情', () => {
     })
     renderWide(deps)
     await screen.findByText('先看改动')
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagents-toggle"]')).not.toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="session-subagents-toggle"]')).not.toBeNull()
     openSubagents()
     fireEvent.click(screen.getByText('孩子会话'))
     await screen.findByText('孩子的正文')
     expect(screen.queryByText('孙辈会话')).not.toBeInTheDocument()
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagents"]')).toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="session-subagents"]')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: '← 返回父会话' }))
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
@@ -1703,5 +1709,418 @@ describe('回收站面板 · 子会话详情', () => {
     fireEvent.click(must(document.getElementById('sd-trash-a'), '甲组那条行'))
     expect(await screen.findByText('先看改动')).toBeInTheDocument()
     expect(screen.queryByText('回收站目录不在')).not.toBeInTheDocument()
+  })
+})
+
+describe('归档档（平级分段）', () => {
+  const archiveRow = (sessionId: string, over: Partial<ArchiveRowWire> = {}): ArchiveRowWire => ({
+    sessionId, projectDir: '--p--', title: `${sessionId}-标题`, updatedAt: 100, updatedAtSource: 'prompt',
+    subagent: false, ...over,
+  })
+  const archiveDetailOf = (sessionId: string): ArchiveDetailLike => ({
+    sessionId, archived: true, cwd: 'C:/p', createdAt: 1, lastActivity: 2, logTitle: '', models: [],
+    turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
+    injectedCount: 0, blocks: [], olderCursor: null,
+  })
+  function makeArchiveDeps(over: Partial<FakeRemoteMethods> = {}) {
+    return makeDeps({
+      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({
+        available: true,
+        rows: [archiveRow('session-x', { label: '子任务名' }), archiveRow('session-y')],
+        totalBytes: 0, missingSizeCount: 0,
+      })),
+      archiveDetail: vi.fn(async (sessionId: string): Promise<ArchiveDetailLike> => archiveDetailOf(sessionId)),
+      ...over,
+    })
+  }
+  const archiveTab = () => screen.getByRole('button', { name: '归档' })
+  const rowCount = (container: HTMLElement, attr: string) =>
+    container.querySelectorAll(`[data-dsh-session-delete="${attr}"]`).length
+  /** 组头在多选态也有一颗勾选框；这里的用例要的是行自己的那几颗。 */
+  const rowCheckboxes = () => screen.getAllByRole('checkbox')
+    .filter((box) => box.closest('[data-dsh-session-delete="archive-row"]') !== null)
+
+  it('面板头是平级分段：回收站 N | 归档 M；M 惰性（挂载只读 /list，切档才读归档）', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    expect(screen.getByRole('button', { name: '回收站' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '归档' })).toBeInTheDocument()
+    // 默认档是回收站：挂载即读 /list、不读 /archive-list（不为可能不打开的档付全语料读）。
+    expect(deps.list).toHaveBeenCalled()
+    expect(deps.archiveList).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-dsh-session-delete="archive-count"]')).toBeNull()
+    // 切到归档档才读；M 在首次成功读取后出现。
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    expect(deps.archiveList).toHaveBeenCalledTimes(1)
+    // 拍板形态「回收站 N | 归档 M」：两档计数都在分段里（M 首次成功读取后才出现）。
+    expect(must(container.querySelector('[data-dsh-session-delete="trash-count"]'), '回收站计数应在场').textContent).toBe('1')
+    expect(must(container.querySelector('[data-dsh-session-delete="archive-count"]'), '归档计数应在场').textContent).toBe('2')
+    // 计数由 `aria-describedby` 带进可及描述：按钮名仍是纯档名，描述里能读到 N/M。
+    const trashButton = screen.getByRole('button', { name: '回收站' })
+    const archiveButton = screen.getByRole('button', { name: '归档' })
+    const trashDescribed = trashButton.getAttribute('aria-describedby')
+    const archiveDescribed = archiveButton.getAttribute('aria-describedby')
+    expect(trashDescribed).not.toBeNull()
+    expect(archiveDescribed).not.toBeNull()
+    expect(document.getElementById(trashDescribed ?? '')?.textContent).toBe('1')
+    expect(document.getElementById(archiveDescribed ?? '')?.textContent).toBe('2')
+  })
+
+  it('归档副标题：合计只加已知大小，读不出来的行数追加「N 条大小缺席」', async () => {
+    const deps = makeArchiveDeps({
+      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({
+        available: true,
+        rows: [archiveRow('session-x', { sizeBytes: 1024 }), archiveRow('session-y'), archiveRow('session-z')],
+        totalBytes: 1024, missingSizeCount: 2,
+      })),
+    })
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(3) })
+    // 「—」在行上，合计里不占数；副标题必须把「两行没有可信读数」说出来，不拿 0 冒充。
+    expect(screen.getByText(/2 条大小缺席/)).toBeInTheDocument()
+    expect(screen.getByText(/3 个已归档会话 · 合计/)).toBeInTheDocument()
+  })
+
+  it('面板头两档用大号分段（与旧版 H1 同档，回收站与归档同尺寸）', async () => {
+    const deps = makeArchiveDeps()
+    renderWide(deps)
+    await waitFor(() => { expect(deps.list).toHaveBeenCalled() })
+    expect(screen.getByRole('group', { name: '面板档位' })).toHaveClass('sd-seg', 'sd-seg-lg')
+  })
+
+  it('宽档归档首读完成后自动选中第一条（右栏不空，与回收站同一条）', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalledWith('session-x', undefined, undefined) })
+    expect(screen.getByRole('row', { name: /子任务名/ })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('父详情里的未归档孩子只读打开：带父 id 读、孩子视图可返回父', async () => {
+    const deps = makeArchiveDeps({
+      archiveDetail: vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<ArchiveDetailLike> => {
+        if (sessionId === 'session-x') {
+          return {
+            ...archiveDetailOf(sessionId),
+            subagents: [{ sessionId: 'kid-1', archived: false, projectDir: '--p--', title: '孩子一' }],
+          }
+        }
+        return sessionId === 'kid-1' ? { ...archiveDetailOf(sessionId), archived: false } : archiveDetailOf(sessionId)
+      }),
+    })
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalledWith('session-x', undefined, undefined) })
+
+    fireEvent.click(must(container.querySelector('[data-dsh-session-delete="session-subagents-toggle"]'), '子会话摘要条'))
+    const child = must(container.querySelector('[data-dsh-session-delete="session-subagent-row"]'), '可点孩子行')
+    fireEvent.click(child)
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalledWith('kid-1', undefined, 'session-x') })
+    expect(await screen.findByText('随归档父会话查看')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /返回父会话/ }))
+    expect(await screen.findByText('已归档')).toBeInTheDocument()
+    expect(screen.queryByText('随归档父会话查看')).not.toBeInTheDocument()
+  })
+
+  it('已归档但不在清单行里的孩子：点开照实说「已归档」，不误标「随归档父会话查看」', async () => {
+    // 归档清单 = 归档集 ∩ `listSessions`：被清单跳过的已归档孩子（冷无 cwd 之列）不在行里，
+    // 却在父闭包里、正文读得出。状态行认主体自己的归档态（wire 的 `archived`），不认
+    // 「孩子视图」这个导航道——「找不到清单行」不等于「未归档」。
+    const deps = makeArchiveDeps({
+      archiveDetail: vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<ArchiveDetailLike> => {
+        if (sessionId === 'session-x') {
+          return {
+            ...archiveDetailOf(sessionId),
+            subagents: [{ sessionId: 'kid-1', archived: true, projectDir: '--p--', title: '孩子一' }],
+          }
+        }
+        return archiveDetailOf(sessionId)
+      }),
+    })
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalledWith('session-x', undefined, undefined) })
+
+    fireEvent.click(must(container.querySelector('[data-dsh-session-delete="session-subagents-toggle"]'), '子会话摘要条'))
+    fireEvent.click(must(container.querySelector('[data-dsh-session-delete="session-subagent-row"]'), '可点孩子行'))
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalledWith('kid-1', undefined, 'session-x') })
+    expect(await screen.findByText('已归档')).toBeInTheDocument()
+    expect(screen.queryByText('随归档父会话查看')).not.toBeInTheDocument()
+  })
+
+  it('归档多选态组头有组勾选框：一点选中整组（含折叠起来的）', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /勾选「p」这 2 条会话/ }))
+    expect(await screen.findByRole('button', { name: '解除所选 2 条' })).toBeInTheDocument()
+  })
+
+  it('归档详情与回收站同一套提问轨：prompts 过线时右缘出现提问导航', async () => {
+    const deps = makeArchiveDeps({
+      archiveDetail: vi.fn(async (sessionId: string): Promise<ArchiveDetailLike> => ({
+        ...archiveDetailOf(sessionId),
+        prompts: [{ id: 'p1', at: 1, preview: '先看改动' }],
+        blocks: [{ kind: 'user', id: 'p1', time: 1, text: '先看改动', truncated: false, attachments: [] }],
+      })),
+    })
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    expect(await screen.findByRole('navigation', { name: '提问导航' })).toBeInTheDocument()
+  })
+
+  it('多选勾选框的无障碍名是显示名（未命名行也有）', async () => {
+    const deps = makeArchiveDeps({
+      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({
+        available: true,
+        rows: [archiveRow('session-z', { title: '' })],
+        totalBytes: 0, missingSizeCount: 0,
+      })),
+    })
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(1) })
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    // 未命名行（无 label、无 title）：勾选框的无障碍名走「未命名 · <短 id>」兜底，不是空串。
+    expect(screen.getByRole('checkbox', { name: /^未命名/ })).toBeInTheDocument()
+  })
+
+  it('切档清空选中（双向）；两档折叠集互不影响', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    // 回收站：进多选勾一条，切档往返 ⇒ 勾选与多选态一起被清（exitSelect）。
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    fireEvent.click(must(screen.getAllByRole('checkbox')[0], '勾选框应在场'))
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
+
+    // 归档档：进多选勾两条，切档往返 ⇒ 同样被清（双向）。
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    for (const box of rowCheckboxes()) fireEvent.click(box)
+    await screen.findByRole('button', { name: '删除所选 2 条' })
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
+
+    // 折叠集按档独立：回收站「全部折叠」收掉 trash 行，归档档的行不受影响。
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    fireEvent.click(screen.getByRole('button', { name: '全部折叠' }))
+    expect(rowCount(container, 'trash-row')).toBe(0)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+  })
+
+  it('归档行渲染：显示名 label 优先、时间标签、大小缺席 —、两枚图标按钮带 aria-label', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    // label 优先（session-x 显示「子任务名」）；session-y 回落日志标题。
+    expect(screen.getAllByText('子任务名').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByText('session-y-标题').length).toBeGreaterThanOrEqual(1) // 无 label 的行回落 title
+    expect(screen.getAllByText(/最后活动/).length).toBeGreaterThanOrEqual(1)
+    // 两行都无 sizeBytes ⇒ 行内元信息各显式「—」，不拿 0 冒充。
+    const renderedRows = container.querySelectorAll('[data-dsh-session-delete="archive-row"]')
+    expect(renderedRows).toHaveLength(2)
+    for (const rendered of renderedRows) expect(rendered.textContent).toContain('—')
+    expect(screen.getAllByRole('button', { name: '解除归档' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: '删除' })).toHaveLength(2)
+  })
+
+  it('归档清单是 grid：rowgroup/row/gridcell、aria-activedescendant 与 roving tabindex', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    const grid = screen.getByRole('grid', { name: '归档' })
+    expect(grid).toHaveAttribute('aria-colcount', '2')
+    expect(within(grid).getAllByRole('rowgroup')).toHaveLength(1)
+    const rows = within(grid).getAllByRole('row').filter((row) => row.hasAttribute('aria-selected'))
+    expect(rows).toHaveLength(2)
+    expect(rows[0]).toHaveAttribute('tabindex', '0')
+    expect(rows[1]).toHaveAttribute('tabindex', '-1')
+    // 每个行内动作都住在 gridcell 里（row 的直接子代必须是 cell）。
+    for (const row of rows) {
+      expect(within(row).getAllByRole('gridcell').length).toBeGreaterThan(0)
+      for (const button of within(row).getAllByRole('button')) {
+        expect(button.closest('[role="gridcell"]')).not.toBeNull()
+      }
+    }
+  })
+
+  it('归档清单键盘：窄档方向键只移动活动行，Enter 下钻，Esc 回清单', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderNarrow(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    const grid = screen.getByRole('grid', { name: '归档' })
+    const rows = within(grid).getAllByRole('row').filter((row) => row.hasAttribute('aria-selected'))
+    const first = must(rows[0], '第一条归档行')
+    const second = must(rows[1], '第二条归档行')
+
+    // 首按 ↓ 未选中 ⇒ 落第一条；再按一次才到下一条（与回收站清单同一条走环规则）。
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
+    expect(grid).toHaveAttribute('aria-activedescendant', first.id)
+    expect(first).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
+    expect(second).toHaveAttribute('aria-selected', 'true')
+    expect(grid).toHaveAttribute('aria-activedescendant', second.id)
+    // 方向键只移动活动行：还没读详情、也没进下钻。
+    expect(deps.archiveDetail).not.toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
+
+    fireEvent.keyDown(second, { key: 'Enter' })
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalled() })
+    expect(await screen.findByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+  })
+
+  // 两档的导航同时挂在一次挂载里（各自一台 `useTrashNav`，都听 `document` 的 Esc）。屏上只有当前档，
+  // 所以按键归属也只能是当前档：另一档的下钻状态不许被这一次 Esc 悄悄收走（ADR-0060 决定第 4 条：
+  // 两档状态互不相通）。
+  it('窄档：一档的下钻不被另一档的 Esc 收走（键盘契约只跟着当前档）', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderNarrow(deps)
+
+    // 归档档下钻 → 切到回收站档 → 一次 Esc → 回归档档：还在详情里。
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    const archiveGrid = screen.getByRole('grid', { name: '归档' })
+    const archiveFirst = must(
+      within(archiveGrid).getAllByRole('row').filter((row) => row.hasAttribute('aria-selected'))[0],
+      '第一条归档行',
+    )
+    fireEvent.keyDown(archiveFirst, { key: 'Enter' })
+    expect(await screen.findByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(archiveTab())
+    expect(screen.getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+
+    // 反方向：回收站档下钻 → 切到归档档 → 一次 Esc → 回回收站档：也还在详情里。
+    fireEvent.click(screen.getByRole('button', { name: '← 返回清单' }))
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    fireEvent.click(must(container.querySelector('[data-dsh-session-delete="trash-row"]'), '回收站行应在场'))
+    expect(await screen.findByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(0) })
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    expect(screen.getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+  })
+
+  it('corpus-missing 是独立块带重试，不折成空态', async () => {
+    const deps = makeArchiveDeps({
+      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({ available: false })),
+    })
+    renderWide(deps)
+    fireEvent.click(archiveTab())
+    await screen.findByText('语料不可见')
+    expect(screen.getByText('宿主的会话查询服务不可用，归档清单读不出来。')).toBeInTheDocument()
+    expect(screen.queryByText('没有已归档的会话')).not.toBeInTheDocument()
+    // 重试：换成可用后走 ready（空态）。
+    must(deps.archiveList, 'archiveList 假件应在场').mockResolvedValue({ ok: true, value: { available: true, rows: [], totalBytes: 0, missingSizeCount: 0 } })
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await screen.findByText('没有已归档的会话')
+  })
+
+  it('读失败上屏带重试，不折成空态', async () => {
+    const failing = makeArchiveDeps({
+      archiveList: vi.fn(async (): Promise<ArchiveListWire> => { throw new Error('boom') }),
+    })
+    renderWide(failing)
+    fireEvent.click(archiveTab())
+    await screen.findByText('归档读不到')
+    expect(screen.getByText('boom')).toBeInTheDocument()
+    expect(screen.queryByText('没有已归档的会话')).not.toBeInTheDocument()
+  })
+
+  it('归档档页脚 = 解除所选/删除所选；回收站档页脚不变', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    // 进多选、勾两条（工具行随档位：这里点多选 = 归档档自己的选择面）。
+    fireEvent.click(screen.getByRole('button', { name: '多选' }))
+    const boxes = rowCheckboxes()
+    fireEvent.click(must(boxes[0], '勾选框应在场'))
+    fireEvent.click(must(boxes[1], '勾选框应在场'))
+    expect(await screen.findByRole('button', { name: '解除所选 2 条' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '删除所选 2 条' })).toBeInTheDocument()
+    // 页脚那颗把**两条勾选 id** 一次交给 /apply 的 unarchive（不是逐条发、也不是只发第一条）。
+    fireEvent.click(screen.getByRole('button', { name: '解除所选 2 条' }))
+    await waitFor(() => { expect(deps.applyOutcomes).toHaveBeenCalled() })
+    const [action, ids] = must(deps.applyOutcomes.mock.calls.at(-1), 'unarchive 应发过一趟')
+    expect(action).toBe('unarchive')
+    expect([...ids].sort()).toEqual(['session-x', 'session-y'])
+    // 回收站档页脚不变（清空回收站仍在）。
+    fireEvent.click(screen.getByRole('button', { name: '回收站' }))
+    await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
+    expect(screen.getByRole('button', { name: '清空回收站…' })).toBeInTheDocument()
+  })
+
+  it('归档档选中/详情不写 trash-snapshot（writeTrashSelection 与详情账本零触碰）', async () => {
+    const deps = makeArchiveDeps()
+    const { container } = renderWide(deps)
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    fireEvent.click(must(container.querySelector('[data-dsh-session-delete="archive-row"]'), '归档行应已渲染'))
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalled() })
+    // 回收站档自己的快照（含宽档自动选中）是它自己的；要钉的是**归档选中/详情零触碰**：
+    // 点归档行前后快照一字不变（选中不进 writeTrashSelection），详情不进回收站账本（键域两套）。
+    const before = readTrashSnapshot()
+    fireEvent.click(must(container.querySelector('[data-dsh-session-delete="archive-row"]'), '归档行应已渲染'))
+    await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalled() })
+    expect(readTrashSnapshot()).toEqual(before)
+    expect(readCachedTrashDetail('session-x')).toBeUndefined()
+  })
+
+  it('删除已归档会话后撤销横幅带归档句：面板 → 确认框 → 撤销提示整条链', async () => {
+    const deps = makeArchiveDeps({
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
+        (action === 'delete'
+          ? ids.map((id) => ok('delete', id, { ...trashRow(`entry-${id}`, id), wasArchived: true }))
+          : outcomes(action, ids))),
+    })
+    const { container } = render(
+      <>
+        <TrashPanel deps={deps} />
+        <DeleteConfirmHost deps={deps} />
+        <UndoToast deps={deps} />
+      </>,
+    )
+    fireEvent.click(archiveTab())
+    await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
+    const archiveRow = must(container.querySelector<HTMLElement>('[data-dsh-session-delete="archive-row"]'), '归档行应已渲染')
+    fireEvent.click(within(archiveRow).getByRole('button', { name: '删除' }))
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站' }))
+    await waitFor(() => {
+      expect(screen.getByText(/其中已归档的，撤销后回到「归档」/)).toBeInTheDocument()
+    })
+    expect(deps.applyOutcomes).toHaveBeenCalledWith('delete', ['session-x'])
   })
 })

@@ -28,7 +28,7 @@ Status: superseded by 0054
 
 ## 后果
 
-- `src/client/trash-detail.tsx` 多出 `ViewMode`；`src/client/detail-blocks.ts` 承担 `threadItems` 的连续过程分组；`src/client/use-detail-pager.ts` 承担 `AUTO_OLDER_PAGE_LIMIT`、自动连翻与 prepend 后的滚动锚点；`src/client/ui/layout.css` 承担分段控件的伪类与焦点环。
+- `src/client/session-detail.tsx` 多出 `ViewMode`；`src/client/detail-blocks.ts` 承担 `threadItems` 的连续过程分组；`src/client/use-detail-pager.ts` 承担 `AUTO_OLDER_PAGE_LIMIT`、自动连翻与 prepend 后的滚动锚点；`src/client/ui/layout.css` 承担分段控件的伪类与焦点环。
 - 旧的「全部展开 / 全部折叠」详情按钮与两条 copy key 删除；简洁档新增“这段会话只有过程内容”与“这一页只有过程内容”两句。
 - 新控件必须自己描键盘焦点（这一代宿主的焦点环 token 是 transparent），并保持分段按钮的 `aria-pressed` 与工具栏可读性。
 - 触发后自动继续翻页的上限住 `AUTO_OLDER_PAGE_LIMIT`（触发那一页不计入）；到达上限后页面仍停留、仍可手动继续。
@@ -42,4 +42,4 @@ Status: superseded by 0054
 - **用原生 `<select>` 选档**：与插件其余控件不是一套长相；分段控件在窄栏也能一眼看全四档。
 - **档位跨会话记住 / 进配置**：一条会话的阅读姿势不该变成另一条的默认，也不该进持久化面。
 
-锚点：`docs/ui-spec.md` ⑥；`src/client/trash-detail.tsx`；`src/client/detail-blocks.ts`；`src/client/use-detail-pager.ts`；`src/client/copy.ts`；`src/client/ui/layout.css`；`tests/client/trash-detail.test.tsx`；ADR-0026。
+锚点：`docs/ui-spec.md` ⑥；`src/client/session-detail.tsx`；`src/client/detail-blocks.ts`；`src/client/use-detail-pager.ts`；`src/client/copy.ts`；`src/client/ui/layout.css`；`tests/client/trash-detail.test.tsx`；ADR-0026。

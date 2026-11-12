@@ -16,7 +16,7 @@ ADR-0004 把段名、纯度、读面与 body 收进一条路由记录；但 deps
 - 方法字面量仍住 `shared/wire.ts` 的段名表，路由记录与浏览器半只投影（ADR-0003）。
 - 不在 dispatch 里逐行做类型判断：查表函数交回整张表的值类型，注入点只按 `slice` 选格；超面调用由表字面量的逆变校验挡。
 - `core` 只收窄 fs 的删除能力与时钟；`host` 的在场三件仍由 `CoreDeps.presence` 分离，不在本篇重复。
-- **`host` 不是运行期切片**：`coreDepsOf` 把 `full.host` 原样转交，读段拿到的是同一颗对象。在场三件在**类型面**已被 `HostCorePort` 挡掉（ADR-0019，`tests/deps.test.ts` 的 `coreHostHasNoPresence` 钉住），运行期那颗对象却仍带着它们——要把它也变成对象事实，得在 `coreDepsOf` 里逐方法包一层窄对象，本篇没做。本篇真正收窄成对象事实的只有 fs（`core` 按 `FS_CORE_METHODS` 现切、`removal` 另切删除名单）与时钟两格。
+- **`host` 不是运行期切片**：`coreDepsOf` 把 `full.host` 原样转交，读段拿到的是同一颗对象。在场三件与投影缓存删除面在**类型面**已被 `HostCorePort` 挡掉（ADR-0019 / ADR-0062，`tests/deps.test.ts` 的 `coreHostHasNoPresence` 与 `tests/host-roles.test.ts` 的键集合钉住），运行期那颗对象却仍带着它们——要把它也变成对象事实，得在 `coreDepsOf` 里逐方法包一层窄对象，本篇没做。本篇真正收窄成对象事实的只有 fs（`core` 按 `FS_CORE_METHODS` 现切、`removal` 另切删除名单）与时钟两格。
 
 ## 后果
 

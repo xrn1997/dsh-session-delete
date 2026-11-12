@@ -35,7 +35,7 @@ const imageLog = () => zlib.zstdCompressSync(Buffer.from(
 /** 一个附件都没碰的回执（现有的普通组不涉及图片）。 */
 const NOTHING_CLEANED = { removed: 0, freedBytes: 0, failed: 0 } as const
 const s = (sessionId: string, over: Partial<SessionIdentity> = {}): SessionIdentity => ({
-  sessionId, projectDir: '--p--', subagent: true, ...over,
+  sessionId, projectDir: '--p--', subagent: true, createdAt: 0, ...over,
 })
 
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）：`corpus` 就是"这一家有会话语料"的语法糖。

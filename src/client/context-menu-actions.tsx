@@ -98,7 +98,7 @@ export function createSessionMenuContribution(
     return [
       {
         id: 'batch-select',
-        label: isSelecting() ? t('trash.toolbar.selectExit') : t('trash.toolbar.select'),
+        label: isSelecting() ? t('list.select.exit') : t('list.select.enter'),
         icon: { key: ICON_BATCH },
         separatorBefore: true,
         afterContent: true,

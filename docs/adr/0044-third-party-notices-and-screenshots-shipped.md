@@ -6,7 +6,7 @@ Status: accepted
 
 ## 背景
 
-0.6.1 的发布校验改成「按 `files` 推导包内树」，同一批把 `THIRD_PARTY_NOTICES.md` 连同它的 `files` 行、README 段与骨架测试一起删了，理由是产物里的出处已经在各复制文件的头注里写死。头注确实说了「从哪来」，但它住在 `src/`，装进包的是 `lib/`：npm 上拿到副本的人看不见头注，MIT 那句「shall be included in all copies」就没有落实。README 的图片是另一件事：插件详情页把 README 当详情文档渲染，相对路径从**包内**读，截图不进包就是三张破图。
+0.6.1 的发布校验改成「按 `files` 推导包内树」，同一批把 `THIRD_PARTY_NOTICES.md` 连同它的 `files` 行、README 段与骨架测试一起删了，理由是产物里的出处已经在各复制文件的头注里写死。头注确实说了「从哪来」，但它住在 `src/`，装进包的是 `lib/`：npm 上拿到副本的人看不见头注，MIT 那句「shall be included in all copies」就没有落实。README 的图片是另一件事：插件详情页渲染的详情文档里相对路径从**包内**读（当时详情文档就是 README；现由 `locale` 的 `meta.detail` 点名 `docs/DETAIL.zh.md` 这类每语言一份的短文档，README 是回退），截图不进包就是三张破图。
 
 ## 决定
 

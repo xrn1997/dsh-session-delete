@@ -33,7 +33,7 @@ export { Config }
  * - `agents`：只给 handle 捕获用（`ctx.get('agents')`；缺席时 `ctx.inject(['agents'])` 等服务就绪再装）。
  *   它同样可能晚于本插件激活，写进插件 inject 只会让整个插件 pending。
  *
- * `connection` 是浏览器半取数通道的唯一承载者：十段注册到 `connection.fetch.register` 的
+ * `connection` 是浏览器半取数通道的唯一承载者：全部段名注册到 `connection.fetch.register` 的
  * `/api/dsh-session-delete-api/*`，Host/Origin/浏览器认证由宿主 `/api` bridge 完成（ADR-0033）。
  * 支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`；服务缺席时插件停在 pending
  * ——可见的激活失败，而不是静默地没有入口。`webServer` 不再直接使用：exact route 仍由宿主的

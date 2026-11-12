@@ -2,7 +2,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate, type Translate } from '../../src/client/copy.js'
-import { TrashDetail, type DetailPager, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
+import { TrashDetail, type TrashDetailProps, type TrashDetailState } from '../../src/client/trash-detail.js'
+import type { DetailPager } from '../../src/client/session-detail.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import {
   OFFICIAL_SESSION_DELETE_API_PREFIX,
@@ -102,7 +103,7 @@ function at(state: TrashDetailState, over: Over = {}) {
 }
 
 function withBlocks(blocks: TrashDetailBlockWire[], over: Over = {}) {
-  return at({ kind: 'ready', entry, detail: { ...detail, blocks } }, over)
+  return at({ kind: 'ready', subject: entry, detail: { ...detail, blocks } }, over)
 }
 
 /** 逐块折叠的判据住在「详细」档：默认「标准」把连续的过程块收成一组（docs/ui-spec.md 状态⑥）。 */
@@ -132,7 +133,7 @@ describe('回收站详情块 · 四种状态', () => {
   })
 
   it('读数中：说在读哪一条，且这里不摆动作（动作住在清单行右侧）', () => {
-    at({ kind: 'loading', entry })
+    at({ kind: 'loading', subject: entry })
     expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
     expect(screen.queryAllByRole('button')).toHaveLength(0)
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
@@ -140,7 +141,7 @@ describe('回收站详情块 · 四种状态', () => {
 
   it('读数失败：原文上屏 + 重试，且这块是 role="status"', () => {
     const onRetry = vi.fn()
-    at({ kind: 'failed', entry, message: '读会话日志失败：第 2 帧解压失败' }, { onRetry })
+    at({ kind: 'failed', subject: entry, message: '读会话日志失败：第 2 帧解压失败' }, { onRetry })
     const block = screen.getByRole('status')
     expect(block).toHaveTextContent('这条会话的正文读不出来')
     expect(block).toHaveTextContent('读会话日志失败：第 2 帧解压失败')
@@ -149,20 +150,20 @@ describe('回收站详情块 · 四种状态', () => {
   })
 
   it('窄档下钻时详情顶部有返回，宽档没有（同屏就有清单）', () => {
-    const { container: narrowPane } = at({ kind: 'ready', entry, detail }, { wide: false })
+    const { container: narrowPane } = at({ kind: 'ready', subject: entry, detail }, { wide: false })
     expect(within(narrowPane).getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
 
-    const { container: widePane } = at({ kind: 'ready', entry, detail }, { wide: true })
+    const { container: widePane } = at({ kind: 'ready', subject: entry, detail }, { wide: true })
     expect(within(widePane).queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
   })
 })
 
 describe('回收站详情块 · 详情保持', () => {
   it('保持：画上一条的标题与正文，正文 aria-busy 且 inert，先不出提示也不出骨架', () => {
-    const { container } = at({ kind: 'holding', entry, detail })
+    const { container } = at({ kind: 'holding', subject: entry, detail })
     expect(screen.getByText('清册标题')).toBeInTheDocument()
     expect(screen.getByText('改动分四层')).toBeInTheDocument()
-    const body = container.querySelector('[data-dsh-session-delete="trash-detail-hold-body"]')
+    const body = container.querySelector('[data-dsh-session-delete="session-detail-hold-body"]')
     expect(body).toHaveAttribute('aria-busy', 'true')
     expect(container.querySelector('[inert]')).not.toBeNull()
     expect(screen.queryByText('正在读这条会话…')).not.toBeInTheDocument()
@@ -172,7 +173,7 @@ describe('回收站详情块 · 详情保持', () => {
   it('保持超过 300ms 才出提示；提示出现后仍不换成骨架', () => {
     vi.useFakeTimers()
     try {
-      const { container } = at({ kind: 'holding', entry, detail })
+      const { container } = at({ kind: 'holding', subject: entry, detail })
       expect(screen.queryByText('正在读这条会话…')).not.toBeInTheDocument()
       act(() => { vi.advanceTimersByTime(300) })
       expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
@@ -184,7 +185,7 @@ describe('回收站详情块 · 详情保持', () => {
   })
 
   it('读数中：骨架按内容形状画（meta 行 + 正文条），条带脉冲类；不标 aria-busy', () => {
-    const { container } = at({ kind: 'loading', entry })
+    const { container } = at({ kind: 'loading', subject: entry })
     expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
     expect(container.querySelectorAll('.sd-skeleton-bar').length).toBeGreaterThanOrEqual(6)
     expect(container.querySelector('[aria-busy]')).toBeNull()
@@ -195,7 +196,7 @@ describe('回收站详情块 · 详情保持', () => {
     const otherEntry = { ...entry, id: 'other', title: '另一条' }
     const view = render(
       <div ref={scrollRef}>
-        {detailElement({ kind: 'ready', entry, detail }, { scrollRef })}
+        {detailElement({ kind: 'ready', subject: entry, detail }, { scrollRef })}
       </div>,
     )
     if (scrollRef.current !== null) scrollRef.current.scrollTop = 120
@@ -203,7 +204,7 @@ describe('回收站详情块 · 详情保持', () => {
     view.rerender(
       <div ref={scrollRef}>
         {detailElement(
-          { kind: 'ready', entry: otherEntry, detail: { ...detail, entryId: 'other' } },
+          { kind: 'ready', subject: otherEntry, detail: { ...detail, entryId: 'other' } },
           { scrollRef },
         )}
       </div>,
@@ -214,7 +215,7 @@ describe('回收站详情块 · 详情保持', () => {
 
 describe('回收站详情块 · 有内容', () => {
   it('标题优先用清册那一份；会话信息单表直显、计量行独立成行', () => {
-    at({ kind: 'ready', entry, detail })
+    at({ kind: 'ready', subject: entry, detail })
     expect(screen.getByText('清册标题')).toBeInTheDocument()
     expect(screen.queryByText('日志标题')).not.toBeInTheDocument()
     // 一张表：项目 → 模型 → 创建 → 最后活动 → 会话 id → 回收站目录 → 原本归档，全部默认可见（不折叠）。
@@ -233,12 +234,12 @@ describe('回收站详情块 · 有内容', () => {
   })
 
   it('清册标题是空串才回落到日志里的 session/title', () => {
-    at({ kind: 'ready', entry: { ...entry, title: '' }, detail })
+    at({ kind: 'ready', subject: { ...entry, title: '' }, detail })
     expect(screen.getByText('日志标题')).toBeInTheDocument()
   })
 
   it('正文按顺序成列：用户在右、助手在左，截断过的那条尾部标「已截断」', () => {
-    const { container } = at({ kind: 'ready', entry, detail })
+    const { container } = at({ kind: 'ready', subject: entry, detail })
     const bubbles = [...container.querySelectorAll('[data-sd-msg]')]
     expect(bubbles.map((el) => el.getAttribute('data-sd-msg'))).toEqual(['user', 'assistant'])
     expect(pick(bubbles, 0).textContent).toContain('先看改动')
@@ -267,43 +268,43 @@ describe('回收站详情块 · 有内容', () => {
 
   // 2026-10-15 拄宿主时最容易写错的一处：给助手也铺一张卡。宿主的 `.bubble` 只住在用户那一行。
   it('只有用户那一侧有气泡，助手正文铺满栏不铺底', () => {
-    const { container } = at({ kind: 'ready', entry, detail })
+    const { container } = at({ kind: 'ready', subject: entry, detail })
     const bubbles = container.querySelectorAll('[data-sd-bubble]')
     expect(bubbles).toHaveLength(1)
     expect((bubbles[0] as HTMLElement).parentElement?.getAttribute('data-sd-msg')).toBe('user')
   })
 
   it('活跃跨度按天说，不到一天按小时说（同一句话的两种量级）', () => {
-    at({ kind: 'ready', entry, detail })
+    at({ kind: 'ready', subject: entry, detail })
     expect(screen.getByText('1 天')).toBeInTheDocument()
     at({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, lastActivity: detail.createdAt + 3 * 3600000 },
     })
     expect(screen.getByText('3 小时')).toBeInTheDocument()
     at({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, lastActivity: detail.createdAt + 10 * 60000 },
     })
     expect(screen.getByText('不足 1 小时')).toBeInTheDocument()
   })
 
   it('时间戳缺省（日志里没读到）⇒ 三格都降级，不报 1970、也不把"不知道"报成"1 小时"', () => {
-    at({ kind: 'ready', entry, detail: { ...detail, createdAt: 0, lastActivity: 0 } })
+    at({ kind: 'ready', subject: entry, detail: { ...detail, createdAt: 0, lastActivity: 0 } })
     expect(screen.queryByText(/1970/)).not.toBeInTheDocument()
     expect(screen.queryByText('1 小时')).not.toBeInTheDocument()
     expect(screen.getAllByText('—')).toHaveLength(3)
   })
 
   it('一条正文都没有 ⇒ 明说"没有可显示的内容"，不装作还在读', () => {
-    at({ kind: 'ready', entry, detail: { ...detail, blocks: [], userMessageCount: 0, assistantMessageCount: 0 } })
+    at({ kind: 'ready', subject: entry, detail: { ...detail, blocks: [], userMessageCount: 0, assistantMessageCount: 0 } })
     expect(screen.getByText('这条会话没有可显示的内容')).toBeInTheDocument()
   })
 
   it('详情里不摆动作按钮（2026-10-15 真机反馈后：动作住在清单行右侧）', () => {
-    at({ kind: 'ready', entry, detail })
+    at({ kind: 'ready', subject: entry, detail })
     expect(screen.queryByRole('button', { name: '恢复' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '彻底删除' })).not.toBeInTheDocument()
   })
@@ -458,7 +459,7 @@ describe('回收站详情块 · 折叠', () => {
 
   it('简洁档自动连翻在飞时不再说「这一页只有过程内容」', () => {
     render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
       { loadingOlder: true },
     ))
     fireEvent.click(screen.getByRole('button', { name: '简洁' }))
@@ -474,7 +475,7 @@ describe('回收站详情块 · 折叠', () => {
   it('简洁档还有更早页时只说这一页只有过程内容，不冒充整条会话', () => {
     at({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [reasoningBlock('r1', 1, '只有过程')], olderCursor: 1 },
     })
     fireEvent.click(screen.getByRole('button', { name: '简洁' }))
@@ -485,7 +486,7 @@ describe('回收站详情块 · 折叠', () => {
   it('切到简洁档时当前页全是过程块：自动连翻一页，不用读者先点「加载更早」', () => {
     const onLoadOlder = vi.fn()
     render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [toolBlock('9', 1)], olderCursor: 9 } },
       { onLoadOlder },
     ))
     fireEvent.click(screen.getByRole('button', { name: '简洁' }))
@@ -497,7 +498,7 @@ describe('回收站详情块 · 折叠', () => {
     render(detailElement(
       {
         kind: 'ready',
-        entry,
+        subject: entry,
         detail: { ...detail, blocks: [userBlock('10', 1, '尾页'), toolBlock('9', 2)], olderCursor: 9 },
       },
       { onLoadOlder },
@@ -511,7 +512,7 @@ describe('回收站详情块 · 折叠', () => {
     let blocks: TrashDetailBlockWire[] = [toolBlock('100', 1)]
     let cursor: number | null = 99
     const { rerender } = render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks, olderCursor: 100 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks, olderCursor: 100 } },
       { onLoadOlder },
     ))
     // 切到简洁档时当前页全是过程块 ⇒ 首屏就自动连翻，不要求先点按钮。
@@ -522,7 +523,7 @@ describe('回收站详情块 · 折叠', () => {
     for (let page = 0; page < 11; page += 1) {
       blocks = [toolBlock(String(90 - page), 1), ...blocks]
       rerender(detailElement(
-        { kind: 'ready', entry, detail: { ...detail, blocks, olderCursor: cursor } },
+        { kind: 'ready', subject: entry, detail: { ...detail, blocks, olderCursor: cursor } },
         { onLoadOlder },
       ))
       cursor = cursor === null ? null : cursor - 1
@@ -535,14 +536,14 @@ describe('回收站详情块 · 折叠', () => {
     const onLoadOlder = vi.fn()
     const tail = [toolBlock('10', 1)]
     const { rerender } = render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
       { onLoadOlder },
     ))
     fireEvent.click(screen.getByRole('button', { name: '简洁' }))
     expect(onLoadOlder).toHaveBeenCalledTimes(1)
 
     rerender(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: null } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: null } },
       { onLoadOlder },
     ))
     expect(onLoadOlder).toHaveBeenCalledTimes(1)
@@ -561,7 +562,7 @@ describe('回收站详情块 · 折叠', () => {
     const tail = [toolBlock('9', 2)]
     const { rerender } = render(detailElement({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: tail, olderCursor: 9 },
     }))
     fireEvent.click(screen.getByRole('button', { name: /工作步骤/ }))
@@ -571,7 +572,7 @@ describe('回收站详情块 · 折叠', () => {
     // 不随 prepend 改动，所以读者已经点开的那一组仍在。
     rerender(detailElement({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [toolBlock('8', 1), ...tail], olderCursor: 8 },
     }))
     expect(screen.getAllByRole('button', { name: /read/ })).toHaveLength(2)
@@ -613,7 +614,7 @@ describe('回收站详情块 · 折叠', () => {
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tail = [userBlock('10', 1, '尾页正文')]
     const { rerender } = render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
       { onLoadOlder, scrollRef },
     ))
     fireEvent.click(screen.getByRole('button', { name: '简洁' }))
@@ -622,14 +623,14 @@ describe('回收站详情块 · 折叠', () => {
 
     // 第一页全是过程块：简洁档下不可见 ⇒ 自动再翻一页。
     rerender(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
       { onLoadOlder, scrollRef },
     ))
     expect(onLoadOlder).toHaveBeenCalledTimes(2)
 
     // 第二页带回用户提问 ⇒ 停在这一页，不再自动翻。
     rerender(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('8', 1, '更早的提问'), toolBlock('9', 1), ...tail], olderCursor: 8 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [userBlock('8', 1, '更早的提问'), toolBlock('9', 1), ...tail], olderCursor: 8 } },
       { onLoadOlder, scrollRef },
     ))
     expect(screen.getByText('更早的提问')).toBeInTheDocument()
@@ -642,13 +643,13 @@ describe('回收站详情块 · 折叠', () => {
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tail = [userBlock('10', 1, '尾页正文')]
     const { rerender } = render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: tail, olderCursor: 10 } },
       { onLoadOlder, scrollRef },
     ))
     fireEvent.click(screen.getByRole('button', { name: '详细' }))
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
     rerender(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [toolBlock('9', 1), ...tail], olderCursor: 9 } },
       { onLoadOlder, scrollRef },
     ))
     expect(onLoadOlder).toHaveBeenCalledTimes(1)
@@ -657,14 +658,14 @@ describe('回收站详情块 · 折叠', () => {
 
   it('prepend 更早一页保留已展开的块：开合挂在块 id 上，不随页重排', () => {
     const tail = [toolBlock('10', 1), reasoningBlock('11', 2, '思考摘要\n思考正文独有')]
-    const { rerender } = render(detailElement({ kind: 'ready', entry, detail: { ...detail, blocks: tail, olderCursor: 10 } }))
+    const { rerender } = render(detailElement({ kind: 'ready', subject: entry, detail: { ...detail, blocks: tail, olderCursor: 10 } }))
     detailedMode()
     fireEvent.click(screen.getByRole('button', { name: /read/ }))
     expect(screen.getByRole('button', { name: /read/ })).toHaveAttribute('aria-expanded', 'true')
 
     rerender(detailElement({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [reasoningBlock('7', 1, '更早的思考\n更早正文独有'), ...tail], olderCursor: 7 },
     }))
     // 原来展开的那块还展开着；新 prepend 进来的按默认折叠摆。
@@ -682,7 +683,7 @@ describe('回收站详情块 · 加载更早', () => {
     expect(screen.queryByRole('button', { name: '加载更早' })).not.toBeInTheDocument()
 
     at(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } },
       { onLoadOlder },
     )
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
@@ -692,7 +693,7 @@ describe('回收站详情块 · 加载更早', () => {
   it('在飞时按钮改说"正在加载更早…"并禁用', () => {
     at({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 },
     }, { loadingOlder: true })
     expect(screen.getByRole('button', { name: '正在加载更早…' })).toBeDisabled()
@@ -704,7 +705,7 @@ describe('回收站详情块 · 加载更早', () => {
     const scroll = fakeScroller()
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     render(detailElement(
-      { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } },
+      { kind: 'ready', subject: entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } },
       { onLoadOlder, scrollRef },
     ))
     scroll.scrollTop = 0
@@ -715,7 +716,7 @@ describe('回收站详情块 · 加载更早', () => {
   it('加载失败原文单独上屏，已有正文不按掉', () => {
     at({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 },
     }, { olderFailure: '更早的页读不出来' })
     expect(screen.getByRole('status')).toHaveTextContent('更早的页读不出来')
@@ -727,16 +728,16 @@ describe('回收站详情块 · 加载更早', () => {
     scroll.scrollTop = 480
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tailPage = { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 }
-    const { rerender } = render(detailElement({ kind: 'ready', entry, detail: tailPage }, { scrollRef }))
+    const { rerender } = render(detailElement({ kind: 'ready', subject: entry, detail: tailPage }, { scrollRef }))
 
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
-    rerender(detailElement({ kind: 'ready', entry, detail: tailPage }, { scrollRef, loadingOlder: true }))
+    rerender(detailElement({ kind: 'ready', subject: entry, detail: tailPage }, { scrollRef, loadingOlder: true }))
 
     // 更早三块落到屏上、容器高了 620 ⇒ 视口跟着下移同样的量。
     scroll.scrollHeight = 1620
     rerender(detailElement({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [userBlock('7', 1, '更早一'), userBlock('8', 1, '更早二'), userBlock('9', 1, '更早三'), userBlock('10', 1, '尾页')], olderCursor: 7 },
     }, { scrollRef }))
     expect(scroll.scrollTop).toBe(1100)
@@ -747,17 +748,17 @@ describe('回收站详情块 · 加载更早', () => {
     scroll.scrollTop = 480
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
     const tailPage = { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 }
-    const { rerender } = render(detailElement({ kind: 'ready', entry, detail: tailPage }, { scrollRef }))
+    const { rerender } = render(detailElement({ kind: 'ready', subject: entry, detail: tailPage }, { scrollRef }))
 
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
-    rerender(detailElement({ kind: 'ready', entry, detail: tailPage }, { scrollRef, loadingOlder: true }))
+    rerender(detailElement({ kind: 'ready', subject: entry, detail: tailPage }, { scrollRef, loadingOlder: true }))
 
     // 请求在飞时读者往下滚了 400；更早三块再让容器高 620。
     scroll.scrollTop = 880
     scroll.scrollHeight = 1620
     rerender(detailElement({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, blocks: [userBlock('7', 1, '更早一'), userBlock('8', 1, '更早二'), userBlock('9', 1, '更早三'), userBlock('10', 1, '尾页')], olderCursor: 7 },
     }, { scrollRef }))
     expect(scroll.scrollTop).toBe(1500)
@@ -767,7 +768,7 @@ describe('回收站详情块 · 加载更早', () => {
     const scroll = fakeScroller()
     scroll.scrollTop = 480
     const scrollRef = { current: scroll as unknown as HTMLDivElement }
-    const tailPage: TrashDetailState = { kind: 'ready', entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } }
+    const tailPage: TrashDetailState = { kind: 'ready', subject: entry, detail: { ...detail, blocks: [userBlock('10', 1, '尾页')], olderCursor: 10 } }
     const { rerender } = render(detailElement(tailPage, { scrollRef }))
 
     fireEvent.click(screen.getByRole('button', { name: '加载更早' }))
@@ -779,17 +780,17 @@ describe('回收站详情块 · 加载更早', () => {
 
 describe('回收站详情块 · 两档形态的差别', () => {
   it('宽档不画返回，窄档画并且点了就回清单', () => {
-    at({ kind: 'ready', entry, detail })
+    at({ kind: 'ready', subject: entry, detail })
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
 
     const onBack = vi.fn()
-    at({ kind: 'ready', entry, detail }, { wide: false, onBack })
+    at({ kind: 'ready', subject: entry, detail }, { wide: false, onBack })
     fireEvent.click(screen.getByRole('button', { name: '← 返回清单' }))
     expect(onBack).toHaveBeenCalled()
   })
 
   it('窄档在读失败时也给返回——不能因为正文读不出就把用户关在一块错误里', () => {
-    at({ kind: 'failed', entry, message: 'io' }, { wide: false })
+    at({ kind: 'failed', subject: entry, message: 'io' }, { wide: false })
     expect(screen.getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
     expect(screen.getByRole('status')).toBeInTheDocument()
   })
@@ -797,7 +798,7 @@ describe('回收站详情块 · 两档形态的差别', () => {
 
 describe('回收站详情块 · 删除时间不进详情', () => {
   it('删除于只在清单行；详情表里没有它（相对/绝对都不重复）', () => {
-    at({ kind: 'ready', entry, detail })
+    at({ kind: 'ready', subject: entry, detail })
     expect(document.querySelector('dt')?.textContent).toBe('项目')
     expect(screen.queryByText(/前（/)).not.toBeInTheDocument()
     expect(screen.queryByText('删除于')).not.toBeInTheDocument()
@@ -996,31 +997,32 @@ const KID = {
 
 describe('回收站详情块 · 子会话', () => {
   const strip = (): HTMLButtonElement =>
-    must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-toggle"]'), '子会话摘要条')
+    must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="session-subagents-toggle"]'), '子会话摘要条')
 
   it('默认收起：只有一行摘要条（计数徽标 + 合计）与标题排徽标，不画孩子行', () => {
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild: vi.fn() } })
+    // `subagentsSizeBytes` 是 Node 半按**全部**孩子算的那一份合计（客户端不拿已列的行自己求和）。
+    at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID], subagentsSizeBytes: KID.sizeBytes } }, { detailNav: { onOpenChild: vi.fn() } })
     expect(strip().getAttribute('aria-expanded')).toBe('false')
     expect(strip().textContent).toContain('子会话')
     expect(strip().textContent).toContain('1')
     expect(strip().textContent).toContain('2.0KB')
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagent-row"]')).toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="session-subagent-row"]')).toBeNull()
     expect(screen.queryByText('孩子会话')).not.toBeInTheDocument()
     // 标题排徽标说的是同一个数（滚进正文后的常驻入口）
-    const jump = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-jump"]'), '子会话跳转徽标')
+    const jump = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="session-subagents-jump"]'), '子会话跳转徽标')
     expect(jump.textContent).toContain('1')
   })
 
   it('点摘要条原地展开：逐条画出，点一条把它交出去；导航行不借折叠头的类与 chevron', () => {
     const onOpenChild = vi.fn()
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2] } }, { detailNav: { onOpenChild } })
+    at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID, kid2], subagentsSizeBytes: KID.sizeBytes + kid2.sizeBytes } }, { detailNav: { onOpenChild } })
     // 合计是这一批孩子的清册大小（与清单行同一口径）：永久删除按整组释放，删前要能核对「几个都在这儿」
     expect(strip().textContent).toContain('3.0KB')
     fireEvent.click(strip())
     expect(strip().getAttribute('aria-expanded')).toBe('true')
     const row = screen.getByText('孩子会话')
-    const rowButton = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagent-row"]'), '子会话导航行')
+    const rowButton = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="session-subagent-row"]'), '子会话导航行')
     // 语法分清：导航行不套折叠头那套类（chevron 只留给原地展开）
     expect(rowButton.className).not.toContain('sd-disclosure-row')
     // 导航行按内容撑开、指针光标；底色不内联（悬停底色住 layout.css，内联会压过 :hover）
@@ -1028,13 +1030,13 @@ describe('回收站详情块 · 子会话', () => {
     expect(rowButton.style.height).toBe('')
     expect(rowButton.style.background).toBe('')
     fireEvent.click(row)
-    expect(onOpenChild).toHaveBeenCalledWith(KID)
+    expect(onOpenChild).toHaveBeenCalledWith(KID.id)
   })
 
   it('子会话行按 label 显示（与工作中同名），label 缺席才回落清册标题', () => {
     const labeled = { ...KID, label: 'Standards 轴全仓审查' }
     at(
-      { kind: 'ready', entry, detail: { ...detail, subagents: [labeled, { ...KID, id: 'kid2', title: '孩子会话二' }] } },
+      { kind: 'ready', subject: entry, detail: { ...detail, subagents: [labeled, { ...KID, id: 'kid2', title: '孩子会话二' }] } },
       { detailNav: { onOpenChild: vi.fn() } },
     )
     fireEvent.click(strip())
@@ -1045,7 +1047,7 @@ describe('回收站详情块 · 子会话', () => {
   })
 
   it('孩子视图的标题排同一条显示名规则：label 优先于清册标题', () => {
-    at({ kind: 'ready', entry: { ...KID, label: 'Standards 轴全仓审查' }, detail }, { detailNav: { onOpenChild: vi.fn() } })
+    at({ kind: 'ready', subject: { ...KID, label: 'Standards 轴全仓审查' }, detail }, { detailNav: { onOpenChild: vi.fn() } })
     expect(screen.getByText('Standards 轴全仓审查')).toBeInTheDocument()
     expect(screen.queryByText('孩子会话')).not.toBeInTheDocument()
   })
@@ -1055,7 +1057,7 @@ describe('回收站详情块 · 子会话', () => {
     // `subagent/descriptor` 补 label，标题排按同一条显示名次序取它，而不是清册里那串主会话标题。
     at({
       kind: 'ready',
-      entry: { ...entry, title: '你是一名代码审查员，对整个' },
+      subject: { ...entry, title: '你是一名代码审查员，对整个' },
       detail: { ...detail, label: 'Standards 轴全仓审查' },
     })
     expect(screen.getByText('Standards 轴全仓审查')).toBeInTheDocument()
@@ -1065,7 +1067,7 @@ describe('回收站详情块 · 子会话', () => {
   it('父行交来的 label 优先于详情自己的 label（同一名字的两份来源不打架）', () => {
     at({
       kind: 'ready',
-      entry: { ...KID, label: '父行登记的 label' },
+      subject: { ...KID, label: '父行登记的 label' },
       detail: { ...detail, label: '详情自己的 label' },
     }, { detailNav: { onOpenChild: vi.fn() } })
     expect(screen.getByText('父行登记的 label')).toBeInTheDocument()
@@ -1074,11 +1076,11 @@ describe('回收站详情块 · 子会话', () => {
 
   it('标题排徽标：点它展开子会话段并滚过去，段顶让开 sticky 标题排', () => {
     const onOpenChild = vi.fn()
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild } })
-    const section = must(document.querySelector<HTMLDivElement>('[data-dsh-session-delete="trash-subagents"]'), '子会话段')
+    at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild } })
+    const section = must(document.querySelector<HTMLDivElement>('[data-dsh-session-delete="session-subagents"]'), '子会话段')
     const scroll = vi.fn<(options?: ScrollIntoViewOptions | boolean) => void>()
     section.scrollIntoView = scroll
-    const jump = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="trash-subagents-jump"]'), '子会话跳转徽标')
+    const jump = must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="session-subagents-jump"]'), '子会话跳转徽标')
     fireEvent.click(jump)
     expect(scroll).toHaveBeenCalledWith({ block: 'start' })
     expect(section.style.scrollMarginTop).toBe('34px')
@@ -1091,7 +1093,7 @@ describe('回收站详情块 · 子会话', () => {
     try {
       const onPrefetchChild = vi.fn()
       at(
-        { kind: 'ready', entry, detail: { ...detail, subagents: [KID] } },
+        { kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID] } },
         { detailNav: { onOpenChild: vi.fn(), onPrefetchChild } },
       )
       fireEvent.click(strip())
@@ -1101,7 +1103,7 @@ describe('回收站详情块 · 子会话', () => {
       act(() => { vi.advanceTimersByTime(149) })
       expect(onPrefetchChild).not.toHaveBeenCalled()
       act(() => { vi.advanceTimersByTime(1) })
-      expect(onPrefetchChild).toHaveBeenCalledWith(KID)
+      expect(onPrefetchChild).toHaveBeenCalledWith(KID.id)
 
       onPrefetchChild.mockClear()
       fireEvent.pointerOut(row)
@@ -1115,14 +1117,14 @@ describe('回收站详情块 · 子会话', () => {
   })
 
   it('subagents 缺席：没有子会话段，也没有跳转徽标', () => {
-    at({ kind: 'ready', entry, detail }, { detailNav: { onOpenChild: vi.fn() } })
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagents"]')).toBeNull()
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagents-jump"]')).toBeNull()
+    at({ kind: 'ready', subject: entry, detail }, { detailNav: { onOpenChild: vi.fn() } })
+    expect(document.querySelector('[data-dsh-session-delete="session-subagents"]')).toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="session-subagents-jump"]')).toBeNull()
   })
 
   it('subagentsTotal 出线：摘要条徽标给总数，展开后说清只列了前几条', () => {
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { detailNav: { onOpenChild: vi.fn() } })
+    at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { detailNav: { onOpenChild: vi.fn() } })
     expect(strip().textContent).toContain('5')
     fireEvent.click(strip())
     expect(screen.getByText('仅列出前 2 条，共 5 条')).toBeInTheDocument()
@@ -1132,25 +1134,37 @@ describe('回收站详情块 · 子会话', () => {
     const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
     at({
       kind: 'ready',
-      entry,
+      subject: entry,
       detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5, subagentsSizeBytes: 10 * 1024 },
     }, { detailNav: { onOpenChild: vi.fn() } })
     expect(strip().textContent).toContain('10KB')
   })
 
+  // 合计的家在 Node 半：客户端不拿**已列的前 N 条**求和冒充全量——那是少报（ADR-0055）。
+  it('合计读数缺席 ⇒ 摘要条不摆大小格：不拿已列的行求和顶上那一格', () => {
+    const kid2 = { ...KID, id: 'kid2', title: '孩子会话二', sizeBytes: 1024 }
+    at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID, kid2], subagentsTotal: 5 } }, { detailNav: { onOpenChild: vi.fn() } })
+    // 已列两行的和是 3.0KB：它不是全量合计，不许顶上摘要条那一格（那边只有 5 个孩子里的已知数）。
+    expect(strip().textContent).not.toContain('KB')
+    fireEvent.click(strip())
+    // 展开体里逐行的大小照旧：那才是每行自己的读数。
+    expect(screen.getByText('孩子会话二')).toBeInTheDocument()
+    expect(screen.getAllByText('1.0KB').length).toBeGreaterThan(0)
+  })
+
   it('detailNav 不带 onOpenChild：即使有 subagents 也不画段（组件不自己造动作）', () => {
-    at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } })
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagents"]')).toBeNull()
-    expect(document.querySelector('[data-dsh-session-delete="trash-subagents-jump"]')).toBeNull()
+    at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID] } })
+    expect(document.querySelector('[data-dsh-session-delete="session-subagents"]')).toBeNull()
+    expect(document.querySelector('[data-dsh-session-delete="session-subagents-jump"]')).toBeNull()
   })
 
   it('换到另一条会话：子会话段回到默认收起', () => {
     const other = { ...entry, id: '20261014T065658Z-session-b' }
-    const view = at({ kind: 'ready', entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild: vi.fn() } })
+    const view = at({ kind: 'ready', subject: entry, detail: { ...detail, subagents: [KID] } }, { detailNav: { onOpenChild: vi.fn() } })
     fireEvent.click(strip())
     expect(screen.getByText('孩子会话')).toBeInTheDocument()
     view.rerender(detailElement(
-      { kind: 'ready', entry: other, detail: { ...detail, entryId: other.id, subagents: [KID] } },
+      { kind: 'ready', subject: other, detail: { ...detail, entryId: other.id, subagents: [KID] } },
       { detailNav: { onOpenChild: vi.fn() } },
     ))
     expect(strip().getAttribute('aria-expanded')).toBe('false')
@@ -1159,7 +1173,7 @@ describe('回收站详情块 · 子会话', () => {
 
   it('孩子视图（parentContext 在场）：宽档也画「返回父会话」，点它交回 onBack', () => {
     const onBack = vi.fn()
-    at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+    at({ kind: 'ready', subject: KID, detail: { ...detail, entryId: KID.id } },
       { wide: true, detailNav: { parentContext: { title: '父会话', onBack } } })
     const btn = screen.getByRole('button', { name: '← 返回父会话' })
     fireEvent.click(btn)
@@ -1170,20 +1184,20 @@ describe('回收站详情块 · 子会话', () => {
 
   // title 的兜底住视图：控制器（`detailNav`）交的是清册原文，翻译只在这一侧发生。
   it('parentContext.title 为空串：返回键的悬停兜底成未命名', () => {
-    at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+    at({ kind: 'ready', subject: KID, detail: { ...detail, entryId: KID.id } },
       { wide: true, detailNav: { parentContext: { title: '', onBack: vi.fn() } } })
     expect(screen.getByRole('button', { name: '← 返回父会话' })).toHaveAttribute('title', '(无标题会话)')
   })
 
   it('清册标题与日志标题都为空：标题行兜底成未命名，悬停也给全称', () => {
-    const { container } = at({ kind: 'ready', entry: { ...entry, title: '' }, detail: { ...detail, logTitle: '' } },
+    const { container } = at({ kind: 'ready', subject: { ...entry, title: '' }, detail: { ...detail, logTitle: '' } },
       { wide: false })
     expect(within(container).getByText('(无标题会话)')).toHaveAttribute('title', '(无标题会话)')
     expect(within(container).getByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
   })
 
   it('parentContext 缺席且宽档：两颗返回按钮都不画（现状不变）', () => {
-    at({ kind: 'ready', entry, detail }, { wide: true })
+    at({ kind: 'ready', subject: entry, detail }, { wide: true })
     expect(screen.queryByRole('button', { name: '← 返回父会话' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
   })
@@ -1192,7 +1206,7 @@ describe('回收站详情块 · 子会话', () => {
   // 「右端」全靠 `flex: 1 1 auto` 那条——DOM 顺序只保证按钮紧跟标题，不保证它被推到最右。
   it('返回键住标题那一排的右端：标题在前吃满余宽、按钮在后，两颗共用同一个位置', () => {
     const headOf = (pane: HTMLElement) =>
-      must(pane.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '详情标题排')
+      must(pane.querySelector<HTMLElement>('[data-dsh-session-delete="session-detail-head"]'), '详情标题排')
     const titleRowOf = (head: HTMLElement) =>
       must(head.firstElementChild instanceof HTMLElement ? head.firstElementChild : null, '标题栏')
     const expectEllipsis = (row: HTMLElement) => {
@@ -1202,7 +1216,7 @@ describe('回收站详情块 · 子会话', () => {
       expect(row.style.minWidth).toBe('0')
     }
 
-    const { container: kidPane } = at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+    const { container: kidPane } = at({ kind: 'ready', subject: KID, detail: { ...detail, entryId: KID.id } },
       { wide: true, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } })
     const kidHead = headOf(kidPane)
     const kidTitleRow = titleRowOf(kidHead)
@@ -1216,7 +1230,7 @@ describe('回收站详情块 · 子会话', () => {
     expect(kidHead.lastElementChild).toBe(within(kidPane).getByRole('button', { name: '← 返回父会话' }))
 
     // 窄档孩子视图：返回父会话仍占同一个位置，且不与「返回清单」同屏。
-    const { container: narrowKidPane } = at({ kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+    const { container: narrowKidPane } = at({ kind: 'ready', subject: KID, detail: { ...detail, entryId: KID.id } },
       { wide: false, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } })
     const narrowKidHead = headOf(narrowKidPane)
     const narrowKidTitleRow = titleRowOf(narrowKidHead)
@@ -1225,7 +1239,7 @@ describe('回收站详情块 · 子会话', () => {
     expect(narrowKidHead.lastElementChild).toBe(within(narrowKidPane).getByRole('button', { name: '← 返回父会话' }))
     expect(within(narrowKidPane).queryByRole('button', { name: '← 返回清单' })).not.toBeInTheDocument()
 
-    const { container: listPane } = at({ kind: 'ready', entry, detail }, { wide: false })
+    const { container: listPane } = at({ kind: 'ready', subject: entry, detail }, { wide: false })
     const listHead = headOf(listPane)
     const listTitleRow = titleRowOf(listHead)
     const listTitle = within(listPane).getByText('清册标题')
@@ -1240,15 +1254,21 @@ describe('回收站详情块 · 子会话', () => {
   // jsdom 量不了布局，钉的是声明契约：宽档父详情的标题排没有返回键、孩子视图有；
   // 标题排不按紧凑按钮（28px）预留行高时，下方会话信息会在父子切换时上下跳 6px。
   it('标题排恒定预留紧凑按钮的行高：父子视图同高、没有返回键的父详情也不塌陷', () => {
-    const { container } = at({ kind: 'ready', entry, detail }, { wide: true })
-    const head = must(container.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '详情标题排')
+    const { container } = at({ kind: 'ready', subject: entry, detail }, { wide: true })
+    const head = must(container.querySelector<HTMLElement>('[data-dsh-session-delete="session-detail-head"]'), '详情标题排')
     expect(head.style.minHeight).toBe('28px')
     // 只钉一侧会漏掉另一侧的回退：父子同高才是这条不变量的全部。
     const { container: kidContainer } = at(
-      { kind: 'ready', entry: KID, detail: { ...detail, entryId: KID.id } },
+      { kind: 'ready', subject: KID, detail: { ...detail, entryId: KID.id } },
       { wide: true, detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } } },
     )
-    const kidHead = must(kidContainer.querySelector<HTMLElement>('[data-dsh-session-delete="trash-detail-head"]'), '孩子详情标题排')
+    const kidHead = must(kidContainer.querySelector<HTMLElement>('[data-dsh-session-delete="session-detail-head"]'), '孩子详情标题排')
     expect(kidHead.style.minHeight).toBe(head.style.minHeight)
   })
+})
+
+it('回收站信息行仍含回收站目录与原本归档（两档信息表各画各的行集）', () => {
+  at({ kind: 'ready', subject: entry, detail })
+  expect(screen.getByText('回收站目录')).toBeInTheDocument()
+  expect(screen.getByText('原本归档')).toBeInTheDocument()
 })

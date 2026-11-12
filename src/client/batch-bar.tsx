@@ -21,7 +21,7 @@ import { zhTranslate, type Translate } from './copy.js'
 import { areAllVisibleRowsSelected, selectAllVisible, useSelectionRowClickGuard } from './batch-pick.js'
 import { useVisibleSelectableRows } from './host-rows.js'
 import type { OneShotDeps } from './remote.js'
-import { clearPicks, exitSelection, getPicks, togglePick, useSelection } from './batch-selection-store.js'
+import { clearPicks, exitSelection, getPicks, shrinkPicksToFailures, togglePick, useSelection } from './batch-selection-store.js'
 import { createLatestWins } from './store.js'
 import { Button } from './ui/Button.js'
 import { IconCloseOutlineRegular } from './ui/icons.js'
@@ -116,12 +116,12 @@ export function BatchBar({
           variant="primary"
           size="sm"
           disabled={picks.length === 0}
-          onClick={() => requestDeleteBatch(getPicks())}
+          onClick={() => requestDeleteBatch(getPicks(), shrinkPicksToFailures)}
         >
           {t('batch.run', { n: picks.length })}
         </Button>
         <Button variant="ghost" size="sm" onClick={exitSelection}>
-          {t('trash.toolbar.selectExit')}
+          {t('list.select.exit')}
         </Button>
       </div>
     </div>

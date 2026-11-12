@@ -38,8 +38,8 @@ ADR-0054 撤掉按钮时，把「连续往前读」交给「从下方滚回离�
 
 ## 后果
 
-- `src/client/use-detail-pager.ts` 少了滚动监听与它的边界常量；`src/client/trash-detail.tsx` 的工具栏恢复按钮；`src/client/copy.ts` 恢复 `detail.loadOlder` / `detail.loadOlder.loading`，`detail.compact.pageOnly` 说回「点『加载更早』」。
+- `src/client/use-detail-pager.ts` 少了滚动监听与它的边界常量；`src/client/session-detail.tsx` 的工具栏恢复按钮；`src/client/copy.ts` 恢复 `detail.loadOlder` / `detail.loadOlder.loading`，`detail.compact.pageOnly` 说回「点『加载更早』」。
 - 连续往前读回到「一次点击一页」；要一次跨很多页，走右缘的轨。
 - 测试：`tests/client/trash-detail.test.tsx` 的「滚到顶自动补页」一组换成「点按钮才取数 + 不挂滚动监听」；`tests/client/trash-panel.test.tsx` 的补页触发改成点按钮。
 
-锚点：`src/client/trash-detail.tsx`；`src/client/use-detail-pager.ts` 的 `AUTO_OLDER_PAGE_LIMIT`；`src/client/use-prompt-rail.ts` 的 `JUMP_PAGE_LIMIT`；`src/client/prompt-rail.tsx`；`src/client/trash-panel.tsx` 的 `DETAIL_PANE` / `RAIL_GUTTER`；`src/client/copy.ts`；`docs/ui-spec.md` ⑥；`tests/client/trash-detail.test.tsx`；`tests/client/trash-panel.test.tsx`；`tests/client/prompt-rail.test.tsx`。ADR-0054 整篇由本篇取代。
+锚点：`src/client/session-detail.tsx`；`src/client/use-detail-pager.ts` 的 `AUTO_OLDER_PAGE_LIMIT`；`src/client/use-prompt-rail.ts` 的 `JUMP_PAGE_LIMIT`；`src/client/use-detail-rail.ts`（两档共用的接线）；`src/client/prompt-rail.tsx`；`src/client/detail-pane.tsx` 的 `DETAIL_PANE` / `RAIL_GUTTER`；`src/client/copy.ts`；`docs/ui-spec.md` ⑥；`tests/client/trash-detail.test.tsx`；`tests/client/trash-panel.test.tsx`；`tests/client/prompt-rail.test.tsx`。ADR-0054 整篇由本篇取代。

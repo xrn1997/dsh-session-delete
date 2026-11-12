@@ -165,12 +165,32 @@ describe('批量层 · 清册只读一次', () => {
 
   it('orphan-clean 一批：对账行读一次，作用域把它原样交给扫描、不读第二遍 raw 索引', async () => {
     const { deps, manifest } = world([], {
-      corpus: [{ sessionId: 'session-root', projectDir: '--p--', subagent: true, parentSessionId: 'gone' }],
+      corpus: [{ sessionId: 'session-root', projectDir: '--p--', subagent: true, parentSessionId: 'gone', createdAt: 0 }],
     })
     const spy = vi.spyOn(manifest, 'list')
     const outcomes = await applyActions(deps, 'orphan-clean', ['session-root'])
     expect(outcomes.map((item) => item.ok)).toEqual([true])
     expect(spy).toHaveBeenCalledTimes(1)
     expect(manifest.reads()).toBe(1)
+  })
+})
+
+describe('批量层 · unarchive（归档档的解除归档）', () => {
+  it('unarchive：逐 id 调 host.unarchive，成功值恒为 1，一条失败不传染下一条', async () => {
+    const { deps, host } = world([parent])
+    host.unarchive.mockImplementation(async (id: string) => {
+      if (id === 'bad') throw new Error('boom')
+    })
+    const outcomes = await applyActions(deps, 'unarchive', ['a', 'bad', 'b'])
+    expect(outcomes.map((item) => item.action)).toEqual(['unarchive', 'unarchive', 'unarchive'])
+    expect(outcomes.map((item) => (item.ok ? item.value : item.error.message))).toEqual([1, 'boom', 1])
+    expect(outcomes[1]).toMatchObject({ id: 'bad', ok: false })
+  })
+
+  it('unarchive：幂等——未归档的 id 也是成功 1（宿主 unarchiveSession 是 no-op）', async () => {
+    const { deps, host } = world([parent])
+    host.unarchive.mockResolvedValue(undefined)
+    const outcomes = await applyActions(deps, 'unarchive', ['never-archived'])
+    expect(outcomes).toEqual([{ id: 'never-archived', action: 'unarchive', ok: true, value: 1 }])
   })
 })

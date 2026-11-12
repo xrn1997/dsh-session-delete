@@ -25,8 +25,14 @@ export interface HostIdentityPort {
    *  名字只存在于宿主自己的账本/缓存里（`FsPort` 不直读文件）⇒ 取数面归宿主端口，接官方投影缓存 API；
    *  header 与 `projectDirOf` 走同一个公开读面。 */
   titleOf(sessionId: string): Promise<string>
+  /** 子会话显示名的**投影 label 本体**（`subagent` 行的 `label`）：空串 = 没有，**不回落标题**——
+   *  回落标题是 {@link HostIdentityPort.titleOf} 的口径。归档行要把 `label` 与日志标题分两格过线
+   *  （界面按 label 非空优先显示），只有这一面能单独问出 label。 */
+  labelOf(sessionId: string): Promise<string>
   isLive(sessionId: string): Promise<boolean>
   isArchived(sessionId: string): Promise<boolean>
+  /** registry **全局**归档集原样（同步数组读；Promise 外壳与在场其余成员同形）。 */
+  archivedSessionIds(): Promise<readonly string[]>
   unarchive(sessionId: string): Promise<void>
   detach(sessionId: string, workspaceId: string): Promise<void>
   attach(sessionId: string, workspaceId: string): Promise<void>
@@ -68,8 +74,9 @@ export type CorpusRead<T> =
 /**
  * 角色三：**会话语料**——整表身份与子会话闭包。
  *
- * 两个读面都把"这一趟看不见语料"写成显式的 {@link CorpusRead}：`{ available: false }` 与
+ * 可缺席的读面都把"这一趟看不见语料"写成显式的 {@link CorpusRead}：`{ available: false }` 与
  * "看见了、里面是空的"是两件事。**缺席之后怎么办归调用方，清单见 `docs/architecture.md` §2 的「语料缺席」**。
+ * `readSession` 是整本读：方法缺席与读失败都抛（调用方折 `io` / `not-found`），不折成缺席。
  */
 export interface HostCorpusPort {
   /** 整个会话语料（live ∪ persisted）的只读身份表。**服务缺席是显式的**：`sessionQuery` 没挂，或它的
@@ -81,14 +88,94 @@ export interface HostCorpusPort {
    *  服务在场时，空入参 ⇒ `{ available: true, value: {} }`，一次宿主调用都不发。
    *  键按调用方传进来的写法回（同一个父的 `session-x` / `x` 两种写法是同一个根，见 `membersFor`）。 */
   subagentMembersOf(parentIds: readonly string[]): Promise<CorpusRead<Record<string, readonly SubagentMember[]>>>
+  /** 批量读日志标题（`sessionQuery.readTitleSnapshots` 折叠 `session/title`）：id → 标题；
+   *  无标题 / 单条 rejected ⇒ **该 id 不在 map**（不失败整张表）。方法缺席（旧宿主）或整次读抛错 ⇒
+   *  `{ available: false }`（调用方逐条回退 `titleOf`，同样不失败整档）。 */
+  titleSnapshots(ids: readonly string[]): Promise<CorpusRead<ReadonlyMap<string, string>>>
+  /** 提问时间表（`sessionController.list()` 的 `updatedAt`）：id → 最后提问时间；服务缺席 / 抛错 ⇒
+   *  `{ available: false }`（调用方回退 `header.createdAt` 并标 `created`）。冷无 cwd 会话被宿主列表
+   *  跳过 ⇒ 它们自然不在 map 里，走同一条回退。 */
+  sessionActivity(): Promise<CorpusRead<ReadonlyMap<string, number>>>
+  /** 持久化日志工件字节表（`sessionPersistence.list()` 的 `sizeBytes`）；值 `undefined` = 该行**没有
+   *  可信读数**（不是 0）。服务缺席 ⇒ `{ available: false }`（调用方逐行缺大小、整档照常）；
+   *  `list()` 抛错 ⇒ 抛（调用方整档 `io`，不拿 0 冒充没有大小）。 */
+  persistedSizes(): Promise<CorpusRead<ReadonlyMap<string, number | undefined>>>
+  /** 持久化服务是否挂载（只探服务，不读列表）。用来区分两件事：
+   *  「没有持久化服务」= 没有 persisted-only 会话，语料仍是完整的保护面；
+   *  「服务在场但列表读面坏了」= 可能有看不见的会话，必须失败关闭（ADR-0062）。
+   *  `persistedSizes()` 的 `{ available: false }` 两者都会回，单看它分不出来。 */
+  persistenceMounted(): boolean
+  /** 整本读（`sessionQuery.readSession`，replay 校验、不 make live）：header 事实 + 完整事件流。
+   *  **事件流不含 `session` 头记录**（宿主把头放在 `session` 那一格）——调用方自己合成头喂块折叠。
+   *  方法缺席（旧宿主）⇒ 抛（调用方折 `io`）；读失败**原样抛**（含 `SESSION_QUERY_SESSION_NOT_FOUND`，
+   *  折 `not-found` 归上层的归档详情读路 `readArchiveDetail`）。 */
+  readSession(sessionId: string): Promise<CorpusLogRead>
 }
 
-/** 复合别名：adapter（`createHostPort`）与调用方把这 15 个方法当一个端口用；三个角色是它的切面。 */
-export type HostPort = HostIdentityPort & HostPresencePort & HostCorpusPort
+/** `readSession` 的窄读面：header 事实三格 + 事件流。多余字段（`id` / `version` / `seq` / `origin`…）留在原对象上，
+ *  类型面只声明消费方用到的。 */
+export interface CorpusLogRead {
+  readonly session: {
+    readonly createdAt?: number
+    readonly cwd?: string
+    readonly parentSession?: string
+  }
+  readonly events: readonly CorpusEvent[]
+}
 
-/** 动词的宿主面：身份与语料两片；不含在场三件。摘活体与通告只经 `CoreDeps.presence`（`PresenceCapability`）。
+/** 一条事件的窄读面（宿主 `SessionEvent` 的 `{ type, seq, time, data }` 信封；`seq` 等多余字段原样留着）。 */
+export interface CorpusEvent {
+  readonly type: string
+  readonly time: number
+  readonly data?: unknown
+}
+
+/**
+ * 角色四：**投影缓存**——宿主 `session_projcache` 域的会话记录键集与落盘删除面。
+ *
+ * 缓存服务本身（`sessionProjectionCache`）只有写与读，**没有删除方法**；记录由 storage domain 的
+ * `sessions` 表承载（`per-record` 布局，一条会话一份文档）。所以删除只能经
+ * `storageDomain.get('session_projcache').table('sessions')` 的同一条写链：**不直接删 `storages/`
+ * 下的文件**——那会绕过域的内存权威（`docs/architecture.md` §6 明写 storages 是内部索引，外面改它
+ * 要重启宿主才自洽）。
+ *
+ * 读面只认**已打开的存储域**，不拿缓存服务缺席当「没有记录」：旧版本或另一份 composition 可能留下
+ * 记录，服务没挂时更要报 `{ available: false }`（调用方折 `io`），不能折成 0 条。域不可用、形状
+ * 不符或 `keys()` 抛错都算读面不可用。
+ *
+ * 读/写再分两片：`HostCorePort` 只拿读面，`dropProjectionCache` 只进 `HostRemovalPort`（`RemovalDeps`）。
+ * 这样纯读的维护卡报告路由在类型上就够不到删除面（ADR-0032 / ADR-0019 的最小权限）。
+ */
+export interface HostProjectionReadPort {
+  /** `session_projcache` 域 `sessions` 表的全部键（**键就是会话 id**，per-record 布局；`session-` 与
+   *  bare 两代写法原样返回，比较归一归 `bareSessionId`）。域不可用 ⇒ `{ available: false }`。 */
+  projectionCacheIds(): Promise<CorpusRead<readonly string[]>>
+}
+
+/** 投影缓存的删除回执：真正删掉的条数与**逐条删除时**失败的条数（批量删除失败整体抛，不折回执）。 */
+export interface ProjectionCacheDropResult {
+  readonly removed: number
+  readonly failed: number
+}
+
+export interface HostProjectionWritePort {
+  /** 从 `session_projcache` 域删掉这些会话的记录。批量写链抛错 ⇒ 原样抛；旧宿主逐条 `delete` 时
+   *  单条失败收进 `failed`、继续删其余条——调用方拿到的始终是这一趟的真实后果。 */
+  dropProjectionCache(sessionIds: readonly string[]): Promise<ProjectionCacheDropResult>
+}
+
+export interface HostProjectionPort extends HostProjectionReadPort, HostProjectionWritePort {}
+
+/** 复合别名：adapter（`createHostPort`）与调用方把四个角色的方法当一个端口用；角色是它的切面。 */
+export type HostPort = HostIdentityPort & HostPresencePort & HostCorpusPort & HostProjectionPort
+
+/** 动词的宿主面：身份、语料与投影缓存**读面**三片；不含在场三件，也不含投影缓存删除面。
+ *  摘活体与通告只经 `CoreDeps.presence`（`PresenceCapability`），删缓存只经 {@link HostRemovalPort}。
  *  用交集而不是 `Omit` 黑名单：`HostPresencePort` 将来长出新方法时，不会自动漏进每个动词的 `host`。 */
-export type HostCorePort = HostIdentityPort & HostCorpusPort
+export type HostCorePort = HostIdentityPort & HostCorpusPort & HostProjectionReadPort
+
+/** 永久删除的宿主面：核心面 + 投影缓存删除面。只给 `RemovalDeps`（执行器与维护卡清理段）。 */
+export type HostRemovalPort = HostCorePort & HostProjectionWritePort
 
 /* ------------------------------------------------------------------ *
  * 宿主服务的**窄镜像**：只声明本端口用到的成员（AGENTS.md：不装宿主类型包、不做 declare module）。
@@ -136,9 +223,12 @@ function liveSessionsOf(ctx: HostCtxLike): LiveSessionsLike | undefined {
 
 /** `ctx.sessionPersistence` 的最小面：公开的单条会话元数据读面。
  *  出处：`@deepseek-ai/dsh-session-persistence` 的 `SessionPersistence.stat`；快照的 `header` 带 `cwd`。
- *  它是 `workspaceRegistry` 的硬注入服务（标准组合必有），按 `ctx.get` 可选读、不进 inject。 */
+ *  它是 `workspaceRegistry` 的硬注入服务（标准组合必有），按 `ctx.get` 可选读、不进 inject。
+ *  `list` 是批量快照读（同包 `SessionPersistence.list()`，`SessionPersistenceSnapshot` 带可选
+ *  `sizeBytes`——JSONL 后端给物理工件字节，其他后端可能不给）。 */
 interface SessionPersistenceLike {
   stat(id: string, options?: unknown): Promise<{ readonly header?: { readonly cwd?: string } } | undefined>
+  list?(): Promise<readonly { readonly header?: { readonly id?: string }; readonly sizeBytes?: unknown }[]>
 }
 
 /**
@@ -180,6 +270,52 @@ function subagentLabelOf(value: unknown): string {
   return typeof label === 'string' ? label : ''
 }
 
+/** `storageDomain` facility 的最小面：`get(name)` 取**已经打开**的域。官方 `.d.ts` 把它标成
+ *  diagnostic surface；但缓存服务自己没有删除面，这是当前唯一一条仍走域写链的落盘入口。
+ *  `session_projcache` 由宿主的缓存服务以 `per-record` 布局打开，本插件只 `get`、不 `open`
+ *  （同名域第二次 `open` 会抛 `already-open`）。 */
+interface ProjectionCacheTableLike {
+  keys(): IterableIterator<string>
+  delete(key: string): Promise<boolean>
+  /** 批量删：一个写槽；旧宿主没有就逐条 `delete`。 */
+  deleteMany?(keys: readonly string[]): Promise<number>
+}
+
+interface ProjectionCacheDomainLike {
+  /** 运行时可能回 null / undefined（镜像钉死≠运行时必有）；调用方按方法面判。 */
+  table(name: string): ProjectionCacheTableLike | null | undefined
+}
+
+interface StorageDomainFacilityLike {
+  /** 运行时可能回 null（镜像钉死≠运行时必有）；调用方按形状判。 */
+  get?(name: string): ProjectionCacheDomainLike | null | undefined
+}
+
+const PROJECTION_CACHE_DOMAIN = 'session_projcache'
+const PROJECTION_CACHE_TABLE = 'sessions'
+
+/** 取已打开的投影缓存表；域未打开 / 形状不符 ⇒ `undefined`。**缓存服务缺席不是一条判据**：
+ *  旧版本可能留下记录，只要域已打开就照读；读面回显式缺席，删除收尾降级为 warning。 */
+function projectionCacheTableOf(host: HostCtxLike): ProjectionCacheTableLike | undefined {
+  const facility = host.get('storageDomain') as StorageDomainFacilityLike | null | undefined
+  if (facility === undefined || facility === null || typeof facility.get !== 'function') return undefined
+  let domain: ProjectionCacheDomainLike | null | undefined
+  try {
+    domain = facility.get(PROJECTION_CACHE_DOMAIN)
+  } catch {
+    return undefined
+  }
+  if (domain === undefined || domain === null) return undefined
+  let table: ProjectionCacheTableLike | null | undefined
+  try {
+    table = domain.table(PROJECTION_CACHE_TABLE)
+  } catch {
+    return undefined
+  }
+  if (typeof table?.keys !== 'function' || typeof table.delete !== 'function') return undefined
+  return table
+}
+
 /** 端口实际读到的 ctx 面（一次强转的落点）。 */
 interface HostCtxLike {
   readonly workspaceRegistry: WorkspaceRegistryLike
@@ -201,7 +337,10 @@ interface HostCtxLike {
 /** `ctx.get('sessionQuery')` 的最小面；可选服务，不进 inject。
  *  `filterSessions([{kind:'parent', values}])` 按 `header.parentSession` 取直接孩子；
  *  出处：asar `dsh-session-query/lib/index.js` 的 `sessionPredicate`，判据逐字
- *  `filter.values.includes(record.header.parentSession ?? null)`；宿主换代先复核这一支。 */
+ *  `filter.values.includes(record.header.parentSession ?? null)`；宿主换代先复核这一支。
+ *  `readTitleSnapshots`（批量折 `session/title`，逐条 `fulfilled`/`rejected`）与 `readSession`
+ *  （`{ session, inheritedEventCount, events }`，events **不含** header 记录）供归档档读面；
+ *  两者都是可选成员（旧宿主缺席，降级/失败口径归 `HostCorpusPort` 的成员注释）。 */
 interface SessionQueryLike {
   listSessions(signal?: unknown): Promise<readonly {
     readonly header?: {
@@ -209,11 +348,14 @@ interface SessionQueryLike {
       readonly cwd?: string
       readonly parentSession?: string
       readonly origin?: string
+      readonly createdAt?: number
     }
   }[]>
   filterSessions(
     filters: readonly { readonly kind: string; readonly values: readonly string[] }[],
   ): Promise<readonly { readonly header?: { readonly id?: string; readonly cwd?: string; readonly parentSession?: string; readonly origin?: string } }[]>
+  readTitleSnapshots?(ids: readonly string[], signal?: unknown): Promise<readonly unknown[]>
+  readSession?(sessionId: string, signal?: unknown): Promise<unknown>
 }
 
 /** 官方的「这些父的孩子」那一支：`kind:'parent'` 的判据逐字是 `values.includes(record.header.parentSession ?? null)`。
@@ -232,6 +374,9 @@ export interface SessionIdentity {
   readonly parentSessionId?: string
   readonly projectDir: string
   readonly subagent: boolean
+  /** `header.createdAt`（归档行「创建于」回退与排序的原料）；header 上真缺席或非正数 ⇒ **不落键**
+   *  （不拿 0 冒充 1970；消费方按「时间未知」处理）。 */
+  readonly createdAt?: number
 }
 
 /** 闭包里的一条后代：`sessionId` 是宿主交回的原写法（身份只认它，归一比对交给闭包部件）。 */
@@ -352,6 +497,14 @@ async function controllerItems(host: HostCtxLike): Promise<readonly unknown[]> {
   }
 }
 
+/** 一条事件的形状判据：折叠要读 `type` 与 `time` 两格，判过就把原对象交出去（信封多余字段留着）。
+ *  与 `controllerItems` 同一条——`Array.isArray` 只证明是数组，元素逐个判，不断言形状。 */
+function isCorpusEvent(item: unknown): item is CorpusEvent {
+  if (typeof item !== 'object' || item === null) return false
+  const { type, time } = item as { readonly type?: unknown; readonly time?: unknown }
+  return typeof type === 'string' && typeof time === 'number'
+}
+
 /** 账本里没有那个工作区时 {@link HostPort.attach} / {@link HostPort.detach} 抛的原话开头。
  *  **原话与判据同住这里**：抛它的是这个端口，认它的也是端口给的那句，调用方不许另抄一份字符串。 */
 const WORKSPACE_MISSING_MESSAGE = 'workspace not found'
@@ -417,6 +570,18 @@ export function createHostPort(ctx: unknown): HostPort {
       }
     },
 
+    /** 子会话 label 的单问面：`subagent` 投影行的 `label` 本体，空串 = 没有（不回落标题，见接口注释）。 */
+    async labelOf(sessionId) {
+      try {
+        const header = await headerOf(host, sessionId)
+        if (header === undefined) return ''
+        const cache = projectionCacheOf(host)
+        return subagentLabelOf(cache?.cachedSnapshot(header, ['subagent'])?.values.subagent)
+      } catch {
+        return ''
+      }
+    },
+
     /** 活跃判据走宿主 `workspace/session-activity` waterfall：空数组 = 无活动；
      *  与宿主 archiveSession 的准入同源。 */
     async isLive(sessionId) {
@@ -432,6 +597,12 @@ export function createHostPort(ctx: unknown): HostPort {
     // eslint-disable-next-line @typescript-eslint/require-await -- 归档集是同步数组读，Promise 只来自在场其余成员的统一形状。
     async isArchived(sessionId) {
       return registry.archivedSessionIds.includes(sessionId)
+    },
+
+    /** registry 全局归档集**原样**（归档清单的交集原料；与 {@link HostIdentityPort.isArchived} 同一格事实）。 */
+    // eslint-disable-next-line @typescript-eslint/require-await -- 归档集是同步数组读，Promise 只来自在场其余成员的统一形状。
+    async archivedSessionIds() {
+      return registry.archivedSessionIds
     },
 
     /**
@@ -546,6 +717,9 @@ export function createHostPort(ctx: unknown): HostPort {
           ...(typeof parent === 'string' && parent !== '' ? { parentSessionId: parent } : {}),
           projectDir: projectDirOfCwd(cwd),
           subagent: record.header?.origin === 'subagent',
+          ...(typeof record.header?.createdAt === 'number' && record.header.createdAt > 0
+            ? { createdAt: record.header.createdAt }
+            : {}),
         })
       }
       return { available: true, value: out }
@@ -561,6 +735,158 @@ export function createHostPort(ctx: unknown): HostPort {
       const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
       if (typeof sessionQuery?.filterSessions !== 'function') return { available: false }
       return { available: true, value: await membersFor(sessionQuery, parentIds) }
+    },
+
+    /** 批量折日志标题：`readTitleSnapshots` 逐条 `fulfilled`（`value.title.title`）/ `rejected`；
+     *  无标题与 rejected 同落「不在 map」。方法缺席或整次读抛错 ⇒ `{available:false}`——
+     *  调用方逐条回退 `titleOf`，标题问题永不失败整档。 */
+    async titleSnapshots(ids) {
+      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
+      if (typeof sessionQuery?.readTitleSnapshots !== 'function') return { available: false }
+      try {
+        const out = new Map<string, string>()
+        for (const item of await sessionQuery.readTitleSnapshots([...new Set(ids)])) {
+          const row = item as {
+            readonly sessionId?: unknown
+            readonly status?: unknown
+            readonly value?: { readonly title?: unknown } | null
+          } | null
+          if (typeof row?.sessionId !== 'string' || row.status !== 'fulfilled') continue
+          const title = (row.value?.title as { readonly title?: unknown } | undefined)?.title
+          if (typeof title === 'string' && title !== '') out.set(row.sessionId, title)
+        }
+        return { available: true, value: out }
+      } catch {
+        return { available: false }
+      }
+    },
+
+    /** 提问时间表：`sessionController.list()` 逐条 `sessionId`/`updatedAt`（正数才收；0 不是
+     *  「1970 年提问过」）；服务缺席或抛错 ⇒ `{available:false}`（调用方回退 `createdAt`）。 */
+    async sessionActivity() {
+      try {
+        const controller = host.get('sessionController') as SessionListLike | null | undefined
+        if (controller === undefined || controller === null || typeof controller.list !== 'function') {
+          return { available: false }
+        }
+        const listed = await controller.list()
+        const items: unknown = Array.isArray(listed) ? listed : (listed as { items?: unknown } | null)?.items
+        const out = new Map<string, number>()
+        if (Array.isArray(items)) {
+          for (const item of items) {
+            const row = item as { readonly sessionId?: unknown; readonly updatedAt?: unknown } | null
+            if (typeof row?.sessionId !== 'string') continue
+            if (typeof row.updatedAt !== 'number' || !Number.isFinite(row.updatedAt) || row.updatedAt <= 0) continue
+            out.set(row.sessionId, row.updatedAt)
+          }
+        }
+        return { available: true, value: out }
+      } catch {
+        return { available: false }
+      }
+    },
+
+    /** 持久化字节表：`sessionPersistence.list()` 的 `sizeBytes`（可选字段，缺席 = 没有可信读数）。
+     *  服务缺席 ⇒ `{ available: false }`（调用方逐行缺大小、整档照常）；`list()` 抛错照抛——
+     *  调用方整档 `io`，不拿空表冒充"没有大小"。 */
+    async persistedSizes() {
+      const persistence = host.get('sessionPersistence') as SessionPersistenceLike | null | undefined
+      if (persistence === undefined || persistence === null || typeof persistence.list !== 'function') {
+        return { available: false }
+      }
+      const out = new Map<string, number | undefined>()
+      for (const snapshot of await persistence.list()) {
+        const id = snapshot.header?.id
+        if (typeof id !== 'string' || id === '') continue
+        const size = snapshot.sizeBytes
+        out.set(id, typeof size === 'number' && Number.isFinite(size) ? size : undefined)
+      }
+      return { available: true, value: out }
+    },
+
+    /** 持久化服务是否在场：只探服务对象，不读列表。`persistedSizes` 的 `available:false` 把
+     *  「服务没挂」与「服务在但列表读面坏了」折成同一形状；维护卡的孤儿判定需要把后者失败关闭。 */
+    persistenceMounted() {
+      try {
+        const persistence = host.get('sessionPersistence')
+        return persistence !== undefined && persistence !== null
+      } catch {
+        return false
+      }
+    },
+
+    /** 投影缓存记录键集：只认已打开的存储域，**不拿服务缺席当空表**。旧版本或另一份 composition
+     *  可能留下记录；域取不到/形状不符/`keys()` 抛错都回显式缺席，调用方折 `io`。
+     *  `keys()` 是域内存表的快照迭代器——与缓存服务读写的是同一份状态。 */
+    // eslint-disable-next-line @typescript-eslint/require-await -- `keys()` 是同步内存读；Promise 只来自成员面的统一形状。
+    async projectionCacheIds() {
+      const table = projectionCacheTableOf(host)
+      if (table === undefined) return { available: false }
+      try {
+        return { available: true, value: [...table.keys()] }
+      } catch {
+        return { available: false }
+      }
+    },
+
+    /** 删投影缓存记录：经 storage domain 的写链，内存与盘一起更新。批量写链失败原样抛（清理段
+     *  折成整批失败）；旧宿主逐条 `delete` 时单条失败收进 `failed`、继续删其余条——回执始终是
+     *  这一趟的真实后果，永久删除的收尾自己吞成 warning。 */
+    async dropProjectionCache(sessionIds) {
+      if (sessionIds.length === 0) return { removed: 0, failed: 0 }
+      const table = projectionCacheTableOf(host)
+      if (table === undefined) throw new Error('session-delete: 宿主的 session_projcache 存储域不可用')
+      const unique = [...new Set(sessionIds)]
+      if (typeof table.deleteMany === 'function') {
+        const removed = await table.deleteMany(unique)
+        return { removed, failed: 0 }
+      }
+      let removed = 0
+      let failed = 0
+      for (const id of unique) {
+        try {
+          if (await table.delete(id)) removed += 1
+        } catch {
+          failed += 1
+        }
+      }
+      return { removed, failed }
+    },
+
+    /** 整本读：`sessionQuery.readSession`（replay 校验、不 make live）。header 只投影折叠消费的三格
+     *  （`origin` 是子会话的权威判据，但折叠认的是 `parentSession`——投影它就没有消费方）；
+     *  事件流原样交回（信封多余字段留着），**逐条判形状**：不符就抛（上层折 `io`），不静默折成空正文。
+     *  方法缺席抛「缺席」；读失败原样抛（含 `SESSION_QUERY_SESSION_NOT_FOUND`——折 `not-found`
+     *  归上层的 `readArchiveDetail`）。 */
+    async readSession(sessionId) {
+      const sessionQuery = host.get('sessionQuery') as SessionQueryLike | undefined
+      if (typeof sessionQuery?.readSession !== 'function') {
+        throw new Error('session-delete: sessionQuery.readSession 缺席')
+      }
+      const raw = (await sessionQuery.readSession(sessionId)) as {
+        readonly session?: { readonly createdAt?: unknown; readonly cwd?: unknown; readonly parentSession?: unknown }
+        readonly events?: unknown
+      } | null
+      const head = raw?.session ?? {}
+      const listed: unknown = raw?.events
+      if (!Array.isArray(listed)) {
+        throw new Error('session-delete: sessionQuery.readSession 的事件流形状不符')
+      }
+      const events: CorpusEvent[] = []
+      for (const item of listed as readonly unknown[]) {
+        if (!isCorpusEvent(item)) {
+          throw new Error('session-delete: sessionQuery.readSession 的事件流形状不符')
+        }
+        events.push(item)
+      }
+      return {
+        session: {
+          ...(typeof head.createdAt === 'number' ? { createdAt: head.createdAt } : {}),
+          ...(typeof head.cwd === 'string' ? { cwd: head.cwd } : {}),
+          ...(typeof head.parentSession === 'string' ? { parentSession: head.parentSession } : {}),
+        },
+        events,
+      }
     },
   }
 }

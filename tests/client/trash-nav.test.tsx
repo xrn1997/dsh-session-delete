@@ -17,8 +17,12 @@ import { act, renderHook } from '@testing-library/react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { useTrashNav, type TrashNavInput } from '../../src/client/trash-nav.js'
+import type { TrashRowWire } from '../../src/shared/wire.js'
 import { trashRow } from './support/outcomes.js'
 import { pick } from '../support/fixture.js'
+
+type NavInput = TrashNavInput<TrashRowWire>
+const rowIdOf = (row: TrashRowWire): string => row.id
 
 const A = trashRow('a', 'session-a')
 const B = trashRow('b', 'session-b')
@@ -26,12 +30,13 @@ const C = trashRow('c', 'session-c')
 
 function harness() {
   // 签名挂到泛型上（不是体内占位参数）：mock.calls 仍带真实两参形状，下面的 `{drill}` 断言要读第二格。
-  const select = vi.fn<TrashNavInput['select']>(async () => {})
+  const select = vi.fn<NavInput['select']>(async () => {})
   const toggleCheck = vi.fn()
   const back = vi.fn()
   const focusRow = vi.fn()
-  const input = (over: Partial<TrashNavInput> = {}): TrashNavInput => ({
+  const input = (over: Partial<NavInput> = {}): NavInput => ({
     ordered: [A, B, C],
+    idOf: rowIdOf,
     selectedId: null,
     selectMode: false,
     drillEnabled: true,
@@ -45,8 +50,8 @@ function harness() {
     scope: { current: null },
     ...over,
   })
-  const mount = (over: Partial<TrashNavInput> = {}) =>
-    renderHook((props: TrashNavInput) => useTrashNav(props), { initialProps: input(over) })
+  const mount = (over: Partial<NavInput> = {}) =>
+    renderHook((props: NavInput) => useTrashNav(props), { initialProps: input(over) })
   return { select, toggleCheck, back, focusRow, input, mount }
 }
 

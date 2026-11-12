@@ -1,15 +1,16 @@
 /**
- * 维护卡的手动编排（`use-maintenance.ts` 的两段 glue + `use-maintenance-section.ts` 的泛型段 module）。
+ * 维护卡的手动编排（`use-maintenance.ts` 的三段 glue + `use-maintenance-section.ts` 的泛型段 module）。
  *
  * 这一份直接测 hook，钉四件事：
  * ① **没有自动扫描**：挂载只交初始态，一次请求都不发（没有 effect、没有定时器）；
  * ② 检查失败是可见的失败：报告回 `null` + 原文，不折成"零条"；
- * ③ 清理后必重查：孤儿会话走 `/apply` 的 `orphan-clean`，孤儿附件走 `/attachment-clean`；
- *    中性 / 失败 / 部分计数与附件跳过按回执说，重查结果覆盖报告，重查成功后才摆这一趟后果；
+ * ③ 清理后必重查：孤儿会话走 `/apply` 的 `orphan-clean`，孤儿附件走 `/attachment-clean`，
+ *    投影缓存走 `/projection-clean`；中性 / 失败 / 部分计数与附件跳过按回执说，重查结果覆盖报告，
+ *    重查成功后才摆这一趟后果；
  * ④ 段的不变量由构造保证：开门只有 `openPreview`（先清旧失败与旧提示）、收框只有 `cancel`
  *    （不碰提示 / 失败）、`busy` 由段自己给（不靠外部传入）、最新票的输家不落地。
  *
- * 两段共用同一台状态机，所以每条判据都各钉两段（或在段层面钉一次、两段各走一遍）。
+ * 三段共用同一台状态机，所以每条判据都各钉三段（或在段层面钉一次、三段各走一遍）。
  */
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -46,6 +47,8 @@ const ATT_106: AttachmentOrphanReportWire = {
   totalBytes: 29_150_413,
   items: Array.from({ length: 106 }, (_, i) => orphanItem(i)),
 }
+const PROJ_3 = { count: 3 }
+const PROJ_EMPTY = { count: 0 }
 
 function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
   return createFakeRemote({
@@ -69,7 +72,7 @@ function current(result: { readonly current: Maintenance }): Maintenance {
 }
 
 describe('维护编排 · 手动触发', () => {
-  it('挂载不发请求：两份报告都是"还没检查"的 null，两段都空闲', () => {
+  it('挂载不发请求：三份报告都是"还没检查"的 null，三段都空闲', () => {
     const { d, result } = mount()
     const m = current(result)
     expect(m.orphans.report).toBeNull()
@@ -85,9 +88,16 @@ describe('维护编排 · 手动触发', () => {
     expect(m.attachments.confirm).toBe(false)
     expect(m.attachments.busy).toBe(false)
     expect(m.attachments.phase).toBeNull()
+    expect(m.projection.report).toBeNull()
+    expect(m.projection.failure).toBeNull()
+    expect(m.projection.notice).toBeNull()
+    expect(m.projection.confirm).toBe(false)
+    expect(m.projection.busy).toBe(false)
+    expect(m.projection.phase).toBeNull()
     // 没有 effect / 定时器：挂载这一拍与下一拍都不该有扫描。
     expect(d.scanOrphans).not.toHaveBeenCalled()
     expect(d.scanAttachmentOrphans).not.toHaveBeenCalled()
+    expect(d.scanProjectionCacheOrphans).not.toHaveBeenCalled()
   })
 
 })
@@ -545,5 +555,104 @@ describe('维护编排 · 孤儿附件清理', () => {
     expect(d.scanAttachmentOrphans).toHaveBeenCalledTimes(1)
     expect(current(result).attachments.confirm).toBe(false)
     expect(current(result).attachments.phase).toBeNull()
+  })
+})
+
+describe('维护编排 · 投影缓存', () => {
+  it('检查读不到：报告回 null、包装成"检查失败"上屏', async () => {
+    const { result } = mount({
+      scanProjectionCacheOrphans: vi.fn(async () => {
+        throw Object.assign(new Error('投影缓存读面不可用'), { code: 'sessiondelete/io' })
+      }),
+    })
+    await act(async () => { await current(result).projection.scan() })
+    expect(current(result).projection.report).toBeNull()
+    expect(current(result).projection.failure).toBe('检查失败：投影缓存读面不可用')
+  })
+
+  it('清理后自动重查，「已清理 N 条」上屏；确认框收起', async () => {
+    const scanProjectionCacheOrphans = vi.fn()
+      .mockResolvedValueOnce(PROJ_3)
+      .mockResolvedValueOnce(PROJ_EMPTY)
+    const cleanProjectionCacheOrphans = vi.fn(async () => ({ removed: 3, failed: 0 }))
+    const { result } = mount({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
+    await act(async () => { await current(result).projection.scan() })
+    act(() => { current(result).projection.openPreview() })
+    await act(async () => { await current(result).projection.clean() })
+
+    expect(cleanProjectionCacheOrphans).toHaveBeenCalledTimes(1)
+    expect(scanProjectionCacheOrphans).toHaveBeenCalledTimes(2)
+    expect(current(result).projection.confirm).toBe(false)
+    expect(current(result).projection.report).toEqual(PROJ_EMPTY)
+    expect(current(result).projection.notice).toBe('已清理 3 条投影缓存记录')
+    expect(current(result).projection.failure).toBeNull()
+    expect(current(result).projection.busy).toBe(false)
+    expect(current(result).projection.phase).toBeNull()
+  })
+
+  it('清理成功先收旧报告：重查还在飞时条数是 0，状态仍是清理中', async () => {
+    let resolveScan!: (value: { count: number }) => void
+    const scanProjectionCacheOrphans = vi.fn()
+      .mockResolvedValueOnce(PROJ_3)
+      .mockImplementationOnce(() => new Promise<{ count: number }>((resolve) => { resolveScan = resolve }))
+    const cleanProjectionCacheOrphans = vi.fn(async () => ({ removed: 3, failed: 0 }))
+    const { result } = mount({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
+    await act(async () => { await current(result).projection.scan() })
+    act(() => { current(result).projection.openPreview() })
+
+    let pending!: Promise<void>
+    act(() => { pending = current(result).projection.clean() })
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(cleanProjectionCacheOrphans).toHaveBeenCalledTimes(1)
+    expect(current(result).projection.report).toEqual(PROJ_EMPTY)
+    expect(current(result).projection.phase).toBe('cleaning')
+    expect(current(result).projection.busy).toBe(true)
+
+    await act(async () => { resolveScan(PROJ_EMPTY); await pending })
+    expect(current(result).projection.notice).toBe('已清理 3 条投影缓存记录')
+    expect(current(result).projection.busy).toBe(false)
+  })
+
+  it('两趟之间记录已不在：removed 0 不念「已清理 0 条」，也不冒充失败', async () => {
+    const { result } = mount({
+      scanProjectionCacheOrphans: vi.fn()
+        .mockResolvedValueOnce(PROJ_3)
+        .mockResolvedValueOnce(PROJ_EMPTY),
+      cleanProjectionCacheOrphans: vi.fn(async () => ({ removed: 0, failed: 0 })),
+    })
+    await act(async () => { await current(result).projection.scan() })
+    await act(async () => { await current(result).projection.clean() })
+    expect(current(result).projection.notice).toBeNull()
+    expect(current(result).projection.failure).toBeNull()
+    expect(current(result).projection.report).toEqual(PROJ_EMPTY)
+  })
+
+  it('failed > 0 ⇒ 未清条数与已清条数都上屏（失败块），重查不吞掉这句', async () => {
+    const { result } = mount({
+      scanProjectionCacheOrphans: vi.fn(async () => PROJ_3),
+      cleanProjectionCacheOrphans: vi.fn(async () => ({ removed: 1, failed: 2 })),
+    })
+    await act(async () => { await current(result).projection.scan() })
+    await act(async () => { await current(result).projection.clean() })
+    expect(current(result).projection.failure).toBe('2 条投影缓存记录未能清理（已清理 1 条）')
+    expect(current(result).projection.notice).toBeNull()
+  })
+
+  it('顶层失败：确认框关掉、本地化前缀 + 原文上屏，并重查一次', async () => {
+    const scanProjectionCacheOrphans = vi.fn(async () => PROJ_3)
+    const { result } = mount({
+      scanProjectionCacheOrphans,
+      cleanProjectionCacheOrphans: vi.fn(async () => {
+        throw Object.assign(new Error('域写链断了'), { code: 'sessiondelete/io' })
+      }),
+    })
+    await act(async () => { await current(result).projection.scan() })
+    act(() => { current(result).projection.openPreview() })
+    await act(async () => { await current(result).projection.clean() })
+    expect(current(result).projection.confirm).toBe(false)
+    expect(current(result).projection.failure).toBe('投影缓存清理失败：域写链断了')
+    expect(scanProjectionCacheOrphans).toHaveBeenCalledTimes(2)
+    expect(current(result).projection.busy).toBe(false)
+    expect(current(result).projection.phase).toBeNull()
   })
 })

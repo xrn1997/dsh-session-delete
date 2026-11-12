@@ -8,6 +8,9 @@
  *
  * 现场是模块级的（同 `delete-confirm.tsx` / `undo-notices.ts`）：请求从浮条那颗按钮发来，确认框住在
  * `shell.overlay` 上——它必须活在行开关那棵子树之外（槽位行随宿主重排而卸载，见 `delete-confirm.tsx` 头注）。
+ *
+ * 这张框不认识任何一方的选中集：宿主浮条与回收站面板的归档档都发请求进来，**执行后怎么收缩自己的
+ * 勾选由发请求那一面交钩子**（`shrinkSelection`）。框自己只收缩请求现场（重试轮只发失败 id）。
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import { useBusyGate } from './busy-gate.js'
@@ -16,7 +19,7 @@ import { ConfirmDialog } from './confirm-dialog.js'
 import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
 import type { OneShotDeps } from './remote.js'
-import { getPicks, shrinkPicksToFailures, type PickItem } from './batch-selection-store.js'
+import type { PickItem } from './batch-selection-store.js'
 import { createStore } from './store.js'
 import { Tag } from './ui/Tag.js'
 import { deleteSessionsFromBatch } from './write-seats.js'
@@ -25,14 +28,24 @@ export interface BatchDeleteRequest {
   /** 每次发布递增：换一批就重挂载，busy / 失败面不带着上一批的记忆。 */
   seq: number
   items: readonly PickItem[]
+  /** 落地后收缩**发请求那一面**的选中集（宿主浮条交 picks 的收缩；归档档不交，勾选面归面板自己）。
+   *  被闸挡回的那一趟不调它——这一趟没跑，不许照着它动任何选中集。 */
+  shrinkSelection?: (failedSessionIds: readonly string[]) => void
 }
 
 const requestStore = createStore<BatchDeleteRequest | null>(null)
 
-/** 浮条那颗按钮调用：请求确认这一批（缺省 = 当前选中集）。空名单不发框。 */
-export function requestDeleteBatch(items: readonly PickItem[] = getPicks()): void {
+/** 请求确认这一批。空名单不发框。`shrinkSelection` 是调用方自己的选中集收尾，缺席 = 这一面没有要收缩的选中集。 */
+export function requestDeleteBatch(
+  items: readonly PickItem[],
+  shrinkSelection?: (failedSessionIds: readonly string[]) => void,
+): void {
   if (items.length === 0) return
-  requestStore.publish((seq) => ({ seq, items: [...items] }))
+  requestStore.publish((seq) => ({
+    seq,
+    items: [...items],
+    ...(shrinkSelection === undefined ? {} : { shrinkSelection }),
+  }))
 }
 
 export function clearDeleteBatchRequest(): void {
@@ -145,7 +158,7 @@ function BatchConfirmDialog({
     // 动作里发生）——界面后果全部归在飞的那一趟（判据住 `busy-gate.ts`）。
     if (result.kind === 'blocked') return
     const failed = result.value
-    shrinkPicksToFailures([...failed.keys()])
+    current.shrinkSelection?.([...failed.keys()])
     if (failed.size === 0) {
       clearDeleteBatchRequest()
       return

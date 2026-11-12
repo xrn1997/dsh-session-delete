@@ -20,7 +20,6 @@ import { PARAMS, ROUTES, type TrashDetailAttachmentWire } from '../shared/wire.j
 import { apiPath } from './api-base.js'
 import type { Translate } from './copy.js'
 import { Button } from './ui/Button.js'
-import { CARD } from './trash-view.js'
 import { Modal } from './ui/Modal.js'
 import { fileSizeText } from './ui/format.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
@@ -284,23 +283,5 @@ export function AttachmentStrip({
         )}
       </Modal>
     </>
-  )
-}
-
-/**
- * 附件清理回执那一行提示（「N 个附件未能清理」/「附件未清理：原因」）。表现层只收一句已经拼好的话；
- * 什么时候该有这句话、失败与跳过怎么拼，归接线的那一侧（判据住 `receipt.ts` 与 `use-trash-query.ts`）。
- */
-export function AttachmentNotice({ message }: { message: string | null }) {
-  if (message === null) return null
-  return (
-    <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 10, marginBottom: 10, padding: '10px 12px' }}>
-      <span style={{ display: 'inline-flex', flex: 'none', color: 'var(--dsw-alias-state-warn-primary)' }} aria-hidden="true">
-        <IconWarningOutlineRegular size={15} />
-      </span>
-      <span style={{ flex: '1 1 auto', minWidth: 0, wordBreak: 'break-word', fontSize: 12, lineHeight: '17px' }}>
-        {message}
-      </span>
-    </div>
   )
 }

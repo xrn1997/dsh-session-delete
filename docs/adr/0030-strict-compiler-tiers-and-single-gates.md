@@ -13,7 +13,7 @@ Status: accepted
 ## 被否的方案
 
 - **`unbound-method` 逐点 disable**：命中集中在同一根因——本仓 interface 用方法简写（`m(): T`）给 TS 隐式 `this`，摘下来传出去一律可疑。改声明式为属性声明（`m: () => T`）一次消掉大半，且顺带让函数属性逆变生效；与 `src/api/route-table.ts` 的既有先例同向。
-- **按规则建议给 `TrashSelection` 的方法包箭头**：它的值每次渲染换新对象，包一层会让 `src/client/trash-nav.ts` 里 `onListKeyDown` 的 useCallback 依赖抖动（`toggleCheck` 是它的依赖之一，`select` 由控制器进同一张依赖表），每次渲染换一个新处理器——那是行为改动，不是消 lint。（`document` 上那条 Esc 监听不在这条链上：它的依赖是 `drillEnabled` / `drilled` / `back` / `selectedId`，不含勾选面。）
+- **按规则建议给 `ListSelection` 的方法包箭头**：它的值每次渲染换新对象，包一层会让 `src/client/trash-nav.ts` 里 `onListKeyDown` 的 useCallback 依赖抖动（`toggleCheck` 是它的依赖之一，`select` 由控制器进同一张依赖表），每次渲染换一个新处理器——那是行为改动，不是消 lint。（`document` 上那条 Esc 监听不在这条链上：它的依赖是 `drillEnabled` / `drilled` / `back` / `selectedId`，不含勾选面。）
 - **删掉 `use-trash-panel-controller` 里被报「多余」的 `detailVersion` 依赖**：详情账本是模块级 Map，这个效应只能靠这个必然变化的信号知道账本被 prepend 过；照规则删掉，加载更早会读回来但不落屏。
 
 ## 后果

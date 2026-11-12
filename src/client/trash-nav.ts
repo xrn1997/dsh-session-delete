@@ -2,7 +2,8 @@
  * 清单的键盘导航面：方向键走环、Enter/Space 的双重语义、roving tabindex 的落点，
  * 以及窄档下钻里按 Esc 回退——孩子视图开着时先回父详情，再按一次才退出下钻并把焦点交还给那一行。
  *
- * 它不查自己的行、不认行选择器：焦点动作由调用方注入 focusRow，行的 DOM 查询留在面板；
+ * 它不查自己的行、不认行选择器：焦点动作由调用方注入 focusRow，行的 DOM 查询留在清单那一侧
+ * （`session-list.tsx` 的 `useRowFocus`）；
  * 唯一的文档查询是 Esc 让路判据（问 ui/top-layer.ts 当前有没有打开的 dialog/menu）。
  * 只读事件的 target 判断这一下该不该归清单：行内按钮/勾选框的 Enter/Space 是人家的激活键。
  *
@@ -14,7 +15,6 @@
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react'
-import type { TrashEntryLike } from './remote.js'
 import { hasTopLayer } from './ui/top-layer.js'
 
 /**
@@ -24,8 +24,10 @@ import { hasTopLayer } from './ui/top-layer.js'
  * `select` 只移动选中（带 `drill` 才下钻），`back` 是控制器的回退动作（两程：先收孩子视图、
  * 再退下钻），`focusRow` 把焦点交给某一行。
  */
-export interface TrashNavInput {
-  ordered: readonly TrashEntryLike[]
+export interface TrashNavInput<R> {
+  ordered: readonly R[]
+  /** 行身份（回收站 = 条目 id，归档 = 会话 id）：调用方给模块级稳定函数，别逐渲染换引用。 */
+  idOf: (row: R) => string
   selectedId: string | null
   selectMode: boolean
   drillEnabled: boolean
@@ -33,10 +35,10 @@ export interface TrashNavInput {
   /** 四个动作都是**属性声明**：它们被摘下来放进 `useTrashNav` 的输入或直接挂成事件处理器，
    *  实现体一个都不读 `this`。方法简写会带上隐式 `this: TrashNavInput`，`unbound-method`
    *  会把这种交接报成可疑；改属性只是让类型面说真话。 */
-  select: (entry: TrashEntryLike, options?: { drill?: boolean }) => Promise<void>
-  toggleCheck: (entryId: string) => void
+  select: (row: R, options?: { drill?: boolean }) => Promise<void>
+  toggleCheck: (rowId: string) => void
   back: () => void
-  focusRow: (entryId: string) => void
+  focusRow: (rowId: string) => void
   /** Esc 的作用域（面板根节点；生产入口必须传，测试可传空引用对象）。下钻时清单不在 DOM，
    *  但详情在面板里；**焦点在面板外**的 Esc 不归清单——否则在侧栏或别的面板按 Esc 会退出下钻，
    *  还会把焦点拽进回收站。根还没挂上时无从判断包含关系，Esc 不处理。 */
@@ -72,18 +74,19 @@ function shouldHandleEsc(event: KeyboardEvent, scope: RefObject<HTMLElement | nu
   return root !== null && root.contains(target)
 }
 
-export function useTrashNav(input: TrashNavInput): TrashNav {
-  const { ordered, selectedId, selectMode, drillEnabled, drilled, select, toggleCheck, back, focusRow } = input
+export function useTrashNav<R>(input: TrashNavInput<R>): TrashNav {
+  const { ordered, idOf, selectedId, selectMode, drillEnabled, drilled, select, toggleCheck, back, focusRow } = input
   /** Esc 退出下钻后要交还焦点的那一行；等 `drilled` 落地、清单回到 DOM 之后再用一次。 */
   const refocusRow = useRef<string | null>(null)
 
   /** 折叠起来的组只是收掉那一列，选中的 id 还留着——所以这条可见性得逐条对账，不能只看非空。 */
-  const activeDescendantId = ordered.some((entry) => entry.id === selectedId) ? selectedId : null
-  const tabStopId = activeDescendantId ?? ordered[0]?.id ?? null
+  const activeDescendantId = ordered.some((row) => idOf(row) === selectedId) ? selectedId : null
+  const first = ordered[0]
+  const tabStopId = activeDescendantId ?? (first === undefined ? null : idOf(first))
 
   const onListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>): void => {
     if (ordered.length === 0 || !isListOwnedEvent(event)) return
-    const index = ordered.findIndex((entry) => entry.id === selectedId)
+    const index = ordered.findIndex((row) => idOf(row) === selectedId)
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
       const step = event.key === 'ArrowDown' ? 1 : -1
@@ -93,7 +96,7 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
       // 万一将来前置条件被改坏也只是不动作，不会把 undefined 当条目交出去。
       if (target === undefined) return
       void select(target)
-      focusRow(target.id)
+      focusRow(idOf(target))
       return
     }
     if (event.key === 'Enter' || event.key === ' ') {
@@ -103,13 +106,13 @@ export function useTrashNav(input: TrashNavInput): TrashNav {
       event.preventDefault()
       // 多选态下 Enter/Space 说的是"勾上/取消这一条"，光标仍由 ↑↓ 移动（grid 的常规分工）。
       if (selectMode) {
-        toggleCheck(target.id)
+        toggleCheck(idOf(target))
         return
       }
       if (drillEnabled) void select(target, { drill: true })
       else void select(target)
     }
-  }, [drillEnabled, focusRow, ordered, select, selectMode, selectedId, toggleCheck])
+  }, [drillEnabled, focusRow, idOf, ordered, select, selectMode, selectedId, toggleCheck])
 
   // 监听挂 `document`：窄档下钻时清单不在 DOM 里，挂在容器上的 Esc 是一条永远收不到的死路径。
   // `drillEnabled` 也进条件：宽档里即使残留着 `drilled`（例如从窄档拖宽），Esc 也不归清单。

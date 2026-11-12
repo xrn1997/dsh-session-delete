@@ -28,8 +28,9 @@
  * 不预先铺开——宿主那套里还有几十个变体与控件，抄全了等于把它的表面积整个搬进来。
  *
  * **七处不是抄本**：① `.sd-resizing`（拖动期间挂在面板根上、关掉文字选中）——宿主那份没有对应的类，
- * 它的把手由 JS 侧的 pointer capture 承担；② `[data-dsh-session-delete="trash-row"]:focus-visible`
- * （清单那一行的键盘焦点描边，复用选中态那枚 `ghost-active-border`）——宿主那套表里行不是可聚焦
+ * 它的把手由 JS 侧的 pointer capture 承担；② `.sd-session-row:focus-visible`
+ * （清单那一行的键盘焦点描边，复用选中态那枚 `ghost-active-border`；认 `session-list.tsx` 的
+ * 类名而不是档位的 `data-*` 值）——宿主那套表里行不是可聚焦
  * div，我们这一行是 `role="row"` 且要吃 ↑↓，而这一代 `--dsw-focus-ring-color` 是 `transparent`；
  * ③ `.sd-rowaction-button` 的 `[aria-pressed='true']` 与 `:disabled` 两档（2026-10-17）——
  * 官方那颗 `iconButton` 只有常态与 hover，勾选开关要有"按下"和"这条删不动"两档，token 与回收站
@@ -741,8 +742,10 @@ button.sd-disclosure-leading {
 /* 本插件自造的第二条（不是抄本，见文件头点名）：清单行是 `role="row"` 的可聚焦 div，而这一代
    `--dsw-focus-ring-color` 逐字是 `transparent`（2026-10-15 实测）——不自己描一条，键盘走
    ↑↓ 选会话时就没有任何焦点可见性。描边**复用选中态那枚** `ghost-active-border`，不新造颜色；
-   0.5px 与 `outline-offset: 1px` 是行的描边宽度与一档外移，不动布局（outline 不进滚动区）。 */
-[data-dsh-session-delete="trash-row"]:focus-visible {
+   0.5px 与 `outline-offset: 1px` 是行的描边宽度与一档外移，不动布局（outline 不进滚动区）。
+   认的是 `session-list.tsx` 交出的类名，不是档位的 `data-*` 值：回收站档与归档档吃同一份，
+   按档位各写一条就只有一档有焦点环（2026-11 归档档缺过一条）。 */
+.sd-session-row:focus-visible {
   outline: 0.5px solid var(--sd-button-ghost-active-border);
   outline-offset: 1px;
 }

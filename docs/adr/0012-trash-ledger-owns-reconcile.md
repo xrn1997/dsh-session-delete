@@ -2,13 +2,13 @@
 
 Status: accepted
 
-清册的外部事实源是 `session-trash/` 目录，而 raw `manifest.list()` 只是一份可能过期的索引；为了让“读前先对账”不再是一条调用方义务，`src/trash/ledger.ts` 把对账与读合成 `list()`，raw 端口只留给 ledger 与对账实现。声明为 pure 的读面（`/orphans` 的扫描、`/detail` 的详情）不能借读清册之名写行，所以 ledger 另开一个不对账的 `raw()`。
+清册的外部事实源是 `session-trash/` 目录，而 raw `manifest.list()` 只是一份可能过期的索引；为了让“读前先对账”不再是一条调用方义务，`src/trash/ledger.ts` 把对账与读合成 `list()`，raw 端口只留给 ledger 与对账实现。声明为 pure 的读面（`/orphans` 的扫描、`/detail` 的详情、`/projection-orphans` 的报告）不能借读清册之名写行，所以 ledger 另开一个不对账的 `raw()`。
 
 ## 决定
 
 1. `TrashLedger` 是动词与路由唯一认识的清册读面：`list()` 是真相读（先对账再交行），`raw()` 是索引快照（不对账、不写行）。
 2. raw `ManifestPort` 不再出现在 `CoreDeps` 上；`src/trash/reconcile.ts` 仍收 raw，因为它是 ledger 的 implementation。
-3. `/list`、`/empty`、restore、purge 与 `orphan-clean` 的写前读走 `list()`；声明为 pure 的 `/orphans` 与 `/detail` 只走 `raw()`。
+3. `/list`、`/empty`、restore、purge 与 `orphan-clean` 的写前读走 `list()`；声明为 pure 的 `/orphans`、`/detail` 与 `/projection-orphans` 只走 `raw()`。投影缓存清理（chained 的 `/projection-clean`）是**有意的例外**：它要保住目录不在的幽灵行，先 `list()` 会把行摘掉，所以也用 raw 行 + 目录名判据（ADR-0062）。
 
 ## 边界
 

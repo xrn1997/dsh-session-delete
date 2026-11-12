@@ -30,7 +30,7 @@ DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读�
 
 - **改通道先改契约**：段名 / 动作 / 方法 / 形状 / 失败码住 `src/shared/wire.ts`（段名表每项 `{ path, method, body }`，两半只投影；`body` 键归这张表），纯度 / 读面与 body 的预读判定住 `src/api/route-table.ts`（`bodyOf` 只投影 wire 那一格，不写第二份字面量）；加一个新段名两处一起改。请求本身不对用 4xx，操作失败回 200 + 信封；浏览器半的通道把信封解析成唯一落地面 `RemoteOutcome`（ADR-0053）。通道只走宿主 `connection` 的 exact Fetch 路由（`/api/dsh-session-delete-api/*`，鉴权归宿主 `/api`）；支持面是 web UI 与桌面端，没有自建前缀 / fallback。为什么不用官方 `remote.<namespace>` 见 ADR-0033（`remote` 仍不可用：第三方拿不到 Typert 描述符的动态发现挂载点）。
 - **删除 / 恢复不碰归档**：回收站与归档是两套状态；删除必须把 session 和它的 agent handle 一起摘掉，恢复走冷 resume。判据与已知限制见 ADR-0008。
-- **附件红线**：附件只随永久删除清 `.dsh` 内独占图片副本——不碰源文件、不碰普通文件、共享引用保留；剩余引用源读不出就跳过。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。孤儿会话与孤儿附件的检查/清理都是**手动**：只在插件设置页的维护卡里触发，任何面板与写后重读都不自动扫（ADR-0021）。
+- **附件红线**：附件只随永久删除清 `.dsh` 内独占图片副本——不碰源文件、不碰普通文件、共享引用保留；剩余引用源读不出就跳过。判据住 `src/trash/attachments.ts`，裁决见 ADR-0020。孤儿会话、孤儿附件与孤儿投影缓存的检查/清理都是**手动**：只在插件设置页的维护卡里触发，任何面板与写后重读都不自动扫（ADR-0021 / ADR-0062）；永久删除逐条带走被删会话的缓存。
 - **浏览器半不许 import 任何宿主客户端包**（type-only 也不留）；跨插件一律 `import type`；宿主类型面用本地窄镜像，不装宿主类型包、不做 `declare module` 增强。
 - **客户端条目注册只在 `src/client/index.tsx`**（唯一例外：会话菜单两行的双轨注册与 `contextMenu.icon` 两个 key 归 `src/client/context-menu-actions.tsx` 的 `installSessionMenus`，由 `index.tsx` 调一次；见 `docs/architecture.md` §3 与 ADR-0059）：槽位只挂官方已声明的；可选服务走 `ctx.get`，不进条目的 `inject`（条目 pending = 宿主进程死）；可能迟到的服务用 `ctx.inject([...])` 的 scoped 等待切过去，不改条目的 `inject`。
 - **宿主要求只在顶层 `engines.dsh`**；`@deepseek-ai/dsh*` peer 保持零条。窗口值与真机名单的事实源是 `package.json`；README 与徽章是投影（文档门校验），`tests/skeleton.test.ts` 双向钉住 `package.json` 与实测代次。

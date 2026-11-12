@@ -8,7 +8,7 @@
 // ③ `confirm` 与报告同时在场才开预览框，取消 / 确认各调一个动作。
 //
 // 组件只吃泛型段 module 的视图 `MaintenanceSectionView<OrphanReportWire>`（设置页的
-// `useMaintenance` 实例化两段后交下来）；这里按那个接口造替身。`busy` 不再是 prop：段自己给
+// `useMaintenance` 实例化三段后交下来）；这里按那个接口造替身。`busy` 不再是 prop：段自己给
 // （在飞即忙），组件从段上读。
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'

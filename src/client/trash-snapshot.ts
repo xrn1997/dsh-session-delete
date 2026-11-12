@@ -12,6 +12,7 @@
  * （`unknown` 的老判据）。也不记折叠集、列宽、孩子视图：那些是视图状态，跨挂载记住会与
  * ADR-0050/ui-spec 打架。
  */
+import { writeDetail } from './detail-ledger.js'
 import type { TrashDetailLike, TrashEntryLike } from './remote.js'
 
 /** 快照的形状：只搬清册/详情线上已有的只读事实，不带时间戳或"读了几次"这类读数。 */
@@ -23,13 +24,6 @@ export interface TrashSnapshot {
 
 let snapshot: TrashSnapshot | null = null
 let details: Map<string, TrashDetailLike> = new Map()
-
-/**
- * 详情账本的上限。孩子详情从不在清单行里（`reconcileTrashRows` 只按清单 id 修剪），账本又是
- * 模块级、跨所有面板挂载存活：不设上限时，一个长会话里打开几十个子会话就把每份详情（含已翻
- * 出来的分页块与附件读数）永久留在进程里。64 远高于一屏能开出来的条目数，命中率不受影响。
- */
-const DETAIL_LEDGER_LIMIT = 64
 
 /** 读当前快照；没有（或已 clear）⇒ null。只在挂载首帧读一次，不做订阅。 */
 export function readTrashSnapshot(): TrashSnapshot | null {
@@ -71,17 +65,11 @@ export function writeTrashSelection(entryId: string | null): void {
 }
 
 /** 记下一条成功读到的详情；失败不写（失败由调用方落 `failed` 状态）。
- *  写时复制：已经交出去的 `snapshot.details` 引用永远不再变，读方可以安全地比引用。 */
+ *  写时复制：已经交出去的 `snapshot.details` 引用永远不再变，读方可以安全地比引用。
+ *  挪队尾与淘汰到上限的口径与归档那本共用（`detail-ledger.ts`）。 */
 export function writeTrashDetail(entryId: string, detail: TrashDetailLike): void {
   const next = new Map(details)
-  next.delete(entryId)
-  next.set(entryId, detail)
-  // 重写挪到队尾 ⇒ 这里等价于按「最近一次写入」淘汰。上限只兜孩子详情那种永不随清单修剪的条目。
-  while (next.size > DETAIL_LEDGER_LIMIT) {
-    const oldest = next.keys().next().value
-    if (oldest === undefined) break
-    next.delete(oldest)
-  }
+  writeDetail(next, entryId, detail)
   details = next
   if (snapshot !== null) snapshot = { ...snapshot, details }
 }

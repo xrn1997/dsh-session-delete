@@ -354,3 +354,18 @@ describe('批量撤销横幅', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument())
   })
 })
+
+describe('撤销横幅 · archived 句', () => {
+  it('已归档会话删除后撤销回到「归档」：横幅追加 archived 句，不提会话列表', () => {
+    publishUndoNotice({ entryId: 'e1', title: '标题', archived: true })
+    render(<UndoToast deps={createFakeRemote()} />)
+    expect(screen.getByText(/其中已归档的，撤销后回到「归档」/)).toBeInTheDocument()
+    expect(screen.queryByText(/会话列表/)).not.toBeInTheDocument()
+  })
+
+  it('非归档删除不带这句', () => {
+    publishUndoNotice({ entryId: 'e1', title: '标题' })
+    render(<UndoToast deps={createFakeRemote()} />)
+    expect(screen.queryByText(/其中已归档的，撤销后回到「归档」/)).not.toBeInTheDocument()
+  })
+})

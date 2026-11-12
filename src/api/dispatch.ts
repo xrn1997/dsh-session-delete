@@ -1,7 +1,7 @@
 /**
  * /dsh-session-delete-api 的分发核心：只负责路由记录的执行。
  *
- * 传输适配器只有 `src/api/connection-route.ts` 一个：十段注册到宿主 `connection.fetch.register`
+ * 传输适配器只有 `src/api/connection-route.ts` 一个：全部段名注册到宿主 `connection.fetch.register`
  * 的 exact Fetch 路由（`Request` / `Response`），Host/Origin/浏览器认证由宿主 `/api` bridge 完成
  * （ADR-0033）。`Request` 的字节闸 / JSON 解析、`Response` 的头与失败信封都归适配器；
  * 这里只收已经解析好的请求，做查表 → 按段注入窄面 → 跑处理 → 回结果。
@@ -81,6 +81,7 @@ function coreDepsOf(full: DeleteDeps): CoreDeps {
 function removalOf(full: DeleteDeps, core: CoreDeps): SliceDeps['removal'] {
   return {
     ...core,
+    host: full.host,
     fs: fsSlice(full.fs, [...FS_CORE_METHODS, ...FS_REMOVAL_METHODS]),
   }
 }

@@ -3,7 +3,7 @@
  * `plugins.bundle.config` 的占用者（`settings-cards.tsx`）：槽位视图守卫与两张卡的先后。
  *
  * 两张卡各自的呈现与动作归 `config-settings.test.tsx` 与 `maintenance-settings.test.tsx`；这里只钉
- * 占用者那三件事：`summary` 什么都不画、`page` 上「可调项」在「维护」之上、替身只带维护四件时不硬造渲染。
+ * 占用者那三件事：`summary` 什么都不画、`page` 上「可调项」在「维护」之上、替身只带维护六件时不硬造渲染。
  */
 import { render } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
@@ -11,10 +11,16 @@ import { SettingsCards } from '../../src/client/settings-cards.js'
 import type { MaintenanceDeps } from '../../src/client/use-maintenance.js'
 import { createFakeRemote, type FakeRemote } from './support/fake-remote.js'
 
-/** 只带维护四件：可调项那两件缺席，占用者不该替它编一次假渲染。 */
+/** 只带维护六件：可调项那两件缺席，占用者不该替它编一次假渲染。 */
 function maintenanceOnly(deps: FakeRemote): MaintenanceDeps {
-  const { scanOrphans, applyOutcomes, scanAttachmentOrphans, cleanAttachmentOrphans } = deps
-  return { scanOrphans, applyOutcomes, scanAttachmentOrphans, cleanAttachmentOrphans }
+  const {
+    scanOrphans, applyOutcomes, scanAttachmentOrphans, cleanAttachmentOrphans,
+    scanProjectionCacheOrphans, cleanProjectionCacheOrphans,
+  } = deps
+  return {
+    scanOrphans, applyOutcomes, scanAttachmentOrphans, cleanAttachmentOrphans,
+    scanProjectionCacheOrphans, cleanProjectionCacheOrphans,
+  }
 }
 
 const CARD_NAMES = new Set(['config-card', 'maintenance-card'])
@@ -42,7 +48,7 @@ describe('设置页占用者 · 槽位视图与两张卡', () => {
     expect(cardOrder(plain.container)).toEqual(['config-card', 'maintenance-card'])
   })
 
-  it('deps 只带维护四件：只剩「维护」卡，不出现一张空的可调项卡', () => {
+  it('deps 只带维护六件：只剩「维护」卡，不出现一张空的可调项卡', () => {
     const { container } = render(<SettingsCards deps={maintenanceOnly(createFakeRemote())} />)
     expect(cardOrder(container)).toEqual(['maintenance-card'])
   })

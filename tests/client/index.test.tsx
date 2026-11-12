@@ -37,6 +37,9 @@ import {
 // 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
 beforeEach(() => {
   resetClientState()
+  // A1 的可选服务缺席在激活期会 `console.info` 留因（安静降级）；这组用例只看入口注册，
+  // 不把降级提示刷进测试输出。
+  vi.spyOn(console, 'info').mockImplementation(() => undefined)
 })
 
 afterEach(() => {
@@ -110,6 +113,7 @@ function okOutcomes(action: ApplyAction, ids: readonly string[]): ApplyOutcome[]
     if (action === 'count') return { id, action, ok: true as const, value: 0 }
     if (action === 'purge') return { id, action, ok: true as const, value: { removed: 1, freedBytes: 224 * 1024 } }
     if (action === 'orphan-clean') return { id, action, ok: true as const, value: { removed: 1, freedBytes: 224 * 1024 } }
+    if (action === 'unarchive') return { id, action, ok: true as const, value: 1 }
     return { id, action, ok: true as const, value: ROW }
   })
 }
@@ -935,9 +939,9 @@ describe('插件设置页（`plugins.bundle.config` 的占用者）', () => {
 
     expect(screen.getByText('维护')).toBeInTheDocument()
     expect(screen.getByText('可调项')).toBeInTheDocument()
-    expect(screen.getAllByText('尚未检查')).toHaveLength(2)
+    expect(screen.getAllByText('尚未检查')).toHaveLength(3)
     // 探测那一问是注册的前提；可调项卡挂载时读一次当前值（不是扫描）；
-    // 维护两段仍是手动触发，之后没有别的请求。
+    // 维护三段仍是手动触发，之后没有别的请求。
     expect(fetchCalls.map((call) => call.path)).toEqual([
       `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`,
       `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.config.path}`,
