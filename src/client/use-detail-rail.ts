@@ -6,7 +6,8 @@
  * - **没有正文就没有轨**：读数中 / 失败那一帧没有 `detail`，那一拍轨不画（画了就是一个指向
  *   不存在正文的刻度）。
  * - **保持期顶住**：那一帧画的是上一条的正文，轨跟着上一条给刻度但整条禁用——跳转会把别人的
- *   游标补进这一页（ADR-0049）。
+ *   游标补进这一页（ADR-0049）。禁用判据**问 `canNavigate`**（保持判据的唯一出口，住
+ *   `use-detail-reader`），这里不再自己重推 holding。
  * - **挂载判据要显式传**：窄档下钻之后详情栏才进 DOM，`scrollRef.current` 是那时才补上的，
  *   而 `prompts` / `blocks` 一个都没变；只靠 ref 会把滚动监听漏挂，当前那句从此不跟滚动走
  *   （ADR-0057）。
@@ -29,6 +30,9 @@ export interface RailDetailLike {
 export interface DetailRailInput<S, D extends RailDetailLike> {
   /** 这一档的详情读路状态（回收站档与归档档各一台实例）。 */
   readonly state: DetailState<S, D>
+  /** 「保持期拒绝导航/跳转」判据（`use-detail-reader` 的唯一出口）：`disabled` 直接取它的反，
+   *  不在这里重推保持。 */
+  readonly canNavigate: boolean
   readonly loadingOlder: boolean
   readonly olderFailure: string | null
   loadOlder: () => Promise<void>
@@ -49,13 +53,14 @@ export interface DetailRail {
 }
 
 export function useDetailRail<S, D extends RailDetailLike>({
-  state, loadingOlder, olderFailure, loadOlder, scrollRef, paneMounted,
+  state, canNavigate, loadingOlder, olderFailure, loadOlder, scrollRef, paneMounted,
 }: DetailRailInput<S, D>): DetailRail {
-  const railState = state.kind === 'ready' || state.kind === 'holding' ? state : null
-  const detail = railState?.detail ?? null
+  // 只有带正文的状态才画轨刻度（读数中 / 失败那一帧没有正文 ⇒ 那一拍没有轨）。正文的取用
+  // 按「有没有 body」认，不再点名状态判别式（保持判据归 `canNavigate`）。
+  const detail = 'detail' in state ? state.detail : null
   const prompts = detail?.prompts ?? NO_PROMPTS
   const blocks = detail?.blocks ?? NO_BLOCKS
-  const disabled = railState?.kind === 'holding'
+  const disabled = !canNavigate
   const handle = usePromptRail({
     prompts: prompts.length > 0 ? prompts : null,
     blocks,

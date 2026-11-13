@@ -11,6 +11,20 @@
  * 也不是持久化：进程重启就没了。**失败时整份丢掉**——读不到就不许再拿旧行冒充此刻的回收站
  * （`unknown` 的老判据）。也不记折叠集、列宽、孩子视图：那些是视图状态，跨挂载记住会与
  * ADR-0050/ui-spec 打架。
+ *
+ * **何时丢什么**（判据收进意图名，调用方只挑意图——ADR-0048 的可观察规则）：
+ * - `reloadSucceeded(rows)`：清单重读**成功**支专用——按新一份清单修剪详情账本（只剪上一份
+ *   清单里出现过、这一份不见了的条目）与失效的选中；失败支不许调它（名字即判据）。
+ * - `reloadFailed()`：清单读失败 / 清空失败——快照与详情账本**整份丢**（旧行不许续命成此刻的
+ *   回收站）；测试与 HMR 复位同走这一条。
+ * - `emptiedTrash()`：清空回收站**成功**后——只丢详情账本，**保空清单快照**（重读刚写下的那份）；
+ *   孩子详情不随清单修剪，只能在这里整本作废。
+ * - `noteSelection(entryId)`：记下选中行；没有快照时无处可挂，忽略。
+ * - `rowGone(entryId)`：那一行不在了（被清单收走 / 读数作废）——只丢它那一条详情。
+ * - `writeSucceeded(entryIds)`：写动作成功收尾——按落地名单丢详情，不等清单重读（面板未挂载
+ *   时这一趟也要丢）。
+ * 读面三口不丢东西：`readTrashSnapshot` / `readCachedTrashDetail` / `writeTrashDetail`。
+ * 「请求归属发起它的那次挂载」是调用方的门（`use-trash-query` 的 alive）：晚到的读数进不到这里。
  */
 import { writeDetail } from './detail-ledger.js'
 import type { TrashDetailLike, TrashEntryLike } from './remote.js'
@@ -42,7 +56,7 @@ export function readCachedTrashDetail(entryId: string): TrashDetailLike | undefi
  * 只修剪「上一份清单里出现过、这一份不见了」的条目：孩子详情从不在清单行里，不能被误删。
  * 调用方是 `use-trash-query` 的 `reload` 成功支；失败支不许调它。
  */
-export function reconcileTrashRows(rows: readonly TrashEntryLike[]): void {
+export function reloadSucceeded(rows: readonly TrashEntryLike[]): void {
   const ids = new Set(rows.map((row) => row.id))
   const previousIds = new Set(snapshot?.rows.map((row) => row.id) ?? [])
   const next = new Map(details)
@@ -59,7 +73,7 @@ export function reconcileTrashRows(rows: readonly TrashEntryLike[]): void {
 }
 
 /** 记下选中行；没有清单快照时无处可挂，直接忽略。 */
-export function writeTrashSelection(entryId: string | null): void {
+export function noteSelection(entryId: string | null): void {
   if (snapshot === null) return
   snapshot = { ...snapshot, selectedId: entryId }
 }
@@ -75,7 +89,7 @@ export function writeTrashDetail(entryId: string, detail: TrashDetailLike): void
 }
 
 /** 丢掉一条详情（恢复 / 彻底删除成功、或那一条的读数失败）。写时复制，口径同 `writeTrashDetail`。 */
-export function forgetTrashDetail(entryId: string): void {
+export function rowGone(entryId: string): void {
   if (!details.has(entryId)) return
   const next = new Map(details)
   next.delete(entryId)
@@ -83,24 +97,24 @@ export function forgetTrashDetail(entryId: string): void {
   if (snapshot !== null) snapshot = { ...snapshot, details }
 }
 
-/** 按写动作的成功名单丢一组详情（settlement 收尾与撤销座位共用）：逐条走 `forgetTrashDetail`。 */
-export function forgetTrashDetails(entryIds: readonly string[]): void {
-  for (const id of entryIds) forgetTrashDetail(id)
+/** 按写动作的成功名单丢一组详情（settlement 收尾与撤销座位共用）：逐条走 `rowGone`。 */
+export function writeSucceeded(entryIds: readonly string[]): void {
+  for (const id of entryIds) rowGone(id)
 }
 
 /** 丢掉整份快照与详情账本：清单读失败、清空失败，以及测试/HMR 复位都走这一条。 */
-export function clearTrashSnapshot(): void {
+export function reloadFailed(): void {
   snapshot = null
   details = new Map()
 }
 
 /**
  * 只丢详情账本，清单快照原样留着：清空回收站**成功**后走这一条——`emptyTrash` 已经重读并
- * `reconcileTrashRows([])` 写下过一份空清单，整份 clear 会把这份成功读数也丢掉，下一次挂载
+ * `reloadSucceeded([])` 写下过一份空清单，整份 clear 会把这份成功读数也丢掉，下一次挂载
  * 又从「正在读回收站…」起画（ADR-0048 要消灭的正是这帧闪）。要丢的只有详情：随条目作废，
  * 而且孩子详情不随清单修剪，不丢就永远留在账本里（ADR-0048 决定 4）。
  */
-export function clearTrashDetails(): void {
+export function emptiedTrash(): void {
   details = new Map()
   if (snapshot !== null) snapshot = { ...snapshot, details }
 }

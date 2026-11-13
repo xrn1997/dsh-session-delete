@@ -40,7 +40,7 @@ import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/sessi
 import { descriptorLabelOf, displayNameOfLog } from './display-name.js'
 import { attachmentsInContent } from './attachments.js'
 import { visibleGroups } from './groups.js'
-import { trashEmpty, verbError } from '../verbs/errors.js'
+import { trashEmpty, verbError } from '../errors.js'
 
 /** 每块文字的上限（字符）。正文、工具参数、工具结果各自吃这一刀。 */
 export const PER_BLOCK_CHAR_CAP = 16_000
@@ -387,8 +387,8 @@ export function createDetailFold(limits: DetailLimits = DEFAULT_LIMITS, before?:
   let ownParentSession = false
   /** 整条会话的提问索引：与分页无关，只在首次读时过线（见 `SessionDetailWire.prompts`）。 */
   const prompts: TrashDetailPromptWire[] = []
-  // 游标的合法性（非负整数）只在契约那一处判（`src/api/route-table.ts` 的 `optionalCursor` ⇒ 400）；
-  // 这里再兜一层就是同一判据的第二份抄本。
+  // 游标的合法性（非负整数）只在契约那一处判（`src/shared/wire.ts` 字段组的 `optionalCursor` 格，
+  // 判与 400 在 `src/api/route-table.ts` 的通用解析手）；这里再兜一层就是同一判据的第二份抄本。
   const end = before ?? Number.POSITIVE_INFINITY
   const page = new PageBuilder(
     end,

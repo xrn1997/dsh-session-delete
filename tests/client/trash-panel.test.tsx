@@ -14,16 +14,17 @@ import {
   readCachedTrashDetail,
   readTrashSnapshot,
   writeTrashDetail,
-  reconcileTrashRows,
-  writeTrashSelection,
+  reloadSucceeded,
+  noteSelection,
 } from '../../src/client/trash-snapshot.js'
 import { invalidateTrash } from '../../src/client/trash-store.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
-import type { ApplyAction, ApplyOutcome, ArchiveDetailLike, TrashDetailLike } from '../../src/client/remote.js'
+import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
+import type { ArchiveDetailLike, PurgeResultLike, RemoteOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import type { ArchiveListWire } from '../../src/shared/wire.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
 import { installWidthObserver, type WidthObserver } from './support/observe-width.js'
-import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk, type FakeRemote } from './support/fake-remote.js'
 import { failed, ok, outcomes, restoreOutcomes, trashRow } from './support/outcomes.js'
 import { firePointer } from './support/pointer.js'
 import { must, pick } from '../support/fixture.js'
@@ -69,12 +70,12 @@ function outcomesOf(
   })
 }
 
-function makeDeps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
+function makeDeps(over: Partial<FakeRemote> = {}): FakeRemote {
   return createFakeRemote({
-    list: vi.fn(async () => rows),
-    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
-    emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
-    detail: vi.fn(async () => detailFixture),
+    list: vi.fn(async () => remoteOk(rows)),
+    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) => remoteOk(outcomesOf(action, ids))),
+    emptyTrash: vi.fn(async () => remoteOk({ removed: 1, freedBytes: 1 })),
+    detail: vi.fn(async () => remoteOk(detailFixture)),
     ...over,
   })
 }
@@ -109,7 +110,7 @@ function renderNarrow(deps: FakeRemote) {
 
 describe('回收站面板', () => {
   it('空回收站显示空态且没有清空按钮', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([])) })} />)
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '清空回收站…' })).not.toBeInTheDocument()
     // 空态是普通内容块，不是「空的 grid」：没有行时不挂 grid 与它的 aria（ADR-0028）。
@@ -120,7 +121,7 @@ describe('回收站面板', () => {
   // 空态块自己的 `flex:1` + `justifyContent:center` 才有高度可居。2026-10-16 真机回归：
   // 两栏改造在清单容器那节把链断在"内容高"上 ⇒ 空态图标贴到左上角。
   it('空态的居中链：单列外壳与清单容器都是 flex:1 1 auto', async () => {
-    const { container } = render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => []) })} />)
+    const { container } = render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([])) })} />)
     await screen.findByText('回收站是空的')
     const listBox = container.querySelector('[data-dsh-session-delete="trash-list"]') as HTMLElement
     expect((listBox.parentElement as HTMLElement).style.flex).toBe('1 1 auto')
@@ -150,7 +151,7 @@ describe('回收站面板', () => {
   // 分组本身就是去向的说明，行上不再挂一句提示。
   it('工作区已不存在的条目归入「未分组」组（沉底），行上不再挂提示', async () => {
     const gone = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), workspaceMissing: true }]) })} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), workspaceMissing: true }])) })} />,
     )
     expect(await screen.findByRole('row', { name: /code-review/ })).toBeInTheDocument()
     expect(screen.getByRole('row', { name: /未分组/ })).toBeInTheDocument()
@@ -173,9 +174,7 @@ describe('回收站面板', () => {
 
   it('清空失败 ⇒ 清单失败块上屏，旧行的页脚动作不再出现', async () => {
     const deps = makeDeps({
-      emptyTrash: vi.fn(async () => {
-        throw Object.assign(new Error('清空失败'), { code: 'sessiondelete/io' })
-      }),
+      emptyTrash: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '清空失败' })),
     })
     render(<TrashPanel deps={deps} />)
     fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
@@ -188,10 +187,10 @@ describe('回收站面板', () => {
   // 动作住在行内 ⇒ 它的失败也就留在行内（与 2026-10-01 那条"失败写在该行上"同一条规则）。
   it('恢复失败的原因写在那一行上，不弹全局错误', async () => {
     const deps = makeDeps({
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> => ids.map((id) => ({
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(ids.map((id) => ({
         id, action, ok: false as const,
         error: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' },
-      }))),
+      })))),
     })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
@@ -254,9 +253,7 @@ describe('回收站面板 · 两栏与下钻', () => {
 
   it('详情读失败只坏详情那一块：清单仍可选、行内动作仍可点', async () => {
     const deps = makeDeps({
-      detail: vi.fn(async () => {
-        throw Object.assign(new Error('读会话日志失败：第 2 帧解压失败'), { code: 'sessiondelete/io' })
-      }),
+      detail: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '读会话日志失败：第 2 帧解压失败' })),
     })
     renderWide(deps)
     expect(await screen.findByRole('status')).toHaveTextContent(/第 2 帧解压失败/)
@@ -287,7 +284,7 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
       olderCursor: null,
     }
     const deps = makeDeps({
-      detail: vi.fn(async (_entryId: string, before?: number) => (before === undefined ? tail : older)),
+      detail: vi.fn(async (_entryId: string, before?: number) => remoteOk((before === undefined ? tail : older))),
     })
     const { container } = renderWide(deps)
 
@@ -319,7 +316,7 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
       olderCursor: null,
     }
     const deps = makeDeps({
-      detail: vi.fn(async (_entryId: string, before?: number) => (before === undefined ? tail : older)),
+      detail: vi.fn(async (_entryId: string, before?: number) => remoteOk((before === undefined ? tail : older))),
     })
     const { container } = renderWide(deps)
 
@@ -348,7 +345,7 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
       ...detailFixture,
       prompts: [{ id: '0', at: 1, preview: '先看改动' }],
     }
-    const { container } = renderNarrow(makeDeps({ detail: vi.fn(async () => withPrompts) }))
+    const { container } = renderNarrow(makeDeps({ detail: vi.fn(async () => remoteOk(withPrompts)) }))
     const row = await screen.findByRole('row', { name: /code-review/ })
     // 详情栏不在 DOM 里时轨也不许提前挂——它挂在详情栏外壳上。
     expect(container.querySelector('.sd-prompt-rail')).toBeNull()
@@ -367,12 +364,12 @@ describe('回收站面板 · 详情分页与折叠状态', () => {
       { ...pick(rows, 0), id: 'b', title: '第二条' },
     ]
     const deps = makeDeps({
-      list: vi.fn(async () => two),
-      detail: vi.fn(async (entryId: string) => ({
+      list: vi.fn(async () => remoteOk(two)),
+      detail: vi.fn(async (entryId: string) => remoteOk(({
         ...detailFixture,
         entryId,
         blocks: [reasoningBlock(entryId, `${entryId} 的思考正文`)],
-      })),
+      }))),
     })
     const { container } = renderWide(deps)
 
@@ -421,10 +418,10 @@ describe('回收站面板 · 切换稳定性', () => {
   }
 
   it('有首帧快照时首帧画旧行与旧详情，不出「正在读回收站…」', async () => {
-    reconcileTrashRows(rows)
-    writeTrashSelection('a')
+    reloadSucceeded(rows)
+    noteSelection('a')
     writeTrashDetail('a', detailFixture)
-    const pending = deferred<typeof rows>()
+    const pending = deferred<RemoteOutcome<typeof rows>>()
     const { container } = renderWide(makeDeps({ list: vi.fn(() => pending.promise) }))
 
     // 首帧就是快照的那三份行：份数钉死（多画一份 = 快照与新一份同时在屏上）。
@@ -435,17 +432,17 @@ describe('回收站面板 · 切换稳定性', () => {
     expect(must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
       .getAttribute('aria-busy')).toBe('true')
     expect(screen.queryByText('更新中')).not.toBeInTheDocument()
-    await act(async () => { pending.resolve(rows) })
+    await act(async () => { pending.resolve(remoteOk(rows)) })
     expect(must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素')
       .hasAttribute('aria-busy')).toBe(false)
   })
 
   it('切到没读过的条目：上一帧详情留到新数据落地，落地后整帧换', async () => {
-    const pending = deferred<TrashDetailLike>()
+    const pending = deferred<RemoteOutcome<TrashDetailLike>>()
     const deps = makeDeps({
-      list: vi.fn(async () => two),
+      list: vi.fn(async () => remoteOk(two)),
       detail: vi.fn((entryId: string) => entryId === 'a'
-        ? Promise.resolve(detailOf('a', 'A 的正文'))
+        ? Promise.resolve(remoteOk(detailOf('a', 'A 的正文')))
         : pending.promise),
     })
     renderWide(deps)
@@ -455,20 +452,20 @@ describe('回收站面板 · 切换稳定性', () => {
     expect(screen.getByText('A 的正文')).toBeInTheDocument()
     expect(document.querySelectorAll('.sd-skeleton-bar')).toHaveLength(0)
 
-    await act(async () => { pending.resolve(detailOf('b', 'B 的正文')) })
+    await act(async () => { pending.resolve(remoteOk(detailOf('b', 'B 的正文'))) })
     expect(await screen.findByText('B 的正文')).toBeInTheDocument()
   })
 
   it('切到没读过的条目：保持期轨跟着上一条禁用顶住，新详情到了再恢复', async () => {
-    const pending = deferred<TrashDetailLike>()
+    const pending = deferred<RemoteOutcome<TrashDetailLike>>()
     const withPrompts = (id: string, text: string): TrashDetailLike => ({
       ...detailOf(id, text),
       prompts: [{ id: '0', at: 1, preview: `${text} 的提问` }],
     })
     const deps = makeDeps({
-      list: vi.fn(async () => two),
+      list: vi.fn(async () => remoteOk(two)),
       detail: vi.fn((entryId: string) => entryId === 'a'
-        ? Promise.resolve(withPrompts('a', 'A 的正文'))
+        ? Promise.resolve(remoteOk(withPrompts('a', 'A 的正文')))
         : pending.promise),
     })
     const { container } = renderWide(deps)
@@ -484,7 +481,7 @@ describe('回收站面板 · 切换稳定性', () => {
     expect(marks().length).toBeGreaterThan(0)
     expect(marks().every((mark) => mark.disabled)).toBe(true)
 
-    await act(async () => { pending.resolve(withPrompts('b', 'B 的正文')) })
+    await act(async () => { pending.resolve(remoteOk(withPrompts('b', 'B 的正文'))) })
     expect(await screen.findByText('B 的正文')).toBeInTheDocument()
     expect(rail()?.getAttribute('data-disabled')).toBeNull()
     expect(marks().every((mark) => mark.disabled)).toBe(false)
@@ -492,8 +489,8 @@ describe('回收站面板 · 切换稳定性', () => {
 
   it('切到已读条目：详情滚动位置回到顶部', async () => {
     const deps = makeDeps({
-      list: vi.fn(async () => two),
-      detail: vi.fn(async (entryId: string) => detailOf(entryId, `${entryId} 的正文`)),
+      list: vi.fn(async () => remoteOk(two)),
+      detail: vi.fn(async (entryId: string) => remoteOk(detailOf(entryId, `${entryId} 的正文`))),
     })
     const { container } = renderWide(deps)
     expect(await screen.findByText('a 的正文')).toBeInTheDocument()
@@ -519,8 +516,8 @@ describe('回收站面板 · 切换稳定性', () => {
 
   it('hover 一条 150ms 后才预取；提前移开不读', async () => {
     const deps = makeDeps({
-      list: vi.fn(async () => two),
-      detail: vi.fn(async (entryId: string) => detailOf(entryId, `${entryId} 的正文`)),
+      list: vi.fn(async () => remoteOk(two)),
+      detail: vi.fn(async (entryId: string) => remoteOk(detailOf(entryId, `${entryId} 的正文`))),
     })
     renderWide(deps)
     expect(await screen.findByText('a 的正文')).toBeInTheDocument()
@@ -539,8 +536,8 @@ describe('回收站面板 · 切换稳定性', () => {
 
   it('键盘落到一条 150ms 后也预取', async () => {
     const deps = makeDeps({
-      list: vi.fn(async () => two),
-      detail: vi.fn(async (entryId: string) => detailOf(entryId, `${entryId} 的正文`)),
+      list: vi.fn(async () => remoteOk(two)),
+      detail: vi.fn(async (entryId: string) => remoteOk(detailOf(entryId, `${entryId} 的正文`))),
     })
     renderWide(deps)
     expect(await screen.findByText('a 的正文')).toBeInTheDocument()
@@ -557,7 +554,7 @@ describe('回收站面板 · 键盘', () => {
   ]
 
   it('ArrowDown 第一次落到第一条、第二次走到下一条；Enter 在窄档进下钻', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => two) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderNarrow(deps)
     const first = await screen.findByRole('row', { name: /第一条/ })
     // 还没选中任何东西时，ArrowDown 的标准语义是"落到第一项"，不是跳过第一项
@@ -571,7 +568,7 @@ describe('回收站面板 · 键盘', () => {
   })
 
   it('ArrowUp 从第一条回到最后一条（清单里是环，不是撞墙）', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => two) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderNarrow(deps)
     const first = await screen.findByRole('row', { name: /第一条/ })
     fireEvent.keyDown(first, { key: 'ArrowDown' })
@@ -580,7 +577,7 @@ describe('回收站面板 · 键盘', () => {
   })
 
   it('下钻里按 Esc 退回清单：选中不变，焦点交还给那一行', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => two) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderNarrow(deps)
     fireEvent.click(await screen.findByRole('row', { name: /第二条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
@@ -594,7 +591,7 @@ describe('回收站面板 · 键盘', () => {
 
   it('条目 id 带引号：交还焦点仍按属性值找行，不把 id 拼进选择器', async () => {
     const awkward = [{ ...rows[0], id: 'a"b', projectDir: '--p--', title: '带引号的那条', deletedAt: 300 }]
-    const deps = makeDeps({ list: vi.fn(async () => awkward) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(awkward)) })
     renderNarrow(deps)
     fireEvent.click(await screen.findByRole('row', { name: /带引号的那条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
@@ -608,7 +605,7 @@ describe('回收站面板 · 键盘', () => {
     // 目录名只挡路径分隔符，空白是合法字符：HTML id 归 DOM 侧编码，entry id 本身不许改形
     // （它是回收站目录名，恢复要按它反推原目录名）。issue #8 第 7 条。
     const awkward = [{ ...pick(rows, 0), id: '20261019T120000Z-my session', title: '带空白的那条' }]
-    const { container } = renderWide(makeDeps({ list: vi.fn(async () => awkward) }))
+    const { container } = renderWide(makeDeps({ list: vi.fn(async () => remoteOk(awkward)) }))
     const row = await screen.findByRole('row', { name: /带空白的那条/ })
     expect(row.id).not.toMatch(/\s/)
     expect(row.id).toBe(`sd-trash-${encodeURIComponent('20261019T120000Z-my session')}`)
@@ -619,7 +616,7 @@ describe('回收站面板 · 键盘', () => {
   })
 
   it('下钻里打开确认框：Esc 只关框，下钻不退；再按才回清单', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => two) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderNarrow(deps)
     fireEvent.click(await screen.findByRole('row', { name: /第二条/ }))
     await screen.findByRole('button', { name: '← 返回清单' })
@@ -635,9 +632,9 @@ describe('回收站面板 · 键盘', () => {
   it('写入在飞时 Esc 不关框也不退下钻，焦点留在框里', async () => {
     let finish: (() => void) | undefined
     const deps = makeDeps({
-      list: vi.fn(async () => two),
-      emptyTrash: vi.fn(() => new Promise((resolve) => {
-        finish = () => { resolve({ removed: 2, freedBytes: 2 }) }
+      list: vi.fn(async () => remoteOk(two)),
+      emptyTrash: vi.fn(() => new Promise<RemoteOutcome<PurgeResultLike>>((resolve) => {
+        finish = () => { resolve(remoteOk({ removed: 2, freedBytes: 2 })) }
       })),
     })
     renderNarrow(deps)
@@ -659,7 +656,7 @@ describe('回收站面板 · 键盘', () => {
   })
 
   it('清单那一块是 grid：每行一个 row，选中的带 aria-selected；组是带名字的 rowgroup', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => two) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderWide(deps)
     const list = await screen.findByRole('grid')
     expect(list).toHaveAccessibleName('回收站清单')
@@ -673,7 +670,7 @@ describe('回收站面板 · 键盘', () => {
   })
 
   it('行内动作按钮住在 gridcell 里、树里没有任何 option（option 的后代会被 AT 抹平）', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => rows) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(rows)) })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
     expect(document.querySelector('[role="option"]')).toBeNull()
@@ -684,7 +681,7 @@ describe('回收站面板 · 键盘', () => {
   })
 
   it('列数一致是显式声明的：grid 带 colcount，组头一格 colspan 横跨，条目行恒两格（多选态不变）', async () => {
-    const deps = makeDeps({ list: vi.fn(async () => two) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderWide(deps)
     const list = await screen.findByRole('grid')
     expect(list).toHaveAttribute('aria-colcount', '2')
@@ -720,7 +717,7 @@ describe('回收站面板 · 其余行为', () => {
 
   // 真机反馈：删完在别处（侧栏菜单），面板是"挂载时取一次数"，不切走再回来就看不见新条目。
   it('别处动过回收站（失效通告）时立刻重读清单，不用切走再回来', async () => {
-    const deps = makeDeps({ list: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce(rows) })
+    const deps = makeDeps({ list: vi.fn().mockResolvedValueOnce(remoteOk([])).mockResolvedValueOnce(remoteOk(rows)) })
     render(<TrashPanel deps={deps} />)
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
 
@@ -734,7 +731,7 @@ describe('回收站面板 · 其余行为', () => {
 
   it('恢复成功后把清单重新读一遍，那一行就没了、详情让位', async () => {
     const deps = makeDeps({
-      list: vi.fn().mockResolvedValueOnce(rows).mockResolvedValueOnce([]),
+      list: vi.fn().mockResolvedValueOnce(remoteOk(rows)).mockResolvedValueOnce(remoteOk([])),
       })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
@@ -764,9 +761,9 @@ describe('回收站面板 · 其余行为', () => {
   // 本文件用真 hook + 假远端整块渲染，所以这条从真回执走上来，断言的是接线而不是夹具。
   it('彻底删除的回执说「N 个附件未清」⇒ 面板顶部摆出那句警告', async () => {
     const deps = makeDeps({
-      applyOutcomes: vi.fn(async (_action: ApplyAction, ids: readonly string[]) => outcomes('purge', ids, {
+      applyOutcomes: vi.fn(async (_action: ApplyAction, ids: readonly string[]) => remoteOk(outcomes('purge', ids, {
         a: { value: { removed: 1, freedBytes: 1, attachments: { removed: 0, freedBytes: 0, failed: 2 } } },
-      })),
+      }))),
     })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
@@ -779,7 +776,7 @@ describe('回收站面板 · 其余行为', () => {
   // "我即将失去多少"，所以它必须是同一个口径，不能只报父自己那一格（issue #2）。
   it('单条彻底删除的确认卡片报的是整组要释放的字节（父 + 孩子）', async () => {
     const group = [{ ...pick(rows, 0), sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]
-    const deps = makeDeps({ list: vi.fn(async () => group) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(group)) })
     renderWide(deps)
     const row = await screen.findByRole('row', { name: /code-review/ })
     fireEvent.click(within(row).getByRole('button', { name: /^彻底删除/ }))
@@ -801,9 +798,7 @@ describe('回收站面板 · 其余行为', () => {
 
   it('清单本身读不到时把原文摆在面板上，不是空态', async () => {
     const deps = makeDeps({
-      list: vi.fn(async () => {
-        throw Object.assign(new Error('回收站清单损坏'), { code: 'sessiondelete/io' })
-      }),
+      list: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '回收站清单损坏' })),
     })
     render(<TrashPanel deps={deps} />)
     expect(await screen.findByText(/回收站清单损坏/)).toBeInTheDocument()
@@ -814,8 +809,8 @@ describe('回收站面板 · 其余行为', () => {
     const deps = makeDeps({
       list: vi
         .fn()
-        .mockRejectedValueOnce(Object.assign(new Error('回收站清单损坏'), { code: 'sessiondelete/io' }))
-        .mockResolvedValueOnce(rows),
+        .mockResolvedValueOnce(remoteFail({ code: 'sessiondelete/io', message: '回收站清单损坏' }))
+        .mockResolvedValueOnce(remoteOk(rows)),
     })
     render(<TrashPanel deps={deps} />)
     await waitFor(() => expect(deps.list).toHaveBeenCalledTimes(1))
@@ -828,14 +823,14 @@ describe('回收站面板 · 其余行为', () => {
 
   // 改版前 `entries === null` 那一拍什么都不画：读得慢就是一块没有解释的空。
   it('首读未回时不是空态（不拿「回收站是空的」骗人）', async () => {
-    let release: (value: typeof rows) => void = () => {}
-    const deps = makeDeps({ list: vi.fn(() => new Promise<typeof rows>((resolve) => { release = resolve })) })
+    let release: (value: RemoteOutcome<typeof rows>) => void = () => {}
+    const deps = makeDeps({ list: vi.fn(() => new Promise<RemoteOutcome<typeof rows>>((resolve) => { release = resolve })) })
     render(<TrashPanel deps={deps} />)
     expect(screen.queryByText('回收站是空的')).not.toBeInTheDocument()
     expect(screen.getByText('正在读回收站…')).toBeInTheDocument()
     // 加载中也还没有行：容器不挂 grid（ADR-0028）。
     expect(screen.queryByRole('grid')).toBeNull()
-    release(rows)
+    release(remoteOk(rows))
     expect(await screen.findByRole('grid')).toBeInTheDocument()
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
   })
@@ -853,7 +848,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('按项目分组：组头只出现一次，名字是摘掉 `--…--` 裹边的目录名', async () => {
     const { container } = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => twoProjects) })} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk(twoProjects)) })} />,
     )
     await screen.findByText('书源解析回归')
     const groups = groupsOf(container)
@@ -868,7 +863,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('组按最新一条倒序，组内也按删除时间倒序', async () => {
     const { container } = render(
-      <TrashPanel deps={makeDeps({ list: vi.fn(async () => twoProjects) })} />,
+      <TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk(twoProjects)) })} />,
     )
     await screen.findByText('书源解析回归')
     const groups = groupsOf(container)
@@ -878,13 +873,13 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('时间走官方 relativeTime 的分桶，绝对时间留在 title 里', async () => {
     const at = Date.now() - (3 * 3600 + 60) * 1000
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: at }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...rows[0], deletedAt: at }])) })} />)
     const meta = await screen.findByTitle(new Date(at).toLocaleString())
     expect(meta.textContent).toBe(`删除于 3小时前 · ${fileSizeText(pick(rows, 0).sizeBytes)}`)
   })
 
   it('now 桶说「刚刚删除」，不写出「删除于 刚刚前」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...rows[0], deletedAt: Date.now() }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...rows[0], deletedAt: Date.now() }])) })} />)
     expect(await screen.findByText(/刚刚删除 · 224KB/)).toBeInTheDocument()
     expect(screen.queryByText(/删除于 刚刚/)).not.toBeInTheDocument()
   })
@@ -893,7 +888,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // 还剩多少孩子，用户从界面上**一个字都看不见**。这一栏就是把那个数说出来；没有计数时（宿主服务没挂、
   // 或这一条确实没孩子）半句都不许出现——不许拿「含 0 个」冒充「不知道」。
   it('行上如实显示「含 N 个子会话」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 3 }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), subagentCount: 3 }])) })} />)
     expect(await screen.findByText(/含 3 个子会话/)).toBeInTheDocument()
   })
 
@@ -909,13 +904,13 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // `strandedSubagents` 是**还留在盘上没被带走**的（级联落地之前删掉的那些存量）。
   // 后者说"含"就成了假话——用户会以为回收站里有它们、恢复能捞回来。
   it('盘上还剩的孩子说「还剩」，不许说成「含」', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), strandedSubagents: 4 }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), strandedSubagents: 4 }])) })} />)
     expect(await screen.findByText(/盘上还剩 4 个子会话/)).toBeInTheDocument()
     expect(screen.queryByText(/含 4 个子会话/)).not.toBeInTheDocument()
   })
 
   it('两组都有 ⇒ 先说带进来的，再说还剩的（两个数各自站开）', async () => {
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 2, strandedSubagents: 4 }]) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), subagentCount: 2, strandedSubagents: 4 }])) })} />)
     const line = await screen.findByText(/含 2 个子会话/)
     expect(line.textContent).toContain('含 2 个子会话')
     expect(line.textContent).toContain('还剩 4 个')
@@ -923,7 +918,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
 
   it('头部合计要把组里孩子的字节算上（孩子不单独列行，只加父那一格就会少报）', async () => {
     render(<TrashPanel deps={makeDeps({
-      list: vi.fn(async () => [{ ...pick(rows, 0), sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }]),
+      list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), sizeBytes: 1024, releaseBytes: 1536, subagentCount: 2, subagentBytes: 512 }])),
     })} />)
     expect(await screen.findByText(/1.5KB/)).toBeInTheDocument()
   })
@@ -933,7 +928,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   // 同一屏不许两套口径。
   it('头部合计与单条彻底删除确认都算上 strandedBytes', async () => {
     const row = { ...pick(rows, 0), strandedSubagents: 2, strandedBytes: 2 * 1024, releaseBytes: 224 * 1024 + 2 * 1024 }
-    const deps = makeDeps({ list: vi.fn(async () => [row]) })
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk([row])) })
     renderWide(deps)
     expect(await screen.findByText(/可释放 226KB/)).toBeInTheDocument()
     fireEvent.click(within(screen.getByRole('row', { name: /code-review/ })).getByRole('button', { name: /^彻底删除/ }))
@@ -946,7 +941,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
       { ...rows[0], id: 'b', projectDir: '_no-cwd', title: '无 cwd' },
       { ...rows[0], id: 'c', projectDir: '', title: '空串' },
     ]
-    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => odd) })} />)
+    render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk(odd)) })} />)
     expect(await screen.findByText('D-develop-中文')).toBeInTheDocument()
     expect(screen.getAllByText('未记录项目')).toHaveLength(2)
   })
@@ -975,7 +970,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
       pick(rows, 0),
       { ...pick(rows, 0), id: 'b', sessionId: 'session-b', title: '另一条会话' },
     ]
-    const { container } = renderWide(makeDeps({ list: vi.fn(async () => twoRows) }))
+    const { container } = renderWide(makeDeps({ list: vi.fn(async () => remoteOk(twoRows)) }))
     const row = await screen.findByRole('row', { name: /code-review/ })
     expect(row.style.background).toBe('var(--sd-button-ghost-active-fill)')
     // 选中不再加描边：一列带框的行叠起来就是"一叠卡片"，那是这一版要去掉的长相。
@@ -992,7 +987,7 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
   })
 
   it('动作列住在自己的 gridcell 里，两颗图标按钮仍在可访问性树里', async () => {
-    renderWide(makeDeps({ list: vi.fn(async () => [pick(rows, 0)]) }))
+    renderWide(makeDeps({ list: vi.fn(async () => remoteOk([pick(rows, 0)])) }))
     const row = await screen.findByRole('row', { name: /code-review/ })
     // 图标按钮的类名是 `layout.css` 提亮条件的接缝（上面那条已钉过）；这里钉它们仍住在同一格
     // `gridcell` 里：row 的直接子代必须是 cell，动作与内容走同一条 ARIA 判据。
@@ -1025,7 +1020,7 @@ describe('回收站面板 · 折叠 / 收起 / 拖栏（2026-10-15 视图三件�
     { ...rows[0], id: 'b', projectDir: '--P-one--', title: '甲组第二条', deletedAt: 200 },
     { ...rows[0], id: 'c', projectDir: '--P-two--', title: '乙组第一条', deletedAt: 100 },
   ]
-  const depsOf = (): FakeRemote => makeDeps({ list: vi.fn(async () => twoProjects) })
+  const depsOf = (): FakeRemote => makeDeps({ list: vi.fn(async () => remoteOk(twoProjects)) })
   const heads = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-dsh-session-delete="trash-group-head"]')] as HTMLElement[]
   const columnOf = (container: HTMLElement): HTMLElement =>
@@ -1172,8 +1167,8 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     } = {},
   ): FakeRemote =>
     makeDeps({
-      list: over.list ?? vi.fn(async () => three),
-      applyOutcomes: over.applyOutcomes ?? vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids)),
+      list: over.list ?? vi.fn(async () => remoteOk(three)),
+      applyOutcomes: over.applyOutcomes ?? vi.fn(async (action: ApplyAction, ids: readonly string[]) => remoteOk(outcomesOf(action, ids))),
     })
 
   const boxes = (container: HTMLElement) =>
@@ -1231,8 +1226,8 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('页脚那颗换成「彻底删除 N 条」：**一次** apply 带走整批（顺序仍是清单从上往下），并重读一次', async () => {
-    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids))
-    const list = vi.fn(async () => three)
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => remoteOk(outcomesOf(action, ids)))
+    const list = vi.fn(async () => remoteOk(three))
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1250,7 +1245,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('清单清空后多选态仍有出口：退出按钮可用，点它回到普通态', async () => {
-    const list = vi.fn().mockResolvedValueOnce(rows).mockResolvedValue([])
+    const list = vi.fn().mockResolvedValueOnce(remoteOk(rows)).mockResolvedValue(remoteOk([]))
     const { container } = renderNarrow(depsOf({ list }))
     await screen.findByText('/code-review')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1272,8 +1267,8 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
       { ...rows[0], id: 'b', projectDir: '--P-two--', title: 'B1', deletedAt: 250 },
       { ...rows[0], id: 'c', projectDir: '--P-one--', title: 'A2', deletedAt: 100 },
     ]
-    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids))
-    const list = vi.fn().mockResolvedValueOnce(crossed).mockResolvedValue([])
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => remoteOk(outcomesOf(action, ids)))
+    const list = vi.fn().mockResolvedValueOnce(remoteOk(crossed)).mockResolvedValue(remoteOk([]))
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('A1')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1287,11 +1282,11 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('部分失败：删掉的走、没删掉的把原文留在它自己那一行，多选态不退', async () => {
-    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
-      outcomesOf('purge', ids, { b: '该会话正被占用' }))
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(
+      outcomesOf('purge', ids, { b: '该会话正被占用' })))
     // 注意 `mockResolvedValue` 调两次是**替换**实现、不是排队（踩过：首屏就直接拿到第二份数据），
     // 要"先给全量、重读后给少一条"必须用 `mockResolvedValueOnce` 起头。
-    const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[1], three[2]])
+    const list = vi.fn().mockResolvedValueOnce(remoteOk(three)).mockResolvedValue(remoteOk([three[1], three[2]]))
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1305,7 +1300,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('别处动过清单（重读）之后，已经不存在的 id 从勾选里剔掉', async () => {
-    const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[0], three[1]])
+    const list = vi.fn().mockResolvedValueOnce(remoteOk(three)).mockResolvedValue(remoteOk([three[0], three[1]]))
     const { container } = renderNarrow(depsOf({ list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1331,8 +1326,8 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('批量恢复走确认框：列出条目、确认后**一次** apply 带回整批顺序，恢复成功的不留行', async () => {
-    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => outcomesOf(action, ids))
-    const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[2]])
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]) => remoteOk(outcomesOf(action, ids)))
+    const list = vi.fn().mockResolvedValueOnce(remoteOk(three)).mockResolvedValue(remoteOk([three[2]]))
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1364,7 +1359,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
 
   it('批量恢复的确认框里，原工作区不存在的条目也逐条说清去向', async () => {
     const flagged = three.map((e) => (e.id === 'b' ? { ...e, workspaceMissing: true } : e))
-    const { container } = renderNarrow(depsOf({ list: vi.fn(async () => flagged) }))
+    const { container } = renderNarrow(depsOf({ list: vi.fn(async () => remoteOk(flagged)) }))
     await screen.findByText('第二条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     fireEvent.click(rowOf(container, 'b'))
@@ -1374,9 +1369,9 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   it('批量恢复部分失败：成功的走、失败的把原文留在它自己那一行', async () => {
-    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
-      outcomesOf('restore', ids, { b: '原项目目录已不存在' }))
-    const list = vi.fn().mockResolvedValueOnce(three).mockResolvedValue([three[1]])
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(
+      outcomesOf('restore', ids, { b: '原项目目录已不存在' })))
+    const list = vi.fn().mockResolvedValueOnce(remoteOk(three)).mockResolvedValue(remoteOk([three[1]]))
     const { container } = renderNarrow(depsOf({ applyOutcomes, list }))
     await screen.findByText('第一条')
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
@@ -1397,10 +1392,10 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
       const promise = new Promise<T>((inResolve) => { resolve = inResolve })
       return { promise, resolve }
     }
-    const first = open<typeof three>()
-    const second = open<typeof three>()
+    const first = open<RemoteOutcome<typeof three>>()
+    const second = open<RemoteOutcome<typeof three>>()
     const list = vi
-      .fn<() => Promise<typeof three>>()
+      .fn<() => Promise<RemoteOutcome<typeof three>>>()
       .mockImplementationOnce(() => first.promise)
       .mockImplementationOnce(() => second.promise)
     renderNarrow(depsOf({ list }))
@@ -1408,9 +1403,9 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     act(() => { invalidateTrash() })
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     // 第二次**先**落地、第一次更晚才回 ⇒ 后到的那份旧数据必须被丢掉
-    second.resolve([pick(three, 2)])
+    second.resolve(remoteOk([pick(three, 2)]))
     expect(await screen.findByText('第三条')).toBeInTheDocument()
-    first.resolve(three)
+    first.resolve(remoteOk(three))
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(screen.queryByText('第一条')).toBeNull()
   })
@@ -1457,7 +1452,7 @@ describe('回收站面板 · 工具排常驻与组勾选（2026-10-15）', () =>
     { ...rows[0], id: 'b', projectDir: '--P-one--', title: '第二条', deletedAt: 200 },
     { ...rows[0], id: 'c', projectDir: '--P-two--', title: '第三条', deletedAt: 100 },
   ]
-  const depsOf = (): FakeRemote => makeDeps({ list: vi.fn(async () => grouped) })
+  const depsOf = (): FakeRemote => makeDeps({ list: vi.fn(async () => remoteOk(grouped)) })
   const heads = (container: HTMLElement) =>
     [...container.querySelectorAll('[data-dsh-session-delete="trash-group-head"]')] as HTMLElement[]
   // 组头那一行里的勾选框（行内的另一颗住在条目行里，选择器带 trash-group 才分得开）
@@ -1535,7 +1530,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
     { ...pick(rows, 0), id: 'b', title: '乙组第一条', projectDir: '--P-two--' },
     { ...pick(rows, 0), id: 'c', title: '丙组第一条', projectDir: '--P-three--' },
   ]
-  const depsOfThree = (): FakeRemote => makeDeps({ list: vi.fn(async () => threeRows) })
+  const depsOfThree = (): FakeRemote => makeDeps({ list: vi.fn(async () => remoteOk(threeRows)) })
   const listColumn = (container: HTMLElement): HTMLElement =>
     must(container.querySelector('[data-dsh-session-delete="trash-list"]'), 'trash-list 元素').parentElement as HTMLElement
   const renderAt = (width: number, deps: FakeRemote) => {
@@ -1561,14 +1556,14 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
 
   // docs/ui-spec.md：清单为空或读数失败时右栏不出现——那一栏没有可选项也没有动作。
   it('空回收站即便盒子够宽也不出右栏（也没把手可拖）', async () => {
-    const { container } = renderAt(1100, makeDeps({ list: vi.fn(async () => []) }))
+    const { container } = renderAt(1100, makeDeps({ list: vi.fn(async () => remoteOk([])) }))
     expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeNull()
     expect(container.querySelector('[role="separator"]')).toBeNull()
   })
 
   it('清单读不到时也只摆清单那一块：原文 +「重试」负责把清单读回来', async () => {
-    const { container } = renderAt(1100, makeDeps({ list: vi.fn(async () => { throw new Error('磁盘忙') }) }))
+    const { container } = renderAt(1100, makeDeps({ list: vi.fn(async () => remoteFail({ code: 'client/unknown', message: '磁盘忙' })) }))
     expect(await screen.findByRole('button', { name: '重试' })).toBeInTheDocument()
     expect(container.querySelector('[data-dsh-session-delete="trash-detail"]')).toBeNull()
   })
@@ -1608,7 +1603,7 @@ describe('回收站面板 · 两档边界、右栏的出现条件与键盘落点
 // 这里只钉"面板这一侧真的没有了"：给假远端一份非空孤儿报告，面板一次都不去问。
 describe('回收站面板 · 不再自动扫无主子会话（2026-10-27 搬家后）', () => {
   it('挂载与写后重读都不发 /orphans，面板上也没有孤儿提示', async () => {
-    const deps = makeDeps({ scanOrphans: vi.fn(async () => ORPHANS) })
+    const deps = makeDeps({ scanOrphans: vi.fn(async () => remoteOk(ORPHANS)) })
     renderWide(deps)
     await screen.findByRole('row', { name: /code-review/ })
     // 写后重读（失效通告）也不许顺手扫一次。
@@ -1627,10 +1622,10 @@ const KID_ROW = {
 
 function kidDeps(): FakeRemote {
   return makeDeps({
-    list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 1, subagentBytes: 1024 }]),
-    detail: vi.fn(async (id: string) => id === 'kid'
+    list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), subagentCount: 1, subagentBytes: 1024 }])),
+    detail: vi.fn(async (id: string) => remoteOk(id === 'kid'
       ? { ...detailFixture, entryId: 'kid', blocks: [{ kind: 'user', id: '0', time: 1, text: '孩子的正文', truncated: false, attachments: [] }] }
-      : { ...detailFixture, subagents: [KID_ROW] }),
+      : { ...detailFixture, subagents: [KID_ROW] })),
   })
 }
 
@@ -1671,15 +1666,15 @@ describe('回收站面板 · 子会话详情', () => {
   // （判据住 `src/trash/groups.ts`），走清单可达——在孩子视图里再开一层会让那颗返回指着孙辈说话。
   it('宽档：孩子视图里不再画「子会话」段，返回仍交还清单选中那条', async () => {
     const deps = makeDeps({
-      list: vi.fn(async () => [{ ...pick(rows, 0), subagentCount: 1, subagentBytes: 1024 }]),
-      detail: vi.fn(async (id: string) => id === 'kid'
+      list: vi.fn(async () => remoteOk([{ ...pick(rows, 0), subagentCount: 1, subagentBytes: 1024 }])),
+      detail: vi.fn(async (id: string) => remoteOk(id === 'kid'
         ? {
           ...detailFixture,
           entryId: 'kid',
           subagents: [{ ...KID_ROW, id: 'grandkid', sessionId: 'session-grandkid', title: '孙辈会话', parentEntryId: 'kid' }],
           blocks: [{ kind: 'user', id: '0', time: 1, text: '孩子的正文', truncated: false, attachments: [] }],
         }
-        : { ...detailFixture, subagents: [KID_ROW] }),
+        : { ...detailFixture, subagents: [KID_ROW] })),
     })
     renderWide(deps)
     await screen.findByText('先看改动')
@@ -1722,14 +1717,14 @@ describe('归档档（平级分段）', () => {
     turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
     injectedCount: 0, blocks: [], olderCursor: null,
   })
-  function makeArchiveDeps(over: Partial<FakeRemoteMethods> = {}) {
+  function makeArchiveDeps(over: Partial<FakeRemote> = {}) {
     return makeDeps({
-      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({
+      archiveList: vi.fn(async (): Promise<RemoteOutcome<ArchiveListWire>> => remoteOk({
         available: true,
         rows: [archiveRow('session-x', { label: '子任务名' }), archiveRow('session-y')],
         totalBytes: 0, missingSizeCount: 0,
       })),
-      archiveDetail: vi.fn(async (sessionId: string): Promise<ArchiveDetailLike> => archiveDetailOf(sessionId)),
+      archiveDetail: vi.fn(async (sessionId: string): Promise<RemoteOutcome<ArchiveDetailLike>> => remoteOk(archiveDetailOf(sessionId))),
       ...over,
     })
   }
@@ -1770,7 +1765,7 @@ describe('归档档（平级分段）', () => {
 
   it('归档副标题：合计只加已知大小，读不出来的行数追加「N 条大小缺席」', async () => {
     const deps = makeArchiveDeps({
-      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({
+      archiveList: vi.fn(async (): Promise<RemoteOutcome<ArchiveListWire>> => remoteOk({
         available: true,
         rows: [archiveRow('session-x', { sizeBytes: 1024 }), archiveRow('session-y'), archiveRow('session-z')],
         totalBytes: 1024, missingSizeCount: 2,
@@ -1802,14 +1797,14 @@ describe('归档档（平级分段）', () => {
 
   it('父详情里的未归档孩子只读打开：带父 id 读、孩子视图可返回父', async () => {
     const deps = makeArchiveDeps({
-      archiveDetail: vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<ArchiveDetailLike> => {
+      archiveDetail: vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<RemoteOutcome<ArchiveDetailLike>> => {
         if (sessionId === 'session-x') {
-          return {
+          return remoteOk({
             ...archiveDetailOf(sessionId),
             subagents: [{ sessionId: 'kid-1', archived: false, projectDir: '--p--', title: '孩子一' }],
-          }
+          })
         }
-        return sessionId === 'kid-1' ? { ...archiveDetailOf(sessionId), archived: false } : archiveDetailOf(sessionId)
+        return remoteOk(sessionId === 'kid-1' ? { ...archiveDetailOf(sessionId), archived: false } : archiveDetailOf(sessionId))
       }),
     })
     const { container } = renderWide(deps)
@@ -1833,14 +1828,14 @@ describe('归档档（平级分段）', () => {
     // 却在父闭包里、正文读得出。状态行认主体自己的归档态（wire 的 `archived`），不认
     // 「孩子视图」这个导航道——「找不到清单行」不等于「未归档」。
     const deps = makeArchiveDeps({
-      archiveDetail: vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<ArchiveDetailLike> => {
+      archiveDetail: vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<RemoteOutcome<ArchiveDetailLike>> => {
         if (sessionId === 'session-x') {
-          return {
+          return remoteOk({
             ...archiveDetailOf(sessionId),
             subagents: [{ sessionId: 'kid-1', archived: true, projectDir: '--p--', title: '孩子一' }],
-          }
+          })
         }
-        return archiveDetailOf(sessionId)
+        return remoteOk(archiveDetailOf(sessionId))
       }),
     })
     const { container } = renderWide(deps)
@@ -1867,7 +1862,7 @@ describe('归档档（平级分段）', () => {
 
   it('归档详情与回收站同一套提问轨：prompts 过线时右缘出现提问导航', async () => {
     const deps = makeArchiveDeps({
-      archiveDetail: vi.fn(async (sessionId: string): Promise<ArchiveDetailLike> => ({
+      archiveDetail: vi.fn(async (sessionId: string): Promise<RemoteOutcome<ArchiveDetailLike>> => remoteOk({
         ...archiveDetailOf(sessionId),
         prompts: [{ id: 'p1', at: 1, preview: '先看改动' }],
         blocks: [{ kind: 'user', id: 'p1', time: 1, text: '先看改动', truncated: false, attachments: [] }],
@@ -1881,7 +1876,7 @@ describe('归档档（平级分段）', () => {
 
   it('多选勾选框的无障碍名是显示名（未命名行也有）', async () => {
     const deps = makeArchiveDeps({
-      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({
+      archiveList: vi.fn(async (): Promise<RemoteOutcome<ArchiveListWire>> => remoteOk({
         available: true,
         rows: [archiveRow('session-z', { title: '' })],
         totalBytes: 0, missingSizeCount: 0,
@@ -2035,7 +2030,7 @@ describe('归档档（平级分段）', () => {
 
   it('corpus-missing 是独立块带重试，不折成空态', async () => {
     const deps = makeArchiveDeps({
-      archiveList: vi.fn(async (): Promise<ArchiveListWire> => ({ available: false })),
+      archiveList: vi.fn(async (): Promise<RemoteOutcome<ArchiveListWire>> => remoteOk({ available: false })),
     })
     renderWide(deps)
     fireEvent.click(archiveTab())
@@ -2050,7 +2045,7 @@ describe('归档档（平级分段）', () => {
 
   it('读失败上屏带重试，不折成空态', async () => {
     const failing = makeArchiveDeps({
-      archiveList: vi.fn(async (): Promise<ArchiveListWire> => { throw new Error('boom') }),
+      archiveList: vi.fn(async () => remoteFail({ code: 'client/unknown', message: 'boom' })),
     })
     renderWide(failing)
     fireEvent.click(archiveTab())
@@ -2083,7 +2078,7 @@ describe('归档档（平级分段）', () => {
     expect(screen.getByRole('button', { name: '清空回收站…' })).toBeInTheDocument()
   })
 
-  it('归档档选中/详情不写 trash-snapshot（writeTrashSelection 与详情账本零触碰）', async () => {
+  it('归档档选中/详情不写 trash-snapshot（noteSelection 与详情账本零触碰）', async () => {
     const deps = makeArchiveDeps()
     const { container } = renderWide(deps)
     fireEvent.click(archiveTab())
@@ -2091,7 +2086,7 @@ describe('归档档（平级分段）', () => {
     fireEvent.click(must(container.querySelector('[data-dsh-session-delete="archive-row"]'), '归档行应已渲染'))
     await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalled() })
     // 回收站档自己的快照（含宽档自动选中）是它自己的；要钉的是**归档选中/详情零触碰**：
-    // 点归档行前后快照一字不变（选中不进 writeTrashSelection），详情不进回收站账本（键域两套）。
+    // 点归档行前后快照一字不变（选中不进 noteSelection），详情不进回收站账本（键域两套）。
     const before = readTrashSnapshot()
     fireEvent.click(must(container.querySelector('[data-dsh-session-delete="archive-row"]'), '归档行应已渲染'))
     await waitFor(() => { expect(deps.archiveDetail).toHaveBeenCalled() })
@@ -2101,10 +2096,10 @@ describe('归档档（平级分段）', () => {
 
   it('删除已归档会话后撤销横幅带归档句：面板 → 确认框 → 撤销提示整条链', async () => {
     const deps = makeArchiveDeps({
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
         (action === 'delete'
           ? ids.map((id) => ok('delete', id, { ...trashRow(`entry-${id}`, id), wasArchived: true }))
-          : outcomes(action, ids))),
+          : outcomes(action, ids)))),
     })
     const { container } = render(
       <>

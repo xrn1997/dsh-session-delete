@@ -20,7 +20,7 @@
  */
 import type { ReactElement } from 'react'
 import type { Translate } from './copy.js'
-import type { OrphanReportWire } from './remote.js'
+import type { OrphanReportWire } from '../shared/wire.js'
 import type { MaintenanceSectionView } from './use-maintenance-section.js'
 import { MaintenanceBanner, MaintenanceFailure } from './maintenance-parts.js'
 import { OrphanConfirm } from './trash-confirm.js'

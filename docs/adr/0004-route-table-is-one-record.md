@@ -33,7 +33,7 @@ Status: accepted
    少一个动作就编译不过，多一个动作也是。
 4. `/apply` 的「动作 → 纯度」（`count` 是纯读、其余进链）是 `route-table.ts` 里**唯一一张表**
    （`APPLY_ACTION_TABLE`：键由 `ApplyAction` 派生、`satisfies` 钉住——漏一个动作编译不过，多一个也是）。
-   该路由 `purity` 的函数形式与动作拒否（`requireAction`）共用同一个识别器（`actionOf`：不抛，
+   该路由 `purity` 的函数形式与动作拒否（通用解析手的 `action` 格）共用同一个识别器（`actionOf`：不抛，
    认不得就回 `undefined`），不各解析一遍动作；也不写在 `dispatch` 里。
 
 ## 边界

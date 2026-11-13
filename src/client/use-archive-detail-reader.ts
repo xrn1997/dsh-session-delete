@@ -2,7 +2,7 @@
  * 归档详情读路：通用机制（`use-detail-reader.ts`）的薄实例——
  * 账本是**挂载内 Map**（键 = sessionId，容量与淘汰口径住 `detail-ledger.ts`），卸载即丢、
  * **不进 `trash-snapshot`**（归档档的清单/选中/详情都不进首帧快照；键域是会话 id，与回收站的
- * 条目 id 两不相干——混一台账本会让 `reconcileTrashRows` 永远裁不到归档详情、还会挤掉回收站详情）。
+ * 条目 id 两不相干——混一台账本会让 `reloadSucceeded` 永远裁不到归档详情、还会挤掉回收站详情）。
  * 归档档的顶层行与「离清单的孩子视图」共用这一本；孩子视图交 `topLevel: false`（不保持上一条），
  * 读孩子时由 `rootOf` 带上那条已归档父会话，供 `/archive-detail` 做闭包校验。
  */

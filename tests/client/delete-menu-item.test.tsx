@@ -14,9 +14,9 @@ import {
   useDeleteRequest,
 } from '../../src/client/delete-confirm.js'
 import { DeleteMenuItem, type DeleteMenuItemProps } from '../../src/client/delete-menu-item.js'
-import type { OneShotDeps } from '../../src/client/remote.js'
+import type { OneShotDeps, SessionDeleteRemote } from '../../src/client/remote.js'
 import { fakeApply } from './support/fake-apply.js'
-import { createFakeRemote, type BareSessionDeleteRemote } from './support/fake-remote.js'
+import { createFakeRemote } from './support/fake-remote.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
 
@@ -31,7 +31,7 @@ afterEach(() => {
 })
 
 /** 菜单/确认框只吃 `applyOutcomes`：一颗完整的假远程面替掉手搭对象与 `as never`。 */
-const deps = (applyOutcomes: BareSessionDeleteRemote['applyOutcomes']) => createFakeRemote({ applyOutcomes: vi.fn(applyOutcomes) })
+const deps = (applyOutcomes: SessionDeleteRemote['applyOutcomes']) => createFakeRemote({ applyOutcomes: vi.fn(applyOutcomes) })
 
 /** 行 + 确认框宿主（缺省再挂上撤销提示的宿主），也就是真机上同屏的那几样。 */
 function renderScene(

@@ -15,7 +15,7 @@
  */
 import { SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
 import { FS_CORE_METHODS, FS_REMOVAL_METHODS, fsSlice } from '../ports/fs-port.js'
-import { routeError } from '../verbs/errors.js'
+import { routeError } from '../errors.js'
 import type { CoreDeps, DeleteDeps } from '../deps.js'
 import {
   routeOf,
@@ -129,19 +129,21 @@ export function createDispatcher(deps: DeleteDeps): Dispatch {
   return async function dispatch(input: ApiInput): Promise<ApiResult> {
     const spec = resolveRoute(input.method, input.rest)
     // body 由适配器读好再进来：`apply` 的纯读判断与处理共用这一份（流不能被消费两遍）。
-    const kind = spec.read
-    let rowsPromise: ReturnType<RouteRead['rows']> | undefined
-    const read: RouteRead = {
-      rows() {
-        if (kind === 'none') return Promise.reject(new Error('route read: none'))
-        rowsPromise ??= kind === 'list' ? deps.ledger.list() : deps.ledger.raw()
-        return rowsPromise
-      },
-    }
     const rowDeps = depsFor(spec, slices)
-    const task = (): Promise<unknown> => spec.response === 'binary'
-      ? spec.run(rowDeps, input.search)
-      : spec.run(rowDeps, input.body, read)
+    const task = (): Promise<unknown> => {
+      if (spec.response === 'binary') return spec.run(rowDeps, input.search)
+      // 读面只交得出去的行（`list` / `raw`）才建这一面：`none` 行的 run 签名里没有它，
+      // 分发器也就不为一行造一个没人叫得动的拒约。
+      if (spec.read === 'none') return spec.run(rowDeps, input.body)
+      let rowsPromise: ReturnType<RouteRead['rows']> | undefined
+      const read: RouteRead = {
+        rows() {
+          rowsPromise ??= spec.read === 'list' ? deps.ledger.list() : deps.ledger.raw()
+          return rowsPromise
+        },
+      }
+      return spec.run(rowDeps, input.body, read)
+    }
     const result = await (isPure(spec.purity, input.body) ? task() : throughChain(task))
     if (spec.response === 'binary') return { kind: 'binary', body: result as BinaryResponse }
     return { kind: 'json', status: 200, body: { ok: true, value: result } }

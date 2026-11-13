@@ -14,7 +14,7 @@
  */
 import { toRemoteFailure } from '../remote/map-error.js'
 import { OFFICIAL_SESSION_DELETE_API_PREFIX } from '../shared/wire.js'
-import { routeError } from '../verbs/errors.js'
+import { routeError } from '../errors.js'
 import { ROUTE_TABLE, type BinaryResponse, type JsonBody } from './route-table.js'
 import type { ApiResult, Dispatch } from './dispatch.js'
 

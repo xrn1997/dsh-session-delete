@@ -37,4 +37,4 @@ ADR-0027 定下永久删除的顺序：退归档集 → 摘账本 → 删目录 
 - **不回滚，让用户之后自己再归档**：用户看到的是「彻底删除失败」，没有任何一处告诉他归档态已经没了；恢复后会话出现在列表里，状态变化静默且不可归因。
 - **失败后把整批 `archive` 一遍**：会把删除前没归档的会话也归档，制造另一种静默状态变化。
 
-锚点：`src/verbs/permanent-removal.ts`；`src/verbs/errors.ts` 的 `withRollbackFailures`；`src/verbs/restore-session.ts`；`tests/permanent-removal.test.ts`；ADR-0008（回收站与归档解耦）；ADR-0027（永久删除计划与执行）
+锚点：`src/verbs/permanent-removal.ts`；`src/errors.ts` 的 `withRollbackFailures`；`src/verbs/restore-session.ts`；`tests/permanent-removal.test.ts`；ADR-0008（回收站与归档解耦）；ADR-0027（永久删除计划与执行）

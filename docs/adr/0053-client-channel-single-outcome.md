@@ -19,12 +19,12 @@ Status: accepted
 - 信封形状（`RemoteResult` / `RemoteFailure` / `isRemoteResult` / `isDSHRemoteError`）仍住 `src/shared/wire.ts`；这条通道只是它的**浏览器半解析者**。
 - `/attachment` 仍是二进制段：它由 `src/client/attachment-view.tsx` 从同一张表拼地址，不经过 JSON 通道。
 - 鉴权仍归宿主 `/api` bridge（ADR-0033）；`ROUTES` 只描述传输，不描述权限。
-- 测试假件负责把「裸值 / 抛出的失败」抬成落地面；生产适配器不替调用方兜业务失败。
+- 测试假件与生产 adapter 同说一种语言：方法直接交落地面（用例设成什么样，组件收到什么），没有抬升 / 归一层；生产适配器不替调用方兜业务失败。（**2026-11-14 就地订正**：本行原文把「抬升」记成假件的职责，与 `tests/client/support/fake-remote.ts` 的现状相反；按本仓口径，事实漂移就地改正文。）
 
 ## 后果
 
 - `callRemote` / raw 层删除后，维护卡状态机不再包一层失败转换：`scan` 直接吃 `RemoteOutcome`，`afterClean` 一次判读 `preset` / `plan`；孤儿会话清理的第二份回执（顺带清掉的图片副本）改走 `secondaryNotice`，不再由 glue 另存一份状态。
-- 测试假件把「裸值 / 抛出的失败」抬成 `RemoteOutcome`；生产 adapter 不替调用方兜业务失败。
+- 测试假件与生产 adapter 同说 `RemoteOutcome`；生产 adapter 不替调用方兜业务失败。
 
 ## 被否方案
 

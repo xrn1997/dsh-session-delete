@@ -15,14 +15,12 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
-import type {
-  AttachmentOrphanReportWire,
-  OrphanReportWire,
-} from '../../src/client/remote.js'
+import type { RemoteOutcome } from '../../src/client/remote.js'
+import type { AttachmentOrphanReportWire, OrphanReportWire } from '../../src/shared/wire.js'
 import { useMaintenance, type Maintenance } from '../../src/client/use-maintenance.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
 import { pick } from '../support/fixture.js'
-import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk, type FakeRemote } from './support/fake-remote.js'
 import { failed, ok, outcomes } from './support/outcomes.js'
 
 const EMPTY: OrphanReportWire = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
@@ -50,18 +48,18 @@ const ATT_106: AttachmentOrphanReportWire = {
 const PROJ_3 = { count: 3 }
 const PROJ_EMPTY = { count: 0 }
 
-function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
+function deps(over: Partial<FakeRemote> = {}): FakeRemote {
   return createFakeRemote({
-    scanOrphans: vi.fn(async () => EMPTY),
-    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
-      outcomes(action, ids)),
-    scanAttachmentOrphans: vi.fn(async () => ATT_EMPTY),
-    cleanAttachmentOrphans: vi.fn(async () => ({ removed: 0, freedBytes: 0, failed: 0 })),
+    scanOrphans: vi.fn(async () => remoteOk(EMPTY)),
+    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
+      outcomes(action, ids))),
+    scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_EMPTY)),
+    cleanAttachmentOrphans: vi.fn(async () => remoteOk({ removed: 0, freedBytes: 0, failed: 0 })),
     ...over,
   })
 }
 
-function mount(over: Partial<FakeRemoteMethods> = {}) {
+function mount(over: Partial<FakeRemote> = {}) {
   const d = deps(over)
   const view = renderHook(() => useMaintenance({ deps: d, t: zhTranslate }))
   return { d, ...view }
@@ -117,16 +115,14 @@ describe('维护编排 · 孤儿会话检查', () => {
   })
 
   it('手动检查：落地 N 条，报告原样交给界面（计数不重算）', async () => {
-    const { result } = mount({ scanOrphans: vi.fn(async () => REPORT) })
+    const { result } = mount({ scanOrphans: vi.fn(async () => remoteOk(REPORT)) })
     await act(async () => { await current(result).orphans.scan() })
     expect(current(result).orphans.report).toEqual(REPORT)
   })
 
   it('检查读不到：报告回 null、原文上屏，不折成"零条"', async () => {
     const { result } = mount({
-      scanOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' })
-      }),
+      scanOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: 'sessionQuery 不在' })),
     })
     await act(async () => { await current(result).orphans.scan() })
     expect(current(result).orphans.report).toBeNull()
@@ -136,8 +132,8 @@ describe('维护编排 · 孤儿会话检查', () => {
 
 describe('维护编排 · 段的不变量（构造保证）', () => {
   it('busy 由段自己给：一段在飞时另一段仍空闲，不靠外部传入', async () => {
-    let resolveScan!: (value: OrphanReportWire) => void
-    const scanOrphans = vi.fn(() => new Promise<OrphanReportWire>((resolve) => { resolveScan = resolve }))
+    let resolveScan!: (value: RemoteOutcome<OrphanReportWire>) => void
+    const scanOrphans = vi.fn(() => new Promise<RemoteOutcome<OrphanReportWire>>((resolve) => { resolveScan = resolve }))
     const { result } = mount({ scanOrphans })
     let pending!: Promise<void>
     act(() => { pending = current(result).orphans.scan() })
@@ -145,18 +141,14 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
     // 另一段没在飞：忙碌是每段自己的读数，不跨段、也不需要谁替它传进来。
     expect(current(result).attachments.busy).toBe(false)
     expect(current(result).attachments.phase).toBeNull()
-    await act(async () => { resolveScan(EMPTY); await pending })
+    await act(async () => { resolveScan(remoteOk(EMPTY)); await pending })
     expect(current(result).orphans.busy).toBe(false)
   })
 
   it('openPreview 是唯一开门：先清旧失败与旧提示再开框', async () => {
     const { result } = mount({
-      scanOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' })
-      }),
-      scanAttachmentOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('引用源读不出'), { code: 'sessiondelete/io' })
-      }),
+      scanOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: 'sessionQuery 不在' })),
+      scanAttachmentOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '引用源读不出' })),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).attachments.scan() })
@@ -173,9 +165,9 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
 
   it('openPreview 连旧的中性提示一起收', async () => {
     const { result } = mount({
-      scanOrphans: vi.fn(async () => REPORT),
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
-        ids.map((id) => failed(action, id, '不在了', 'sessiondelete/not-found'))),
+      scanOrphans: vi.fn(async () => remoteOk(REPORT)),
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
+        ids.map((id) => failed(action, id, '不在了', 'sessiondelete/not-found')))),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
@@ -189,14 +181,14 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
   it('cancel 只收框：提示与失败一个都不碰', async () => {
     // 一趟"有一组没清成（失败）+ 有一组已不在（中性）"的清理：两种句子同时在场。
     const { result } = mount({
-      scanOrphans: vi.fn(async () => TWO_ROOTS),
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> => [
+      scanOrphans: vi.fn(async () => remoteOk(TWO_ROOTS)),
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
         {
           id: pick(ids, 0), action, ok: false as const,
           error: { code: 'sessiondelete/io', message: '目录搬不动', details: { removed: 1, freedBytes: 2048 } },
         },
         failed(action, pick(ids, 1), '不在了', 'sessiondelete/not-found'),
-      ]),
+      ])),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
@@ -213,8 +205,8 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
 
   it('附件段也走同一台机器：cancel 不碰提示，openPreview 连它一起收', async () => {
     const { result } = mount({
-      scanAttachmentOrphans: vi.fn(async () => ATT_106),
-      cleanAttachmentOrphans: vi.fn(async () => ({
+      scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_106)),
+      cleanAttachmentOrphans: vi.fn(async () => remoteOk({
         removed: 3, freedBytes: 300, failed: 0, skipped: '剩余引用源读不出',
       })),
     })
@@ -234,10 +226,10 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
 
   it('最新票输家不落地：后发的检查先落地，先发的那份不盖掉它', async () => {
     const LATER: OrphanReportWire = { ...REPORT, totalSessions: 7, totalBytes: 7000 }
-    let resolveSlow!: (value: OrphanReportWire) => void
+    let resolveSlow!: (value: RemoteOutcome<OrphanReportWire>) => void
     const scanOrphans = vi.fn()
-      .mockImplementationOnce(() => new Promise<OrphanReportWire>((resolve) => { resolveSlow = resolve }))
-      .mockResolvedValueOnce(LATER)
+      .mockImplementationOnce(() => new Promise<RemoteOutcome<OrphanReportWire>>((resolve) => { resolveSlow = resolve }))
+      .mockResolvedValueOnce(remoteOk(LATER))
     const { result } = mount({ scanOrphans })
 
     let slow!: Promise<void>
@@ -248,27 +240,27 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
     expect(current(result).orphans.report).toEqual(LATER)
     expect(current(result).orphans.busy).toBe(false)        // 赢家已经收尾
 
-    await act(async () => { resolveSlow(EMPTY); await slow })
+    await act(async () => { resolveSlow(remoteOk(EMPTY)); await slow })
     expect(current(result).orphans.report).toEqual(LATER)   // 输家什么都不落地
     expect(current(result).orphans.busy).toBe(false)         // 也不替赢家清 phase
   })
 
   it('输家清不掉附件回执：清除只发生在赢家落地之后', async () => {
-    let resolveLoser!: (value: OrphanReportWire) => void
-    let resolveWinner!: (value: OrphanReportWire) => void
+    let resolveLoser!: (value: RemoteOutcome<OrphanReportWire>) => void
+    let resolveWinner!: (value: RemoteOutcome<OrphanReportWire>) => void
     const scanOrphans = vi.fn()
-      .mockResolvedValueOnce(REPORT)                        // 首趟手动检查
-      .mockResolvedValueOnce(REPORT)                        // clean 之后的必发重查
-      .mockImplementationOnce(() => new Promise<OrphanReportWire>((resolve) => { resolveLoser = resolve }))
-      .mockImplementationOnce(() => new Promise<OrphanReportWire>((resolve) => { resolveWinner = resolve }))
+      .mockResolvedValueOnce(remoteOk(REPORT))                        // 首趟手动检查
+      .mockResolvedValueOnce(remoteOk(REPORT))                        // clean 之后的必发重查
+      .mockImplementationOnce(() => new Promise<RemoteOutcome<OrphanReportWire>>((resolve) => { resolveLoser = resolve }))
+      .mockImplementationOnce(() => new Promise<RemoteOutcome<OrphanReportWire>>((resolve) => { resolveWinner = resolve }))
     const { result } = mount({
       scanOrphans,
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
         ids.map((id) => ok(action, id, {
           removed: 1,
           freedBytes: 2048,
           attachments: { removed: 2, freedBytes: 100, failed: 1, skipped: '剩余引用源读不出' },
-        }))),
+        })))),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
@@ -280,17 +272,17 @@ describe('维护编排 · 段的不变量（构造保证）', () => {
     act(() => { winner = current(result).orphans.scan() })    // 后发：赢下最新票
 
     // 输家落地：回执仍在（清除若放在发请求之前，这里已经被清掉了）。
-    await act(async () => { resolveLoser(REPORT); await loser })
+    await act(async () => { resolveLoser(remoteOk(REPORT)); await loser })
     expect(current(result).orphans.secondaryNotice).not.toBeNull()
 
-    await act(async () => { resolveWinner(REPORT); await winner })
+    await act(async () => { resolveWinner(remoteOk(REPORT)); await winner })
     expect(current(result).orphans.secondaryNotice).toBeNull()   // 只有赢家清
   })
 })
 
 describe('维护编排 · 孤儿会话清理', () => {
   it('openPreview 先收掉旧提示再开确认框；cancel 能关', async () => {
-    const { result } = mount({ scanOrphans: vi.fn(async () => REPORT) })
+    const { result } = mount({ scanOrphans: vi.fn(async () => remoteOk(REPORT)) })
     await act(async () => { await current(result).orphans.scan() })
     act(() => { current(result).orphans.openPreview() })
     expect(current(result).orphans.confirm).toBe(true)
@@ -300,10 +292,10 @@ describe('维护编排 · 孤儿会话清理', () => {
 
   it('清理走 /apply 的 orphan-clean，发报告的 roots，清完自动重查', async () => {
     const scanOrphans = vi.fn()
-      .mockResolvedValueOnce(REPORT)
-      .mockResolvedValueOnce(EMPTY)
-    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
-      ids.map((id) => ok(action, id, { removed: 1, freedBytes: 2048 })))
+      .mockResolvedValueOnce(remoteOk(REPORT))
+      .mockResolvedValueOnce(remoteOk(EMPTY))
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
+      ids.map((id) => ok(action, id, { removed: 1, freedBytes: 2048 }))))
     const { result } = mount({ scanOrphans, applyOutcomes })
     await act(async () => { await current(result).orphans.scan() })
     act(() => { current(result).orphans.openPreview() })
@@ -326,13 +318,13 @@ describe('维护编排 · 孤儿会话清理', () => {
 
   it('清理回执里的附件读数也上屏：跳过 + 逐文件失败按面板同一套句子', async () => {
     const { result } = mount({
-      scanOrphans: vi.fn(async () => REPORT),
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
+      scanOrphans: vi.fn(async () => remoteOk(REPORT)),
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
         ids.map((id) => ok(action, id, {
           removed: 1,
           freedBytes: 2048,
           attachments: { removed: 2, freedBytes: 100, failed: 1, skipped: '剩余引用源读不出' },
-        }))),
+        })))),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
@@ -347,9 +339,9 @@ describe('维护编排 · 孤儿会话清理', () => {
 
   it('not-found 是中性提示，不是失败；报告为空时也不冒充清理过', async () => {
     const { result } = mount({
-      scanOrphans: vi.fn(async () => REPORT),
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
-        ids.map((id) => failed(action, id, '不在了', 'sessiondelete/not-found'))),
+      scanOrphans: vi.fn(async () => remoteOk(REPORT)),
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
+        ids.map((id) => failed(action, id, '不在了', 'sessiondelete/not-found')))),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
@@ -359,8 +351,8 @@ describe('维护编排 · 孤儿会话清理', () => {
 
   it('部分失败：原文 + 服务端给的部分计数一起说，重查不吞掉这两句', async () => {
     const { result } = mount({
-      scanOrphans: vi.fn(async () => REPORT),
-      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
+      scanOrphans: vi.fn(async () => remoteOk(REPORT)),
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
         ids.map((id) => ({
           id,
           action,
@@ -370,7 +362,7 @@ describe('维护编排 · 孤儿会话清理', () => {
             message: '目录搬不动',
             details: { removed: 1, freedBytes: 2048 },
           },
-        }))),
+        })))),
     })
     await act(async () => { await current(result).orphans.scan() })
     await act(async () => { await current(result).orphans.clean() })
@@ -380,10 +372,10 @@ describe('维护编排 · 孤儿会话清理', () => {
   })
 
   it('顶层失败：确认框关掉、原文上屏、仍然重查（旧报告不再可信）', async () => {
-    const scanOrphans = vi.fn(async () => REPORT)
+    const scanOrphans = vi.fn(async () => remoteOk(REPORT))
     const { result } = mount({
       scanOrphans,
-      applyOutcomes: vi.fn(async () => { throw new Error('路由自检失败') }),
+      applyOutcomes: vi.fn(async () => remoteFail({ code: 'client/unknown', message: '路由自检失败' })),
     })
     await act(async () => { await current(result).orphans.scan() })
     act(() => { current(result).orphans.openPreview() })
@@ -398,8 +390,8 @@ describe('维护编排 · 孤儿会话清理', () => {
 describe('维护编排 · 孤儿附件检查', () => {
   it('手动检查：106 / 27.8MiB 原样交给界面；0 条也原样', async () => {
     const scanAttachmentOrphans = vi.fn()
-      .mockResolvedValueOnce(ATT_106)
-      .mockResolvedValueOnce(ATT_EMPTY)
+      .mockResolvedValueOnce(remoteOk(ATT_106))
+      .mockResolvedValueOnce(remoteOk(ATT_EMPTY))
     const { result } = mount({ scanAttachmentOrphans })
     await act(async () => { await current(result).attachments.scan() })
     expect(current(result).attachments.report).toEqual(ATT_106)
@@ -410,9 +402,7 @@ describe('维护编排 · 孤儿附件检查', () => {
 
   it('检查读不到：报告回 null、包装成"检查失败"上屏', async () => {
     const { result } = mount({
-      scanAttachmentOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('引用源读不出'), { code: 'sessiondelete/io' })
-      }),
+      scanAttachmentOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '引用源读不出' })),
     })
     await act(async () => { await current(result).attachments.scan() })
     expect(current(result).attachments.report).toBeNull()
@@ -423,9 +413,9 @@ describe('维护编排 · 孤儿附件检查', () => {
 describe('维护编排 · 孤儿附件清理', () => {
   it('清理后自动重查，已清件数与体积上屏；确认框收起', async () => {
     const scanAttachmentOrphans = vi.fn()
-      .mockResolvedValueOnce(ATT_106)
-      .mockResolvedValueOnce(ATT_EMPTY)
-    const cleanAttachmentOrphans = vi.fn(async () => ({
+      .mockResolvedValueOnce(remoteOk(ATT_106))
+      .mockResolvedValueOnce(remoteOk(ATT_EMPTY))
+    const cleanAttachmentOrphans = vi.fn(async () => remoteOk({
       removed: 106, freedBytes: 29_150_413, failed: 0,
     }))
     const { result } = mount({ scanAttachmentOrphans, cleanAttachmentOrphans })
@@ -449,11 +439,11 @@ describe('维护编排 · 孤儿附件清理', () => {
   })
 
   it('清理成功先收旧报告：重查还在飞时横幅数据是 0，状态仍是清理中', async () => {
-    let resolveScan!: (value: AttachmentOrphanReportWire) => void
+    let resolveScan!: (value: RemoteOutcome<AttachmentOrphanReportWire>) => void
     const scanAttachmentOrphans = vi.fn()
-      .mockResolvedValueOnce(ATT_106)
-      .mockImplementationOnce(() => new Promise<AttachmentOrphanReportWire>((resolve) => { resolveScan = resolve }))
-    const cleanAttachmentOrphans = vi.fn(async () => ({
+      .mockResolvedValueOnce(remoteOk(ATT_106))
+      .mockImplementationOnce(() => new Promise<RemoteOutcome<AttachmentOrphanReportWire>>((resolve) => { resolveScan = resolve }))
+    const cleanAttachmentOrphans = vi.fn(async () => remoteOk({
       removed: 106, freedBytes: 29_150_413, failed: 0,
     }))
     const { result } = mount({ scanAttachmentOrphans, cleanAttachmentOrphans })
@@ -468,7 +458,7 @@ describe('维护编排 · 孤儿附件清理', () => {
     expect(current(result).attachments.phase).toBe('cleaning')
     expect(current(result).attachments.busy).toBe(true)
 
-    await act(async () => { resolveScan(ATT_EMPTY); await pending })
+    await act(async () => { resolveScan(remoteOk(ATT_EMPTY)); await pending })
     expect(current(result).attachments.report).toEqual(ATT_EMPTY)
     expect(current(result).attachments.notice).toBe('已清理 106 个（28MB）')
     expect(current(result).attachments.busy).toBe(false)
@@ -476,8 +466,8 @@ describe('维护编排 · 孤儿附件清理', () => {
 
   it('skipped 且一件未清 ⇒ 只说整轮跳过，不念「已清理 0 个」', async () => {
     const { result } = mount({
-      scanAttachmentOrphans: vi.fn(async () => ATT_106),
-      cleanAttachmentOrphans: vi.fn(async () => ({
+      scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_106)),
+      cleanAttachmentOrphans: vi.fn(async () => remoteOk({
         removed: 0, freedBytes: 0, failed: 0, skipped: '引用源读不出',
       })),
     })
@@ -489,8 +479,8 @@ describe('维护编排 · 孤儿附件清理', () => {
 
   it('skipped 但已清一部分 ⇒ 说「部分」与已清件数（与面板同一对句子）', async () => {
     const { result } = mount({
-      scanAttachmentOrphans: vi.fn(async () => ATT_106),
-      cleanAttachmentOrphans: vi.fn(async () => ({
+      scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_106)),
+      cleanAttachmentOrphans: vi.fn(async () => remoteOk({
         removed: 3, freedBytes: 300, failed: 0, skipped: '剩余引用源读不出',
       })),
     })
@@ -503,8 +493,8 @@ describe('维护编排 · 孤儿附件清理', () => {
 
   it('逐文件失败 ⇒ 未清理件数与已清件数都上屏', async () => {
     const { result } = mount({
-      scanAttachmentOrphans: vi.fn(async () => ATT_106),
-      cleanAttachmentOrphans: vi.fn(async () => ({ removed: 3, freedBytes: 30, failed: 2 })),
+      scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_106)),
+      cleanAttachmentOrphans: vi.fn(async () => remoteOk({ removed: 3, freedBytes: 30, failed: 2 })),
     })
     await act(async () => { await current(result).attachments.scan() })
     await act(async () => { await current(result).attachments.clean() })
@@ -513,8 +503,8 @@ describe('维护编排 · 孤儿附件清理', () => {
 
   it('skipped 与 failed 同时出现：跳过原因在前，失败件数追加在句尾', async () => {
     const { result } = mount({
-      scanAttachmentOrphans: vi.fn(async () => ATT_106),
-      cleanAttachmentOrphans: vi.fn(async () => ({
+      scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_106)),
+      cleanAttachmentOrphans: vi.fn(async () => remoteOk({
         removed: 4, freedBytes: 40, failed: 2, skipped: '剩余引用源读不出',
       })),
     })
@@ -526,12 +516,10 @@ describe('维护编排 · 孤儿附件清理', () => {
   })
 
   it('顶层失败：确认框关掉、本地化前缀 + 原文上屏，并重查一次', async () => {
-    const scanAttachmentOrphans = vi.fn(async () => ATT_106)
+    const scanAttachmentOrphans = vi.fn(async () => remoteOk(ATT_106))
     const { result } = mount({
       scanAttachmentOrphans,
-      cleanAttachmentOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('盘上忙'), { code: 'sessiondelete/io' })
-      }),
+      cleanAttachmentOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '盘上忙' })),
     })
     await act(async () => { await current(result).attachments.scan() })
     act(() => { current(result).attachments.openPreview() })
@@ -544,7 +532,7 @@ describe('维护编排 · 孤儿附件清理', () => {
   })
 
   it('报告为空时清理是 no-op：不发请求，只把确认框关掉（phase 一档都没进）', async () => {
-    const cleanAttachmentOrphans = vi.fn(async () => ({ removed: 0, freedBytes: 0, failed: 0 }))
+    const cleanAttachmentOrphans = vi.fn(async () => remoteOk({ removed: 0, freedBytes: 0, failed: 0 }))
     const { d, result } = mount({ cleanAttachmentOrphans })
     await act(async () => { await current(result).attachments.scan() })
     expect(current(result).attachments.report).toEqual(ATT_EMPTY)
@@ -561,9 +549,7 @@ describe('维护编排 · 孤儿附件清理', () => {
 describe('维护编排 · 投影缓存', () => {
   it('检查读不到：报告回 null、包装成"检查失败"上屏', async () => {
     const { result } = mount({
-      scanProjectionCacheOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('投影缓存读面不可用'), { code: 'sessiondelete/io' })
-      }),
+      scanProjectionCacheOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '投影缓存读面不可用' })),
     })
     await act(async () => { await current(result).projection.scan() })
     expect(current(result).projection.report).toBeNull()
@@ -572,9 +558,9 @@ describe('维护编排 · 投影缓存', () => {
 
   it('清理后自动重查，「已清理 N 条」上屏；确认框收起', async () => {
     const scanProjectionCacheOrphans = vi.fn()
-      .mockResolvedValueOnce(PROJ_3)
-      .mockResolvedValueOnce(PROJ_EMPTY)
-    const cleanProjectionCacheOrphans = vi.fn(async () => ({ removed: 3, failed: 0 }))
+      .mockResolvedValueOnce(remoteOk(PROJ_3))
+      .mockResolvedValueOnce(remoteOk(PROJ_EMPTY))
+    const cleanProjectionCacheOrphans = vi.fn(async () => remoteOk({ removed: 3, failed: 0 }))
     const { result } = mount({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
     await act(async () => { await current(result).projection.scan() })
     act(() => { current(result).projection.openPreview() })
@@ -591,11 +577,11 @@ describe('维护编排 · 投影缓存', () => {
   })
 
   it('清理成功先收旧报告：重查还在飞时条数是 0，状态仍是清理中', async () => {
-    let resolveScan!: (value: { count: number }) => void
+    let resolveScan!: (value: RemoteOutcome<{ count: number }>) => void
     const scanProjectionCacheOrphans = vi.fn()
-      .mockResolvedValueOnce(PROJ_3)
-      .mockImplementationOnce(() => new Promise<{ count: number }>((resolve) => { resolveScan = resolve }))
-    const cleanProjectionCacheOrphans = vi.fn(async () => ({ removed: 3, failed: 0 }))
+      .mockResolvedValueOnce(remoteOk(PROJ_3))
+      .mockImplementationOnce(() => new Promise<RemoteOutcome<{ count: number }>>((resolve) => { resolveScan = resolve }))
+    const cleanProjectionCacheOrphans = vi.fn(async () => remoteOk({ removed: 3, failed: 0 }))
     const { result } = mount({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
     await act(async () => { await current(result).projection.scan() })
     act(() => { current(result).projection.openPreview() })
@@ -608,7 +594,7 @@ describe('维护编排 · 投影缓存', () => {
     expect(current(result).projection.phase).toBe('cleaning')
     expect(current(result).projection.busy).toBe(true)
 
-    await act(async () => { resolveScan(PROJ_EMPTY); await pending })
+    await act(async () => { resolveScan(remoteOk(PROJ_EMPTY)); await pending })
     expect(current(result).projection.notice).toBe('已清理 3 条投影缓存记录')
     expect(current(result).projection.busy).toBe(false)
   })
@@ -616,9 +602,9 @@ describe('维护编排 · 投影缓存', () => {
   it('两趟之间记录已不在：removed 0 不念「已清理 0 条」，也不冒充失败', async () => {
     const { result } = mount({
       scanProjectionCacheOrphans: vi.fn()
-        .mockResolvedValueOnce(PROJ_3)
-        .mockResolvedValueOnce(PROJ_EMPTY),
-      cleanProjectionCacheOrphans: vi.fn(async () => ({ removed: 0, failed: 0 })),
+        .mockResolvedValueOnce(remoteOk(PROJ_3))
+        .mockResolvedValueOnce(remoteOk(PROJ_EMPTY)),
+      cleanProjectionCacheOrphans: vi.fn(async () => remoteOk({ removed: 0, failed: 0 })),
     })
     await act(async () => { await current(result).projection.scan() })
     await act(async () => { await current(result).projection.clean() })
@@ -629,8 +615,8 @@ describe('维护编排 · 投影缓存', () => {
 
   it('failed > 0 ⇒ 未清条数与已清条数都上屏（失败块），重查不吞掉这句', async () => {
     const { result } = mount({
-      scanProjectionCacheOrphans: vi.fn(async () => PROJ_3),
-      cleanProjectionCacheOrphans: vi.fn(async () => ({ removed: 1, failed: 2 })),
+      scanProjectionCacheOrphans: vi.fn(async () => remoteOk(PROJ_3)),
+      cleanProjectionCacheOrphans: vi.fn(async () => remoteOk({ removed: 1, failed: 2 })),
     })
     await act(async () => { await current(result).projection.scan() })
     await act(async () => { await current(result).projection.clean() })
@@ -639,12 +625,10 @@ describe('维护编排 · 投影缓存', () => {
   })
 
   it('顶层失败：确认框关掉、本地化前缀 + 原文上屏，并重查一次', async () => {
-    const scanProjectionCacheOrphans = vi.fn(async () => PROJ_3)
+    const scanProjectionCacheOrphans = vi.fn(async () => remoteOk(PROJ_3))
     const { result } = mount({
       scanProjectionCacheOrphans,
-      cleanProjectionCacheOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('域写链断了'), { code: 'sessiondelete/io' })
-      }),
+      cleanProjectionCacheOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '域写链断了' })),
     })
     await act(async () => { await current(result).projection.scan() })
     act(() => { current(result).projection.openPreview() })

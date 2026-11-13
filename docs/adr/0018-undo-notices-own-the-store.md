@@ -6,7 +6,7 @@ Status: accepted
 
 ## 边界
 
-- 发布决定与 `anySuccess` 门仍住 `src/client/write-settlement.ts`；`anySuccess` 与落地名单的派生住 `src/client/receipt.ts` 的 `summarizeReceipt`。座位只决定发布哪一形（单条带标题、批量带条数）。
+- 发布决定与 `anySuccess` 门仍住 `src/client/write-seats.ts` 的收尾；`anySuccess` 与落地名单的派生住 `src/client/receipt.ts` 的 `summarizeReceipt`。座位只决定发布哪一形（单条带标题、批量带条数）。
 - 恢复座位仍住 `src/client/write-seats.ts`（ADR-0013）。撤销那一趟的编排（ids 组装、三种回执形状对横幅的改写、成功收自己）归恢复座位 `restoreFromUndo`；组件只画通知台已有的事实。现场归属与发布决定不变。
 - 通知台的按条目熄灭与整条清空仍只由 `undo-notices.ts` 提供；`undo-toast.tsx` 不重新拥有现场。
 

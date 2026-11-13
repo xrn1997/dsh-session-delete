@@ -5,7 +5,7 @@ import {
   verbCodeOf,
   type RouteCode,
   type VerbCode,
-} from '../shared/wire.js'
+} from './shared/wire.js'
 
 /** 一次失败的**结构**：码、上屏原文、可选 cause（`map-error` 沿 cause 链认宿主类型化错误）、
  *  可选的结构化附带物（对齐官方 `rpcErrorSchema` 的第三件 `details`）。 */

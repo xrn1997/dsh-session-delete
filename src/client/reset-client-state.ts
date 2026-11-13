@@ -13,14 +13,14 @@ import { resetSelection } from './batch-selection-store.js'
 import { resetDeleteRequest } from './delete-confirm.js'
 import { resetHostRows } from './host-rows.js'
 import { resetMainView } from './main-view.js'
-import { clearTrashSnapshot } from './trash-snapshot.js'
+import { reloadFailed } from './trash-snapshot.js'
 import { resetTrashStore } from './trash-store.js'
 import { resetUndoNotice } from './undo-notices.js'
 
 export function resetClientState(): void {
   resetTrashStore()
   resetArchiveStore()
-  clearTrashSnapshot()
+  reloadFailed()
   resetSelection()
   resetHostRows()
   resetUndoNotice()

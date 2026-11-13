@@ -1,7 +1,7 @@
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { CoreDeps, DeleteSessionDeps } from '../deps.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
-import { verbError } from './errors.js'
+import { verbError } from '../errors.js'
 import { attempt, createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
 import { assertNoLive } from './live-admission.js'
 import { withPresenceTail } from './member-presence.js'

@@ -33,4 +33,4 @@ Status: accepted
 - **把折叠集、列宽、孩子视图也存进快照**：这些是视图状态，跨会话记住会在下一次挂载时把布局带回一个用户没要求的状态。
 - **把快照持久化到磁盘**：会造出第二份「回收站现在长什么样」的事实，且与宿主账本的一致性无从保证。
 
-锚点：`src/client/trash-snapshot.ts` 的 `readTrashSnapshot` / `reconcileTrashRows` / `writeTrashSelection`；`src/client/use-trash-query.ts` 的 `listView` 与 `TrashQuery.refreshing`；`src/client/use-trash-panel-controller.ts` 的 `detail`；`docs/ui-spec.md` §3；`CONTEXT.md` 的「清单状态」「首帧快照」「详情账本」；`tests/client/trash-snapshot.test.ts`；`tests/client/use-trash-query.test.tsx`；`tests/client/trash-panel.test.tsx` 的「切换稳定性」。相关 ADR-0049、ADR-0051。
+锚点：`src/client/trash-snapshot.ts` 的 `readTrashSnapshot` / `reloadSucceeded` / `noteSelection`（符号已收成意图名，本篇的可观察规则原文不变）；`src/client/use-trash-query.ts` 的 `listView` 与 `TrashQuery.refreshing`；`src/client/use-trash-panel-controller.ts` 的 `detail`；`docs/ui-spec.md` §3；`CONTEXT.md` 的「清单状态」「首帧快照」「详情账本」；`tests/client/trash-snapshot.test.ts`；`tests/client/use-trash-query.test.tsx`；`tests/client/trash-panel.test.tsx` 的「切换稳定性」。相关 ADR-0049、ADR-0051。

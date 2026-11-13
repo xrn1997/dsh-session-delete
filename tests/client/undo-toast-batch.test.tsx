@@ -4,7 +4,8 @@ import { join } from 'node:path'
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { afterDelete, bindMainView } from '../../src/client/main-view.js'
-import type { ApplyOutcome } from '../../src/client/remote.js'
+import type { RemoteOutcome } from '../../src/client/remote.js'
+import type { ApplyOutcome } from '../../src/shared/wire.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
@@ -13,7 +14,7 @@ import {
   publishUndoNotice,
   useUndoNotice,
 } from '../../src/client/undo-notices.js'
-import { createFakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
 
 beforeEach(() => {
@@ -65,9 +66,7 @@ describe('通知台 seq', () => {
   })
 
   it('撤销失败把原因换到同一条横幅上：seq 也递增（换 key ⇒ 停留重新计）', async () => {
-    const applyOutcomes = vi.fn(async () => {
-      throw Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' })
-    })
+    const applyOutcomes = vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '原项目目录已不在' }))
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
     const view = renderHook(() => useUndoNotice())
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
@@ -82,9 +81,9 @@ describe('通知台 seq', () => {
   it('撤销在飞时横幅到点也不熄灭：慢失败原文仍能上屏', async () => {
     vi.useFakeTimers()
     try {
-      let rejectApply!: (reason: unknown) => void
-      const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((_resolve, reject) => {
-        rejectApply = reject
+      let failApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+      const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => {
+        failApply = resolve
       }))
       publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
       const view = renderHook(() => useUndoNotice())
@@ -95,7 +94,7 @@ describe('通知台 seq', () => {
       expect(view.result.current).not.toBeNull()
 
       await act(async () => {
-        rejectApply(Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' }))
+        failApply(remoteFail({ code: 'sessiondelete/io', message: '原项目目录已不在' }))
       })
       expect(view.result.current?.failure).toBe('原项目目录已不在')
     } finally {
@@ -122,9 +121,9 @@ describe('按条目熄灭撤销横幅', () => {
   })
 
   it('撤销在飞时条目已在别处恢复：旧撤销失败不把熄灭的横幅翻回来', async () => {
-    let rejectApply!: (reason: unknown) => void
-    const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((_resolve, reject) => {
-      rejectApply = reject
+    let failApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => {
+      failApply = resolve
     }))
     publishUndoNotice({ entryId: 'e1', title: 'T' })
     const view = renderHook(() => useUndoNotice())
@@ -135,14 +134,14 @@ describe('按条目熄灭撤销横幅', () => {
     expect(view.result.current).toBeNull()
 
     await act(async () => {
-      rejectApply(Object.assign(new Error('回收站里没有这一条'), { code: 'sessiondelete/trash-empty' }))
+      failApply(remoteFail({ code: 'sessiondelete/trash-empty', message: '回收站里没有这一条' }))
     })
     expect(view.result.current).toBeNull()
   })
 
   it('撤销在飞时来了新删除：旧撤销成功不清掉新横幅', async () => {
-    let resolveApply!: (value: ApplyOutcome[]) => void
-    const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((resolve) => {
+    let resolveApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => {
       resolveApply = resolve
     }))
     publishUndoNotice({ entryId: 'e1', title: 'T' })
@@ -151,7 +150,7 @@ describe('按条目熄灭撤销横幅', () => {
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
 
     act(() => { publishUndoNotice({ entryId: 'e2', title: 'U' }) })
-    await act(async () => { resolveApply(restoreOutcomes(['e1'])) })
+    await act(async () => { resolveApply(remoteOk(restoreOutcomes(['e1']))) })
 
     expect(view.result.current).toMatchObject({ kind: 'one', entryId: 'e2' })
   })
@@ -159,7 +158,7 @@ describe('按条目熄灭撤销横幅', () => {
 
 describe('批量撤销横幅', () => {
   it('报条数、撤销只发一次批量 restore', async () => {
-    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => restoreOutcomes(ids))
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(restoreOutcomes(ids)))
     const restore = vi.fn(async () => ({}))
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 })
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
@@ -172,9 +171,7 @@ describe('批量撤销横幅', () => {
   })
 
   it('撤销失败只剩原文，不再有撤销按钮', async () => {
-    const applyOutcomes = vi.fn(async () => {
-      throw Object.assign(new Error('原项目目录已不在'), { code: 'sessiondelete/io' })
-    })
+    const applyOutcomes = vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '原项目目录已不在' }))
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
@@ -183,9 +180,9 @@ describe('批量撤销横幅', () => {
   })
 
   it('批量撤销：信封成功但逐条全失败 ⇒ 横幅换成失败原文，不假装撤销成功', async () => {
-    const applyOutcomes = vi.fn(async () => [
+    const applyOutcomes = vi.fn(async () => remoteOk([
       { id: 'e1', action: 'restore' as const, ok: false as const, error: { code: 'sessiondelete/project-missing', message: '项目目录不在' } },
-    ])
+    ]))
     publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
     const view = renderHook(() => useUndoNotice())
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
@@ -206,7 +203,7 @@ describe('批量撤销横幅', () => {
       title: '会话一',
       sizeBytes: 1,
     }
-    const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
       { id: 'e1', action: 'restore', ok: true, value: restored },
       {
         id: 'e2',
@@ -214,7 +211,7 @@ describe('批量撤销横幅', () => {
         ok: false,
         error: { code: 'sessiondelete/project-missing', message: '项目目录不在' },
       },
-    ])
+    ]))
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 })
     const notice = renderHook(() => useUndoNotice())
     const revision = renderHook(() => useTrashRevision())
@@ -230,14 +227,14 @@ describe('批量撤销横幅', () => {
   it('批量撤销逐条全失败：横幅报失败原文，被关掉的会话一条都不重开', async () => {
     // 回执里的 id 与被关掉的会话同串：这条钉的是「失败名单绝不能被当成会话名单传下去」，
     // 两个 id 不同名时 afterRestore 本来就会过滤掉它，断言会空转。
-    const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
       {
         id: 'session-a',
         action: 'restore',
         ok: false,
         error: { code: 'sessiondelete/project-missing', message: '项目目录不在' },
       },
-    ])
+    ]))
     let selected: { sessionId?: string } = { sessionId: 'session-a' }
     const openSession = vi.fn()
     const uiWorkspace = {
@@ -274,7 +271,7 @@ describe('批量撤销横幅', () => {
       title: '会话一',
       sizeBytes: 1,
     }
-    const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
       { id: 'e1', action: 'restore', ok: true, value: restored },
       {
         id: 'e2',
@@ -282,7 +279,7 @@ describe('批量撤销横幅', () => {
         ok: false,
         error: { code: 'sessiondelete/project-missing', message: '项目目录不在' },
       },
-    ])
+    ]))
     let selected: { sessionId?: string } = { sessionId: 'session-a' }
     const openSession = vi.fn()
     const uiWorkspace = {
@@ -307,11 +304,11 @@ describe('批量撤销横幅', () => {
 
   it('批量撤销多条逐条失败：横幅说清失败条数与各条原因（去重），不许只显第一条', async () => {
     // issue #8 第 5 条：`failures.values().next().value` 把多条不同原因折成一句，条数与其余原因全没了。
-    const applyOutcomes = vi.fn(async (): Promise<ApplyOutcome[]> => [
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
       { id: 'e1', action: 'restore', ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } },
       { id: 'e2', action: 'restore', ok: false, error: { code: 'sessiondelete/project-missing', message: '项目目录不在' } },
       { id: 'e3', action: 'restore', ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } },
-    ])
+    ]))
     publishUndoBatchNotice({ entryIds: ['e1', 'e2', 'e3'], n: 3 })
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
@@ -320,10 +317,10 @@ describe('批量撤销横幅', () => {
   })
 
   it('撤销在飞时来了新删除：新横幅的撤销不被旧那一趟按灰（闸按通知隔离）', async () => {
-    let resolveOld!: (value: ApplyOutcome[]) => void
+    let resolveOld!: (value: RemoteOutcome<ApplyOutcome[]>) => void
     const applyOutcomes = vi.fn((_action: string, ids: readonly string[]) => {
-      if (ids[0] === 'e1') return new Promise<ApplyOutcome[]>((resolve) => { resolveOld = resolve })
-      return Promise.resolve(restoreOutcomes(ids))
+      if (ids[0] === 'e1') return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { resolveOld = resolve })
+      return Promise.resolve(remoteOk(restoreOutcomes(ids)))
     })
     publishUndoNotice({ entryId: 'e1', title: 'T' })
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
@@ -337,12 +334,12 @@ describe('批量撤销横幅', () => {
     fireEvent.click(fresh)
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
     expect(applyOutcomes).toHaveBeenLastCalledWith('restore', ['e2'])
-    await act(async () => { resolveOld(restoreOutcomes(['e1'])) })
+    await act(async () => { resolveOld(remoteOk(restoreOutcomes(['e1']))) })
   })
 
   it('撤销在飞时连点只发一条 /apply，按钮在飞期间禁用（issue #8 第 8 条）', async () => {
-    let resolveApply!: (value: ApplyOutcome[]) => void
-    const applyOutcomes = vi.fn(() => new Promise<ApplyOutcome[]>((resolve) => { resolveApply = resolve }))
+    let resolveApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { resolveApply = resolve }))
     publishUndoNotice({ entryId: 'e1', title: 'T' })
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
     const button = screen.getByRole('button', { name: '撤销' })
@@ -350,7 +347,7 @@ describe('批量撤销横幅', () => {
     fireEvent.click(button)
     expect(applyOutcomes).toHaveBeenCalledTimes(1)
     expect(button).toBeDisabled()
-    await act(async () => { resolveApply(restoreOutcomes(['e1'])) })
+    await act(async () => { resolveApply(remoteOk(restoreOutcomes(['e1']))) })
     await waitFor(() => expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument())
   })
 })

@@ -28,7 +28,7 @@ import type { CorpusEvent, CorpusLogRead } from '../ports/host-port.js'
 import { bareSessionId } from '../domain/closure.js'
 import { createDetailFold, SUBAGENT_SUMMARY_LIMIT, type DetailLimits } from './detail.js'
 import { projectSessionRows, sizeTotals } from './session-rows.js'
-import { verbError, type VerbError } from '../verbs/errors.js'
+import { verbError, type VerbError } from '../errors.js'
 
 /** `readSession` 抛的宿主失败码（`SessionQueryError.code`）：未知 id / 已无盘上记录。 */
 const SESSION_QUERY_SESSION_NOT_FOUND = 'SESSION_QUERY_SESSION_NOT_FOUND'

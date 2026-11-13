@@ -21,7 +21,7 @@
  * （在飞即忙），不再作为 prop 逐层传。
  *
  * 动作是每渲染重建的普通闭包、不包 `useCallback`：config 每渲染本来就要重建，包了也稳定不下来；
- * 这些动作只被点击触发，没有按身份依赖它们的 effect（`useIdleClose` 只在调用时读它们）。
+ * 这些动作只被点击触发，没有按身份依赖它们的 effect（`confirm-dialog.tsx` 的关框回调只在调用时读它们）。
  */
 import { useState } from 'react'
 import type { RemoteOutcome } from './remote.js'

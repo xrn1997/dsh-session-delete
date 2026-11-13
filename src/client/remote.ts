@@ -120,7 +120,7 @@ export interface SessionDeleteRemote {
 /** 插件设置页「可调项」卡只要这两件。 */
 export type ConfigDeps = Pick<SessionDeleteRemote, 'config' | 'saveConfig'>
 
-/** 需要那一段 `/apply` 的组件只要这一段 deps（单条非写调用见 {@link applyOne}，写动作走 `./write.js` 的 `runWrite`）。 */
+/** 需要那一段 `/apply` 的组件只要这一段 deps（单条非写调用见 {@link applyOne}，写动作走 `./write-seats.ts` 的六个座位）。 */
 export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
 
 /* ── 通道实现：同源 fetch，基础路径由 `api-base.ts` 投影 ───────────── */
@@ -267,15 +267,6 @@ export async function probeChannel(
     clearTimeout(timer)
   }
 }
-
-/** `shared/wire.ts` 的 `ApplyOutcome`、扫描报告与附件回执从这里转出去——浏览器半只认 `remote.js` 这一扇门。 */
-export type {
-  ApplyAction,
-  ApplyOutcome,
-  AttachmentCleanupWire,
-  AttachmentOrphanReportWire,
-  OrphanReportWire,
-} from '../shared/wire.js'
 
 /**
  * N=1 的成功支：`null` 已被 `receipt.ts` 的单条读法折成协议错，所以 `value` 必然非空。

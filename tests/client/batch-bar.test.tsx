@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton } from '../../src/client/batch-select.js'
 import { BatchBar } from '../../src/client/batch-bar.js'
 import { BatchConfirmHost } from '../../src/client/batch-confirm.js'
-import type { ApplyOutcome } from '../../src/client/remote.js'
+import type { RemoteOutcome } from '../../src/client/remote.js'
+import type { ApplyOutcome } from '../../src/shared/wire.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
-import { createFakeRemote } from './support/fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import {
   enterSelection,
   getPicks,
@@ -27,7 +28,7 @@ afterEach(() => {
 
 function countOnly(): { applyOutcomes: ReturnType<typeof vi.fn> } {
   const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-    action === 'count' ? countOutcomes(ids) : [],
+    remoteOk(action === 'count' ? countOutcomes(ids) : []),
   )
   return { applyOutcomes }
 }
@@ -99,7 +100,7 @@ describe('浮条', () => {
 
   it('主行不再放汇总；条数与子会话数在「查看已选」列表头', async () => {
     const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
-      countOutcomes(ids, { a: 2 }),
+      remoteOk(countOutcomes(ids, { a: 2 })),
     )
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
@@ -115,9 +116,7 @@ describe('浮条', () => {
   })
 
   it('计数读不到就整句不说（不拿 0 冒充没有）', async () => {
-    const applyOutcomes = vi.fn(async () => {
-      throw Object.assign(new Error('读不到'), { code: 'sessiondelete/io' })
-    })
+    const applyOutcomes = vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '读不到' }))
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
     render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
@@ -128,9 +127,9 @@ describe('浮条', () => {
   })
 
   it('旧响应不落地：后发的勾选才是准的', async () => {
-    const deferred: Array<(value: ApplyOutcome[]) => void> = []
+    const deferred: Array<(value: RemoteOutcome<ApplyOutcome[]>) => void> = []
     const applyOutcomes = vi.fn(
-      () => new Promise<ApplyOutcome[]>((resolve) => deferred.push(resolve)),
+      () => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => deferred.push(resolve)),
     )
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
@@ -139,12 +138,12 @@ describe('浮条', () => {
     togglePick({ sessionId: 'b', title: 'B' })
     await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
     // 第二次的响应先回（a、b 都无子会话）……上面那条次数断言已经把它推进来了
-    pick(deferred, 1)(countOutcomes(['a', 'b']))
+    pick(deferred, 1)(remoteOk(countOutcomes(['a', 'b'])))
     await screen.findByRole('button', { name: '移入回收站 2 条' })
     fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
     await screen.findByText('已选 2 条')
     // ……第一次的后回（a 带 2 个）——旧响应，不许把「含 2 个」盖回来
-    pick(deferred, 0)(countOutcomes(['a'], { a: 2 }))
+    pick(deferred, 0)(remoteOk(countOutcomes(['a'], { a: 2 })))
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(screen.queryByText(/子会话/)).not.toBeInTheDocument()
     view.unmount()
@@ -152,7 +151,7 @@ describe('浮条', () => {
 
   it('「查看已选」默认收起；展开后按勾选序列出标题，可逐条移除', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids, { a: 2 }) : [],
+      remoteOk(action === 'count' ? countOutcomes(ids, { a: 2 }) : []),
     )
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })

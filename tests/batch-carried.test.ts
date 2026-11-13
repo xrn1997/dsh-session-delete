@@ -1,7 +1,9 @@
 /**
  * 同批已带走集（ADR-0002 的内部实现）：entry 域与 session 域各一个 adapter，两域都有
- * claim / take，但 claim 形状不同；收缩中的当前视图不再外递（purge 那一半住 `trash-scope.ts`）。
- * entry 适配的三态判据读 `trash/groups.ts` 的 `claimOf`；session 适配没有原始清册视图，只记 take 过的会话 id。
+ * claim / take，但 claim 形状不同；收缩中的当前视图不再外递（purge 那一半的实例住
+ * `src/verbs/trash-scope.ts`）。entry 适配是 `src/trash/shrinking-view.ts` 的
+ * `createShrinkingView` 薄壳（持有机制在那边，判据仍读 `src/trash/groups.ts` 的 `claimOf`，
+ * 不抄第二遍）；session 适配没有原始清册视图，只记 take 过的会话 id。
  */
 import { describe, expect, it } from 'vitest'
 import { createEntryCarried, createSessionCarried } from '../src/verbs/batch-carried.js'

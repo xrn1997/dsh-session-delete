@@ -4,7 +4,7 @@
 // （`{code, message, details?}`）——消费者是 `src/api/dispatch.ts`（路由层把结果原样塞进失败信封）。
 import { describe, expect, it } from 'vitest'
 import { toRemoteFailure } from '../src/remote/map-error.js'
-import { verbError } from '../src/verbs/errors.js'
+import { verbError } from '../src/errors.js'
 
 /** 宿主两条类型化错误的**结构替身**：跨插件类不可 import（值 import 是生态红线），
  *  我们按官方构造器写死的 `this.name` 认——asar `dsh-workspace/lib/index.js` 原文：

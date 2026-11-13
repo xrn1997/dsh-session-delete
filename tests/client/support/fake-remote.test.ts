@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createBareFakeRemote, channelOf, createFakeRemote, failureOf } from './fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk } from './fake-remote.js'
 
 it('FakeRemote 是完整的 SessionDeleteRemote，默认安静成功', async () => {
   const remote = createFakeRemote()
@@ -22,38 +22,37 @@ it('FakeRemote 是完整的 SessionDeleteRemote，默认安静成功', async () 
   })
 })
 
-// 假件与生产 adapter 同一条契约（ADR-0053）：用例只交裸值或**抛出**失败，抬成落地面是假件的活。
-// 这两支没测到，用例就会把「假件里的 bug」读成「通道失败」，或反过来用 `as never` 自己拼信封。
-describe('假件把抛出的失败抬成落地面', () => {
-  it('抛 Error ⇒ 回 `client/unknown` + 原文，且不向调用方抛', async () => {
-    const bare = createBareFakeRemote({
-      list: vi.fn(async () => {
-        throw new Error('清单坏了')
-      }),
-    })
-    await expect(channelOf(bare).list()).resolves.toEqual({
-      ok: false,
-      failure: { code: 'client/unknown', message: '清单坏了' },
-    })
+// 假件与生产 adapter 同一条契约（ADR-0053）：方法直接交 `RemoteOutcome`——用例设成什么样，组件收到
+// 的就是什么样。没有「裸值 + 抛出」的第二套口径，抬升 / 归一那一层不存在（通道不抛，失败是数据）。
+// 这几支测不到，用例就会把「假件改写了落地面」读成「通道失败」，或反过来用 `as never` 自己拼信封。
+describe('假件原样交回用例设的落地面', () => {
+  it('成功支：设进去的值原样交回（不重包装、不改写）', async () => {
+    const value = { roots: ['session-root'], totalSessions: 2, totalBytes: 2048, missingParents: 1, groups: [] }
+    const remote = createFakeRemote({ scanOrphans: vi.fn(async () => remoteOk(value)) })
+    await expect(remote.scanOrphans()).resolves.toEqual({ ok: true, value })
   })
 
-  it('抛带官方标记位的失败 ⇒ 原样带出自己的 code（别域的码不许被改写）', async () => {
-    const bare = createBareFakeRemote({
-      detail: vi.fn(async (): Promise<never> => {
-        throw Object.assign(new Error('会话正在运行'), {
-          code: 'sessiondelete/live',
-          isDSHRemoteError: true,
-          details: { sessionId: 'session-a' },
-        })
-      }),
+  it('失败支：生产形状的 RemoteFailure 原样交回（code / message / details 三件不丢）', async () => {
+    const remote = createFakeRemote({
+      detail: vi.fn(async () => remoteFail({
+        code: 'sessiondelete/live',
+        message: '会话正在运行',
+        details: { sessionId: 'session-a' },
+      })),
     })
-    await expect(channelOf(bare).detail('a')).resolves.toEqual({
+    await expect(remote.detail('a')).resolves.toEqual({
       ok: false,
       failure: { code: 'sessiondelete/live', message: '会话正在运行', details: { sessionId: 'session-a' } },
     })
   })
 
-  it('非 Error 的抛出也留原文，不吞成空失败', () => {
-    expect(failureOf('炸了')).toEqual({ code: 'client/unknown', message: '炸了' })
+  it('失败支以 ok:false promise 落地，不向调用方抛', async () => {
+    const remote = createFakeRemote({
+      list: vi.fn(async () => remoteFail({ code: 'client/unknown', message: '清单坏了' })),
+    })
+    await expect(remote.list()).resolves.toEqual({
+      ok: false,
+      failure: { code: 'client/unknown', message: '清单坏了' },
+    })
   })
 })

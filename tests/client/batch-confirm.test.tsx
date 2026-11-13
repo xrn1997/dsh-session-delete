@@ -12,8 +12,9 @@ import { getPicks, shrinkPicksToFailures, togglePick } from '../../src/client/ba
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
-import { createFakeRemote } from './support/fake-remote.js'
-import type { ApplyOutcome } from '../../src/client/remote.js'
+import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
+import type { RemoteOutcome } from '../../src/client/remote.js'
+import type { ApplyOutcome } from '../../src/shared/wire.js'
 import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 
 beforeEach(() => {
@@ -41,7 +42,7 @@ describe('模块级现场', () => {
 
   it('重试轮收缩失败名单不改 seq（框不重挂载，逐条失败原文留在框里）', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b']),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b'])),
     )
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
@@ -60,10 +61,10 @@ describe('模块级现场', () => {
 
 describe('批量确认框', () => {
   it('写入在飞时取消/关闭都拦住（busy 关框规则）', async () => {
-    let release: (value: ApplyOutcome[]) => void = () => {}
-    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<ApplyOutcome[]> => {
-      if (action === 'count') return countOutcomes(ids)
-      return new Promise<ApplyOutcome[]>((resolve) => { release = resolve })
+    let release: (value: RemoteOutcome<ApplyOutcome[]>) => void = () => {}
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      if (action === 'count') return remoteOk(countOutcomes(ids))
+      return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve })
     })
     requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
     render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
@@ -71,15 +72,15 @@ describe('批量确认框', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '取消' })).toBeDisabled())
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    release(deleteOutcomes(['a']))
+    release(remoteOk(deleteOutcomes(['a'])))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('同一 tick 连点两次「移入回收站」：第二趟被同步挡回 ⇒ 只发一条删除，框不提前收', async () => {
-    let release!: (value: ApplyOutcome[]) => void
-    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<ApplyOutcome[]> => {
-      if (action === 'count') return countOutcomes(ids)
-      return new Promise<ApplyOutcome[]>((resolve) => { release = resolve })
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      if (action === 'count') return remoteOk(countOutcomes(ids))
+      return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve })
     })
     requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
     render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
@@ -91,13 +92,13 @@ describe('批量确认框', () => {
     await waitFor(() => expect(applyOutcomes.mock.calls.filter(([action]) => action === 'delete')).toHaveLength(1))
     // 挡回来的那一趟没有结论：框留在原地，等第一条真落地。
     expect(screen.getByRole('dialog')).toBeInTheDocument()
-    release(deleteOutcomes(['a']))
+    release(remoteOk(deleteOutcomes(['a'])))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('标题随条数：1 条是单删那句，多条是「删除这些 N 个会话？」', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids)),
     )
     requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
     render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
@@ -106,7 +107,7 @@ describe('批量确认框', () => {
 
   it('子会话两句只在有数时说：chip 有才标、汇总句 K>0 才出；读不到整句不说且主按钮照常可点', async () => {
     const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) =>
-      countOutcomes(ids, { a: 2 }),
+      remoteOk(countOutcomes(ids, { a: 2 })),
     )
     requestDeleteBatch([
       { sessionId: 'a', title: 'A' },
@@ -121,9 +122,7 @@ describe('批量确认框', () => {
     first.unmount()
 
     clearDeleteBatchRequest()
-    const failing = vi.fn(async () => {
-      throw Object.assign(new Error('读不到'), { code: 'sessiondelete/io' })
-    })
+    const failing = vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '读不到' }))
     requestDeleteBatch([{ sessionId: 'c', title: 'C' }])
     render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes: failing })} />)
     expect(await screen.findByText('删除这个会话？')).toBeInTheDocument()
@@ -132,7 +131,7 @@ describe('批量确认框', () => {
   })
 
   it('目标列表限高滚动：几十条也不会把标题和底部按钮顶出弹框', async () => {
-    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => countOutcomes(ids))
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(countOutcomes(ids)))
     const items = Array.from({ length: 80 }, (_, i) => ({ sessionId: `s${i}`, title: `S${i}` }))
     requestDeleteBatch(items)
     render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
@@ -148,7 +147,7 @@ describe('批量确认框', () => {
 
   it('成功路径：一次 applyOutcomes、框收工、发批量撤销横幅、选中集清空', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids)),
     )
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
@@ -168,7 +167,7 @@ describe('批量确认框', () => {
 
   it('不交收缩钩子那一面（归档档页脚）：全成功也不动宿主侧栏的选中集', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids)),
     )
     togglePick({ sessionId: 'x', title: 'X' })
     togglePick({ sessionId: 'y', title: 'Y' })
@@ -182,7 +181,7 @@ describe('批量确认框', () => {
 
   it('不交收缩钩子那一面：部分失败也只收框自己的名单，宿主侧栏勾选原样留着', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b']),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b'])),
     )
     togglePick({ sessionId: 'x', title: 'X' })
     requestDeleteBatch([
@@ -198,7 +197,7 @@ describe('批量确认框', () => {
 
   it('部分失败：原文落它自己那行、按钮变「重试这 1 条」、重试只发失败 id', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b']),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b'])),
     )
     togglePick({ sessionId: 'a', title: 'A' })
     togglePick({ sessionId: 'b', title: 'B' })
@@ -220,7 +219,7 @@ describe('批量确认框', () => {
 
   it('重试轮收缩后汇总子会话数只算还在名单里的（不把已移走的算进去）', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids, { a: 2, b: 3 }) : deleteOutcomes(ids, ['b']),
+      remoteOk(action === 'count' ? countOutcomes(ids, { a: 2, b: 3 }) : deleteOutcomes(ids, ['b'])),
     )
     requestDeleteBatch([
       { sessionId: 'a', title: 'A' },
@@ -237,7 +236,7 @@ describe('批量确认框', () => {
 
   it('整批失败：失败原文落行、不发撤销横幅，但回收站照样收到失效通告', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
-      action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids),
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids)),
     )
     togglePick({ sessionId: 'a', title: 'A' })
     requestDeleteBatch(getPicks(), shrinkPicksToFailures)

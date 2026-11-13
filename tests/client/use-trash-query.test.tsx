@@ -12,11 +12,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { listView, useTrashQuery } from '../../src/client/use-trash-query.js'
 import type { BusyGate } from '../../src/client/busy-gate.js'
 import { zhTranslate } from '../../src/client/copy.js'
-import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
-import { readCachedTrashDetail, readTrashSnapshot, reconcileTrashRows, writeTrashDetail } from '../../src/client/trash-snapshot.js'
+import type { RemoteOutcome, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
+import { readCachedTrashDetail, readTrashSnapshot, reloadSucceeded, writeTrashDetail } from '../../src/client/trash-snapshot.js'
 import { publishUndoNotice, useUndoNotice } from '../../src/client/undo-notices.js'
 import type { PurgeStatsWire } from '../../src/shared/wire.js'
-import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk, type FakeRemote } from './support/fake-remote.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
 import { pick } from '../support/fixture.js'
 
@@ -33,10 +33,10 @@ const detailOf = (entryId: string): TrashDetailLike => ({
 // 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
 beforeEach(() => { resetClientState() })
 
-function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
+function deps(over: Partial<FakeRemote> = {}): FakeRemote {
   return createFakeRemote({
-    list: vi.fn(async () => rows),
-    emptyTrash: vi.fn(async () => ({ removed: 1, freedBytes: 1 })),
+    list: vi.fn(async () => remoteOk(rows)),
+    emptyTrash: vi.fn(async () => remoteOk({ removed: 1, freedBytes: 1 })),
     ...over,
   })
 }
@@ -47,7 +47,7 @@ type Around = BusyGate['around']
 /** 这类编排测试不关心渲染期的禁用：替身直接放行。 */
 const passThrough: Around = async <T,>(task: () => Promise<T>) => ({ kind: 'ran', value: await task() })
 
-function mount(over: Partial<FakeRemoteMethods> = {}, around: Around = passThrough) {
+function mount(over: Partial<FakeRemote> = {}, around: Around = passThrough) {
   const d = deps(over)
   const view = renderHook(() => useTrashQuery({ deps: d, t: zhTranslate, gate: { busy: false, around } }))
   return { d, ...view }
@@ -82,14 +82,14 @@ describe('取数编排 · 首帧快照', () => {
   })
 
   it('挂载时有快照 ⇒ 首帧就是 ready 的旧行，并标 refreshing', () => {
-    reconcileTrashRows(rows)
+    reloadSucceeded(rows)
     const { result } = mount()
     expect(result.current.list).toEqual({ status: 'ready', rows })
     expect(result.current.refreshing).toBe(true)
   })
 
   it('重读成功写回快照并关 refreshing', async () => {
-    reconcileTrashRows(rows)
+    reloadSucceeded(rows)
     const { result } = mount()
     await act(async () => { await result.current.reload() })
     expect(result.current.refreshing).toBe(false)
@@ -97,9 +97,9 @@ describe('取数编排 · 首帧快照', () => {
   })
 
   it('重读失败丢掉快照并落 unknown', async () => {
-    reconcileTrashRows(rows)
+    reloadSucceeded(rows)
     const { result } = mount({
-      list: vi.fn(async () => { throw Object.assign(new Error('清单坏了'), { code: 'sessiondelete/io' }) }),
+      list: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '清单坏了' })),
     })
     await act(async () => { await result.current.reload() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清单坏了' })
@@ -107,19 +107,19 @@ describe('取数编排 · 首帧快照', () => {
   })
 
   it('已有行时重读在飞也标 refreshing：不只在首帧快照那一次', async () => {
-    const list = vi.fn(async () => rows)
+    const list = vi.fn(async () => remoteOk(rows))
     const { result } = mount({ list })
     await act(async () => { await result.current.reload() })
     expect(result.current.refreshing).toBe(false)
 
-    let resolve!: (value: TrashEntryLike[]) => void
-    const pending = new Promise<TrashEntryLike[]>((inResolve) => { resolve = inResolve })
+    let resolve!: (value: RemoteOutcome<TrashEntryLike[]>) => void
+    const pending = new Promise<RemoteOutcome<TrashEntryLike[]>>((inResolve) => { resolve = inResolve })
     list.mockImplementationOnce(() => pending)
     act(() => { void result.current.reload() })
     expect(result.current.list).toEqual({ status: 'ready', rows })
     expect(result.current.refreshing).toBe(true)
 
-    await act(async () => { resolve(rows) })
+    await act(async () => { resolve(remoteOk(rows)) })
     expect(result.current.refreshing).toBe(false)
   })
 
@@ -128,27 +128,27 @@ describe('取数编排 · 首帧快照', () => {
       id, sessionId: `session-${id}`, projectDir: '--p--', workspaceId: 'ws',
       wasArchived: false, deletedAt: 1, sizeBytes: 10, releaseBytes: 10, title: id,
     })
-    let releaseOld!: (value: TrashEntryLike[]) => void
+    let releaseOld!: (value: RemoteOutcome<TrashEntryLike[]>) => void
     const first = mount({
-      list: vi.fn(() => new Promise<TrashEntryLike[]>((resolve) => { releaseOld = resolve })),
+      list: vi.fn(() => new Promise<RemoteOutcome<TrashEntryLike[]>>((resolve) => { releaseOld = resolve })),
     })
     act(() => { void first.result.current.reload() })
     first.unmount()
 
     const freshRows = [row('fresh')]
-    const second = mount({ list: vi.fn(async () => freshRows) })
+    const second = mount({ list: vi.fn(async () => remoteOk(freshRows)) })
     await act(async () => { await second.result.current.reload() })
     expect(readTrashSnapshot()?.rows).toEqual(freshRows)
 
     // 旧挂载的响应此刻才落地：它属于已经卸载的那一次界面，不许改模块级快照。
-    await act(async () => { releaseOld([row('old')]) })
+    await act(async () => { releaseOld(remoteOk([row('old')])) })
     expect(readTrashSnapshot()?.rows).toEqual(freshRows)
   })
 
   it('旧挂载晚到的失败也不清快照：新挂载刚写下的读数不许被上一代界面作废', async () => {
-    let rejectOld!: (reason: unknown) => void
+    let failOld!: (value: RemoteOutcome<TrashEntryLike[]>) => void
     const first = mount({
-      list: vi.fn(() => new Promise<TrashEntryLike[]>((_resolve, reject) => { rejectOld = reject })),
+      list: vi.fn(() => new Promise<RemoteOutcome<TrashEntryLike[]>>((resolve) => { failOld = resolve })),
     })
     act(() => { void first.result.current.reload() })
     first.unmount()
@@ -157,19 +157,19 @@ describe('取数编排 · 首帧快照', () => {
       id: 'fresh', sessionId: 'session-fresh', projectDir: '--p--', workspaceId: 'ws',
       wasArchived: false, deletedAt: 1, sizeBytes: 10, releaseBytes: 10, title: 'fresh',
     }]
-    const second = mount({ list: vi.fn(async () => freshRows) })
+    const second = mount({ list: vi.fn(async () => remoteOk(freshRows)) })
     await act(async () => { await second.result.current.reload() })
     expect(readTrashSnapshot()?.rows).toEqual(freshRows)
 
-    await act(async () => { rejectOld(new Error('旧读失败')) })
+    await act(async () => { failOld(remoteFail({ code: 'client/unknown', message: '旧读失败' })) })
     expect(readTrashSnapshot()?.rows).toEqual(freshRows)
   })
 })
 
 describe('取数编排 · 最新票', () => {
   it('后发的读数先落地、先发的后落地 ⇒ 先发的那份不盖掉新的', async () => {
-    const resolvers: Array<(value: TrashEntryLike[]) => void> = []
-    const list = vi.fn(() => new Promise<TrashEntryLike[]>((resolve) => {
+    const resolvers: Array<(value: RemoteOutcome<TrashEntryLike[]>) => void> = []
+    const list = vi.fn(() => new Promise<RemoteOutcome<TrashEntryLike[]>>((resolve) => {
       resolvers.push((value) => resolve(value))
     }))
     const { result } = mount({ list: list })
@@ -181,11 +181,11 @@ describe('取数编排 · 最新票', () => {
     })
     const fresh = [{ ...pick(rows, 0), id: 'fresh' }]
     await act(async () => {
-      pick(resolvers, 1)(fresh)
+      pick(resolvers, 1)(remoteOk(fresh))
       await second
     })
     await act(async () => {
-      pick(resolvers, 0)(rows)
+      pick(resolvers, 0)(remoteOk(rows))
       await first
     })
     expect(result.current.list).toEqual({ status: 'ready', rows: fresh })
@@ -193,7 +193,7 @@ describe('取数编排 · 最新票', () => {
 
   it('读不到 ⇒ 清单进 unknown、原文进 failure（"读不到"与"空的"是两件事）', async () => {
     const { result } = mount({
-      list: vi.fn(async () => { throw Object.assign(new Error('清单损坏'), { code: 'sessiondelete/io' }) }),
+      list: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '清单损坏' })),
     })
     await act(async () => { await result.current.reload() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清单损坏' })
@@ -254,7 +254,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
   // 跳过（skipped）说的是"这一轮部分或整体没敢清"，与 failed（逐文件真出错）分开说。
   it('清空的聚合回执带 skipped ⇒ 原句上屏（removed=0 说整轮没清）', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => ({
+      emptyTrash: vi.fn(async () => remoteOk({
         removed: 1, freedBytes: 1,
         attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '候选日志读不出' },
       })),
@@ -265,7 +265,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
 
   it('skipped 且已清掉一部分 ⇒ 说清"部分"，不冒充整轮失败', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => ({
+      emptyTrash: vi.fn(async () => remoteOk({
         removed: 1, freedBytes: 1,
         attachments: { removed: 4, freedBytes: 40, failed: 0, skipped: '剩余引用源读不出' },
       })),
@@ -276,7 +276,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
 
   it('skipped 与 failed 同时出现 ⇒ 原因在前、失败件数追加在句尾，不许被跳过吞掉', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => ({
+      emptyTrash: vi.fn(async () => remoteOk({
         removed: 1, freedBytes: 1,
         attachments: { removed: 0, freedBytes: 0, failed: 2, skipped: '候选日志读不出' },
       })),
@@ -287,7 +287,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
 
   it('部分清理的 skipped 与 failed 同时出现 ⇒ 已清数、原因、失败数三样都在', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => ({
+      emptyTrash: vi.fn(async () => remoteOk({
         removed: 1, freedBytes: 1,
         attachments: { removed: 4, freedBytes: 40, failed: 1, skipped: '剩余引用源读不出' },
       })),
@@ -300,7 +300,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
 
   it('没有 skipped、有逐文件失败 ⇒ 报未清理的件数', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => ({
+      emptyTrash: vi.fn(async () => remoteOk({
         removed: 1, freedBytes: 1,
         attachments: { removed: 3, freedBytes: 30, failed: 2 },
       })),
@@ -314,7 +314,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
       removed: 1, freedBytes: 1,
       attachments: { removed: 0, freedBytes: 0, failed: 3 },
     }
-    const { result } = mount({ emptyTrash: vi.fn(async () => stats) })
+    const { result } = mount({ emptyTrash: vi.fn(async () => remoteOk(stats)) })
     await act(async () => { await result.current.emptyTrash() })
     expect(result.current.attachmentNotice).toBe('已删除会话，但 3 个附件未能清理')
 
@@ -325,7 +325,7 @@ describe('取数编排 · 附件清理读数上屏', () => {
 
   it('顶层失败/没有附件读数时 noteAttachmentCleanup 清掉旧提示', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => ({
+      emptyTrash: vi.fn(async () => remoteOk({
         removed: 1, freedBytes: 1,
         attachments: { removed: 0, freedBytes: 0, failed: 1 },
       })),
@@ -341,8 +341,8 @@ describe('取数编排 · 附件清理读数上屏', () => {
   it('清空失败 ⇒ 旧附件提示一起收掉（这一趟没拿到回执）', async () => {
     let fail = false
     const emptyTrash = vi.fn(async () => {
-      if (fail) throw Object.assign(new Error('盘上忙'), { code: 'sessiondelete/io' })
-      return { removed: 1, freedBytes: 1, attachments: { removed: 0, freedBytes: 0, failed: 3 } }
+      if (fail) return remoteFail({ code: 'sessiondelete/io', message: '盘上忙' })
+      return remoteOk({ removed: 1, freedBytes: 1, attachments: { removed: 0, freedBytes: 0, failed: 3 } })
     })
     const { result } = mount({ emptyTrash })
     await act(async () => { await result.current.emptyTrash() })
@@ -363,8 +363,8 @@ describe('取数编排 · 清空走注入的闸', () => {
       return { kind: 'ran', value }
     }
     const { result } = mount({
-      list: vi.fn(async () => { order.push('list'); return rows }),
-      emptyTrash: vi.fn(async () => { order.push('empty'); return { removed: 1, freedBytes: 1 } }),
+      list: vi.fn(async () => { order.push('list'); return remoteOk(rows) }),
+      emptyTrash: vi.fn(async () => { order.push('empty'); return remoteOk({ removed: 1, freedBytes: 1 }) }),
     }, wrap)
 
     await act(async () => { await result.current.emptyTrash() })
@@ -375,9 +375,7 @@ describe('取数编排 · 清空走注入的闸', () => {
 
   it('emptyTrash 失败 ⇒ 清单置为未知，旧行不再留在 ready 里', async () => {
     const { result } = mount({
-      emptyTrash: vi.fn(async () => {
-        throw Object.assign(new Error('清空失败'), { code: 'sessiondelete/io' })
-      }),
+      emptyTrash: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '清空失败' })),
     })
     await act(async () => { await result.current.reload() })
     expect(result.current.list.status).toBe('ready')
@@ -399,20 +397,18 @@ describe('取数编排 · 清空走注入的闸', () => {
   })
 
   it('emptyTrash 失败作废在飞的清单读：晚到的旧读不能把 unknown 盖回 ready', async () => {
-    let release!: (value: TrashEntryLike[]) => void
-    const list = vi.fn(() => new Promise<TrashEntryLike[]>((resolve) => { release = resolve }))
+    let release!: (value: RemoteOutcome<TrashEntryLike[]>) => void
+    const list = vi.fn(() => new Promise<RemoteOutcome<TrashEntryLike[]>>((resolve) => { release = resolve }))
     const { result } = mount({
       list,
-      emptyTrash: vi.fn(async () => {
-        throw Object.assign(new Error('清空失败'), { code: 'sessiondelete/io' })
-      }),
+      emptyTrash: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '清空失败' })),
     })
     let refreshing!: Promise<void>
     act(() => { refreshing = result.current.reload() })
     await act(async () => { await result.current.emptyTrash() })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清空失败' })
     await act(async () => {
-      release(rows)
+      release(remoteOk(rows))
       await refreshing
     })
     expect(result.current.list).toEqual({ status: 'unknown', failure: '清空失败' })
@@ -437,8 +433,8 @@ describe('取数编排 · 清空与撤销横幅', () => {
   })
 
   it('清空在飞期间新删除发布的横幅不被这次清空误熄', async () => {
-    let releaseEmpty!: (value: PurgeStatsWire) => void
-    const emptyTrash = vi.fn(() => new Promise<PurgeStatsWire>((resolve) => { releaseEmpty = resolve }))
+    let releaseEmpty!: (value: RemoteOutcome<PurgeStatsWire>) => void
+    const emptyTrash = vi.fn(() => new Promise<RemoteOutcome<PurgeStatsWire>>((resolve) => { releaseEmpty = resolve }))
     const { result } = mount({ emptyTrash })
     await act(async () => { await result.current.reload() })
     const notice = renderHook(() => useUndoNotice())
@@ -449,17 +445,17 @@ describe('取数编排 · 清空与撤销横幅', () => {
     act(() => { publishUndoNotice({ entryId: 'fresh', title: 'Fresh' }) })
     expect(notice.result.current).toMatchObject({ kind: 'one', entryId: 'fresh' })
 
-    await act(async () => { releaseEmpty({ removed: 1, freedBytes: 1 }); await running })
+    await act(async () => { releaseEmpty(remoteOk({ removed: 1, freedBytes: 1 })); await running })
     expect(notice.result.current).toMatchObject({ kind: 'one', entryId: 'fresh' })
   })
 
   it('卸载后晚到的清空成功：不重读、不清新挂载的账本，也不误熄新发布的横幅', async () => {
     writeTrashDetail('a', detailOf('a'))
-    let releaseEmpty!: (value: PurgeStatsWire) => void
-    const list = vi.fn(async () => rows)
+    let releaseEmpty!: (value: RemoteOutcome<PurgeStatsWire>) => void
+    const list = vi.fn(async () => remoteOk(rows))
     const first = mount({
       list,
-      emptyTrash: vi.fn(() => new Promise<PurgeStatsWire>((resolve) => { releaseEmpty = resolve })),
+      emptyTrash: vi.fn(() => new Promise<RemoteOutcome<PurgeStatsWire>>((resolve) => { releaseEmpty = resolve })),
     })
     let running!: Promise<unknown>
     act(() => { running = first.result.current.emptyTrash() })
@@ -467,7 +463,7 @@ describe('取数编排 · 清空与撤销横幅', () => {
 
     const notice = renderHook(() => useUndoNotice())
     act(() => { publishUndoNotice({ entryId: 'fresh', title: 'Fresh' }) })
-    await act(async () => { releaseEmpty({ removed: 1, freedBytes: 1 }); await running })
+    await act(async () => { releaseEmpty(remoteOk({ removed: 1, freedBytes: 1 })); await running })
 
     // 旧挂载的晚到结论只交付「清空成功」：重读、快照、账本与横幅都归后来那次挂载。
     expect(notice.result.current).toMatchObject({ kind: 'one', entryId: 'fresh' })
@@ -476,7 +472,7 @@ describe('取数编排 · 清空与撤销横幅', () => {
   })
 
   it('清空成功丢整份详情账本：孩子详情不随清单修剪，必须在这里作废', async () => {
-    // 孩子详情从不在清单行里，`reconcileTrashRows` 不会按清单把它剪掉；清空成功必须整份作废。
+    // 孩子详情从不在清单行里，`reloadSucceeded` 不会按清单把它剪掉；清空成功必须整份作废。
     writeTrashDetail('kid', detailOf('kid'))
     const { result } = mount()
 
@@ -487,7 +483,7 @@ describe('取数编排 · 清空与撤销横幅', () => {
   it('清空失败：横幅留着——回收站此刻还在，撤销仍是可做的动作', async () => {
     publishUndoNotice({ entryId: 'a', title: 'A' })
     const notice = renderHook(() => useUndoNotice())
-    const { result } = mount({ emptyTrash: vi.fn(async () => { throw new Error('盘上忙') }) })
+    const { result } = mount({ emptyTrash: vi.fn(async () => remoteFail({ code: 'client/unknown', message: '盘上忙' })) })
 
     await act(async () => { expect(await result.current.emptyTrash()).toEqual({ kind: 'ran', value: false }) })
     expect(notice.result.current?.kind).toBe('one')

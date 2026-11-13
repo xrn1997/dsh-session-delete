@@ -5,6 +5,7 @@
  * 孩子必须自己占一行，否则它的字节会被头部合计数两遍，而它自己既看不见也清不掉。
  *
  * 这些函数都是纯函数、都吃一份快照；什么时候收缩、把收缩后的视图存在哪里归调用方，本模块不持有可变状态。
+ * 收缩视图的持有机制（包住这些判据的那一份）住 `src/trash/shrinking-view.ts` 的 `createShrinkingView`。
  */
 import type { TrashEntry } from './entry.js'
 

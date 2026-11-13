@@ -17,7 +17,7 @@ import type { EvictionOutcome } from '../src/ports/host-port.js'
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import { visibleGroups } from '../src/trash/groups.js'
-import { verbError } from '../src/verbs/errors.js'
+import { verbError } from '../src/errors.js'
 import {
   executeRemoval,
   planOrphanRemoval,
@@ -1439,7 +1439,8 @@ describe('永久删除是唯一的删目录者', () => {
  *
  * 在场通告已由 `PresenceCapability` 在依赖面收口（`CoreDeps.host` 是 `HostCorePort`，不含在场三件，
  * `tests/deps.test.ts` 钉住）；journal 的 import confinement 无法用类型表达，只能继续扫源码。
- * purge / orphan-clean 的「委托给执行器」结构同理（各自的用例里扫）。
+ * orphan-clean 的「委托给执行器」结构同理（它的用例里扫）；purge 那一半已由 `createTrashScope`
+ * 的签名收口（执行器按调用点注入，作用域够不着删除面）。
  */
 describe('journal 只服务可回滚的成员移动', () => {
   it('createJournal( 只在 member-journal 定义、delete / restore 调用', () => {

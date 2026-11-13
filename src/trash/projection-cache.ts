@@ -26,7 +26,7 @@ import { parseEntryId, type TrashEntry } from './entry.js'
 import { TRASH_DIR_NAME, type ProjectionCacheCleanupWire, type ProjectionCacheOrphanReportWire } from '../shared/wire.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import type { CorpusRead, SessionIdentity } from '../ports/host-port.js'
-import { verbError } from '../verbs/errors.js'
+import { verbError } from '../errors.js'
 
 /**
  * 仍在册的会话 id（去前缀后的形状）：语料（live ∪ persisted）与持久化列表**两条都并进来**——

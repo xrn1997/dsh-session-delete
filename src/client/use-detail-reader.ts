@@ -46,6 +46,10 @@ export interface DetailReaderInput<S, D extends DetailBody> {
 
 export interface DetailReader<S, D extends DetailBody> {
   readonly detail: DetailState<S, D>
+  /** 「保持期拒绝导航/跳转」这条判据的**唯一出口**：holding ⇒ false，其余状态 true。
+   *  两个面板控制器的 `openChild` / `loadOlder` 守卫与 `use-detail-rail` 的 `disabled` 都只问它，
+   *  不再各自重推保持（第二处重推就会与保持的成立条件走散）。 */
+  readonly canNavigate: boolean
   readonly loadingOlder: boolean
   readonly olderFailure: string | null
   /** 命中账本就摆；没命中才读。`loading` 先摆到这一条，再判在飞。 */
@@ -320,6 +324,7 @@ export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInpu
   const subjectId = subject === null ? null : idOf(subject)
   return {
     detail,
+    canNavigate: detail.kind !== 'holding',
     loadingOlder: subjectId !== null && olderShown === subjectId,
     olderFailure: olderFailure !== null && olderFailure.id === subjectId
       ? olderFailure.message

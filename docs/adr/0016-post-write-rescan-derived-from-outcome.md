@@ -27,4 +27,4 @@ Status: superseded by 0021
 - **刷新完清单之后再反推**：判据要看的是「这次动作动了谁」，而清单已经是动作的后果。
 - **把判定搬进 settlement**：那里没有当前清单，也不该知道最新票与在飞的那次读。
 
-锚点：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`；`src/client/write.ts` 的 `WriteOutcome`；`tests/client/use-trash-query.test.tsx`；`docs/architecture.md` §4；ADR-0013。
+锚点：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`；`src/client/write-seats.ts` 的 `WriteOutcome`；`tests/client/use-trash-query.test.tsx`；`docs/architecture.md` §4；ADR-0013。

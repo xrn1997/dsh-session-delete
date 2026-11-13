@@ -15,7 +15,7 @@
  * 本 module 只造数据、不碰宿主：`readReceipt` 是浏览器半的纯读法，所以这里也只用它起空回执。
  */
 import { readReceipt, summarizeReceipt, type ReceiptRead } from '../../../src/client/receipt.js'
-import type { WriteFailure, WriteSuccess } from '../../../src/client/write.js'
+import type { SeatedAction, WriteFailure, WriteSuccess } from '../../../src/client/write-seats.js'
 import {
   SESSION_DELETE_CODES,
   type ApplyAction,
@@ -124,7 +124,7 @@ function summarizeOutcomes(action: ApplyAction, ids: readonly string[]): Receipt
   return summarizeReceipt(readReceipt(action, ids, []))
 }
 
-export function writeOutcome<A extends ApplyAction>(
+export function writeOutcome<A extends SeatedAction>(
   action: A, ids: readonly string[], over: Partial<WriteSuccess<A>> = {},
 ): WriteSuccess<A> {
   const read = summarizeOutcomes(action, ids)
@@ -140,7 +140,7 @@ export function writeOutcome<A extends ApplyAction>(
 }
 
 /** `runWrite` 的**顶层失败**那一支：同一句原文铺到每个请求 id（与 `runWrite` 自己造的一致）。 */
-export function writeFailed<A extends ApplyAction>(
+export function writeFailed<A extends SeatedAction>(
   action: A, ids: readonly string[], message: string,
 ): WriteFailure<A> {
   return {

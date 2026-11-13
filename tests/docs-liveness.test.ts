@@ -18,7 +18,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { APPLY_ACTIONS, APPLY_ACTION_TABLE } from '../src/api/route-table.js'
 import { DEFAULT_CONFIG } from '../src/config.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES } from '../src/shared/wire.js'
 import { collectFiles } from './support/corpus.js'
 import { pick } from './support/fixture.js'
 
@@ -574,6 +576,130 @@ describe('文档门 · 可调项事实单源', () => {
     expect(readmeDrift(drifted)).toEqual(['orphanPreviewLimit'])
     expect(patchDrift(read('cordis.patch.yml').replace('maxJsonRefBytes: 10485760', 'maxJsonRefBytes: 1')))
       .toEqual(['maxJsonRefBytes'])
+  })
+})
+
+describe('文档门 · §1 段名/动作枚举投影', () => {
+  // 文档里的段名与动作名单只是投影，判据从代码的两张表派生（`ROUTES` 的 path、`APPLY_ACTIONS`
+  // 与 `APPLY_ACTION_TABLE` 的纯度）——断言里再抄一份名单就是第二本账，文档漂了照样绿。
+  const routePaths = new Set<string>(Object.values(ROUTES).map((seg) => seg.path))
+
+  /** §1 的正文（标题行到下一个 `##` 前）；围栏代码不进比对——框图里的斜杠不是段名。 */
+  const section1 = (() => {
+    const lines = stripFencedCode(read('docs/architecture.md')).split(/\r?\n/)
+    const at = lines.findIndex((line) => /^##\s+1\.?\s/.test(line))
+    if (at < 0) return ''
+    const rest = lines.slice(at + 1)
+    const end = rest.findIndex((line) => /^##\s/.test(line))
+    return (end < 0 ? rest : rest.slice(0, end)).join('\n')
+  })()
+
+  /** 反引号点名的段名候选：单段小写路径（`/kebab-name`）；多段或带通配的挂载形态不是段名。 */
+  const SEGMENT_TOKEN = /^\/[a-z0-9]+(?:-[a-z0-9]+)*$/
+  /** 前缀常量的组成段（宿主 `/api` 与插件前缀）也不是段名——从前缀派生排除，不手写白名单。 */
+  const MOUNT_PARTS = new Set(
+    OFFICIAL_SESSION_DELETE_API_PREFIX.split('/').filter((part) => part !== '').map((part) => `/${part}`),
+  )
+
+  const namedSegments = (section: string): Set<string> => {
+    const out = new Set<string>()
+    for (const m of stripFencedCode(section).matchAll(/`([^`]+)`/g)) {
+      const token = pick(m, 1).trim()
+      if (SEGMENT_TOKEN.test(token) && !MOUNT_PARTS.has(token)) out.add(token)
+    }
+    return out
+  }
+
+  /** 段名投影漂移：§1 没点名的、点了而 `ROUTES` 里没有的，各报一行。 */
+  const segmentDrift = (section: string): string[] => {
+    const named = namedSegments(section)
+    return [
+      ...[...routePaths].filter((path) => !named.has(path)).map((path) => `§1 没点名的段名：${path}`),
+      ...[...named].filter((path) => !routePaths.has(path)).map((path) => `§1 点了 ROUTES 里没有的段名：${path}`),
+    ]
+  }
+
+  /** 「N 个动作」那一句（到句号为止）；动作名单只认这句里的反引号词。 */
+  const claimSentence = (section: string): string => {
+    const at = section.search(/[0-9零一二两三四五六七八九十]+个动作/)
+    if (at < 0) return ''
+    const end = section.indexOf('。', at)
+    return end < 0 ? section.slice(at) : section.slice(at, end)
+  }
+
+  /** 反引号里的动作词形（kebab 小写单词）；段名与带杂字符的引文不算。 */
+  const actionWords = (sentence: string): Set<string> =>
+    new Set(
+      [...sentence.matchAll(/`([^`]+)`/g)]
+        .map((m) => pick(m, 1).trim())
+        .filter((word) => /^[a-z]+(?:-[a-z]+)*$/.test(word)),
+    )
+
+  /** 中文数字（一～九十九，含「十」「两」）与阿拉伯数字 → 数值；认不出回 undefined。 */
+  const CN_DIGIT: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
+  function countWord(raw: string): number | undefined {
+    if (/^\d+$/.test(raw)) return Number(raw)
+    const single = CN_DIGIT[raw]
+    if (single !== undefined) return single
+    const match = /^([一二两三四五六七八九])?十([一二三四五六七八九])?$/.exec(raw)
+    if (match === null) return undefined
+    const tens = match[1] === undefined ? 1 : CN_DIGIT[match[1]]
+    const ones = match[2] === undefined ? 0 : CN_DIGIT[match[2]]
+    return tens === undefined || ones === undefined ? undefined : tens * 10 + ones
+  }
+
+  /** 动作枚举投影漂移：「N 个动作」的每个计数与动作名单逐词都要对上 `APPLY_ACTIONS`。 */
+  const actionDrift = (section: string): string[] => {
+    const drift: string[] = []
+    const claims = [...section.matchAll(/([0-9零一二两三四五六七八九十]+)个动作/g)]
+    if (claims.length === 0) drift.push('§1 没有「N 个动作」的计数句')
+    for (const claim of claims) {
+      const n = countWord(pick(claim, 1))
+      if (n !== APPLY_ACTIONS.length) drift.push(`§1 写「${pick(claim, 0)}」，APPLY_ACTIONS 是 ${APPLY_ACTIONS.length} 个`)
+    }
+    const names = actionWords(claimSentence(section))
+    const roster: readonly string[] = APPLY_ACTIONS
+    for (const action of APPLY_ACTIONS) if (!names.has(action)) drift.push(`§1 动作名单没点名：${action}`)
+    for (const word of names) if (!roster.includes(word)) drift.push(`§1 动作名单点了 APPLY_ACTIONS 里没有的词：${word}`)
+    return drift
+  }
+
+  /** 表的纯度词汇 → §1 的口径词汇；哪一格是哪种的**结论**从 `APPLY_ACTION_TABLE` 来，断言里不抄死。 */
+  const PURITY_WORD: Record<'pure' | 'chained', string> = { pure: '纯读', chained: '写动作' }
+
+  /** `count` 的纯度口径漂移：§1 对它的说法必须与 `APPLY_ACTION_TABLE` 那一格同口径。
+   *  只要求「`count` 与纯度词在同一句、且第一个纯度词对得上」——不锁「是」这类句式，
+   *  改写句子不该只为过门而保留一种语法。 */
+  const purityDrift = (section: string): string[] => {
+    const claim = /`count`[^。\n]{0,30}?(纯读|写动作)/.exec(section)
+    if (claim === null) return ['§1 没有 `count` 的纯度口径（同一句里要有「纯读」或「写动作」）']
+    const said = pick(claim, 1)
+    const expected = PURITY_WORD[APPLY_ACTION_TABLE.count]
+    return said === expected ? [] : [`§1 说 count 是「${said}」，表里那一格是 ${APPLY_ACTION_TABLE.count}（应说「${expected}」）`]
+  }
+
+  it('§1 反引号点名的段名与 `ROUTES` 全部 path 不多不少', () => {
+    const drift = segmentDrift(section1)
+    expect(drift, `段名投影漂移：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('§1「N 个动作」的计数与动作名单逐词对上 `APPLY_ACTIONS`', () => {
+    const drift = actionDrift(section1)
+    expect(drift, `动作枚举漂移：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('§1 对 `count` 的纯度表述与 `APPLY_ACTION_TABLE` 同一口径', () => {
+    const drift = purityDrift(section1)
+    expect(drift, `纯度口径漂移：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出段名、动作名单与纯度口径各自漂移（正控）', () => {
+    expect(segmentDrift(section1.replaceAll('`/ping`', '`/pong`')), '换掉的段名没被认出').not.toEqual([])
+    expect(segmentDrift(section1.replaceAll('`/orphans`', '')), '少点的段名没被认出').not.toEqual([])
+    expect(actionDrift(section1.replace('六个动作', '七个动作')), '计数漂移没被认出').not.toEqual([])
+    expect(actionDrift(section1.replaceAll('`purge`', '`purgex`')), '名单漂移没被认出').not.toEqual([])
+    expect(purityDrift(section1.replace('`count` 是纯读', '`count` 是写动作')), '纯度口径漂移没被认出').not.toEqual([])
+    expect(purityDrift(section1.replaceAll('`count` 是纯读', 'x')), '纯度口径没了没被认出').not.toEqual([])
   })
 })
 

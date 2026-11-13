@@ -13,13 +13,8 @@
  */
 import type { Translate } from './copy.js'
 import { attachmentSkippedSentence, readReceipt, summarizeReceipt, type ReceiptSummary } from './receipt.js'
-import {
-  type AttachmentCleanupWire,
-  type AttachmentOrphanReportWire,
-  type OrphanReportWire,
-  type RemoteOutcome,
-  type SessionDeleteRemote,
-} from './remote.js'
+import type { AttachmentCleanupWire, AttachmentOrphanReportWire, OrphanReportWire } from '../shared/wire.js'
+import { type RemoteOutcome, type SessionDeleteRemote } from './remote.js'
 import type { ApplyOutcome, ProjectionCacheCleanupWire, ProjectionCacheOrphanReportWire } from '../shared/wire.js'
 import { fileSizeText } from './ui/format.js'
 import {

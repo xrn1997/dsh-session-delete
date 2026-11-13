@@ -1,7 +1,7 @@
 import { parseEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import { isWorkspaceMissingError, type HostIdentityPort } from '../ports/host-port.js'
 import type { CoreDeps } from '../deps.js'
-import { trashEmpty, verbError } from './errors.js'
+import { trashEmpty, verbError } from '../errors.js'
 import { createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
 import { withPresenceTail } from './member-presence.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
@@ -22,10 +22,12 @@ export function restoreSession(deps: CoreDeps) {
   const presence = deps.presence
   return async function restoreSession(
     entryId: string,
-    /** 这一组（只读）：批量层由 `batch-carried.ts` 的 `claimOf` 给出，直调者按 `trash/groups.ts`
-     *  的 `groupOf` 自己算。ghost 父（父行已摘、只剩孩子）的组只有孩子、不含 `entryId`，这里照旧
-     *  报 `trash-empty`；其余调用按这一组整体恢复。动词**不收缩**它——收缩与同批已带走集都归
-     *  `verbs/batch-carried.ts`，组语义归 `trash/groups.ts`。 */
+    /** 这一组（只读）：批量层由 `src/verbs/batch-carried.ts` 的 `claim` 交出（三态判据是
+     *  `src/trash/groups.ts` 的 `claimOf`、经 `src/trash/shrinking-view.ts` 的持有机制），
+     *  直调者按 `src/trash/groups.ts` 的 `groupOf` 自己算。ghost 父（父行已摘、只剩孩子）的组
+     *  只有孩子、不含 `entryId`，这里照旧报 `trash-empty`；其余调用按这一组整体恢复。动词
+     *  **不收缩**它——收缩与同批已带走集都归 `src/verbs/batch-carried.ts`，组语义归
+     *  `src/trash/groups.ts`。 */
     group: readonly TrashEntry[],
   ): Promise<TrashEntry> {
     const [root, ...followers] = group

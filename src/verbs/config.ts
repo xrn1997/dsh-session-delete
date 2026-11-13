@@ -12,7 +12,7 @@
  */
 import { normalizeConfig, type SessionDeleteConfig } from '../config.js'
 import type { ConfigEditorLike } from '../deps.js'
-import { routeError, verbError } from './errors.js'
+import { routeError, verbError } from '../errors.js'
 
 /** `/config` 的写支需要的三件；读支只要 `config`。 */
 export interface ConfigRouteDeps {

@@ -759,17 +759,21 @@ describe('路由层 · 请求体自检（不静默吞）', () => {
   it('body 不对：缺动作 / ids 不是串数组 / 非法 JSON，一律 400 + 信封（不崩成空响应，也不伪装成 200）', async () => {
     const { deps } = makeDeps()
     const base = await start(deps)
-    const badBodies: Array<Record<string, unknown>> = [
-      {},
+    // 缺动作 / 不认得动作归动作拒否那一句——它的逐字钉在 `tests/route-table.test.ts` 的动作表用例，这里只钉形状。
+    for (const body of [{}, { [PARAMS.action]: 'nuke', [PARAMS.ids]: ['x'] }]) {
+      const { status, message } = await failureOf(base, ROUTES.apply.path, { method: 'POST', body })
+      expect(message, JSON.stringify(body)).toMatch(/动作/)
+      // 请求本身不对 ⇒ 自己的 4xx。**操作**失败才是 200 + 信封（那条口径见下面 `/detail` 读不到那条）。
+      expect(status, JSON.stringify(body)).toBe(400)
+    }
+    // `idArray` 支那句 400 原文逐字钉（改写措辞这里就红）。
+    for (const body of [
       { [PARAMS.action]: 'delete' },
       { [PARAMS.action]: 'delete', [PARAMS.ids]: [] },
       { [PARAMS.action]: 'delete', [PARAMS.ids]: [42] },
-      { [PARAMS.action]: 'nuke', [PARAMS.ids]: ['x'] },
-    ]
-    for (const body of badBodies) {
+    ]) {
       const { status, message } = await failureOf(base, ROUTES.apply.path, { method: 'POST', body })
-      expect(message, JSON.stringify(body)).toMatch(/动作|ids/)
-      // 请求本身不对 ⇒ 自己的 4xx。**操作**失败才是 200 + 信封（那条口径见下面 `/detail` 读不到那条）。
+      expect(message, JSON.stringify(body)).toBe(`请求体需带 ${PARAMS.ids}：非空字符串组成的非空数组`)
       expect(status, JSON.stringify(body)).toBe(400)
     }
     expect((await failureOf(base, ROUTES.detail.path, { method: 'POST', body: {} })).status).toBe(400)
@@ -845,7 +849,8 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
         method: 'POST', body: { [PARAMS.entryId]: entryIdOf('session-a'), [PARAMS.before]: before },
       })
       expect(failure.status, String(before)).toBe(400)
-      expect(failure.message).toContain(PARAMS.before)
+      // `optionalCursor` 支那句 400 原文逐字钉（改写措辞这里就红）。
+      expect(failure.message).toBe(`请求体字段 ${PARAMS.before} 需是非负整数`)
     }
   })
 
@@ -892,7 +897,8 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     for (const bad of [{}, { [PARAMS.entryId]: '' }, { [PARAMS.entryId]: 42 }]) {
       const failure = await failureOf(base, ROUTES.detail.path, { method: 'POST', body: bad })
       expect(failure.code).toBe('sessiondelete/io')
-      expect(failure.message).toMatch(PARAMS.entryId)
+      // `requiredString` 支那句 400 原文逐字钉（改写措辞这里就红）。
+      expect(failure.message).toBe(`请求体需带非空字符串字段 ${PARAMS.entryId}`)
     }
   })
 })
@@ -1995,7 +2001,8 @@ describe('路由层 · GET /archive-list 与 POST /archive-detail（归档档两
       const { status, body } = await call(base, ROUTES.archiveDetail.path, { method: 'POST', body: payload })
       expect(status).toBe(400)
       expect(body.ok).toBe(false)
-      expect((body.error as { message: string }).message).toContain(PARAMS.rootSessionId)
+      // `optionalString` 支那句 400 原文逐字钉（改写措辞这里就红）。
+      expect((body.error as { message: string }).message).toBe(`请求体字段 ${PARAMS.rootSessionId} 需是非空字符串`)
     }
   })
 

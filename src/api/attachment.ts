@@ -31,7 +31,7 @@ import type {
 import { AttachmentsUnavailableError } from '../ports/attachments-port.js'
 import { PARAMS } from '../shared/wire.js'
 import { attachmentPathOf, isAttachmentId } from '../trash/attachments.js'
-import { routeError, verbError } from '../verbs/errors.js'
+import { routeError, verbError } from '../errors.js'
 import type { BinaryResponse } from './route-table.js'
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])

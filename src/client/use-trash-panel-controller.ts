@@ -19,10 +19,10 @@ import {
 } from './remote.js'
 import type { TrashEntryWire } from '../shared/wire.js'
 import {
-  forgetTrashDetail,
-  forgetTrashDetails,
+  rowGone,
+  writeSucceeded,
   readTrashSnapshot,
-  writeTrashSelection,
+  noteSelection,
 } from './trash-snapshot.js'
 import { useTrashDetailReader } from './use-trash-detail-reader.js'
 import { useTrashRevision } from './trash-store.js'
@@ -31,8 +31,7 @@ import { usePanelSelection } from './use-panel-selection.js'
 import type { DetailNav } from './session-detail.js'
 import type { TrashDetailState } from './trash-detail.js'
 import { listView, type TrashQuery } from './use-trash-query.js'
-import type { WriteOutcome } from './write.js'
-import { purgeFromPanel, restoreFromPanel } from './write-seats.js'
+import { purgeFromPanel, restoreFromPanel, type WriteOutcome } from './write-seats.js'
 
 /** 待确认的动作：一条记录、整个回收站、或多选挑出来的一批（`ids` 已按清单顺序排好）。
  *  类型归状态机，视图只 import 它来渲染。 */
@@ -74,6 +73,9 @@ export interface TrashPanelController {
   closeChild(): void
   readonly drilled: boolean
   readonly detail: TrashDetailState
+  /** 「保持期拒绝导航/跳转」判据（`use-detail-reader` 的唯一出口）：`openChild` / `loadOlder` 的守卫
+   *  与详情栏 `disabled` 都只问它，不再各自重推保持。 */
+  readonly canNavigate: boolean
   /** 更早一页正在读（只对当前详情主体有意义：孩子视图开着就是孩子）。 */
   readonly loadingOlder: boolean
   /** 更早一页读失败的原文（只对当前详情主体有意义；正文本身仍是 ready）。 */
@@ -130,7 +132,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     // 那一行被清单收走：丢掉它的详情账本、作废在飞读数，孩子视图与下钻跟着让位
     // （孩子是从这条父行点进来的，父让位了就没有第二道门）。选中 id 由选中面清。
     onGone: (entryId) => {
-      forgetTrashDetail(entryId)
+      rowGone(entryId)
       setChildView(null)
       resetReader(entryId)
       setDrilled(false)
@@ -155,6 +157,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   /** 详情读路：账本 / 在飞 / 失败 / 保持 / 分页都住 `use-trash-detail-reader.ts`。 */
   const {
     detail,
+    canNavigate,
     loadingOlder,
     olderFailure,
     ensure: ensureDetail,
@@ -174,11 +177,11 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   }, [revision])
 
   // 选中行写进快照：面板卸载再挂载时先画这一行；重读回来若它不在了，清场 effect 再让位。
-  // `entries` 一起进依赖：清单从 unknown 恢复时快照刚被重建（`reconcileTrashRows` 拿不到当前选中），
+  // `entries` 一起进依赖：清单从 unknown 恢复时快照刚被重建（`reloadSucceeded` 拿不到当前选中），
   // 只盯 `selectedId` 会让这一次恢复永远不写回，下一次挂载窄档就丢掉选中。
   useEffect(() => {
     if (selectedId !== null && entries !== null && !entries.some((entry) => entry.id === selectedId)) return
-    writeTrashSelection(selectedId)
+    noteSelection(selectedId)
   }, [selectedId, entries])
 
   // 清单未知时，确认框不许留着：看不见的行不许继续被确认；写入在飞时不收（那一趟还在跑）。
@@ -210,8 +213,8 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
 
   const openChild = useCallback(async (childId: string): Promise<void> => {
     // 保持期（ADR-0049）的上屏槽属于上一条：正文是 inert 的，指针点不到；但键盘/合成事件仍可能
-    // 到这里。放进来的话，孩子导航面会把 A 的分页读到 B 上，所以这一帧不接受导航。
-    if (detail.kind === 'holding') return
+    // 到这里。放进来的话，孩子导航面会把 A 的分页读到 B 上，所以这一帧不接受导航（判据问 `canNavigate`）。
+    if (!canNavigate) return
     // 孩子的清册行只存在于**父详情**那一份 `subagents` 里（它不在客户端清单上）：id 在这里补回成行，
     // 视图侧的导航面因此不必先查行——两档共用一面的代价就收在这一处。
     const kids = detail.kind === 'ready' ? detail.detail.subagents : undefined
@@ -219,7 +222,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (child === undefined) return
     setChildView(child)
     await ensureDetail(child.id)
-  }, [detail, ensureDetail, setChildView])
+  }, [canNavigate, detail, ensureDetail, setChildView])
 
   const closeChild = useCallback((): void => {
     setChildView(null)
@@ -229,12 +232,12 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   /**
    * 按当前详情的 `olderCursor` 取更早一页，拼到现有块前面。判据（没有游标 / 在飞去重 /
    * 晚到不落屏 / 失败只坏分页）全在 `use-trash-detail-reader.ts`。
-   * 保持期不接受：那一帧画的是上一条的正文，翻页会把它的游标读进新主体（ADR-0049）。
+   * 保持期不接受：那一帧画的是上一条的正文，翻页会把它的游标读进新主体（ADR-0049；判据问 `canNavigate`）。
    */
   const loadOlder = useCallback(async (): Promise<void> => {
-    if (detail.kind === 'holding') return
+    if (!canNavigate) return
     await loadOlderDetail()
-  }, [detail.kind, loadOlderDetail])
+  }, [canNavigate, loadOlderDetail])
 
   // 清单换版清场与宽档自动选中都在 `use-panel-selection.ts`（layout 阶段，ADR-0050）；
   // 这一台通过 `onGone` 把「父行让位 ⇒ 孩子视图跟着收」那条本地规矩接进去。
@@ -314,7 +317,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
       entries,
       gate,
       refreshAfterWrite: () => reload(),
-      forgetTrashDetails,
+      writeSucceeded,
     })
     // 被闸挡回的那一趟什么都没跑：这一行的成败由在飞那一趟说，这里不再补失败原文
     // （进入时清旧失败那一下已在同一动作里发生）。
@@ -342,7 +345,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     }
     // 面板座位：purge 清成功条目的详情账本并熄灭指向它们的撤销横幅；restore 另忘掉 main-view 的
     // closedByUs（只遗忘、不重开）。两样都由 settlement 按 anySuccess 上闸。
-    const seat = { deps, ids, gate, refreshAfterWrite: settle, forgetTrashDetails }
+    const seat = { deps, ids, gate, refreshAfterWrite: settle, writeSucceeded }
     const run = action === 'purge'
       ? await purgeFromPanel(seat)
       : await restoreFromPanel({ ...seat, entries })
@@ -381,6 +384,7 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     closeChild,
     drilled,
     detail,
+    canNavigate,
     loadingOlder,
     olderFailure,
     pending,

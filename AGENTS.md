@@ -1,6 +1,6 @@
 # dsh-session-delete — 给 agent 的工作须知
 
-DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读哪份、哪些门必须过、哪些红线跨所有改动。架构细节、构建步骤、历史裁决都不在这里。双半产物：Node 半（Cordis 插件 + `/dsh-session-delete-api`，`src/{domain,ports,trash,verbs,api,log}`）与浏览器半（左侧栏回收站面板、行菜单、批量浮条、插件设置页的可调项 + 维护卡，`src/client`）。
+DSH 的「会话删除」插件。这份文件只做三件事：告诉你先读哪份、哪些门必须过、哪些红线跨所有改动。架构细节、构建步骤、历史裁决都不在这里。双半产物：Node 半（Cordis 插件 + `/dsh-session-delete-api`，`src/{errors,domain,ports,trash,verbs,api,log}`）与浏览器半（左侧栏回收站面板、行菜单、批量浮条、插件设置页的可调项 + 维护卡，`src/client`）。
 
 ## 先读哪份
 

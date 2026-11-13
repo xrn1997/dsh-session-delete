@@ -61,7 +61,7 @@ purge 照旧清这一组；其余目标按组整体处理。
 - 一次成员的搬入或搬出 = 一串**步骤**，每步自带反向动作与一个标签（标签就是原来那些
   `rollbackReason('摘账本失败', e)` 里的那个词）；
 - journal 独占：**相反顺序**退化、逐条失败收集、以及「某一步退不干净时不许让原错误独走」这条语义；
-  `details.rollbackFailures` 的**合并与措辞**住在 `src/verbs/errors.ts` 的 `withRollbackFailures`，
+  `details.rollbackFailures` 的**合并与措辞**住在 `src/errors.ts` 的 `withRollbackFailures`，
   journal 是它唯一的调用方（**2026-10-20 就地订正**：本行原文把"合并"也记在 journal 名下，与代码、
   `member-journal.ts` 头注③ 和 `docs/architecture.md` §4 都不同源——按本仓口径，翻案个别条目就地补括注）；
 - 三个动词变成三条**策略**：各自只声明「这个成员要按什么顺序做哪几步」，

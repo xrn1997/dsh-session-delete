@@ -17,20 +17,18 @@
  */
 import {
   type CSSProperties,
-  useCallback,
   useId,
   useMemo,
   useRef,
   useState,
 } from 'react'
-import { TRASH_DIR_LABEL, type ArchiveRowWire, type TrashEntryWire } from '../shared/wire.js'
+import { TRASH_DIR_LABEL, type TrashEntryWire } from '../shared/wire.js'
 import { useBusyGate } from './busy-gate.js'
 import { absoluteText, splitOn, unitWord, zhTranslate, type Translate } from './copy.js'
 import { Notice } from './notice.js'
 import { type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
 import { TrashDetail } from './trash-detail.js'
 import { ArchiveDetail } from './archive-detail.js'
-import type { DetailNav } from './session-detail.js'
 import { ArchiveFooter, ArchiveList, ArchiveToolbar, ARCHIVE_LIST_DOM, archiveRowIdOf } from './archive-pane.js'
 import { useArchiveQuery } from './use-archive-query.js'
 import { useArchivePanelController } from './use-archive-panel-controller.js'
@@ -53,7 +51,7 @@ import { listView, useTrashQuery } from './use-trash-query.js'
 import { useListSelection } from './use-list-selection.js'
 import { useDetailRail } from './use-detail-rail.js'
 import { DetailPane, ListPane } from './detail-pane.js'
-import { BULK_DANGER, displayNameOf, groupByProject } from './trash-view.js'
+import { BULK_DANGER, groupByProject } from './trash-view.js'
 
 /** 面板的依赖面：两个读（`list` / `detail`）+ **一段 `apply`** + 清空。
  *  **没有第二条路**：「恢复一条」也走 `apply`（N=1），面板不再同时吃
@@ -235,59 +233,24 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     ordered: archiveSelection.ordered,
     // 档位不活动时不替用户读详情（归档档只在该档可见时自动选中）。
     canAutoSelect: archiveSplit && tab === 'archive',
+    split: archiveSplit,
     t,
   })
   const archiveScrollRef = useRef<HTMLDivElement>(null)
   const archiveListRef = useRef<HTMLDivElement>(null)
-  const [archiveCursorId, setArchiveCursorId] = useState<string | null>(null)
 
   /** 归档清单的键盘面住面板：窄档下钻时清单卸载，导航与 Esc 仍要活着（与回收站同一条）。 */
   const archiveFocusRow = useRowFocus(archiveListRef, ARCHIVE_LIST_DOM.idAttr)
-  const archiveSelect = useCallback(async (
-    row: ArchiveRowWire,
-    options?: { drill?: boolean },
-  ): Promise<void> => {
-    setArchiveCursorId(row.sessionId)
-    // 方向键只移动活动行；Enter/Space（drill）或宽档才真正选中并读详情。
-    if (options?.drill === true || archiveSplit) await archiveController.select(row)
-  }, [archiveController, archiveSplit])
-  /** 选中行优先；没有选中（窄档方向键只移动光标）时用光标，光标已不在清单就落空。 */
-  const archiveActiveId = archiveController.selected?.sessionId
-    ?? (archiveCursorId !== null && (archiveRowsList?.some((row) => row.sessionId === archiveCursorId) ?? false)
-      ? archiveCursorId
-      : null)
-  /** 归档详情里的孩子：已归档的仍是选中清单那一行；未归档的进只读孩子视图（父行做只读根）。 */
-  const openArchiveChild = useCallback((sessionId: string): void => {
-    const child = archiveRowsList?.find((row) => row.sessionId === sessionId)
-    if (child !== undefined) { void archiveController.select(child); return }
-    void archiveController.openChild(sessionId)
-  }, [archiveController, archiveRowsList])
-  /** 归档详情的导航面：父视图交开孩子/预取；孩子视图只交返回父，不再开下一层（单级）。 */
-  const archiveDetailNav = useMemo<DetailNav>(() => {
-    if (archiveController.childView !== null) {
-      const parent = archiveController.selected
-      return {
-        parentContext: {
-          title: parent === null ? '' : displayNameOf(parent, t),
-          onBack: archiveController.closeChild,
-        },
-      }
-    }
-    return {
-      onOpenChild: openArchiveChild,
-      onPrefetchChild: archiveController.prefetch,
-    }
-  }, [archiveController.childView, archiveController.selected, archiveController.closeChild, archiveController.prefetch, openArchiveChild, t])
   const archiveNav = useTrashNav({
     ordered: archiveSelection.ordered,
     idOf: archiveRowIdOf,
-    selectedId: archiveActiveId,
+    selectedId: archiveController.activeId,
     selectMode: archiveSelection.selectMode,
     // 键盘契约只跟着**当前档**：两台导航都听 `document` 的 Esc，屏上却只有一档。不按档收口，
     // 在回收站档按一次 Esc 会把归档档看不见的下钻一起收走（两档状态互不相通，ADR-0060 决定第 4 条）。
     drillEnabled: !archiveSplit && tab === 'archive',
     drilled: !archiveSplit && archiveController.selected !== null,
-    select: archiveSelect,
+    select: archiveController.selectRow,
     toggleCheck: archiveSelection.toggleCheck,
     back: archiveController.back,
     focusRow: archiveFocusRow,
@@ -298,6 +261,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const archivePaneMounted = tab === 'archive' && (archiveSplit || archiveController.selected !== null)
   const archiveRail = useDetailRail({
     state: archiveController.detail,
+    canNavigate: archiveController.canNavigate,
     loadingOlder: archiveController.loadingOlder,
     olderFailure: archiveController.olderFailure,
     loadOlder: archiveController.loadOlder,
@@ -341,6 +305,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   const detailPaneMounted = split || (controller.drilled && controller.selected !== null)
   const trashRail = useDetailRail({
     state: controller.detail,
+    canNavigate: controller.canNavigate,
     loadingOlder: controller.loadingOlder,
     olderFailure: controller.olderFailure,
     loadOlder: controller.loadOlder,
@@ -541,7 +506,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
         state={archiveController.detail}
         busy={archiveController.busy}
         wide={archiveSplit}
-        detailNav={archiveDetailNav}
+        detailNav={archiveController.detailNav}
         onRetry={() => archiveController.retry()}
         onBack={() => archiveController.back()}
         pager={{
@@ -562,8 +527,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
       controller={archiveController}
       listRef={archiveListRef}
       nav={archiveNav}
-      activeId={archiveActiveId}
-      onCursor={setArchiveCursorId}
+      activeId={archiveController.activeId}
       onRetry={() => { void archiveQuery.reload() }}
       t={t}
     />

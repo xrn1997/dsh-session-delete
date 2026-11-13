@@ -128,13 +128,13 @@ _唯一实现_: `src/api/route-table.ts` 的 `RouteSpec.read` 与 `RouteRead`（
 _Avoid_: 纯度（纯度管是否进到达序链；`count` 是 pure/不读，`detail` 是 pure/raw）。
 
 **清册作用域（trash scope）**:
-一份调用方选好读面的清册快照上的收缩视图——purge 这条写路径的「拿目标」owner。写入口 = 真相读；报告入口不经作用域（`/orphans` 直接把 raw 快照交 `loadOrphanGroups`）。**选哪一格由调用方（路由行 / 批量层）定好交进来**（ADR-0012 的边界）；组与收缩视图归它且**不外露**（三态与按组收缩的判据是内部闭包，读「组」的 `claimOf` / `withoutGroup`）：`purge(id)` 只收一个 id（选组、同批带走的幂等、`trash-empty` 的原文点名都在它里面），`purgeAll()` 清全部行，`orphanGroups(roots?)` 把当前视图原样交给「无主子会话」的扫描。
+一份调用方选好读面的清册快照上的收缩视图——purge 这条写路径的「拿目标」owner。写入口 = 真相读；报告入口不经作用域（`/orphans` 直接把 raw 快照交 `loadOrphanGroups`，`orphan-clean` 也直调扫描）。**选哪一格由调用方（路由行 / 批量层）定好交进来**（ADR-0012 的边界）；收缩视图的**实例**归它且**不外露**（持有机制是 `src/trash/shrinking-view.ts` 的 `createShrinkingView`，三态与按组收缩的判据仍读「组」的 `claimOf` / `withoutGroup`）：`purge(id)` 只收一个 id（选组、同批带走的幂等、`trash-empty` 的原文点名都在它里面），`purgeAll()` 清全部行。**能力面**：作用域收 `CoreDeps` 与注入的执行器（`RemovalExecutor`），删的动作只经执行器、作用域自己没有删除能力。
 _唯一实现_: `src/verbs/trash-scope.ts` 的 `createTrashScope`。
 _Avoid_: purge-trash（三行 glue 已被作用域吸收；「彻底删除」说的是动作，不是模块）。
 
 **同批已带走集（batch carried set）**:
-同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记（会话 id 域按「会话闭包」的 `bareSessionId` 归一后再记），恢复按条目 id 记，各一个 adapter；它决定这一条还该不该交给动词，purge 那一半连同收缩中的当前视图（盘上后代要按清册里还在的 id 排除）住「清册作用域」。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
-_唯一实现_: `src/verbs/batch-carried.ts`
+同一次 `/apply` 里已经被前一条带走的 id。删除按会话 id 记（会话 id 域按「会话闭包」的 `bareSessionId` 归一后再记），恢复按条目 id 记，各一个 adapter——entry 适配是 `src/trash/shrinking-view.ts` 的 `createShrinkingView` 薄壳（持有机制一个家，判据仍读「组」的 `claimOf` / `withoutGroup`），session 适配自己持一个会话 id 集合（没有组可收缩）。它决定这一条还该不该交给动词，purge 那一半连同收缩视图的**实例**住「清册作用域」（盘上后代要按清册里还在的 id 排除）。组语义仍读「组」。**不要也叫「账本」**：本仓的「账本」指宿主工作区注册表（`workspaceOf` / `attach` / `detach`），是另一件事。
+_唯一实现_: `src/verbs/batch-carried.ts`（两个 adapter）与 `src/trash/shrinking-view.ts` 的 `createShrinkingView`（收缩视图的持有机制）。
 _Avoid_: 账本（同批集合不要与宿主工作区注册表混用）。
 
 **组（group） / 组根（group root）**:
@@ -229,17 +229,17 @@ _唯一实现_: `src/client/use-panel-selection.ts` 的 `usePanelSelection`。
 _Avoid_: 选择面（勾选集合、多选态与折叠组住 `src/client/use-list-selection.ts`）；详情账本（那一行没了要作废哪些读数，由各档控制器经 `onGone` 自己决定）。
 
 **首帧快照（first-paint snapshot）**:
-面板跨挂载留下的**上一次成功读数**：清单、选中与详情账本；挂载首帧先画它，随后静默重读，重读失败整份丢掉。只活在进程内、不订阅、不持久化；折叠集、列宽、孩子视图不进快照。
-_唯一实现_: `src/client/trash-snapshot.ts` 的 `readTrashSnapshot` / `reconcileTrashRows` / `writeTrashSelection`。
+面板跨挂载留下的**上一次成功读数**：清单、选中与详情账本；挂载首帧先画它，随后静默重读。只活在进程内、不订阅、不持久化；折叠集、列宽、孩子视图不进快照。重读与丢弃走 `src/client/trash-snapshot.ts` 的意图名（`reloadSucceeded` / `reloadFailed` / `noteSelection`；逐条口径住 `docs/architecture.md` §4 的 trash-snapshot 行）。
+_唯一实现_: `src/client/trash-snapshot.ts` 的 `readTrashSnapshot` / `reloadSucceeded` / `noteSelection`。
 _Avoid_: 缓存（本仓已有「附件引用缓存」与「渲染侧快照」两个主）、持久化（重启即无）。
 
 **详情账本（detail ledger）**:
-按行身份记下的**已成功读到的详情**，两档各持一份、互不读写：回收站那本键 = 条目 id、模块级、与首帧快照同一模块（面板卸载后仍留着，挂载时详情与清单、选中一起续上）；归档那本键 = 会话 id、只活在挂载内、不进首帧快照。读取失败不记账，选中该行时重读；回收站那本在清单重读失败、清空成功、恢复或彻底删除成功时丢掉相应条目或整份，清单成功重读只修剪上一份清单里出现过的顶部条目（孩子详情从不在清单行里，保留）。容量与淘汰两档同一条口径。
-_唯一实现_: 容量与淘汰住 `src/client/detail-ledger.ts` 的 `DETAIL_LEDGER_LIMIT` / `writeDetail`（账本 seam `DetailLedger` 也在这里）；回收站那本的读写住 `src/client/trash-snapshot.ts` 的 `readCachedTrashDetail` / `writeTrashDetail` / `forgetTrashDetail` / `forgetTrashDetails`，归档那本住 `src/client/use-archive-detail-reader.ts` 的挂载内 Map。
+按行身份记下的**已成功读到的详情**，两档各持一份、互不读写：回收站那本键 = 条目 id、模块级、与首帧快照同一模块（面板卸载后仍留着，挂载时详情与清单、选中一起续上）；归档那本键 = 会话 id、只活在挂载内、不进首帧快照。读取失败不记账，选中该行时重读；回收站那本的丢弃走 `reloadFailed` / `emptiedTrash` / `rowGone` / `writeSucceeded` / `reloadSucceeded` 五个意图，逐条口径住 `docs/architecture.md` §4 的 trash-snapshot 行。容量与淘汰两档同一条口径。
+_唯一实现_: 容量与淘汰住 `src/client/detail-ledger.ts` 的 `DETAIL_LEDGER_LIMIT` / `writeDetail`（账本 seam `DetailLedger` 也在这里）；回收站那本的读写住 `src/client/trash-snapshot.ts` 的 `readCachedTrashDetail` / `writeTrashDetail` / `rowGone` / `writeSucceeded`，归档那本住 `src/client/use-archive-detail-reader.ts` 的挂载内 Map。
 _Avoid_: 详情缓存（「缓存」在本仓专指附件引用缓存；这里记的是已读事实）、旧详情（那是详情保持）。
 
 **详情保持（detail hold）**:
-换到一条还没读过的条目时，详情先继续画上一条已就绪的那一帧（正文 `inert` + `aria-busy`，右缘提问轨跟着顶住但整条禁用，超过静默窗口才在标题排出「正在读这条会话…」），新详情到了整帧换掉、失败换该条失败块；孩子视图不保持（导航面会串）。一条读失败不丢上一条已就绪的详情，下一条切换仍由它顶住。
+换到一条还没读过的条目时，详情先继续画上一条已就绪的那一帧（正文 `inert` + `aria-busy`，右缘提问轨跟着顶住但整条禁用，超过静默窗口才在标题排出「正在读这条会话…」），新详情到了整帧换掉、失败换该条失败块；孩子视图不保持（导航面会串）。保持期的导航 / 跳转守卫只问 `canNavigate`，不各自重推保持。一条读失败不丢上一条已就绪的详情，下一条切换仍由它顶住。
 _唯一实现_: `src/client/use-detail-reader.ts` 的 `DetailState`（`holding` 那一支，两档共用）；回收站实例对外的别名是 `src/client/trash-detail.tsx` 的 `TrashDetailState`。
 _Avoid_: 旧详情缓存（它不是缓存，是当前画着的那一帧）、骨架（保持期不出骨架）。
 
@@ -259,19 +259,19 @@ _唯一实现_: `src/client/maintenance-settings.tsx` 的 `MaintenanceSettings`�
 _Avoid_: 设置面板、清理任务（「面板」专指回收站面板；这里没有自动任务）。
 
 **写入座位（write seat）**:
-一次 `/apply` 写入发生在哪个界面位置：菜单删除、批量删除、外部撤销恢复、面板恢复 / 永久删除。座位拥有自己的呈现材质、闸与重读通道；逐条收尾顺序与 `anySuccess` 门仍住 `src/client/write-settlement.ts`，busy 的生命周期住 `src/client/busy-gate.ts`。
+一次 `/apply` 写入发生在哪个界面位置：菜单删除、批量删除、外部撤销恢复、面板恢复 / 永久删除、归档档解除归档。座位拥有自己的呈现材质、闸与重读通道；一次写入的生命周期与逐条收尾顺序（含 `anySuccess` 门）都住 `src/client/write-seats.ts`，busy 的生命周期住 `src/client/busy-gate.ts`。
 _唯一实现_: `src/client/write-seats.ts`。
 _Avoid_: 写入入口、按钮处理（座位说的是一个界面位置的整趟材质，不是某颗控件的回调）。
 
 **回执摘要（receipt summary）**:
-一次写 `/apply` 回执的唯一派生物：成功 id、失败表、中性 id、失败 verdict、部分计数、按动作取的相关落地 id（delete 的条目 id / restore 的回盘会话 id）、跨 `ok` 相加的附件清理读数（`skipped` 取第一条）与 `anySuccess`。写入座位与收尾只消费摘要，不再各自 walk `verdicts`。
+一次写 `/apply` 回执的唯一派生物：成功 id、失败表、中性 id、失败 verdict、部分计数、按动作取的相关落地 id（delete 的条目 id / restore 的回盘会话 id）、跨 `ok` 相加的附件清理读数（`skipped` 取第一条）与 `anySuccess`。写入座位（连同它模块内的收尾）只消费摘要，不再各自 walk `verdicts`。
 _唯一实现_: `src/client/receipt.ts` 的 `summarizeReceipt`。
 _Avoid_: 回执（写回执的原始 `Receipt` 仍住 `src/client/receipt.ts`，是摘要的输入，不是调用方的读法）；`count` 的逐条数值仍由 `src/client/batch-select.tsx` 的 `fetchCounts` 读 `verdicts`，它不产摘要。
 
 **待确认动作（pending action）**:
 面板状态机里等待确认的一条 / 一批 / 整站动作；控制器拥有 `pending`、`pendingEntries` 与 request 意图，确认框只渲染。
 _唯一实现_: `src/client/use-trash-panel-controller.ts`。
-_Avoid_: 确认框状态（框只管呈现；开合与关框规则不在视图里）。
+_Avoid_: 确认框状态（框只管呈现；开合归控制器、关框规则归共用页脚壳，都不在各张框自己的视图里）。
 
 **孩子视图（child view）**:
 两档详情正在看某个孩子时的离清单导航态：详情主体切到孩子（同一套会话信息、正文与分页），清单选中仍在父行；单级，返回回到清单选中那条的详情。回收站档的孩子是清册行，入口是父详情的「子会话」段（裁决见 ADR-0055 的「沿用」节）；归档档的孩子是宿主闭包行，未归档孩子随已归档父会话只读查看（裁决见 ADR-0061）。两档各持一份状态，只共用视图层。

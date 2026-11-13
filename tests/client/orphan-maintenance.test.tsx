@@ -14,7 +14,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate } from '../../src/client/copy.js'
 import { OrphanMaintenance } from '../../src/client/orphan-maintenance.js'
-import type { OrphanReportWire } from '../../src/client/remote.js'
+import type { OrphanReportWire } from '../../src/shared/wire.js'
 import type { MaintenanceSectionView } from '../../src/client/use-maintenance-section.js'
 
 /** 与面板测试同一份读数形状：`roots` 是每组"父没了"的 subagent 自己的 id，界面不重算。 */

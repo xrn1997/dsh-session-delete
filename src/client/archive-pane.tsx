@@ -40,21 +40,20 @@ export interface ArchiveListProps {
   query: ArchiveQuery
   selection: ListSelection<ArchiveRowWire>
   groups: readonly ProjectGroup<ArchiveRowWire>[]
-  controller: Pick<ArchivePanelController, 'select' | 'prefetch' | 'unarchive' | 'requestDeleteOne' | 'actionFailure' | 'busy'>
+  controller: Pick<ArchivePanelController, 'selectRow' | 'prefetch' | 'unarchive' | 'requestDeleteOne' | 'actionFailure' | 'busy'>
   /** 清单的 grid 节点：面板的 `useRowFocus` 按 `ARCHIVE_LIST_DOM.idAttr` 查询它。 */
   listRef: RefObject<HTMLDivElement>
   /** 键盘契约（导航状态住面板，窄档下钻时清单卸载也不丢 Esc 与焦点交还）。 */
   nav: TrashNav
-  /** 当前活动行（键盘光标或选中行）：说「详情正画着这一条」，也只在非多选态参与 `aria-selected`。 */
+  /** 当前活动行（选中行优先，回落光标）：说「详情正画着这一条」，也只在非多选态参与 `aria-selected`。
+   *  光标与活动行都住控制器（`activeId` / `selectRow`），清单不再自己回报光标。 */
   activeId: string | null
-  /** 方向键移动活动行时回报面板。 */
-  onCursor: (sessionId: string) => void
   onRetry: () => void
   t: Translate
 }
 
 /** 清单列：四态里非「有行」的三档各交一块普通内容；有行时只交读数与动作给 `SessionList`。 */
-export function ArchiveList({ query, selection, groups, controller, listRef, nav, activeId, onCursor, onRetry, t }: ArchiveListProps) {
+export function ArchiveList({ query, selection, groups, controller, listRef, nav, activeId, onRetry, t }: ArchiveListProps) {
   const prefetchRow = useDelayedPrefetch((row: ArchiveRowWire) => { controller.prefetch(row.sessionId) })
   const state = query.list
   const notice = state.status === 'loading' ? <ListLoading label={t('archive.loading')} />
@@ -101,10 +100,7 @@ export function ArchiveList({ query, selection, groups, controller, listRef, nav
       metaTip: row.updatedAt === undefined ? '' : absoluteText(row.updatedAt),
       checkLabel: displayName,
       failure: controller.actionFailure[row.sessionId] ?? null,
-      onSelect: () => {
-        onCursor(row.sessionId)
-        void controller.select(row)
-      },
+      onSelect: () => { void controller.selectRow(row, { drill: true }) },
       actions: (
         <>
           <button

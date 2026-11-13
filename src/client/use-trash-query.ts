@@ -20,10 +20,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BusyGate, GateRun } from './busy-gate.js'
 import { type SessionDeleteRemote, type TrashEntryLike } from './remote.js'
 import {
-  clearTrashDetails,
-  clearTrashSnapshot,
+  emptiedTrash,
+  reloadFailed,
   readTrashSnapshot,
-  reconcileTrashRows,
+  reloadSucceeded,
 } from './trash-snapshot.js'
 import { dismissUndoNotice } from './undo-notices.js'
 import { createLatestWins, useLatest } from './store.js'
@@ -111,7 +111,7 @@ export function useTrashQuery({
   /**
    * 这一份挂载还在不在。清单快照是**模块级**的，而请求属于某一次挂载：切走面板后晚到的响应
    * 不许再写快照——否则旧读数会盖掉新挂载刚写下的行，还会按旧行把新行仍引用的详情剪掉
-   * （`reconcileTrashRows` 的 `previousIds` 读的是当前快照）。StrictMode 的挂载→卸载→再挂载
+   * （`reloadSucceeded` 的 `previousIds` 读的是当前快照）。StrictMode 的挂载→卸载→再挂载
    * 由 setup 里重新置真接住。
    */
   const alive = useRef(true)
@@ -122,7 +122,7 @@ export function useTrashQuery({
 
   /** 清单进入 `unknown` 的唯一落点：旧行与首帧快照一起作废，重读在飞标记一起收掉。 */
   const failList = useCallback((failure: string): void => {
-    clearTrashSnapshot()
+    reloadFailed()
     setRefreshing(false)
     setList({ status: 'unknown', failure })
   }, [])
@@ -139,7 +139,7 @@ export function useTrashQuery({
       failList(outcome.failure.message)
       return
     }
-    reconcileTrashRows(outcome.value)
+    reloadSucceeded(outcome.value)
     setRefreshing(false)
     setList({ status: 'ready', rows: outcome.value })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 回的恒稳 ref（自定义 hook，规则看不见），读的是 `.current`。
@@ -194,7 +194,7 @@ export function useTrashQuery({
     if (!alive.current) return true
     await reload()
     // 清空让整份详情账本作废：孩子详情不随清单修剪，靠这里丢；空清单快照原样留着（重读刚写下的）。
-    clearTrashDetails()
+    emptiedTrash()
     // 附件那半句只住在这一趟的聚合回执里，重读读不出来 ⇒ 重读之后再摆（清单读失败也不影响它：
     // 已经发生的事情与"此刻清单长什么样"无关）。
     noteAttachmentCleanup(outcome.value.attachments)

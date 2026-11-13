@@ -2,7 +2,7 @@
 
 Status: accepted
 
-五个逐条 `/apply` 写入面曾各自把 receipt、主视图收尾、回收站失效与撤销通告拼一遍；把顺序按 action 收进 `src/client/write-settlement.ts` 后，写入面只交呈现材质，顺序与 `anySuccess` 门只有一个家。
+五个逐条 `/apply` 写入面曾各自把 receipt、主视图收尾、回收站失效与撤销通告拼一遍；把顺序按 action 收进 `src/client/write-seats.ts`（收尾实现 `settleWrite` 与生命周期 `runWrite` 同为模块私有）后，写入面只交呈现材质，顺序与 `anySuccess` 门只有一个家。
 
 ## 决定
 
@@ -28,4 +28,4 @@ Status: accepted
 - **把 refresh 也塞进 settlement**：重读策略依赖面板的最新票与在飞的那次读，属于 `use-trash-query.ts`。
 - **让面板恢复也走 `afterRestore`**：它会在恢复后把主视图抢到那条会话上，与 main-view 的“只遗忘、不重开”冲突。
 
-锚点：`src/client/write-settlement.ts`；`src/client/write.ts`；`src/client/write-seats.ts`；`tests/client/write-settlement.test.ts`；`tests/client/write-seats.test.ts`；ADR-0017。
+锚点：`src/client/write-seats.ts`（六个座位与模块私有的 `runWrite` / `settleWrite`）；`tests/client/write-seats.test.ts`；ADR-0017。

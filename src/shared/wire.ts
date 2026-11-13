@@ -21,15 +21,17 @@ export const SESSION_DELETE_API_PREFIX = '/dsh-session-delete-api'
  */
 export const OFFICIAL_SESSION_DELETE_API_PREFIX = `/api${SESSION_DELETE_API_PREFIX}`
 
-/** 请求体的线上形状。`none` = 没有字段（GET，或只带空对象的 POST）；`query` = GET 查询串（二进制段）；
- *  其余是 JSON 体的字段组。**读这一格的是 Node 半**：`src/api/route-table.ts` 的 `bodyOf` 据此决定
- *  分发器要不要预读 JSON。浏览器半的入参形状由 `src/client/remote.ts` 的 interface 签名决定，只投影
- *  这一格的**配对事实**（有 JSON 字段的段必然是 POST），配对由 `tests/wire-shape.test.ts` 钉住。 */
+/** 请求体的线上形状：`none` = 没有字段（GET，或只带空对象的 POST）；`query` = GET 查询串（二进制段）；
+ *  其余是 JSON 体的字段组——**每组有哪些字段、什么种类**由 {@link BODY_GROUPS} 一次描述（键即这六个值）。
+ *  **读这一格的是 Node 半**：`src/api/route-table.ts` 的 `bodyOf` 据此决定分发器要不要预读 JSON，
+ *  通用解析手再按 `BODY_GROUPS` 把 JSON 体读成 typed 字段。浏览器半的入参形状由
+ *  `src/client/remote.ts` 的 interface 签名决定，只投影这一格的**配对事实**（有 JSON 字段的段必然是
+ *  POST），配对由 `tests/wire-shape.test.ts` 钉住。 */
 export type RouteBody = 'none' | 'query' | 'config' | 'entry' | 'apply' | 'sessionId'
 
 /** 段名表（相对前缀）。**每项 `{ path, method, body }` 三键**：某段用什么方法、带什么请求体也是线上
- *  形状的一部分（ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）逐行投影
- *  （`ROUTES.x.method` / `bodyOf(ROUTES.x)`），浏览器半的取数通道（`src/client/remote.ts`）从同一格
+ *  形状的一部分（ADR-0003），家就在这一张表——路由记录（`src/api/route-table.ts`）经 `defineRoute`
+ *  从这一格派生 method / body（行里不写投影），浏览器半的取数通道（`src/client/remote.ts`）从同一格
  *  投影路径与方法，两半都不逐段手写一份字面量。
  *  写动作统一走一段 `/apply`：一次 HTTP 带一组 id、逐条回结果；
  *  单条就是长度为 1 的批量，仓里不留第二条执行路径。
@@ -106,7 +108,14 @@ export const CONFIG_LIMITS = {
 /** `/apply` 的六个动作。id 的含义随动作走：`delete`/`count`/`orphan-clean`/`unarchive` 是**宿主会话 id**
  *  （前两个还没进回收站，第三个压根没有回收站行，`unarchive` 写的是 registry 归档集），`restore`/`purge` 是**回收站条目 id**。
  *  两域都是 string（线上形状）；这里不引入品牌类型——错域不靠类型拦，交给各动词在运行期按自己的
- *  语义处理，批处理不猜格式。 */
+ *  语义处理，批处理不猜格式。
+ *
+ *  **动作六面清单**（只指路：不抄各家的表达式，也不做动作逐条的映射表——映射表会随任何一家漂）：
+ *  一个动作的口径散在六个家，改一个动作六处一起看。值型（成功值的线上形状）就在本文件的
+ *  {@link ApplyValueByAction}；静态纯度（纯读还是写）住 `src/api/route-table.ts` 的 `APPLY_ACTION_TABLE`；
+ *  执行住 `src/verbs/batch.ts` 的 `applyActions`；逐条回执怎么判读住 `src/client/receipt.ts` 的 `readReceipt`；
+ *  写后收尾（何时结算、什么跟着失效）住 `src/client/write-seats.ts` 的 `settleWrite`；上屏文案的键住
+ *  `src/client/copy.ts` 的 `CopyKey`。判据各住各家、各带各的闸，这里只负责让人找得到门。 */
 export type ApplyAction = 'delete' | 'restore' | 'purge' | 'count' | 'orphan-clean' | 'unarchive'
 
 /** 每个动作的成功值：`count` 是一个数（拿不到就是 0，界面上那半句整句不出现）；
@@ -469,6 +478,45 @@ export const PARAMS = {
   attachmentHeight: 'height',
 } as const
 
+/* ── 请求字段组：段名表 `body` 那一格的**内容**（ADR-0003 决定 6 的字段描述面） ─────────────
+ * `RouteBody` 六值只说「哪一组」，这里说「这组有哪些字段、每个字段什么种类」。字段名与种类是线上
+ * 形状（浏览器半的 interface 签名按它写、Node 半的字段闸按它派生），写错与写错方法同一类事故——
+ * 所以与 `path` / `method` 同家。Node 半的通用解析手（`src/api/route-table.ts`）拿这份描述把
+ * JSON 体读成 typed 字段，五种错误原文各只写在解析手那一处。 */
+
+/** 请求体字段的种类 → 解析后的类型：种类只在这一处兑现成类型（`action` 给 `ApplyAction` 而不是裸串，
+ *  动作名单由类型闸钉死）。新增种类只改这张表的键，解析手的 switch 与 {@link ParsedBody} 会一起编译错
+ *  直到补齐。 */
+type ParsedByKind = {
+  requiredString: string
+  optionalString: string | undefined
+  optionalCursor: number | undefined
+  action: ApplyAction
+  idArray: string[]
+}
+
+/** 请求体字段的种类：每一种由通用解析手的一种读法兑现，拒绝原文也按种类只写一遍。 */
+export type BodyFieldKind = keyof ParsedByKind
+
+/** 一个字段组：字段键 → 字段种类。键必须是 {@link PARAMS} 的成员——类型只收窄值、不收窄键，
+ *  键↔`PARAMS` 的配对由 `tests/wire-shape.test.ts` 的运行期用例把守；组里引用同一常量，不抄第二份。 */
+export type BodyGroup = Readonly<Record<string, BodyFieldKind>>
+
+/** 段名表每格 `body` → 那一段的字段组描述。空组 = 这一层没有要拦的字段：`none` / `query` 没有
+ *  JSON 字段；`config` 的三只旋钮由 `src/verbs/config.ts` 的 Standard Schema 按自己的口径校验
+ *  （未知键 / 非整数 / 越界都归它），路由层的字段闸故意不覆盖它——两处都拦就是两本账。 */
+export const BODY_GROUPS = {
+  none: {},
+  query: {},
+  config: {},
+  entry: { [PARAMS.entryId]: 'requiredString', [PARAMS.before]: 'optionalCursor' },
+  apply: { [PARAMS.action]: 'action', [PARAMS.ids]: 'idArray' },
+  sessionId: { [PARAMS.sessionId]: 'requiredString', [PARAMS.before]: 'optionalCursor', [PARAMS.rootSessionId]: 'optionalString' },
+} as const satisfies Record<RouteBody, BodyGroup>
+
+/** 描述 → 解析后的字段类型：描述与本型同源 ⇒ 解析手交回的字段，用法在类型层就对得上。 */
+export type ParsedBody<G extends BodyGroup> = { [K in keyof G]: ParsedByKind[G[K]] }
+
 /**
  * 失败信封的**线上形状**（本文件）：`code` 是判别依据、`message` 是上屏原文、
  * `details` 是**可选的结构化附带物**——对齐官方 `rpcErrorSchema` 那三件
@@ -495,7 +543,7 @@ export type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: Remot
  * 本仓生产侧不造它：Node 半的 `toRemoteFailure`（`src/remote/map-error.ts`）只**消费**它，产出的
  * `RemoteFailure` 是普通过线对象；浏览器半的取数通道**不抛失败、也不补标记**——信封原样当数据交回
  * （`RemoteOutcome`），通道自己造的诊断（打不通 / 非信封 / 401·403）是普通失败对象，不进这条判别；
- * 测试假件同样只消费（`tests/client/support/fake-remote.ts` 的 `failureOf`）。
+ * 测试假件同样不认标记位：用例设的 `RemoteFailure` 原样交回组件（`tests/client/support/fake-remote.ts`）。
  */
 export function isDSHRemoteError(value: unknown): value is RemoteFailure {
   if (typeof value !== 'object' || value === null) return false

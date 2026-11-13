@@ -163,7 +163,7 @@ describe('批量层 · 清册只读一次', () => {
     expect(manifest.reads()).toBe(1)
   })
 
-  it('orphan-clean 一批：对账行读一次，作用域把它原样交给扫描、不读第二遍 raw 索引', async () => {
+  it('orphan-clean 一批：对账行读一次，批量层把它原样交给扫描、不读第二遍 raw 索引', async () => {
     const { deps, manifest } = world([], {
       corpus: [{ sessionId: 'session-root', projectDir: '--p--', subagent: true, parentSessionId: 'gone', createdAt: 0 }],
     })

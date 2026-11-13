@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { VERB_CODES, isSessionDeleteCodeError, verbCodeOf } from '../src/shared/wire.js'
-import { routeError, verbError } from '../src/verbs/errors.js'
+import { routeError, verbError } from '../src/errors.js'
 
 describe('动词码的两条读法', () => {
   // 名单直接取 `VERB_CODES`（失败码的主人），这里不抄第二份、也不抄「几个」：多一个码就自动多钉一个。

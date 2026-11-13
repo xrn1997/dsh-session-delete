@@ -10,7 +10,7 @@
  * 边界：只服务成员在 sessions/ 与 session-trash/ 之间搬；不做通用撤销框架。
  */
 import { isSessionDeleteCodeError } from '../shared/wire.js'
-import { rollbackReason, verbError, withRollbackFailures, type VerbError } from './errors.js'
+import { rollbackReason, verbError, withRollbackFailures, type VerbError } from '../errors.js'
 
 /** 一步反向动作的结果：这一 step 的领域键（`key`）是否回到原样 + 没能退干净的原因。
  *  `restored` 只回答键所指的那件写；同一步里的附属写失败仍进 `failures`
@@ -108,7 +108,7 @@ export async function stepUndo(label: string, run: () => Promise<unknown>): Prom
 
 /**
  * **组级回滚**：把已经做成的成员按相反顺序退回；某一步退不干净时把失败并进原错误的
- * `details.rollbackFailures`，绝不让原错误独走。那些失败句子的合并与措辞住 `src/verbs/errors.ts`；
+ * `details.rollbackFailures`，绝不让原错误独走。那些失败句子的合并与措辞住 `src/errors.ts`；
  * 删除与恢复两个按组走的动词共用这一处。
  */
 export async function rollbackJournals(journals: readonly Journal[], error: unknown): Promise<never> {

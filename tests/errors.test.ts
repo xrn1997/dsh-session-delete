@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { trashEmpty, verbError, withRollbackFailures } from '../src/verbs/errors.js'
+import { trashEmpty, verbError, withRollbackFailures } from '../src/errors.js'
 
 describe('`trash-empty` 的原文', () => {
   // 原文要上屏，点名那句是承重的（purge 与详情都靠它告诉用户"你点的这条不在清单里"）。

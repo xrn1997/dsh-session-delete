@@ -6,14 +6,14 @@
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
-  clearTrashDetails,
-  clearTrashSnapshot,
-  forgetTrashDetail,
+  emptiedTrash,
+  reloadFailed,
+  rowGone,
   readCachedTrashDetail,
   readTrashSnapshot,
-  reconcileTrashRows,
+  reloadSucceeded,
   writeTrashDetail,
-  writeTrashSelection,
+  noteSelection,
 } from '../../src/client/trash-snapshot.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
@@ -40,8 +40,8 @@ describe('首帧快照', () => {
   })
 
   it('写 rows / selection / detail 后能读回；rows 修剪已不在的选中与详情', () => {
-    reconcileTrashRows([A, B])
-    writeTrashSelection('b')
+    reloadSucceeded([A, B])
+    noteSelection('b')
     writeTrashDetail('b', detailOf('b'))
 
     const snapshot = readTrashSnapshot()
@@ -50,7 +50,7 @@ describe('首帧快照', () => {
     expect(snapshot?.details.get('b')?.entryId).toBe('b')
 
     // 别处恢复了 b：下一次成功读数只带回 a，快照不许继续留着 b 的选中与详情。
-    reconcileTrashRows([A])
+    reloadSucceeded([A])
     const pruned = readTrashSnapshot()
     expect(pruned?.rows.map((row) => row.id)).toEqual(['a'])
     expect(pruned?.selectedId).toBeNull()
@@ -62,32 +62,32 @@ describe('首帧快照', () => {
     writeTrashDetail('kid', detailOf('kid'))
     expect(readCachedTrashDetail('a')?.entryId).toBe('a')
 
-    reconcileTrashRows([A])
+    reloadSucceeded([A])
     expect(readCachedTrashDetail('a')?.entryId).toBe('a')
     expect(readCachedTrashDetail('kid')?.entryId).toBe('kid')
 
-    reconcileTrashRows([B])
+    reloadSucceeded([B])
     expect(readCachedTrashDetail('a')).toBeUndefined()
     // 孩子从不在清单行里，重读清单不许把它误删。
     expect(readCachedTrashDetail('kid')?.entryId).toBe('kid')
   })
 
-  it('forgetTrashDetail 只丢一条；clear 之后回到 null', () => {
-    reconcileTrashRows([A])
+  it('rowGone 只丢一条；clear 之后回到 null', () => {
+    reloadSucceeded([A])
     writeTrashDetail('a', detailOf('a'))
-    forgetTrashDetail('a')
+    rowGone('a')
     expect(readTrashSnapshot()?.details.size).toBe(0)
 
-    clearTrashSnapshot()
+    reloadFailed()
     expect(readTrashSnapshot()).toBeNull()
   })
 
-  it('clearTrashDetails 只丢详情账本：清空回收站成功后的空清单快照原样留着', () => {
+  it('emptiedTrash 只丢详情账本：清空回收站成功后的空清单快照原样留着', () => {
     // `emptyTrash` 已经重读并写下过空清单；整份 clear 会把这份成功读数也丢掉，
     // 下次挂载又从「正在读回收站…」起画（ADR-0048 要消灭的正是这帧闪）。
-    reconcileTrashRows([])
+    reloadSucceeded([])
     writeTrashDetail('kid', detailOf('kid'))
-    clearTrashDetails()
+    emptiedTrash()
 
     expect(readTrashSnapshot()?.rows).toEqual([])
     expect(readCachedTrashDetail('kid')).toBeUndefined()
@@ -95,23 +95,23 @@ describe('首帧快照', () => {
   })
 
   it('没有快照时选中写不进去：它只更新既有快照，不凭空造一份', () => {
-    writeTrashSelection('a')
+    noteSelection('a')
     expect(readTrashSnapshot()).toBeNull()
   })
 
   it('写出去的是副本：调用方改自己的数组不会改快照', () => {
     const rows = [A]
-    reconcileTrashRows(rows)
+    reloadSucceeded(rows)
     rows.push(B)
     expect(readTrashSnapshot()?.rows).toHaveLength(1)
   })
 
   it('写时复制：先前读到的 details 引用不会被后来的写入改动', () => {
-    reconcileTrashRows([A])
+    reloadSucceeded([A])
     writeTrashDetail('a', detailOf('a'))
     const before = readTrashSnapshot()?.details
     writeTrashDetail('b', detailOf('b'))
-    forgetTrashDetail('a')
+    rowGone('a')
     expect(before?.has('a')).toBe(true)
     expect(before?.has('b')).toBe(false)
     expect(readTrashSnapshot()?.details.has('b')).toBe(true)

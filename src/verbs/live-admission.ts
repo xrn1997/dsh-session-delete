@@ -6,7 +6,7 @@
  * 本模块只拥有「查什么、怎么判、怎么说」。
  */
 import type { HostIdentityPort } from '../ports/host-port.js'
-import { verbError } from './errors.js'
+import { verbError } from '../errors.js'
 
 /** 逐个问，任一在跑就抛 `live`。名单的挑选（哪些成员算这一组）归调用方，这里只按传入顺序问完。 */
 export async function assertNoLive(

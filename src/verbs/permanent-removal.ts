@@ -20,7 +20,7 @@ import { bareSessionId, firstByBare } from '../domain/closure.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/wire.js'
 import { dropDeletedSessionCache } from '../trash/projection-cache.js'
-import { verbError, rollbackReason, withRollbackFailures } from './errors.js'
+import { verbError, rollbackReason, withRollbackFailures } from '../errors.js'
 import { assertNoLive } from './live-admission.js'
 
 export interface MeasuredMemberDir {
@@ -323,6 +323,19 @@ export async function planOrphanRemoval(
   }
 }
 
+/** 一次永久删除的成功回执：条数、计划合计字节与附件读数（purge 与 orphan-clean 共用这一形状）。 */
+export interface RemovalStats {
+  readonly removed: number
+  readonly freedBytes: number
+  readonly attachments: AttachmentCleanupWire
+}
+
+/**
+ * 执行器的窄面：把一份计划动成盘、把 {@link RemovalStats} 交回来。清册作用域只拿这一件——
+ * 删的能力（`RemovalDeps`）留在持有它的调用方手里、按调用点注入，作用域自己够不着。
+ */
+export type RemovalExecutor = (plan: RemovalPlan) => Promise<RemovalStats>
+
 /**
  * 按计划执行一次永久删除：不再量。回执的字节念计划（`plan.bytes`），执行期不再累加一遍。
  *
@@ -356,7 +369,7 @@ export async function planOrphanRemoval(
 export async function executeRemoval(
   deps: RemovalDeps,
   plan: RemovalPlan,
-): Promise<{ removed: number; freedBytes: number; attachments: AttachmentCleanupWire }> {
+): Promise<RemovalStats> {
   // 计划→执行的窗口由附件引用扫描撑开；动第一笔写前重查同一份名单（理由见函数头注）。
   await assertNoLive(deps.host, plan.unarchive)
   const presence = deps.presence

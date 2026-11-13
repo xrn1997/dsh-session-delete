@@ -7,8 +7,8 @@
 import type { TrashEntryWire } from '../shared/wire.js'
 import type { SessionDeleteRemote, TrashDetailLike } from './remote.js'
 import {
-  clearTrashDetails,
-  forgetTrashDetail,
+  emptiedTrash,
+  rowGone,
   readCachedTrashDetail,
   writeTrashDetail,
 } from './trash-snapshot.js'
@@ -37,8 +37,9 @@ export type TrashDetailReader = DetailReader<TrashEntryWire, TrashDetailLike>
 const TRASH_LEDGER: DetailLedger<TrashDetailLike> = {
   read: readCachedTrashDetail,
   write: writeTrashDetail,
-  forget: forgetTrashDetail,
-  clear: clearTrashDetails,
+  // 读数失败与行消失都只是这一条详情作废（`rowGone` 的「读数作废」那一面）；整本作废只走 `clear`。
+  forget: rowGone,
+  clear: emptiedTrash,
 }
 
 /** 模块级取键函数：身份恒稳，不随渲染换引用（通用层把它放进 memo/effect 的依赖）。 */

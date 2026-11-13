@@ -3,7 +3,7 @@ import type { SessionIdentity } from '../ports/host-port.js'
 import type { TrashEntry } from '../trash/entry.js'
 import type { OrphanCleanStatsWire, OrphanReportWire } from '../shared/wire.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
-import { verbError } from './errors.js'
+import { verbError } from '../errors.js'
 import { executeRemoval, measureMemberDir, planOrphanRemoval } from './permanent-removal.js'
 
 /** 组里一个人的盘上身份（字节是**扫描那一刻**量的，清理时按目录重量一次，不拿这份快照冒充准数）。 */

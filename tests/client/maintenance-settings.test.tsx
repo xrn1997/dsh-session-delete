@@ -10,13 +10,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { MaintenanceSettings } from '../../src/client/maintenance-settings.js'
-import type {
-  AttachmentCleanupWire,
-  AttachmentOrphanReportWire,
-  OrphanReportWire,
-} from '../../src/client/remote.js'
+import type { RemoteOutcome } from '../../src/client/remote.js'
+import type { AttachmentCleanupWire, AttachmentOrphanReportWire, OrphanReportWire } from '../../src/shared/wire.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
-import { createFakeRemote, type FakeRemote, type FakeRemoteMethods } from './support/fake-remote.js'
+import { createFakeRemote, remoteFail, remoteOk, type FakeRemote } from './support/fake-remote.js'
 import { ok, outcomes } from './support/outcomes.js'
 
 const EMPTY: OrphanReportWire = { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] }
@@ -37,20 +34,20 @@ const ATT_106: AttachmentOrphanReportWire = {
 const PROJ_3 = { count: 3 }
 const PROJ_EMPTY = { count: 0 }
 
-function deps(over: Partial<FakeRemoteMethods> = {}): FakeRemote {
+function deps(over: Partial<FakeRemote> = {}): FakeRemote {
   return createFakeRemote({
-    scanOrphans: vi.fn(async () => EMPTY),
-    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
-      outcomes(action, ids)),
-    scanAttachmentOrphans: vi.fn(async () => ATT_EMPTY),
-    cleanAttachmentOrphans: vi.fn(async () => ({ removed: 0, freedBytes: 0, failed: 0 })),
-    scanProjectionCacheOrphans: vi.fn(async () => PROJ_EMPTY),
-    cleanProjectionCacheOrphans: vi.fn(async () => ({ removed: 0, failed: 0 })),
+    scanOrphans: vi.fn(async () => remoteOk(EMPTY)),
+    applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> =>
+      remoteOk(outcomes(action, ids))),
+    scanAttachmentOrphans: vi.fn(async () => remoteOk(ATT_EMPTY)),
+    cleanAttachmentOrphans: vi.fn(async () => remoteOk({ removed: 0, freedBytes: 0, failed: 0 })),
+    scanProjectionCacheOrphans: vi.fn(async () => remoteOk(PROJ_EMPTY)),
+    cleanProjectionCacheOrphans: vi.fn(async () => remoteOk({ removed: 0, failed: 0 })),
     ...over,
   })
 }
 
-function renderCard(over: Partial<FakeRemoteMethods> = {}) {
+function renderCard(over: Partial<FakeRemote> = {}) {
   const d = deps(over)
   const view = render(<MaintenanceSettings deps={d} />)
   const section = (slot: 'maintenance-orphans' | 'maintenance-attachments' | 'maintenance-projection') => {
@@ -76,8 +73,8 @@ describe('维护卡 · 初始态', () => {
   })
 
   it('「检查」在飞时状态是「检查中…」、按钮按住；落地 0 条显示「没有发现」', async () => {
-    let resolveScan!: (value: OrphanReportWire) => void
-    const scanOrphans = vi.fn(() => new Promise<OrphanReportWire>((resolve) => { resolveScan = resolve }))
+    let resolveScan!: (value: RemoteOutcome<OrphanReportWire>) => void
+    const scanOrphans = vi.fn(() => new Promise<RemoteOutcome<OrphanReportWire>>((resolve) => { resolveScan = resolve }))
     const { section } = renderCard({ scanOrphans })
     const orphans = section('maintenance-orphans')
     const check = within(orphans).getByRole('button', { name: '检查' })
@@ -86,7 +83,7 @@ describe('维护卡 · 初始态', () => {
     expect(within(orphans).getByText('检查中…')).toBeInTheDocument()
     expect(check).toBeDisabled()
 
-    await act(async () => { resolveScan(EMPTY) })
+    await act(async () => { resolveScan(remoteOk(EMPTY)) })
     await waitFor(() => expect(within(orphans).getByText('没有发现')).toBeInTheDocument())
     expect(check).not.toBeDisabled()
   })
@@ -95,10 +92,10 @@ describe('维护卡 · 初始态', () => {
 describe('维护卡 · 孤儿会话', () => {
   it('检查显示 N 条并复用既有横幅；清理后重查归零', async () => {
     const scanOrphans = vi.fn()
-      .mockResolvedValueOnce(REPORT)
-      .mockResolvedValueOnce(EMPTY)
-    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<ApplyOutcome[]> =>
-      ids.map((id) => ok(action, id, { removed: 1, freedBytes: 2048 })))
+      .mockResolvedValueOnce(remoteOk(REPORT))
+      .mockResolvedValueOnce(remoteOk(EMPTY))
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> =>
+      remoteOk(ids.map((id) => ok(action, id, { removed: 1, freedBytes: 2048 }))))
     const { d, section } = renderCard({ scanOrphans, applyOutcomes })
     const orphans = section('maintenance-orphans')
 
@@ -118,9 +115,7 @@ describe('维护卡 · 孤儿会话', () => {
 
   it('检查失败：状态行是「检查失败」，不是「尚未检查」；另一段不受影响', async () => {
     const { section } = renderCard({
-      scanOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('sessionQuery 不在'), { code: 'sessiondelete/io' })
-      }),
+      scanOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: 'sessionQuery 不在' })),
     })
     const orphans = section('maintenance-orphans')
 
@@ -133,12 +128,12 @@ describe('维护卡 · 孤儿会话', () => {
   })
 
   it('清理在飞时状态是「清理中…」；回执里的附件读数在孤儿段上屏', async () => {
-    let resolveApply!: (value: ApplyOutcome[]) => void
+    let resolveApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
     const scanOrphans = vi.fn()
-      .mockResolvedValueOnce(REPORT)
-      .mockResolvedValueOnce(EMPTY)
+      .mockResolvedValueOnce(remoteOk(REPORT))
+      .mockResolvedValueOnce(remoteOk(EMPTY))
     const applyOutcomes = vi.fn(
-      () => new Promise<ApplyOutcome[]>((resolve) => { resolveApply = resolve }),
+      () => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { resolveApply = resolve }),
     )
     const { section } = renderCard({ scanOrphans, applyOutcomes })
     const orphans = section('maintenance-orphans')
@@ -156,11 +151,11 @@ describe('维护卡 · 孤儿会话', () => {
     expect(within(section('maintenance-attachments')).getByRole('button', { name: '检查' })).not.toBeDisabled()
 
     await act(async () => {
-      resolveApply(['session-root'].map((id) => ok('orphan-clean', id, {
+      resolveApply(remoteOk(['session-root'].map((id) => ok('orphan-clean', id, {
         removed: 1,
         freedBytes: 2048,
         attachments: { removed: 2, freedBytes: 100, failed: 0, skipped: '剩余引用源读不出' },
-      })))
+      }))))
     })
     expect(
       await within(orphans).findByText('部分附件未清理：剩余引用源读不出（已清理 2 个）'),
@@ -172,10 +167,10 @@ describe('维护卡 · 孤儿会话', () => {
 describe('维护卡 · 孤儿附件', () => {
   it('106 / 27.8MiB：检查显示数量与体积，确认后清理并重查归零', async () => {
     let report = ATT_106
-    const scanAttachmentOrphans = vi.fn(async () => report)
-    let resolveClean!: (value: AttachmentCleanupWire) => void
+    const scanAttachmentOrphans = vi.fn(async () => remoteOk(report))
+    let resolveClean!: (value: RemoteOutcome<AttachmentCleanupWire>) => void
     const cleanAttachmentOrphans = vi.fn(
-      () => new Promise<AttachmentCleanupWire>((resolve) => { resolveClean = resolve }),
+      () => new Promise<RemoteOutcome<AttachmentCleanupWire>>((resolve) => { resolveClean = resolve }),
     )
     const { d, section } = renderCard({ scanAttachmentOrphans, cleanAttachmentOrphans })
     const attachments = section('maintenance-attachments')
@@ -206,7 +201,7 @@ describe('维护卡 · 孤儿附件', () => {
 
     await act(async () => {
       report = ATT_EMPTY
-      resolveClean({ removed: 106, freedBytes: 29_150_413, failed: 0 })
+      resolveClean(remoteOk({ removed: 106, freedBytes: 29_150_413, failed: 0 }))
     })
     await waitFor(() => expect(cleanAttachmentOrphans).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(scanAttachmentOrphans).toHaveBeenCalledTimes(2))
@@ -223,7 +218,7 @@ describe('维护卡 · 孤儿附件', () => {
       bytes: 1,
     }))
     const report: AttachmentOrphanReportWire = { count: 205, totalBytes: 205, items }
-    const scanAttachmentOrphans = vi.fn(async () => report)
+    const scanAttachmentOrphans = vi.fn(async () => remoteOk(report))
     const { section } = renderCard({ scanAttachmentOrphans })
     const attachments = section('maintenance-attachments')
 
@@ -239,8 +234,8 @@ describe('维护卡 · 孤儿附件', () => {
 
   it('检查失败：原因上屏，重试再发一次请求', async () => {
     const scanAttachmentOrphans = vi.fn()
-      .mockRejectedValueOnce(Object.assign(new Error('引用源读不出'), { code: 'sessiondelete/io' }))
-      .mockResolvedValueOnce(ATT_EMPTY)
+      .mockResolvedValueOnce(remoteFail({ code: 'sessiondelete/io', message: '引用源读不出' }))
+      .mockResolvedValueOnce(remoteOk(ATT_EMPTY))
     const { section } = renderCard({ scanAttachmentOrphans })
     const attachments = section('maintenance-attachments')
 
@@ -257,10 +252,10 @@ describe('维护卡 · 孤儿附件', () => {
 
   it('skipped 回执在卡片上出提示，不冒充"没有发现"之外的成功', async () => {
     let report = ATT_106
-    const scanAttachmentOrphans = vi.fn(async () => report)
+    const scanAttachmentOrphans = vi.fn(async () => remoteOk(report))
     const cleanAttachmentOrphans = vi.fn(async () => {
       report = ATT_EMPTY
-      return { removed: 0, freedBytes: 0, failed: 0, skipped: '引用源读不出' }
+      return remoteOk({ removed: 0, freedBytes: 0, failed: 0, skipped: '引用源读不出' })
     })
     const { section } = renderCard({ scanAttachmentOrphans, cleanAttachmentOrphans })
     const attachments = section('maintenance-attachments')
@@ -275,12 +270,10 @@ describe('维护卡 · 孤儿附件', () => {
   })
 
   it('清理顶层失败：本地化前缀 + 原文，状态行是「检查失败」', async () => {
-    const scanAttachmentOrphans = vi.fn(async () => ATT_106)
+    const scanAttachmentOrphans = vi.fn(async () => remoteOk(ATT_106))
     const { section } = renderCard({
       scanAttachmentOrphans,
-      cleanAttachmentOrphans: vi.fn(async () => {
-        throw Object.assign(new Error('盘上忙'), { code: 'sessiondelete/io' })
-      }),
+      cleanAttachmentOrphans: vi.fn(async () => remoteFail({ code: 'sessiondelete/io', message: '盘上忙' })),
     })
     const attachments = section('maintenance-attachments')
 
@@ -298,10 +291,10 @@ describe('维护卡 · 孤儿附件', () => {
 describe('维护卡 · 投影缓存', () => {
   it('检查显示条数；确认后清理并重查归零，回执单独一行', async () => {
     let report = PROJ_3
-    const scanProjectionCacheOrphans = vi.fn(async () => report)
+    const scanProjectionCacheOrphans = vi.fn(async () => remoteOk(report))
     const cleanProjectionCacheOrphans = vi.fn(async () => {
       report = PROJ_EMPTY
-      return { removed: 3, failed: 0 }
+      return remoteOk({ removed: 3, failed: 0 })
     })
     const { d, section } = renderCard({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
     const projection = section('maintenance-projection')
@@ -328,9 +321,8 @@ describe('维护卡 · 投影缓存', () => {
   })
 
   it('检查失败：原因上屏、状态是「检查失败」，不退回「尚未检查」', async () => {
-    const scanProjectionCacheOrphans = vi.fn(async () => {
-      throw Object.assign(new Error('投影缓存读面不可用'), { code: 'sessiondelete/io' })
-    })
+    const scanProjectionCacheOrphans = vi.fn(async () =>
+      remoteFail({ code: 'sessiondelete/io', message: '投影缓存读面不可用' }))
     const { section } = renderCard({ scanProjectionCacheOrphans })
     const projection = section('maintenance-projection')
 
@@ -341,8 +333,8 @@ describe('维护卡 · 投影缓存', () => {
   })
 
   it('清理部分失败：未清条数与已清条数都在句里，状态行是「检查失败」', async () => {
-    const scanProjectionCacheOrphans = vi.fn(async () => PROJ_3)
-    const cleanProjectionCacheOrphans = vi.fn(async () => ({ removed: 1, failed: 2 }))
+    const scanProjectionCacheOrphans = vi.fn(async () => remoteOk(PROJ_3))
+    const cleanProjectionCacheOrphans = vi.fn(async () => remoteOk({ removed: 1, failed: 2 }))
     const { section } = renderCard({ scanProjectionCacheOrphans, cleanProjectionCacheOrphans })
     const projection = section('maintenance-projection')
 

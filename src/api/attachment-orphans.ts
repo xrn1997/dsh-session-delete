@@ -10,7 +10,7 @@
 import { scanOrphanImageAttachments, type AttachmentReadDeps } from '../trash/attachments.js'
 import type { SessionDeleteConfig } from '../config.js'
 import type { AttachmentOrphanReportWire } from '../shared/wire.js'
-import { verbError } from '../verbs/errors.js'
+import { verbError } from '../errors.js'
 
 /** 报告比扫描多读一只旋钮（预览条数）；扫描本体仍只认 `maxJsonRefBytes`。 */
 export interface AttachmentOrphanReportDeps extends AttachmentReadDeps {

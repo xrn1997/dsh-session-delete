@@ -7,8 +7,11 @@
  */
 import { describe, expect, it } from 'vitest'
 import { toWire } from '../src/api/trash-rows.js'
+import { bodyOf } from '../src/api/route-table.js'
 import { REQUIRED_ENTRY_FIELDS, type TrashEntry } from '../src/trash/entry.js'
 import {
+  BODY_GROUPS,
+  PARAMS,
   ROUTE_CODES,
   ROUTES,
   SESSION_DELETE_CODES,
@@ -231,24 +234,38 @@ describe('响应信封的运行期判形（isRemoteResult）', () => {
 describe('段名表 `ROUTES` 是结构化常量（路径 / 方法 / 请求体形状各一格，ADR-0004 就地订正后的家）', () => {
   // 一条 wire 事实（某段的 path + method + body）只住这一张表；键集漂了（多一格、少一格、
   // 某段退化回纯字符串）两半的投影就会静默分叉——这类漂移运行期不报错，只有键集比对抓得住。
-  it('每项恰有 path / method / body 三键，且 path 以 / 开头、body 在册', () => {
+  it('每项恰有 path / method / body 三键，且 path 以 / 开头、body 是字段组描述的键', () => {
     for (const [name, seg] of Object.entries(ROUTES)) {
       expect(`${name}:${Object.keys(seg).sort().join('+')}`).toBe(`${name}:body+method+path`)
       expect(`${name}:${seg.path.startsWith('/')}`).toBe(`${name}:true`)
-      expect(`${name}:${['none', 'query', 'config', 'entry', 'apply', 'sessionId'].includes(seg.body)}`).toBe(`${name}:true`)
+      // 「body 在册」的判据是字段组描述本身的键集：不在 `BODY_GROUPS` 里有格子的 body 值，
+      // 就是没有字段描述的空名——不另抄一份 body 名单（`Record<RouteBody, …>` 的类型闸同管这条）。
+      expect(`${name}:${Object.hasOwn(BODY_GROUPS, seg.body)}`).toBe(`${name}:true`)
     }
   })
 
   // `body` 与方法是**同一件事的两格**：带 JSON 字段的段只能是 POST（GET 不带体），查询串段只能是
   // GET。这条配对是浏览器半唯一读得见的判据（它只投影 path / method，请求字段由 interface 签名决定），
-  // 配对漂了就意味着某一格的投影不再描述真实线上形状。
-  it('body 与方法配对：JSON 字段段是 POST，GET 段只带 none / query，查询串段是 GET', () => {
+  // 配对漂了就意味着某一格的投影不再描述真实线上形状。「哪一格带 JSON 字段」的判据是 `bodyOf`
+  // （预读判定的家），不在这里抄一份 body 名单。
+  it('body 与方法配对：JSON 字段段是 POST，GET 段不预读 JSON，查询串段是 GET', () => {
     for (const [name, seg] of Object.entries(ROUTES)) {
-      const carriesJson = seg.body === 'config' || seg.body === 'entry' || seg.body === 'apply' || seg.body === 'sessionId'
-      const readableByGet = seg.body === 'none' || seg.body === 'query'
+      const carriesJson = bodyOf(seg) === 'json'
       if (carriesJson) expect(`${name}:${seg.method}`, '带 JSON 字段的段必须是 POST').toBe(`${name}:POST`)
-      if (seg.method === 'GET') expect(`${name}:${readableByGet}`, 'GET 段不带 JSON 字段').toBe(`${name}:true`)
+      if (seg.method === 'GET') expect(`${name}:${bodyOf(seg)}`, 'GET 段不带 JSON 字段').toBe(`${name}:none`)
       if (seg.body === 'query') expect(`${name}:${seg.method}`, '查询串段必须是 GET').toBe(`${name}:GET`)
+    }
+  })
+
+  // 字段组描述是线上形状的一部分（浏览器半的 interface 签名按它写）：键名字面量只许出 `PARAMS`，
+  // 组里另写一个字符串就是第二份键名，两半会在改名时各走各的。种类不在运行期验——`BodyGroup`
+  // 的类型闸把每格收窄成五种 kind，写错种类编译不过。
+  it('字段组描述：每组的字段键都是 `PARAMS` 的成员', () => {
+    const paramNames = new Set<string>(Object.values(PARAMS))
+    for (const [name, group] of Object.entries(BODY_GROUPS)) {
+      for (const field of Object.keys(group)) {
+        expect(`${name}:${paramNames.has(field)}`, `${name} 组的字段 ${field} 应是 PARAMS 的成员`).toBe(`${name}:true`)
+      }
     }
   })
 })
