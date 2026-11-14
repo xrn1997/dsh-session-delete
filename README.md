@@ -3,7 +3,7 @@
 [![CI](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xrn1997/dsh-session-delete/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@xrn1997/dsh-session-delete.svg)](https://www.npmjs.com/package/@xrn1997/dsh-session-delete)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Tested with DSH 0.2.0-rc.2 … 0.2.2-rc.2](https://img.shields.io/badge/DSH-0.2.0--rc.2%20%E2%80%A6%200.2.2--rc.2-brightgreen)](#兼容性)
+[![Tested with DSH 0.2.0-rc.2 … 0.2.2-rc.3](https://img.shields.io/badge/DSH-0.2.0--rc.2%20%E2%80%A6%200.2.2--rc.3-brightgreen)](#兼容性)
 
 > **DeepSeek Harness（DSH）会话回收站插件** —— DSH 原生只有「归档」没有「删除」。本插件补上可恢复的删除：删除即移入本地回收站，随时还原；彻底删除是另一件显式动作。
 
@@ -42,7 +42,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-session-delete
 ## 兼容性
 
 - **装得上**：由 `package.json` 的 `engines.dsh` 决定，窗口是 **`>=0.1.7-rc.2 <0.3.0-0`**（预发布版本参与匹配）；不满足的宿主拒绝安装并回滚
-- **真跑过**：桌面真机实测名单是 **DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1、0.2.2-rc.2**；窗口内的其他版本装得上但没实测过，不作为推荐目标
+- **真跑过**：桌面真机实测名单是 **DSH Desktop 0.2.0-rc.2、0.2.1-rc.1、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.5、0.2.2-rc.1、0.2.2-rc.2、0.2.2-rc.3**；窗口内的其他版本装得上但没实测过，不作为推荐目标
 - **多 Peer 部署**：接口的 owner 校验（非 owner 回 403）自 `0.2.1-alpha.3` 起才有；要跑多 Peer，优先选名单里 `0.2.1-rc.1` 起的实测代次
 
 ## 使用指南
