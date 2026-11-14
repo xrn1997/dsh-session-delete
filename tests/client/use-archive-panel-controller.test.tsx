@@ -53,10 +53,13 @@ function mountController(
   initialRows: readonly ArchiveRowWire[],
   over: {
     detailFails?: string
-    canAutoSelect?: boolean
+    /** 档位是否活动（读生命周期的门）；缺省 true = 面板正看着归档档。 */
+    active?: boolean
     /** 分栏态（原住在面板的 `archiveSplit`）：`selectRow` 的「drill 或分栏才 select」要它。 */
     split?: boolean
     detailFor?: (sessionId: string) => ArchiveDetailLike | undefined
+    /** 整段接管详情读（用来造「在飞」与风暴计数）。 */
+    detailImpl?: (sessionId: string) => Promise<RemoteOutcome<ArchiveDetailLike>>
     /** 点名的主体把这一趟读数挂住（不落地），用来造保持期。 */
     detailDelay?: (sessionId: string) => Promise<RemoteOutcome<ArchiveDetailLike>> | undefined
     applyFailIds?: readonly string[]
@@ -66,6 +69,7 @@ function mountController(
     if (sessionId === over.detailFails) {
       return { ok: false, failure: { code: 'sessiondelete/io', message: '读归档日志失败：帧坏了' } }
     }
+    if (over.detailImpl !== undefined) return over.detailImpl(sessionId)
     const delayed = over.detailDelay?.(sessionId)
     if (delayed !== undefined) return delayed
     return { ok: true, value: over.detailFor?.(sessionId) ?? detailOf(sessionId) }
@@ -78,7 +82,7 @@ function mountController(
         : ok('unarchive', id, 1))),
     }))
   const deps: Pick<SessionDeleteRemote, 'archiveDetail' | 'applyOutcomes'> = { archiveDetail, applyOutcomes }
-  const view = renderHook(({ rows }: { rows: readonly ArchiveRowWire[] }) => {
+  const view = renderHook(({ rows, active }: { rows: readonly ArchiveRowWire[]; active?: boolean }) => {
     const groups = groupByProject(rows, zhTranslate, {
       timeOf: (r) => r.updatedAt ?? 0,
       projectDirOf: (r) => r.projectDir,
@@ -95,19 +99,77 @@ function mountController(
       gate: gate(),
       query,
       ordered: selection.ordered,
-      canAutoSelect: over.canAutoSelect ?? false,
+      active: active ?? over.active ?? true,
       split: over.split ?? false,
       t: zhTranslate,
     })
-  }, { initialProps: { rows: initialRows } })
-  return { ...view, archiveDetail, applyOutcomes }
+  }, { initialProps: { rows: initialRows, active: over.active ?? true } })
+  const rerender = (next: { rows: readonly ArchiveRowWire[]; active?: boolean }): void => {
+    view.rerender({ rows: next.rows, active: next.active ?? over.active ?? true })
+  }
+  return { ...view, rerender, archiveDetail, applyOutcomes }
 }
 
 describe('归档档控制器', () => {
   it('宽档自动选中：清单就绪后选第一条并读详情（与回收站同一条）', async () => {
-    const m = mountController([row('session-a'), row('session-b')], { canAutoSelect: true })
+    const m = mountController([row('session-a'), row('session-b')], { split: true })
     await waitFor(() => { expect(m.result.current.selected?.sessionId).toBe('session-a') })
     expect(m.archiveDetail).toHaveBeenCalledWith('session-a', undefined, undefined)
+  })
+
+
+  it('归档档不活动时归档修订不读详情；切回活动恰好一次', async () => {
+    const m = mountController([row('session-a')], { split: true })
+    await waitFor(() => { expect(m.result.current.selected?.sessionId).toBe('session-a') })
+    expect(m.archiveDetail).toHaveBeenCalledTimes(1)
+
+    m.rerender({ rows: [row('session-a')], active: false })
+    act(() => { invalidateArchive() })
+    await act(async () => { await Promise.resolve() })
+    expect(m.archiveDetail).toHaveBeenCalledTimes(1)
+
+    m.rerender({ rows: [row('session-a')], active: true })
+    await waitFor(() => { expect(m.archiveDetail).toHaveBeenCalledTimes(2) })
+    expect(m.archiveDetail).toHaveBeenLastCalledWith('session-a', undefined, undefined)
+    // 合并窗过去也不许再补一条：切回只补那一次。
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)) })
+    expect(m.archiveDetail).toHaveBeenCalledTimes(2)
+  })
+
+
+  it('归档修订跨 tick 风暴：窗口合并 + 单飞，兜底读不抢跑，结算后恰好一轮追补', async () => {
+    const queued: Array<() => void> = []
+    const calls: string[] = []
+    const m = mountController([row('session-a')], {
+      split: true,
+      detailImpl: (sessionId) => {
+        calls.push(sessionId)
+        if (calls.length === 1) return Promise.resolve({ ok: true, value: detailOf(sessionId) })
+        return new Promise((resolve) => { queued.push(() => resolve({ ok: true, value: detailOf(sessionId) })) })
+      },
+    })
+    await waitFor(() => { expect(m.result.current.selected?.sessionId).toBe('session-a') })
+    await waitFor(() => { expect(m.result.current.detail.kind).toBe('ready') })
+    expect(calls.length).toBe(1)
+
+    // 窗口未到：不立即读（读由合并窗到点后的 refresh 发起，兜底 effect 不抢跑）。
+    act(() => { invalidateArchive() })
+    await act(async () => { await Promise.resolve() })
+    expect(calls.length).toBe(1)
+
+    act(() => { invalidateArchive() })
+    await waitFor(() => { expect(calls.length).toBe(2) })
+    // 在飞期间再来两次修订：不许并发第三条（单飞）。
+    act(() => { invalidateArchive() })
+    act(() => { invalidateArchive() })
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 140)) })
+    expect(calls.length).toBe(2)
+
+    // 结算后追补恰好一轮。
+    queued[0]?.()
+    await waitFor(() => { expect(calls.length).toBe(3) })
+    queued[1]?.()
+    await act(async () => { await Promise.resolve() })
   })
 
   it('清单行首读不带根：选完 A 再选 B，B 的那一趟不许掺 A 做只读根（根判据认在不在清单）', async () => {
@@ -244,7 +306,7 @@ describe('归档档控制器', () => {
 
   it('宽档自动选中与父行消失同拍：孩子视图关掉、孩子账本一起丢（再开要重读）', async () => {
     const m = mountController([row('session-a'), row('session-b')], {
-      canAutoSelect: true,
+      split: true,
       detailFor: (sessionId) => sessionId === 'session-a'
         ? detailOf('session-a', {
             subagents: [{ sessionId: 'kid-1', archived: false, projectDir: '--p--', title: '孩子一' }],

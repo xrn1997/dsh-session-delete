@@ -21,6 +21,7 @@ _Avoid_: 接口、API（太泛；通道专指这条双半取数线）；fallback
 
 **会话（session）**:
 宿主持久化的一条对话。落盘为 `sessions/<项目目录>/<会话目录>/session.vN.jsonl.zstd`——zstd **多帧**，第一行是 header（含 `id` 与 `cwd`）；一个目录里可以并存多代日志，只读版本号最大的那代（`src/log/session-log.ts`）。
+_无单点实现_: 宿主概念（会话目录 + 事件日志）；本插件只经端口读面投影，不存在一个函数能称为「会话的实现」。
 _Avoid_: 对话、聊天记录（那是用户视角的内容，不是持久化单位）。
 
 **附件（attachment）**:
@@ -29,6 +30,7 @@ _唯一实现_: `src/trash/attachments.ts` 的 `attachmentsInContent`；读取�
 
 **附件库（attachment store）**:
 `$DSH_HOME/attachments/v1`：图片在 `objects/`，普通文件在 `file-objects/` + `files/`。宿主所有、没有删除接口。
+_无单点实现_: 宿主的附件存储；本插件只在永久删除与孤儿附件清理时删 `.dsh` 内的图片副本（判据归 `src/trash/attachments.ts`），库本身不是本仓实现。
 _Avoid_: 缓存（它是宿主持久副本；派生请求缓存在 `cache/attachments`）。
 
 **附件引用（attachment reference）**:
@@ -41,8 +43,8 @@ _唯一实现_: `src/api/connection-route.ts` 的 `isSameOriginFetch`；声明�
 _Avoid_: 请求栅栏（旧概念已随 ADR-0033 删除；这里只收字节 oracle，不做身份 / 归属判定）。
 
 **可调项（config）**:
-宿主 profile 的 patch 层里给本插件的三只旋钮（孤儿预览条数 / 附件响应上限 / JSON 扫描上限）；写有两个入口：直接改 patch，或在插件设置页的「可调项」卡里改（走 `/config` 的写支）。
-_唯一实现_: `src/config.ts` 的 `DEFAULT_CONFIG` / `normalizeConfig` / `Config`（Standard Schema）；`apply` 归一一次后作为 `CoreDeps.config` 注入，读方从 deps 读；跨半的读/写由 `src/verbs/config.ts` 与 `src/client/config-settings.tsx` 承载（ADR-0043）。
+宿主 profile 的 patch 层里给本插件的三只旋钮（孤儿预览条数 / 附件响应上限 / JSON 扫描上限）；写有两个入口：直接改 patch，或在插件设置页的「可调项」卡里改（走 `/config` 的写支）。归一一次后作为 `CoreDeps.config` 注入，读方从 deps 读（ADR-0043）。
+_唯一实现_: `src/config.ts` 的 `DEFAULT_CONFIG` / `normalizeConfig` / `Config`（Standard Schema）；跨半的读/写由 `src/verbs/config.ts` 与 `src/client/config-settings.tsx` 承载。
 _Avoid_: 设置（界面设置页）、环境变量（配置只走宿主的 patch 层，ADR-0037）。
 
 **引用扫描（reference scan）**:
@@ -79,20 +81,22 @@ _Avoid_: 不存在（口语；判据只认那两种错误码）、读不到（�
 
 **回收站（trash）**:
 被删除会话的本体，住在数据根的 `session-trash/` 下，与 `sessions/` **同卷**（搬移靠整目录 `rename`，原子）。**不自动过期**；清空是显式动作。手工翻回收站目录时看到比清单多的目录，那是跟着父进来的子会话，各有自己的条目。
+_无单点实现_: 插件概念：清册、`session-trash/` 目录、首帧快照与面板各司其职，没有哪一个模块单独实现「回收站」。
 _Avoid_: 垃圾桶、删除列表（会把它说成一个 UI 或一个临时缓存）。
 
 **条目（trash entry）**:
 回收站里的一行。`id` = `<删除时刻 UTC>-<原目录名>`，**回收站目录名就是它**，恢复也靠它反推原目录名。形状与路径闸住 `src/trash/entry.ts`。
+_无单点实现_: 一条回收站行的概念；线上形状与落地形状各住 `src/shared/wire.ts` / `src/trash/entry.ts`，视图再投影，无单点实现。
 _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 
 **条目显示名（entry display name）**:
 清单行（回收站档与归档档）、详情标题排与子会话行显示的那个名字。次序：子会话的显示名（父日志 `subagent/catalog` 的 label；独立子会话自己日志的 `subagent/descriptor` label；fork 子会话自己日志的 `session/title`）→ 清册 `title` → 日志 `session/title` 兜底 → 未命名兜底。删除那一刻的取名判据住 `src/ports/host-port.ts` 的 `titleOf`（起名就按 label 优先）；存量条目的读时兜底由 `src/trash/detail.ts` 的 `subagentLabels` / `ownLabel` 与 `src/trash/display-name.ts` 的 `displayNameOfLog` 从日志折出。
-_唯一实现_: 次序的前两格（`label` 非空优先 → 日志标题）住 `src/client/trash-view.ts` 的 `preferredNameOf`；兜底那句各归其面——子会话行 `src/client/subagent-section.tsx` 的 `rowName`、归档行 `src/client/trash-view.ts` 的 `displayNameOf`。回收站详情标题排另有四源次序（父行 label → 详情自己的 label → 清册标题 → 日志标题），住 `src/client/trash-detail.tsx` 的 `headerName`。裁决见 ADR-0058。
+_唯一实现_: 次序的前两格（`label` 非空优先 → 日志标题）住 `src/client/trash-view.ts` 的 `preferredNameOf`；兜底那句各归其面——子会话行 `src/client/subagent-section.tsx` 的 `rowName`、归档行 `src/client/trash-view.ts` 的 `displayNameOf`。回收站详情标题排的四源次序（父行 label → 详情自己的 label → 清册标题 → 日志标题）住 `src/client/trash-view.ts` 的 `detailNameOf`；`src/client/trash-detail.tsx` 的 `headerName` 只是回收站那一档的薄包装。裁决见 ADR-0058。
 _Avoid_: 拿主会话的 `title` 投影给子会话起名（同批会撞名，ADR-0058 就是为防它）。
 
 **详情块（detail block）**:
-详情正文的一格（回收站档与归档档同一份），判别联合：`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`tool` 由 `tool/call` 建块、`tool/result` 按 `callId` 回填；turn/step/job/request 这类簿记事件不成块。每次只回尾部一页，页有块数与正文总量两道闸（单块另有字符闸）；`olderCursor` 是块在日志里的序号（分页边界），不是时间戳。
-_唯一实现_: `src/trash/detail.ts` 的 `createDetailFold`（内含 `PageBuilder`）——两档喂它：`readTrashDetail` 从 raw JSONL、`readArchiveDetail` 从 `readSession` 的事件流 + 合成 `session` 头；线上形状住 `src/shared/wire.ts` 的 `TrashDetailBlockWire`。
+详情正文的一格（回收站档与归档档同一份），判别联合：`user` / `assistant` / `reasoning` / `tool` / `injection` / `system` / `compaction`。`tool` 由 `tool/call` 建块、`tool/result` 按 `callId` 回填；turn/step/job/request 这类簿记事件不成块。每次只回尾部一页，页有块数与正文总量两道闸（单块另有字符闸）；`olderCursor` 是块在日志里的序号（分页边界），不是时间戳。两档喂同一份折叠器：`readTrashDetail` 从 raw JSONL、`readArchiveDetail` 从 `readSession` 的事件流 + 合成 `session` 头。
+_唯一实现_: `src/trash/detail.ts` 的 `createDetailFold`（内含 `PageBuilder`）；线上形状住 `src/shared/wire.ts` 的 `TrashDetailBlockWire`。
 _Avoid_: 消息（消息是日志里的 `user/message` / `assistant/message`；一条消息可以拆成多个块，工具块来自 `tool/call` 而不是 assistant content）。
 
 **工作步骤展示（work steps view）**:
@@ -107,15 +111,17 @@ _Avoid_: 轮次轨 / turn rail（宿主按 turn 分格；这里按用户提问�
 
 **未分组（ungrouped）**:
 回收站清单里原工作区已从宿主账本删掉的条目统一归入的组；该组永远沉底，因为它不是一个可比较的项目。它与「未记录项目」（空 cwd）不是同一件事。
-_唯一实现_: `src/client/trash-view.ts` 的 `UNGROUPED_PROJECT_DIR` / `groupByProject`；组的 `ungrouped` 与 `title` 由它派生。
+_唯一实现_: `src/client/trash-view.ts` 的 `UNGROUPED_PROJECT_DIR` / `groupByProject`；组的 ungrouped 与 title 由它派生。
 _Avoid_: 未记录项目（那是空 cwd）；工作区已丢失提示（清单分组本身就是去向的说明）。
 
 **清册（manifest）**:
 条目的索引，住在宿主 storage 域（介质在数据根下的 `storages/`）。它是**内部索引、不用手碰**；外部真正的事实来源是 `session-trash/` 里那些目录，两者由**对账**拉平。清册只记文件里真有的事实：随盘上随时变的数（还剩几个孩子、这次释放多少）现算现给、不落清册。
+_无单点实现_: 活的面是宿主 storage 域；仓内绑定住 `src/trash/manifest.ts` 的 `createStorageManifest` 与 `src/trash/storage-manifest.ts`（读面归「清册读面」词条）。
 _Avoid_: 索引、数据库（清册是宿主 storage 域里的内部索引，但不是一个可查询的数据库）。
 
 **对账（reconcile）**:
 真相读由 `src/trash/ledger.ts` 的 `list()` 先与 `session-trash/` 的目录修回一致：多出的目录重建出行、目录没了的行摘掉、认不出的当外人（不动也不列）。幂等，且**零漂移零写入**；判据住 `src/trash/reconcile.ts`。谁走真相读、谁走 `raw()` 见 `docs/architecture.md` §4 与 ADR-0012。
+_唯一实现_: `src/trash/reconcile.ts` 的 `reconcileTrash`。
 
 **清册读面（trash ledger）**:
 清册的两条读法：**真相读** `list()` 先对账再交行；**raw 索引** `raw()` 只回清册、不对账也不写行。谁走哪条见 `docs/architecture.md` §4 与 ADR-0012。
@@ -139,6 +145,7 @@ _Avoid_: 账本（同批集合不要与宿主工作区注册表混用）。
 
 **组（group） / 组根（group root）**:
 一次删除搬进来的父会话与**在盘上、进了回收站**的孩子。孩子那行记 `parentEntryId` 指向父那行的 id。判据只有一条：**接得住孩子的只有组根**——自己不记 `parentEntryId` 的那一行；父行不在、或父行自己也是孩子时，孩子必须自己占一行。**组的闭包按组根算，不按直接孩子算**（`kind:'parent'` 一次问一层，问到问空为止）。组语义住 `src/trash/groups.ts`。
+_无单点实现_: 组语义的纯函数面住 `src/trash/groups.ts`；「组 / 组根」是关系概念，不指单一符号。
 _Avoid_: 批次、集合（组是删除时一起搬进来的成员关系；批次是操作单位）。
 
 **会话闭包（session closure）**:
@@ -156,6 +163,7 @@ _唯一实现_: `src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrph
 
 **活体（live session）**:
 宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**；「在跑就整组拒绝」的判据住 `src/verbs/live-admission.ts`，删除时把 session 与它的 agent handle 一起摘掉（见 ADR-0008）。
+_无单点实现_: 宿主进程里的活会话；本插件只经宿主的 `isLive` 查询观察（身份面 `HostIdentityPort`），不从本仓拥有。
 _Avoid_: 运行中（“运行中”可能指 agent 正在跑；活体指宿主内存里 attach 着的会话）。
 
 **活体准入（live admission）**:
@@ -170,6 +178,7 @@ _Avoid_: 彻底删除与永久删除混用（本仓统一说「永久删除」�
 
 **永久删除计划（permanent removal plan）**:
 一次永久删除之前要记下的全部事实：哪些**成员**（含盘上后代）与目录要删、各自**实测**多少字节、哪些会话要退归档集 / 摘账本，以及**活体准入**。计划函数**只读**；执行器拿到计划后才动盘，不再量；第一笔写前的活体复查见「活体准入」。purge 与 orphan-clean 共用这一对；journal 不参与永久删除（它只服务有反向动作的一次成员移动）。计划与执行住 `src/verbs/permanent-removal.ts`（成功回执的字节念计划、执行期只记进度）；**活体准入的判据**住 `src/verbs/live-admission.ts`。裁决见 ADR-0027。
+_无单点实现_: 计划形状与执行器住 `src/verbs/permanent-removal.ts`；「计划」是跨步骤的概念，无单点函数。
 
 **成员在场（member presence）**:
 一个成员在宿主可见列表里的状态。**离场** = 摘活体（session + agent）并如实发 `api-session/removed`；**归位** = 目录 / 账本两件写都回去后才发 `api-session/added`。判据与成对通告住 `src/verbs/member-presence.ts`；动词经 `CoreDeps.presence` 的 `PresenceCapability` 调用（端口形状住 `src/ports/presence-port.ts`）。批量恢复仍由 `src/verbs/batch.ts` 发起一次 `announceRestored(ids)`（单条就是长度为 1 的批，ADR-0014）。
@@ -177,6 +186,7 @@ _唯一实现_: `src/verbs/member-presence.ts` 的 `createMemberPresence`（动�
 
 **归档（archive）**:
 宿主「从分组面藏掉」那一档，只反映**用户自己**的归档状态；**回收站不使用它**（删除不调 `archiveSession`，见 ADR-0008）。旧版本删除留下的归档态条目在恢复时迁移式取消归档；`wasArchived` 只记删除前的事实。
+_无单点实现_: 宿主的归档位；本插件读面 + A1 观察，归档状态不由本仓实现。
 _Avoid_: 隐藏、回收站（归档不是删除，回收站也不是归档）。
 
 **归档档（archive tab）**:
@@ -186,6 +196,7 @@ _Avoid_: 归档面板、归档列表（档不是侧栏第二个面板；清单/�
 
 **通告（announce）**:
 让客户端**当场**删掉/加回一行的两条宿主事件（`api-session/removed` / `api-session/added`）。冷会话没有活体可摘，通告照样必须发。
+_无单点实现_: 事件面归宿主；本仓决定何时成对触发（判据住 `src/verbs/member-presence.ts` 的 `createMemberPresence`），不实现事件本身。
 _Avoid_: 通知、事件（太泛；通告专指这两条成对的客户端事件）。
 
 **渲染侧快照（visible-rows snapshot）**:
@@ -232,6 +243,11 @@ _Avoid_: 选择面（勾选集合、多选态与折叠组住 `src/client/use-lis
 面板跨挂载留下的**上一次成功读数**：清单、选中与详情账本；挂载首帧先画它，随后静默重读。只活在进程内、不订阅、不持久化；折叠集、列宽、孩子视图不进快照。重读与丢弃走 `src/client/trash-snapshot.ts` 的意图名（`reloadSucceeded` / `reloadFailed` / `noteSelection`；逐条口径住 `docs/architecture.md` §4 的 trash-snapshot 行）。
 _唯一实现_: `src/client/trash-snapshot.ts` 的 `readTrashSnapshot` / `reloadSucceeded` / `noteSelection`。
 _Avoid_: 缓存（本仓已有「附件引用缓存」与「渲染侧快照」两个主）、持久化（重启即无）。
+
+**意图名（intent name）**:
+首帧快照与详情账本那组「何时丢什么」的命名动作：`reloadSucceeded` / `reloadFailed` / `emptiedTrash` / `rowGone` / `writeSucceeded` / `noteSelection`。调用方只选意图，不直接改快照结构；每条意图丢什么、留什么住 `docs/architecture.md` §4 的 trash-snapshot 行。
+_唯一实现_: `src/client/trash-snapshot.ts` 的 `reloadSucceeded` / `reloadFailed` / `emptiedTrash` / `rowGone` / `writeSucceeded` / `noteSelection`。
+_Avoid_: 事件名、动作名（这两个词在本仓另有含义）。
 
 **详情账本（detail ledger）**:
 按行身份记下的**已成功读到的详情**，两档各持一份、互不读写：回收站那本键 = 条目 id、模块级、与首帧快照同一模块（面板卸载后仍留着，挂载时详情与清单、选中一起续上）；归档那本键 = 会话 id、只活在挂载内、不进首帧快照。读取失败不记账，选中该行时重读；回收站那本的丢弃走 `reloadFailed` / `emptiedTrash` / `rowGone` / `writeSucceeded` / `reloadSucceeded` 五个意图，逐条口径住 `docs/architecture.md` §4 的 trash-snapshot 行。容量与淘汰两档同一条口径。

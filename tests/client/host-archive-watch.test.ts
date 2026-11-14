@@ -110,6 +110,65 @@ describe('A1 · host-archive-watch', () => {
     expect(result.current).toBe(1) // 只有刚才那一次手动戳：降级路径一次都没戳过
   })
 
+  it('服务迟到 ⇒ ctx.inject 的 scoped 等待切过去；就绪后观察生效、收尾后不再戳', () => {
+    const { result } = renderHook(() => useArchiveRevision())
+    const workspaces = workspacesWith(['session-a'])
+    let arrive: ((child: ClientContextLike) => unknown) | undefined
+    const listen = vi.fn((_deps: readonly string[], callback: (child: ClientContextLike) => unknown) => {
+      arrive = callback
+      return () => { arrive = undefined }
+    })
+    const childDisposers: Array<() => void> = []
+    const child = {
+      slots: { inject: () => {}, register: () => {} },
+      get: (name: string) => (name === 'workspaces' ? workspaces : undefined),
+      effect: (execute: () => unknown) => { childDisposers.push(execute() as () => void) },
+    } as unknown as ClientContextLike
+    // 宿主这一拍还没提供 workspaces：`get` 落空、`inject` 就是 scoped 等待面。
+    const client = {
+      slots: { inject: () => {}, register: () => {} },
+      get: () => undefined,
+      inject: listen,
+      effect: (execute: () => unknown) => execute(),
+    } as unknown as ClientContextLike
+
+    const dispose = installArchiveHostWatch(client)
+    expect(listen).toHaveBeenCalledTimes(1)
+    expect(listen.mock.calls[0]?.[0]).toEqual(['workspaces'])
+
+    // 服务就绪：child ctx 上装出观察（disposer 收进 child.effect）。
+    act(() => { arrive?.(child) })
+    expect(childDisposers).toHaveLength(1)
+
+    act(() => {
+      workspaces.list.getSnapshot().archivedSessionIds.push('session-b')
+      workspaces.emit()
+    })
+    expect(result.current).toBe(1)
+
+    // 等待的摘除函数与 child 的收尾各管一边：卸掉后不再戳。
+    act(() => { dispose() })
+    act(() => { childDisposers[0]?.() })
+    act(() => {
+      workspaces.list.getSnapshot().archivedSessionIds.push('session-c')
+      workspaces.emit()
+    })
+    expect(result.current).toBe(1)
+  })
+
+  it('服务已就绪 ⇒ 不装 scoped 等待（inject 零调用）', () => {
+    const workspaces = workspacesWith(['session-a'])
+    const listen = vi.fn()
+    const client = {
+      slots: { inject: () => {}, register: () => {} },
+      get: (name: string) => (name === 'workspaces' ? workspaces : undefined),
+      inject: listen,
+      effect: () => {},
+    } as unknown as ClientContextLike
+    expect(() => installArchiveHostWatch(client)()).not.toThrow()
+    expect(listen).not.toHaveBeenCalled()
+  })
+
   it('disposer 退订：摘掉之后归档集再变也不戳', () => {
     const { result } = renderHook(() => useArchiveRevision())
     const workspaces = workspacesWith(['session-a'])

@@ -39,22 +39,41 @@ const identity = (sessionId: string) => ({
 })
 
 describe('孤儿投影缓存 · 报告', () => {
-  it('保护面 = 语料 ∪ 清册行 ∪ 回收站目录；bare 两种写法互通', async () => {
-    const rows = [entry('session-in-trash')]
-    const unindexed = makeEntryId(2, 'session-unindexed')
+  it('保护面 = 语料 ∪ 清册行 ∪ 回收站目录；缓存是 `session-` 写法、保护面是 bare 写法时归一后仍算在册', async () => {
+    const rows = [entry('in-trash-bare')]
+    const unindexed = makeEntryId(2, 'unindexed-bare')
     const { deps } = makeWorld({
       seed: rows,
-      corpus: [identity('session-live'), identity('session-bare')],
+      corpus: [identity('live-bare')],
       // 语料看不见的持久化会话（例如冷无 cwd）也要保护：持久化列表是第二条保护面。
-      sizes: { 'session-persisted-only': 1 },
+      sizes: { 'persisted-bare': 1 },
+      // 缓存一律 `session-` 前缀；语料 / 清册行 / 持久化 / 目录名全用 bare 写法：
+      // 去掉 `bareSessionId` 归一（任一侧）这五条都会变成孤儿。
       projectionCache: [
-        'session-live', 'session-bare', 'session-persisted-only',
-        'session-in-trash', 'session-unindexed', 'session-orphan',
+        'session-live-bare', 'session-persisted-bare',
+        'session-in-trash-bare', 'session-unindexed-bare', 'session-orphan',
       ],
       fs: { dirs: (p: string) => (p === TRASH_ROOT ? [unindexed] : []) },
     })
 
-    // 缓存里用 `session-` 写法、语料里只用 bare 写法：归一后仍算在册。
+    await expect(reportProjectionCacheOrphans(deps, rows)).resolves.toEqual({ count: 1 })
+  })
+
+  it('反方向：缓存是 bare 写法、保护面是 `session-` 写法时同样归一', async () => {
+    const rows = [entry('session-in-trash-prefixed')]
+    const unindexed = makeEntryId(3, 'session-unindexed-prefixed')
+    const { deps } = makeWorld({
+      seed: rows,
+      corpus: [identity('session-live-prefixed')],
+      sizes: { 'session-persisted-prefixed': 1 },
+      // 缓存写的是宿主那一代的裸 id；四个保护面都带前缀。
+      projectionCache: [
+        'live-prefixed', 'persisted-prefixed',
+        'in-trash-prefixed', 'unindexed-prefixed', 'orphan',
+      ],
+      fs: { dirs: (p: string) => (p === TRASH_ROOT ? [unindexed] : []) },
+    })
+
     await expect(reportProjectionCacheOrphans(deps, rows)).resolves.toEqual({ count: 1 })
   })
 

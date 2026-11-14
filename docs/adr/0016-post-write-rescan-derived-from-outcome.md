@@ -27,4 +27,4 @@ Status: superseded by 0021
 - **刷新完清单之后再反推**：判据要看的是「这次动作动了谁」，而清单已经是动作的后果。
 - **把判定搬进 settlement**：那里没有当前清单，也不该知道最新票与在飞的那次读。
 
-锚点：`src/client/use-trash-query.ts` 的 `needsOrphanRescan`；`src/client/write-seats.ts` 的 `WriteOutcome`；`tests/client/use-trash-query.test.tsx`；`docs/architecture.md` §4；ADR-0013。
+锚点：写后重扫的名单 / 失败面判据已随 ADR-0021 删除（孤儿扫描只由维护卡手动发起）；写入成败事实仍住 `src/client/write-seats.ts` 的 `WriteOutcome`；`tests/client/use-trash-query.test.tsx`；`docs/architecture.md` §4；ADR-0013。

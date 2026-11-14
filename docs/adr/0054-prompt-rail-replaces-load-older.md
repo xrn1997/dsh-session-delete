@@ -41,4 +41,4 @@ ADR-0047 把四档工作步骤与「简洁档联动分页」一起做进来时�
 - **把轨做进滚动容器（sticky）**：sticky 在滚动容器里贴不到视口中线，滚到中段就跟着走。
 - **落位时给目标行套一圈高亮**：user 行整行大半是空白，一圈环在正文里就是一个大白框；宿主也只对齐、不画。
 
-锚点：`src/client/prompt-rail.tsx`；`src/client/use-prompt-rail.ts` 的 `JUMP_PAGE_LIMIT`；`ADR-0057`（滚动入口与它的边界常量已由该篇删除）；`src/client/trash-panel.tsx` 的 `DETAIL_PANE` / `RAIL_GUTTER`；`src/trash/detail.ts` 的 `PROMPT_PREVIEW_LIMIT`；`src/shared/wire.ts` 的 `TrashDetailPromptWire`；`docs/ui-spec.md` ⑥；`tests/client/prompt-rail.test.tsx`；`tests/client/use-prompt-rail.test.tsx`；`tests/client/trash-panel.test.tsx`；`tests/trash-detail.test.ts`；`tests/layout-css.test.ts`。ADR-0047 的分页联动两条由本篇取代；档位决定由 `0057` 的「沿用」节承接。
+锚点：`src/client/prompt-rail.tsx`；`src/client/use-prompt-rail.ts` 的 `JUMP_PAGE_LIMIT`；`ADR-0057`（滚动入口与它的边界常量已由该篇删除）；`src/client/detail-pane.tsx` 的 `DETAIL_PANE` / `RAIL_GUTTER`；`src/trash/detail.ts` 的 `PROMPT_PREVIEW_LIMIT`；`src/shared/wire.ts` 的 `TrashDetailPromptWire`；`docs/ui-spec.md` ⑥；`tests/client/prompt-rail.test.tsx`；`tests/client/use-prompt-rail.test.tsx`；`tests/client/trash-panel.test.tsx`；`tests/trash-detail.test.ts`；`tests/layout-css.test.ts`。ADR-0047 的分页联动两条由本篇取代；档位决定由 `0057` 的「沿用」节承接。

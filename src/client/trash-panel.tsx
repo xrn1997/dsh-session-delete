@@ -183,7 +183,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
 
   const listRef = useRef<HTMLDivElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
-  /** 详情栏的滚动容器：分页 prepend 后按高度差补偿滚动位置（归 `trash-detail.tsx` 消费）。 */
+  /** 详情栏的滚动容器：分页 prepend 后按高度差补偿滚动位置（归 `session-detail.tsx` 的正文块与 `use-detail-pager` 消费）。 */
   const detailScrollRef = useRef<HTMLDivElement | null>(null)
   const width = usePanelWidth(rootRef)
   const wide = width >= SPLIT_MIN_WIDTH
@@ -214,7 +214,10 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   // ── 归档档（平级分段）：查询/选择面/控制器**常驻挂载**（同一次挂载内切档保留已读缓存，卸载即丢）；
   // `active` 门控读取（不活动只置脏不读，不为可能不打开的档付全语料读）。三台现场与回收站档完全独立。
   const [tab, setTab] = useState<'trash' | 'archive'>('trash')
-  const archiveQuery = useArchiveQuery({ deps, active: tab === 'archive' })
+  // 档位活动面只在这里派生一次：查询/两台控制器/导航/挂载判据都消费同一份。
+  const trashActive = tab === 'trash'
+  const archiveActive = tab === 'archive'
+  const archiveQuery = useArchiveQuery({ deps, active: archiveActive })
   const archiveRowsList = archiveQuery.list.status === 'ready' ? archiveQuery.list.rows : null
   /** 归档档自己的分栏判据：回收站空着不代表归档该缩成单列（两档数据源独立）。 */
   const archiveSplit = wide && archiveRowsList !== null && archiveRowsList.length > 0
@@ -231,8 +234,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     gate,
     query: archiveQuery,
     ordered: archiveSelection.ordered,
-    // 档位不活动时不替用户读详情（归档档只在该档可见时自动选中）。
-    canAutoSelect: archiveSplit && tab === 'archive',
+    // 档位不活动时不替用户读详情（归档档只在该档可见时自动选中）；自动选中判据由控制器派生。
+    active: archiveActive,
     split: archiveSplit,
     t,
   })
@@ -248,7 +251,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     selectMode: archiveSelection.selectMode,
     // 键盘契约只跟着**当前档**：两台导航都听 `document` 的 Esc，屏上却只有一档。不按档收口，
     // 在回收站档按一次 Esc 会把归档档看不见的下钻一起收走（两档状态互不相通，ADR-0060 决定第 4 条）。
-    drillEnabled: !archiveSplit && tab === 'archive',
+    drillEnabled: !archiveSplit && archiveActive,
     drilled: !archiveSplit && archiveController.selected !== null,
     select: archiveController.selectRow,
     toggleCheck: archiveSelection.toggleCheck,
@@ -258,7 +261,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   })
 
   /** 归档详情的提问轨：与回收站档走同一份接线（`use-detail-rail.ts`），只换主体与挂载判据。 */
-  const archivePaneMounted = tab === 'archive' && (archiveSplit || archiveController.selected !== null)
+  const archivePaneMounted = archiveActive && (archiveSplit || archiveController.selected !== null)
   const archiveRail = useDetailRail({
     state: archiveController.detail,
     canNavigate: archiveController.canNavigate,
@@ -294,6 +297,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     query,
     ordered,
     canAutoSelect: split,
+    active: trashActive,
   })
 
   /**
@@ -327,7 +331,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     selectedId: controller.selectedId,
     selectMode,
     // 键盘契约只跟着当前档（同一条判据的为什么写在上方的 `archiveNav`）。
-    drillEnabled: !split && tab === 'trash',
+    drillEnabled: !split && trashActive,
     drilled: controller.drilled,
     select: controller.select,
     toggleCheck,

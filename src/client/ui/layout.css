@@ -408,7 +408,7 @@
 }
 
 /* 落位只把目标行对齐，不画落地高亮框：宿主 `scrollToTurn` 也只对齐，整行套一圈环在正文里
-   就是一个大白框（ADR-0057）。目标行的让位（sticky 标题排的高度）由 `trash-detail.tsx` 的
+   就是一个大白框（ADR-0057）。目标行的让位（sticky 标题排的高度）由 `session-detail.tsx` 的
    `USER_ROW` 以行内 `scrollMarginTop` 消费 `JUMP_SCROLL_MARGIN_PX`，这里不写第二份像素。 */
 
 @media (prefers-reduced-motion: reduce) {

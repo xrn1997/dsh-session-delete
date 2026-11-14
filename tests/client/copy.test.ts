@@ -401,6 +401,6 @@ describe('归档档文案键', () => {
     expect(zhTranslate('archive.summary', { count: 3, size: '1 KB' })).toBe('3 个已归档会话 · 合计 1 KB')
     expect(zhTranslate('archive.detail.status')).toBe('已归档')
     expect(zhTranslate('undo.movedArchived', { title: '会话' }))
-      .toBe('会话 已移入回收站；其中已归档的，撤销后回到「归档」')
+      .toBe('会话 已移入回收站；撤销后回到「归档」')
   })
 })

@@ -84,15 +84,17 @@ export function useArchivePanelController(input: {
   query: ArchiveQuery
   /** 屏幕上的可见顺序（只含展开的组）：宽档自动选中第一条走这一份。 */
   ordered: readonly ArchiveRowWire[]
-  /** 宽档且清单有东西：与回收站同一条自动选中判据。 */
-  canAutoSelect: boolean
+  /** 归档档是否在眼前：不活动时详情主体落空（没有读需求，生命周期只订失效不读）。 */
+  active: boolean
   /** 分栏态（原住面板的 `archiveSplit`）：`selectRow` 的「drill 或分栏才真正选中」要它。
    *  归档档没有回收站那样的独立 `drilled` 位（选中即窄档下钻），所以布局事实必须进控制器；
    *  两台孪生控制器的 `select` 契约因此不同——回收站的 drill 由调用方交，归档的由 `split` 补。 */
   split: boolean
   t: Translate
 }): ArchivePanelController {
-  const { deps, gate, query, ordered, canAutoSelect, split, t } = input
+  const { deps, gate, query, ordered, active, split, t } = input
+  /** 自动选中只在「档位在眼前 + 分栏有清单」时发生：由两个已经传进来的事实派生，不另收一个入参。 */
+  const canAutoSelect = active && split
   const rows = query.list.status === 'ready' ? query.list.rows : null
   /** 离清单的孩子视图：父仍是 `selected`，详情主体换成孩子。两档状态各一份（ADR-0060 第 4 条）。 */
   const [childView, setChildView] = useState<ArchiveChildView | null>(null)
@@ -119,8 +121,9 @@ export function useArchivePanelController(input: {
     (sessionId: string): boolean => rows?.some((row) => row.sessionId === sessionId) ?? false,
     [rows],
   )
-  /** 详情主体：孩子视图开着就是孩子；父行被清单收走的那一拍先落空，effect 随后收孩子视图。 */
-  const subject: ArchiveDetailSubject | null = selected === null
+  /** 详情主体：档位在眼前才有读需求；孩子视图开着就是孩子；父行被清单收走的那一拍先落空，
+   *  effect 随后收孩子视图。不活动交 null = 生命周期只记修订、不发起读。 */
+  const subject: ArchiveDetailSubject | null = !active || selected === null
     ? null
     : childView === null ? selected : childSubjectOf(childView.child)
   /** 根判据认**在不在清单**，不认「id 是否与选中不同」：清单行自己已归档，首读/预取都不需要根；
@@ -133,6 +136,7 @@ export function useArchivePanelController(input: {
   )
   const reader = useArchiveDetailReader({
     deps,
+    active,
     subject,
     present,
     topLevel: childView === null,

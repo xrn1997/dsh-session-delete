@@ -27,7 +27,7 @@ import type { SessionRecord } from '../log/session-log.js'
 import type { CorpusEvent, CorpusLogRead } from '../ports/host-port.js'
 import { bareSessionId } from '../domain/closure.js'
 import { createDetailFold, SUBAGENT_SUMMARY_LIMIT, type DetailLimits } from './detail.js'
-import { projectSessionRows, sizeTotals } from './session-rows.js'
+import { projectRowFacts, readRowSurfaces, sizeTotalsForIds } from './session-rows.js'
 import { verbError, type VerbError } from '../errors.js'
 
 /** `readSession` 抛的宿主失败码（`SessionQueryError.code`）：未知 id / 已无盘上记录。 */
@@ -123,7 +123,8 @@ async function assertArchiveReadable(
   return false
 }
 
-/** 归档详情的子会话只读投影：宿主闭包 + `session-rows.ts` 那一份行读数。 */
+/** 归档详情的子会话只读投影：宿主闭包 + `session-rows.ts` 那一份行读数——按输出计划只装配
+ *  显示的那几行，摘要条的合计覆盖全部孩子。 */
 async function readArchiveSubagents(
   deps: CoreDeps,
   sessionId: string,
@@ -134,21 +135,24 @@ async function readArchiveSubagents(
   const kids = members.value[sessionId] ?? []
   if (kids.length === 0) return undefined
 
+  // 条数闸先落：只对**显示的**孩子付逐行读与归档态读，显示外的一条逐行读都不发（输出计划）。
+  const limit = limits?.subagents ?? SUBAGENT_SUMMARY_LIMIT
+  const displayed = kids.slice(0, limit)
   // 与归档清单同一份读面，只换两条策略：大小读失败**不许**坏正文（`absent` ⇒ 逐行缺大小），
   // 子会话没有「创建时间」这一格可回落 ⇒ 读不到提问时间就整格缺席。
-  const facts = await projectSessionRows(deps, kids.map((kid) => ({
+  const surfaces = await readRowSurfaces(deps, displayed.map((kid) => kid.sessionId), { sizeFailure: 'absent' })
+  const facts = await projectRowFacts(deps, surfaces, displayed.map((kid) => ({
     sessionId: kid.sessionId,
     wantsLabel: true,
-  })), { sizeFailure: 'absent' })
+  })))
   // 孩子自己的归档态：**不**拿「在不在归档清单里」推（清单是交集投影、会缺席）——认宿主
   // 归档集这条权威判据（`isArchived`，id 原样）。这一格读不出就整段不画（与闭包同一条
   // 「读不出不画」策略），不拿 false 冒充「未归档」。
-  const archived = await Promise.all(kids.map((kid) => deps.host.isArchived(kid.sessionId)))
-  const limit = limits?.subagents ?? SUBAGENT_SUMMARY_LIMIT
+  const archived = await Promise.all(displayed.map((kid) => deps.host.isArchived(kid.sessionId)))
   // 摘要条报的是**全部**孩子的合计，不是已列前 N 条的和（ADR-0055）；超闸只报总数，不静默截断。
-  const { totalBytes, missingSizeCount } = sizeTotals(facts)
-  const rows = facts.slice(0, limit).flatMap((fact, index): ArchiveSubagentWire[] => {
-    const kid = kids[index]
+  const totals = sizeTotalsForIds(kids.map((kid) => kid.sessionId), surfaces.sizes)
+  const rows = facts.flatMap((fact, index): ArchiveSubagentWire[] => {
+    const kid = displayed[index]
     const isArchived = archived[index]
     if (kid === undefined || isArchived === undefined) return []
     return [{
@@ -165,7 +169,7 @@ async function readArchiveSubagents(
   return {
     rows,
     ...(kids.length > limit ? { total: kids.length } : {}),
-    ...(missingSizeCount === facts.length ? {} : { sizeBytes: totalBytes }),
+    ...(totals.missingSizeCount === kids.length ? {} : { sizeBytes: totals.totalBytes }),
   }
 }
 

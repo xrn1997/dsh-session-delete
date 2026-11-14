@@ -127,6 +127,8 @@ interface Over {
   list?: TrashListState
   ordered?: readonly TrashEntryLike[]
   canAutoSelect?: boolean
+  /** 回收站档是否活动；缺省 true = 面板正看着回收站档。 */
+  active?: boolean
   busy?: boolean
   /** 需要观察闸 / 真实 busy 时换一枚自己的闸（缺省放行）。 */
   gate?: BusyGate
@@ -159,8 +161,16 @@ function harness() {
     },
     ordered: over.ordered ?? [],
     canAutoSelect: over.canAutoSelect ?? false,
+    active: over.active ?? true,
   })
   return { deps, reload, emptyTrash, noteAttachmentCleanup, input }
+}
+
+/** 挂载读经共用生命周期的调度（微任务合并）落地：凡以 reload 次数为基线的用例先等它一轮。 */
+async function settleMount(): Promise<void> {
+  await act(async () => {
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+  })
 }
 
 function mount(over: Over = {}) {
@@ -1152,6 +1162,7 @@ describe('面板控制器 · detailNav（单级判据一个家）', () => {
 describe('面板控制器 · 恢复与确认动作', () => {
   it('restore 失败：原文落在这条的行上，清单照样重读（回滚失败可能留下半套）', async () => {
     const m = mount({ entries: [A, B] })
+    await settleMount()
     m.deps.applyOutcomes.mockResolvedValueOnce(remoteOk(restoreOutcomes(['a'], ['a'], '恢复失败：项目目录不存在')))
     const refreshBefore = m.reload.mock.calls.length
 
@@ -1167,6 +1178,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
   // 写可能已经成了、响应断在路上；逐条失败也可能是组回滚留下的半套，只有重读能定。
   it('restore 顶层失败：原文落在这条的行上，清单照样重读', async () => {
     const m = mount({ entries: [A, B] })
+    await settleMount()
     m.deps.applyOutcomes.mockResolvedValueOnce(remoteFail({ code: 'client/unknown', message: '路由自检失败' }))
     const refreshBefore = m.reload.mock.calls.length
 
@@ -1226,6 +1238,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('单条恢复后清单重读一次：控制器只交"重读"这个动作，不再把 outcome 交给 query 判重扫', async () => {
     const child = mount({ entries: [CHILD] })
+    await settleMount()
     child.deps.applyOutcomes.mockResolvedValueOnce(remoteOk(restoreOutcomes(['child'])))
     const refreshBefore = child.reload.mock.calls.length
     await act(async () => {
@@ -1245,6 +1258,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('批量恢复后清单重读一次，同样不把 outcome 交给 query', async () => {
     const withChild = mount({ entries: [A, CHILD] })
+    await settleMount()
     withChild.deps.applyOutcomes.mockResolvedValueOnce(remoteOk(restoreOutcomes(['a', 'child'])))
     const refreshBefore = withChild.reload.mock.calls.length
     await act(async () => {
@@ -1457,6 +1471,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('confirmApply 请求里的 id 没回：那条落 missing 原文，不静默', async () => {
     const m = mount({ entries: [A, B] })
+    await settleMount()
     m.deps.applyOutcomes.mockResolvedValueOnce(remoteOk(purgeOutcomes(['a'])))
     const refreshBefore = m.reload.mock.calls.length
     await act(async () => {
@@ -1468,6 +1483,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
 
   it('confirmApply 顶层失败：每个 id 落同一句原文，pending 收起，清单照样重读', async () => {
     const m = mount({ entries: [A, B] })
+    await settleMount()
     act(() => {
       m.result.current.request({ kind: 'entries', ids: ['a', 'b'] })
     })
@@ -1744,6 +1760,21 @@ describe('面板控制器 · 失效通告', () => {
     expect(m.deps.detail).toHaveBeenCalledTimes(1)
   })
 
+
+  it('回收站档不活动时失效通告不重读；切回活动恰好一次', async () => {
+    const m = mount({ entries: [A] })
+    await act(async () => { await m.result.current.select(A) })
+    expect(m.reload).toHaveBeenCalledTimes(1)
+
+    m.update({ entries: [A], active: false })
+    act(() => { invalidateTrash() })
+    await act(async () => { await Promise.resolve() })
+    expect(m.reload).toHaveBeenCalledTimes(1)
+
+    m.update({ entries: [A], active: true })
+    await waitFor(() => { expect(m.reload).toHaveBeenCalledTimes(2) })
+  })
+
   it('query 回调每渲染换新身份也不重发取数，且失效时读最新那一份', async () => {
     // 模拟调用方逐渲染传新字面量（issue #8 第 3 条的环）：回调身份与闭包都按代次换新。
     // 只断言"没重发"不够——若 ref 冻在初代，失效时仍会调用旧闭包；按代次记录才钉得住 freshness。
@@ -1766,18 +1797,23 @@ describe('面板控制器 · 失效通告', () => {
         },
         ordered: [A],
         canAutoSelect: false,
+        active: true,
       }
     }
     const view = renderHook((p: TrashPanelControllerInput) => useTrashPanelController(p), { initialProps: input() })
     view.rerender(input())
     view.rerender(input())
     view.rerender(input())
-    expect(calls.mock.calls).toEqual([[0]])
+    await act(async () => {
+      for (let i = 0; i < 4; i++) await Promise.resolve()
+    })
+    // 挂载读经生命周期排到微任务：落地时取的是**最新**那份回调（第 4 次渲染的 3），不是首渲染的 0。
+    expect(calls.mock.calls).toEqual([[3]])
 
     act(() => {
       invalidateTrash()
     })
     await waitFor(() => expect(calls).toHaveBeenLastCalledWith(3))
-    expect(calls.mock.calls).toEqual([[0], [3]])
+    expect(calls.mock.calls).toEqual([[3], [3]])
   })
 })

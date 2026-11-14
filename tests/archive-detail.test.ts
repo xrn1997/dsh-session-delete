@@ -28,7 +28,7 @@ function world(log: CorpusLogRead | undefined, over: FakeDepsOptions = {}) {
 
 it('header 合成：readSession 的 session 头喂出 cwd/createdAt/parentSession（fork 子会话 label 兜底）', async () => {
   // 事件流里**没有** `session` 记录——项目/创建时间/子会话判定全靠合成那一条。
-  const { read } = world({
+  const { made, read } = world({
     session: { createdAt: 10, cwd: 'C:/p', parentSession: 'session-p' },
     events: [
       { type: 'session/title', time: 1, data: { title: '自己的标题' } },
@@ -46,6 +46,12 @@ it('header 合成：readSession 的 session 头喂出 cwd/createdAt/parentSessio
     label: '自己的标题',
   })
   expect(wire.blocks.map((block) => block.kind)).toEqual(['user'])
+  // 只读红线（ADR-0061 决定 2）：详情读路不碰生命周期与归档写面。
+  expect(made.host.archive).not.toHaveBeenCalled()
+  expect(made.host.unarchive).not.toHaveBeenCalled()
+  expect(made.host.evictLive).not.toHaveBeenCalled()
+  expect(made.host.announceRemoved).not.toHaveBeenCalled()
+  expect(made.host.announceRestored).not.toHaveBeenCalled()
 })
 
 it('分页游标：before 取更早一页，prompts 只在首次读出现', async () => {
@@ -129,6 +135,12 @@ it('仅凭根放行 ⇒ 不装配子会话段（孩子视图单级不画它，�
   // 这一趟只付寻址校验本身那一次闭包 BFS：问的是根，不是目标自己。
   expect(made.host.subagentMembersOf.mock.calls).toEqual([[['session-a']]])
   expect(made.host.titleSnapshots).not.toHaveBeenCalled()
+  // 闭包放行只是读路：不 archive / unarchive / 摘活体 / 发收尾事件（ADR-0061 决定 2）。
+  expect(made.host.archive).not.toHaveBeenCalled()
+  expect(made.host.unarchive).not.toHaveBeenCalled()
+  expect(made.host.evictLive).not.toHaveBeenCalled()
+  expect(made.host.announceRemoved).not.toHaveBeenCalled()
+  expect(made.host.announceRestored).not.toHaveBeenCalled()
 })
 
 it('主体自己已归档：子会话段照常装配——根放行不放行都不减它的段', async () => {
@@ -277,5 +289,53 @@ it('子会话段：闭包缺席不拖垮正文；大小读失败逐行缺大小�
   const wire = await sizeFails.read('session-a')
   const child = wire.subagents?.[0]
   expect(child && Object.hasOwn(child, 'sizeBytes')).toBe(false)
+  expect(wire.subagentsSizeBytes).toBeUndefined()
+})
+
+it('子会话段：只读显示行——250 个孩子只对前 200 个付逐行读与归档态，合计仍覆盖全部', async () => {
+  const kidIds = Array.from({ length: 250 }, (_, i) => `session-a-member-${i}`)
+  const made = createFakeDeps({
+    archived: true,
+    logs: { 'session-a': { session: { createdAt: 10 }, events: [] } },
+    counts: { 'session-a': 250 },
+    titles: Object.fromEntries(kidIds.map((id, i) => [id, `标题-${i}`])),
+    activity: { 'session-a-member-0': 50, 'session-a-member-17': 77 },
+    sizes: Object.fromEntries(kidIds.map((id, i) => [id, i + 1])),
+    label: '子任务名',
+  })
+  const wire = await readArchiveDetail(made.deps)('session-a')
+  // 行 = 显示的那 200 条，逐项照旧口径落格（提问时间有就有、没有不造 0）。
+  expect(wire.subagents).toEqual(kidIds.slice(0, 200).map((sessionId, i) => ({
+    sessionId,
+    archived: true,
+    projectDir: '--p--',
+    title: `标题-${i}`,
+    label: '子任务名',
+    ...(i === 0 ? { updatedAt: 50, updatedAtSource: 'prompt' } : {}),
+    ...(i === 17 ? { updatedAt: 77, updatedAtSource: 'prompt' } : {}),
+    sizeBytes: i + 1,
+  })))
+  // 截断只报总数；摘要条的大小合计覆盖全部 250 个孩子（1 到 250 求和 = 31375）。
+  expect(wire.subagentsTotal).toBe(250)
+  expect(wire.subagentsSizeBytes).toBe(31375)
+  // 显示外的孩子零逐行读：label / 标题 / 归档态都不读（寻址校验那次 isArchived 是主体自己）。
+  expect(made.host.labelOf).toHaveBeenCalledTimes(200)
+  expect(made.host.titleOf).not.toHaveBeenCalled()
+  expect(made.host.titleSnapshots.mock.calls.map(([ids]) => ids)).toEqual([kidIds.slice(0, 200)])
+  expect(made.host.isArchived.mock.calls.map(([id]) => id)).toEqual(['session-a', ...kidIds.slice(0, 200)])
+})
+
+it('子会话段：旧宿主标题回退也只读显示行——250 个孩子只问 200，全缺大小时合计格不出线', async () => {
+  const kidIds = Array.from({ length: 250 }, (_, i) => `session-a-member-${i}`)
+  const made = createFakeDeps({
+    archived: true,
+    logs: { 'session-a': { session: { createdAt: 10 }, events: [] } },
+    counts: { 'session-a': 250 },
+  })
+  const wire = await readArchiveDetail(made.deps)('session-a')
+  expect(made.host.titleOf.mock.calls.map(([id]) => id)).toEqual(kidIds.slice(0, 200))
+  expect(wire.subagents?.map((row) => row.title)).toEqual(Array.from({ length: 200 }, () => '会话标题'))
+  expect(wire.subagentsTotal).toBe(250)
+  // 250 个孩子全缺大小 ⇒ 合计格不出线（不拿 0 冒充没有大小）。
   expect(wire.subagentsSizeBytes).toBeUndefined()
 })

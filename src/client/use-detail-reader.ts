@@ -145,6 +145,9 @@ export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInpu
   const [shown, setShown] = useState<ShownDetail<S, D> | null>(null)
   /** 已被 `reset` 作废的在飞读数：落地时它还在这张表里 ⇒ 这一拍的成功与失败都不许落地。 */
   const voided = useRef(new Set<string>())
+  /** 整本作废（`clearAll`）的代次：在那之前发出的读数，落地时一律丢弃——只凭 `voided` 会漏掉
+   *  「作废前发出、作废后才回来、且之后又没被重新要过」的那一拍，把旧账本写回新风衣。 */
+  const clearToken = useRef(0)
   const [olderShown, olderFlight] = useInFlight()
   const [olderFailure, setOlderFailure] = useState<DetailFailure | null>(null)
   /** 账本被写入后要有一个**必然变化**的 state 把新对象推上屏（极快的响应会把置位/清位合批成净零变化）。 */
@@ -157,7 +160,10 @@ export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInpu
     id: string,
     options: { readonly quiet?: boolean } = {},
   ): Promise<void> => {
+    const token = clearToken.current
     const outcome = await fetch(id)
+    // 整本作废（`clearAll`）之前发出的读数：不落地，也不许按掉作废后那一拍的在飞登记。
+    if (token !== clearToken.current) return
     // 只收自己那一拍的 loading：期间已经切到别的条目时，别把新的那一拍按掉。
     detailFlight.end(id)
     // 卸载后晚到的读数不落账本（ADR-0048 边界）。
@@ -261,6 +267,8 @@ export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInpu
   }, [ledger])
 
   const clearAll = useCallback((): void => {
+    // 代次先走：作废前发出的读数（含当前主体那一拍）落地时 token 对不上，一律丢。
+    clearToken.current += 1
     ledger.clear()
     voided.current.clear()
     detailFlight.clear()

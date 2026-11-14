@@ -498,6 +498,26 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     expect(host.detach).toHaveBeenCalledWith('session-abc', 'ws-1')
   })
 
+  it('apply unarchive 拿一组 sessionId 走解除归档动词：成功值固定 1，只碰归档集', async () => {
+    const { deps, host, manifest } = makeDeps()
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.apply.path, {
+      method: 'POST', body: { [PARAMS.action]: 'unarchive', [PARAMS.ids]: ['session-a', 'session-b'] },
+    })
+    expect(status).toBe(200)
+    // 第六个动作经 `BODY_GROUPS.apply` 的 action 格识别，逐条回 1（不是实际状态变化数）。
+    expect(body.value).toEqual([
+      { id: 'session-a', action: 'unarchive', ok: true, value: 1 },
+      { id: 'session-b', action: 'unarchive', ok: true, value: 1 },
+    ])
+    expect(host.unarchive.mock.calls).toEqual([['session-a'], ['session-b']])
+    // 解除归档是归档集的显式动作（ADR-0008/0060）：删除 / 恢复的写面一次都不碰。
+    expect(host.evictLive).not.toHaveBeenCalled()
+    expect(host.announceRemoved).not.toHaveBeenCalled()
+    expect(host.announceRestored).not.toHaveBeenCalled()
+    expect(await manifest.list()).toEqual([])
+  })
+
   it('apply restore 拿一组 entryId 走恢复动词，成功即从清单消失', async () => {
     const { deps, manifest } = makeDeps({ seed: [entry('a')] })
     const base = await start(deps)
@@ -896,6 +916,8 @@ describe('POST /detail（回收站单条详情，2026-10-15）', () => {
     const base = await start(deps)
     for (const bad of [{}, { [PARAMS.entryId]: '' }, { [PARAMS.entryId]: 42 }]) {
       const failure = await failureOf(base, ROUTES.detail.path, { method: 'POST', body: bad })
+      // 请求体不对是 4xx（不是 200 + 信封）：别让这条回归成「信封形状对、状态码错」。
+      expect(failure.status).toBe(400)
       expect(failure.code).toBe('sessiondelete/io')
       // `requiredString` 支那句 400 原文逐字钉（改写措辞这里就红）。
       expect(failure.message).toBe(`请求体需带非空字符串字段 ${PARAMS.entryId}`)

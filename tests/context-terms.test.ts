@@ -1,9 +1,8 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { withoutComments } from './support/comments.js'
-import { collectFiles } from './support/corpus.js'
+import { clauseOwnershipProblems, productionText } from './support/doc-anchors.js'
 import { pick } from './support/fixture.js'
 
 /**
@@ -19,16 +18,7 @@ import { pick } from './support/fixture.js'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const CONTEXT = readFileSync(join(ROOT, 'CONTEXT.md'), 'utf8')
-
-/** 生产代码 = src/ 全部 .ts/.tsx + 仓库根的 .ts 配置（构建期守卫住在 tsdown.config.ts） */
-function productionText(): string {
-  const src = collectFiles(join(ROOT, 'src'), /\.(ts|tsx)$/, ['node_modules', 'lib', '.git', '.qoder', '.superpowers'])
-    .map((p) => withoutComments(readFileSync(p, 'utf8')))
-  const rootConfigs = readdirSync(ROOT, { withFileTypes: true })
-    .filter((e) => e.isFile() && /\.ts$/.test(e.name))
-    .map((e) => withoutComments(readFileSync(join(ROOT, e.name), 'utf8')))
-  return [...src, ...rootConfigs].join('\n')
-}
+/** 生产语料（剥注释）归 `tests/support/doc-anchors.ts`：两个文档门共用一份。 */
 const CODE = productionText()
 
 /** 词条行：`**名（en）**:`；全角冒号也收，格式漂了由下面的格式门报红，不静默漏检。 */
@@ -86,9 +76,35 @@ describe('CONTEXT.md 的词条与锚点', () => {
     expect(bad, `这些行像词条但解析器不认（应为 \`**名（en）**:\`）：\n${bad.join('\n')}`).toEqual([])
   })
 
-  it('每个词条都点名仓内锚点', () => {
-    const bad = T.filter((t) => anchors(definition(t)).length === 0).map((t) => `${t.line} ${t.name}`)
-    expect(bad, `这些词条没点任何实现锚点：\n${bad.join('\n')}`).toEqual([])
+  const IMPL_LINE = /^_唯一实现_\s*[:：]/
+  const CONCEPT_LINE = /^_无单点实现_\s*[:：]/
+
+  it('每个词条恰有一条实现声明（`_唯一实现_` 或 `_无单点实现_`）', () => {
+    const bad = T.filter((term) => {
+      const declared = term.body.split('\n').filter((line) => IMPL_LINE.test(line) || CONCEPT_LINE.test(line))
+      return declared.length !== 1
+    }).map((term) => `${term.line} ${term.name}`)
+    expect(bad, `这些词条缺实现声明或声明不唯一（有唯一实现写 \`_唯一实现_\`，概念词写 \`_无单点实现_\`）：\n${bad.join('\n')}`).toEqual([])
+  })
+
+  it('`_唯一实现_` 行按子句归属：含符号的子句必须点名路径，符号在该子句路径文件里现查得到', () => {
+    const bad: string[] = []
+    let clausesWithSymbols = 0
+    for (const term of T) {
+      for (const line of term.body.split('\n').filter((l) => IMPL_LINE.test(l))) {
+        clausesWithSymbols += 1
+        bad.push(...clauseOwnershipProblems(line.replace(IMPL_LINE, '')).map((problem) => `${term.name} → ${problem}`))
+      }
+    }
+    // 非空 guard：判据接线退化成恒真/恒空时这里先红。
+    expect(clausesWithSymbols, '词条实现声明数量异常（判据可能没在查）').toBeGreaterThan(40)
+    expect(bad, `实现声明与它的 owner 不一致（消费者叙述移进定义句，别塞进 \`_唯一实现_\`）：\n${bad.join('\n')}`).toEqual([])
+  })
+
+  it('子句归属判据认得出假符号与缺路径（正控）', () => {
+    expect(clauseOwnershipProblems('`src/client/trash-view.ts` 的 `groupByProject`')).toEqual([])
+    expect(clauseOwnershipProblems('`src/client/trash-view.ts` 的 `groupByProjectRenamedAway`').length).toBeGreaterThan(0)
+    expect(clauseOwnershipProblems('`groupByProject`').join('\n')).toContain('没有点名路径')
   })
 
   it('写出的源文件路径必须在场', () => {

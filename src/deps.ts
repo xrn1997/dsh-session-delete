@@ -6,8 +6,9 @@ import type { SessionDeleteConfig } from './config.js'
 import type { TrashLedger } from './trash/ledger.js'
 
 /** Node 半的基础依赖面：组合根只装配这一颗；动词之间不互相 import 依赖面 interface。
- *  `fs` 不含 `removeDir` / `removeFile`，`host` 不含在场三件——两条危险能力各走 {@link RemovalDeps} 与
- *  {@link CoreDeps.presence}。`config` 是 `apply` 归一后的只读快照：读方从 deps 读，不 import 模块级单例。 */
+ *  `fs` 不含 `removeDir` / `removeFile`，`host` 不含在场三件与删除面——删目录 / 删投影缓存记录走
+ *  {@link RemovalDeps}，在场三件（`evictLive` / `announce*`）走 {@link CoreDeps.presence}。`config` 是
+ *  `apply` 归一后的只读快照：读方从 deps 读，不 import 模块级单例。 */
 export interface CoreDeps {
   fs: CoreFsPort
   host: HostCorePort

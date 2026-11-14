@@ -20,7 +20,7 @@ const row = (over: Partial<ArchiveRowWire> = {}): ArchiveRowWire => ({
 })
 
 const childSubject = (over: Partial<ArchiveDetailSubject> = {}): ArchiveDetailSubject => ({
-  sessionId: 'kid-a', archived: false, projectDir: '--p--', title: '孩子甲', label: '甲', ...over,
+  sessionId: 'kid-a', projectDir: '--p--', title: '孩子甲', label: '甲', ...over,
 })
 
 const detailOf = (over: Partial<ArchiveDetailLike> = {}): ArchiveDetailLike => ({
@@ -146,13 +146,13 @@ describe('归档详情投影（ArchiveDetail）', () => {
     expect(document.querySelector('[data-dsh-session-delete="session-subagents"]')).toBeNull()
   })
 
-  it('孩子视图：状态行认主体自己的归档态——已归档孩子照实说「已归档」', () => {
-    // 清单不可见（重读失败 / 语料缺席）时已归档孩子也会进孩子视图：状态行认 `archived` 这一格，
-    // 不认 `parentContext` 在场与否（导航道会串，主体的归档态不会）。
+  it('孩子视图：状态行认这一读的归档态——已归档孩子照实说「已归档」', () => {
+    // 清单不可见（重读失败 / 语料缺席）时已归档孩子也会进孩子视图：状态行认 `ArchiveDetailWire.archived`
+    // 这一格，不认 `parentContext` 在场与否，也不认主体上的旧快照（导航道会串，这一读的归档态不会）。
     render(detailElement({
       kind: 'ready',
-      subject: childSubject({ archived: true }),
-      detail: detailOf({ sessionId: 'kid-a' }),
+      subject: childSubject(),
+      detail: detailOf({ sessionId: 'kid-a', archived: true }),
     }, {
       detailNav: { parentContext: { title: '父会话', onBack: vi.fn() } },
     }))

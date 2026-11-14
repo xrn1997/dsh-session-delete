@@ -8,7 +8,8 @@
  *   `onGone` 里的孩子视图与下钻让位，以及挂载时的快照续位。
  * - 详情主体可以离清单：孩子视图 = 从这条父行点进来的下一代，`selectedId` 仍指着父行
  *   （单级是设计，ADR-0055）。
- * - 失效通告与挂载都只触发 reload()；动作成功必须在同一趟里丢详情账本。
+ * - 失效通告与挂载都只触发 reload()（节奏归 `use-gated-refresh.ts`：档位门 / 合并 / 单飞）；
+ *   动作成功必须在同一趟里丢详情账本。
  * - back() 先收孩子视图、再收下钻，不碰焦点；失败原文不翻译。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -26,6 +27,7 @@ import {
 } from './trash-snapshot.js'
 import { useTrashDetailReader } from './use-trash-detail-reader.js'
 import { useTrashRevision } from './trash-store.js'
+import { useGatedRefresh } from './use-gated-refresh.js'
 import { useLatest } from './store.js'
 import { usePanelSelection } from './use-panel-selection.js'
 import type { DetailNav } from './session-detail.js'
@@ -45,8 +47,8 @@ export type PendingAction =
  * 控制器要的面。`query` 取四样：清单（选中从它里面找）、`reload`（挂载、显式重试、失效与写后
  * 都是同一条读）、清空（面板的写动作那一半）、`noteAttachmentCleanup`（purge 回执里
  * 附件那半句交给查询侧拼句子上屏）。`ordered` 是键盘/自动选中用的"屏幕上的顺序"（只含展开的组），
- * 由面板算好传进来——布局常量不搬进控制器。输入的引用**不需稳定**：失效 effect 的判据只有
- * `revision`，reload 回调经 `useLatest` 读最新那一份（判据住 `store.ts`）。
+ * 由面板算好传进来——布局常量不搬进控制器。输入的引用**不需稳定**：修订/档位判据交给
+ * `use-gated-refresh.ts`，reload 回调经 `useLatest` 读最新那一份（判据住 `store.ts`）。
  */
 export interface TrashPanelControllerInput {
   deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
@@ -54,6 +56,8 @@ export interface TrashPanelControllerInput {
   query: Pick<TrashQuery, 'list' | 'reload' | 'emptyTrash' | 'noteAttachmentCleanup'>
   ordered: readonly TrashEntryLike[]
   canAutoSelect: boolean
+  /** 回收站档是否在眼前：不活动只记失效（修订号），不读清单。 */
+  active: boolean
 }
 
 export interface TrashPanelController {
@@ -108,7 +112,7 @@ export interface TrashPanelController {
 }
 
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
-  const { deps, gate, query, ordered, canAutoSelect } = input
+  const { deps, gate, query, ordered, canAutoSelect, active } = input
   const { list, reload, emptyTrash, noteAttachmentCleanup } = query
   const entries = listView(list).rows
 
@@ -169,12 +173,15 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   } = useTrashDetailReader({ deps, subject, topLevel: childView === null, present })
 
   // 挂载读一次清单；别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍再重读。
+  // 档位不活动只记修订、不读；切回来那一拍补一趟（挂载那次靠 initialDirty）。
   // 无主子会话不再顺带扫：那是设置页维护卡的手动动作（ADR-0021）。
   const revision = useTrashRevision()
-  useEffect(() => {
-    void refreshers.current.reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `refreshers` 是 `useLatest` 的恒稳 ref（规则看不见自定义 hook）；失效判据只有 `revision`。
-  }, [revision])
+  useGatedRefresh({
+    active,
+    revisions: [revision],
+    refresh: () => refreshers.current.reload(),
+    policy: { initialDirty: true },
+  })
 
   // 选中行写进快照：面板卸载再挂载时先画这一行；重读回来若它不在了，清场 effect 再让位。
   // `entries` 一起进依赖：清单从 unknown 恢复时快照刚被重建（`reloadSucceeded` 拿不到当前选中），

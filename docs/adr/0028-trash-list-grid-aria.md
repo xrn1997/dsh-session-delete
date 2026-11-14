@@ -34,4 +34,4 @@ Status: accepted
 
 按 ARIA 语义，读屏播报从「选项」变成「行、n/N、选中」，行内按钮以真实按钮暴露（AT 实测仍属真机边界）。`tests/client/trash-panel.test.tsx` 钉住 grid/row/rowgroup/gridcell 四层、「树里没有 option」与列数声明（`aria-colcount` / 组头 `aria-colspan`）；`docs/ui-spec.md` 的④与「键盘」两段是这条语义的界面家。
 
-锚点：`src/client/trash-panel.tsx`（`gridActive`、`LIST_COLUMN_COUNT`、`role="rowgroup"`、`role="gridcell"`）、`src/client/trash-nav.ts`（`isListOwnedEvent`）、`tests/client/trash-panel.test.tsx`、`docs/ui-spec.md` 的④与「键盘」。
+锚点：`src/client/session-list.tsx`（`gridActive`、`COLUMN_COUNT`、`domIdOf`、`role="rowgroup"`、`role="gridcell"`）、`src/client/trash-nav.ts`（`isListOwnedEvent`）、`tests/client/session-list.test.tsx`、`tests/client/trash-panel.test.tsx`、`docs/ui-spec.md` 的④与「键盘」。

@@ -319,7 +319,9 @@ export interface TrashDetailWire extends SessionDetailWire {
 export interface ArchiveRowWire {
   sessionId: string
   projectDir: string
-  /** 日志标题（`readTitleSnapshots` 折出的 `session/title`；缺席 = 空串）。 */
+  /** 日志标题（`readTitleSnapshots` 折出的 `session/title`；缺席 = 空串）。旧宿主没有这个批量读面时
+   *  回退 `titleOf` 的投影面——那一代的 `titleOf` 对子会话可能回 label 优先的显示名，属降级口径，
+   *  不是线上主口径（显示名本来就按 label 非空优先，用户看不出差别）。 */
   title: string
   /** 子会话的宿主 `subagent` 投影 label；空串/缺席 = 没有。显示名按 label 非空优先，否则 title。 */
   label?: string

@@ -356,13 +356,20 @@ describe('撤销横幅 · archived 句', () => {
   it('已归档会话删除后撤销回到「归档」：横幅追加 archived 句，不提会话列表', () => {
     publishUndoNotice({ entryId: 'e1', title: '标题', archived: true })
     render(<UndoToast deps={createFakeRemote()} />)
-    expect(screen.getByText(/其中已归档的，撤销后回到「归档」/)).toBeInTheDocument()
+    // 单条形的主语就是那一条：整句直说「撤销后回到『归档』」，不用「其中」。
+    expect(screen.getByText(/撤销后回到「归档」/)).toBeInTheDocument()
     expect(screen.queryByText(/会话列表/)).not.toBeInTheDocument()
+  })
+
+  it('批量删除含已归档会话：批量句保留「其中已归档的」', () => {
+    publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2, archived: true })
+    render(<UndoToast deps={createFakeRemote()} />)
+    expect(screen.getByText(/2 条会话已移入回收站；其中已归档的，撤销后回到「归档」/)).toBeInTheDocument()
   })
 
   it('非归档删除不带这句', () => {
     publishUndoNotice({ entryId: 'e1', title: '标题' })
     render(<UndoToast deps={createFakeRemote()} />)
-    expect(screen.queryByText(/其中已归档的，撤销后回到「归档」/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/撤销后回到「归档」/)).not.toBeInTheDocument()
   })
 })

@@ -40,8 +40,12 @@ function mountQuery(archiveList: Fetch, active = true) {
   return { ...view, props: initialProps }
 }
 
-/** 微任务+effect 合并后的空拍（fetch 立即完成时用）。 */
-const flush = async (): Promise<void> => { await act(async () => { await Promise.resolve(); await Promise.resolve() }) }
+/** 微任务+effect 合并后的空拍（fetch 立即完成时用）：失效链路多一级调度，留足微任务轮次。 */
+const flush = async (): Promise<void> => {
+  await act(async () => {
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+  })
+}
 
 describe('归档清单查询（use-archive-query）', () => {
   beforeEach(() => { resetClientState() })
@@ -59,7 +63,7 @@ describe('归档清单查询（use-archive-query）', () => {
     expect(archiveList).toHaveBeenCalledTimes(1)
   })
 
-  it('trash 修订 + 归档修订同拍 ⇒ 一次读（合并）；在飞期间的新失效顶掉旧读（旧响应不落地）', async () => {
+  it('trash 修订 + 归档修订同拍 ⇒ 一次读（合并）；在飞期间只置脏、结算后一轮追补，旧响应不盖新态', async () => {
     const pending: Array<{ promise: Promise<RemoteOutcome<ArchiveListWire>>; resolve: (value: RemoteOutcome<ArchiveListWire>) => void }> = []
     const archiveList = vi.fn((): Promise<RemoteOutcome<ArchiveListWire>> => {
       const d = deferred<RemoteOutcome<ArchiveListWire>>()
@@ -67,6 +71,8 @@ describe('归档清单查询（use-archive-query）', () => {
       return d.promise
     })
     const m = mountQuery(archiveList, true)
+    // 挂载读经共用生命周期排到微任务：先让 fetch 发出去再结算它。
+    await flush()
     await act(async () => { pending[0]?.resolve(ready([])); await pending[0]?.promise })
     expect(archiveList).toHaveBeenCalledTimes(1)
 
@@ -75,17 +81,19 @@ describe('归档清单查询（use-archive-query）', () => {
     await flush()
     expect(archiveList).toHaveBeenCalledTimes(2)
 
-    // 在飞期间的新失效发新读、旧读作废（「同一时刻在飞只留最后一次」）。
+    // 在飞期间的新失效只置脏：单飞，不并发第三条；结算后恰一轮追补。
     act(() => { invalidateArchive() })
+    await flush()
+    expect(archiveList).toHaveBeenCalledTimes(2)
+    await act(async () => {
+      pending[1]?.resolve(ready([row('old')]))
+      await pending[1]?.promise
+    })
     await flush()
     expect(archiveList).toHaveBeenCalledTimes(3)
     await act(async () => {
       pending[2]?.resolve(ready([row('new')]))
       await pending[2]?.promise
-    })
-    await act(async () => {
-      pending[1]?.resolve(ready([row('old')]))
-      await pending[1]?.promise
     })
     expect(m.result.current.list).toMatchObject({ status: 'ready', rows: [{ sessionId: 'new' }] })
   })

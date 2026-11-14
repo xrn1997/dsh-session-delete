@@ -135,6 +135,33 @@ describe('通用详情读路 · 机制（内存账本 + 假 fetch）', () => {
     expect(m.result.current.detail.kind).toBe('idle')
   })
 
+  it('clearAll 作废在飞读数：作废前发出、作废后才回来的一拍不写回账本（代次闸）', async () => {
+    const first = deferred<RemoteOutcome<D>>()
+    const second = deferred<RemoteOutcome<D>>()
+    let calls = 0
+    const fetch = vi.fn(() => {
+      calls += 1
+      return calls === 1 ? first.promise : second.promise
+    })
+    const ledger = memoryLedger()
+    const m = mount({ fetch, ledger, subject: row('a') })
+    act(() => { void m.result.current.ensure('a') })
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    // 整本作废（归档集变更）：账本 / 在飞 / 保持一起清；orphaned effect 补一拍新读。
+    act(() => { m.result.current.clearAll() })
+    await act(async () => { await Promise.resolve() })
+    expect(fetch).toHaveBeenCalledTimes(2)
+
+    // 旧那一拍最后才回来：代次对不上 ⇒ 不写账本、也不按掉新那一拍的在飞。
+    await act(async () => { first.resolve(ok(detailOf('a', { logTitle: '旧' }))); await first.promise })
+    expect(ledger.read('a')).toBeUndefined()
+    expect(m.result.current.detail).toMatchObject({ kind: 'loading' })
+
+    await act(async () => { second.resolve(ok(detailOf('a', { logTitle: '新' }))); await second.promise })
+    expect(ledger.read('a')?.logTitle).toBe('新')
+  })
+
   it('账本是注入的：两台实例的账本互不读写', async () => {
     const ledgerA = memoryLedger()
     const ledgerB = memoryLedger()

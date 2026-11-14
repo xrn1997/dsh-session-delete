@@ -257,6 +257,20 @@ describe('段名表 `ROUTES` 是结构化常量（路径 / 方法 / 请求体形
     }
   })
 
+  // 「有字段 ⇒ 必须预读」是 `BODY_KIND` 的派生判据：带字段的组在 `BODY_KIND` 里填 `none`，
+  // 请求体就永远不预读、字段闸静默失效，而没有任何一条用例会红。`config` 是唯一例外：
+  // 组是空的（三只旋钮由 Standard Schema 自校验），但它仍是 json 段。
+  it('有字段的组必然预读 JSON；config 是「空组但 json」的唯一例外', () => {
+    for (const [name, seg] of Object.entries(ROUTES)) {
+      const fields = Object.keys(BODY_GROUPS[seg.body]).length
+      if (fields > 0) expect(`${name}:${bodyOf(seg)}`, '有字段的组必须预读 JSON').toBe(`${name}:json`)
+    }
+    const configSegs = Object.entries(ROUTES).filter(([, seg]) => seg.body === 'config')
+    expect(configSegs.length).toBeGreaterThan(0)
+    expect(Object.keys(BODY_GROUPS.config)).toEqual([])
+    for (const [name, seg] of configSegs) expect(`${name}:${bodyOf(seg)}`).toBe(`${name}:json`)
+  })
+
   // 字段组描述是线上形状的一部分（浏览器半的 interface 签名按它写）：键名字面量只许出 `PARAMS`，
   // 组里另写一个字符串就是第二份键名，两半会在改名时各走各的。种类不在运行期验——`BodyGroup`
   // 的类型闸把每格收窄成五种 kind，写错种类编译不过。

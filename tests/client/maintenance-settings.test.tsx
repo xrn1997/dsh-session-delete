@@ -193,6 +193,11 @@ describe('维护卡 · 孤儿附件', () => {
     expect(
       within(dialog).getByText('只清理 .dsh 内无引用的图片副本；源文件不受影响；共享引用保留。'),
     ).toBeInTheDocument()
+    // 危险层级跟动作走（ADR-0052）：孤儿附件是**不可恢复**的删除 ⇒ 实心红主按钮。
+    expect(
+      within(dialog).getByRole('button', { name: '清理这些附件' })
+        .style.getPropertyValue('--sd-button-primary-fill'),
+    ).toBe('var(--dsw-alias-state-error-primary)')
     expect(within(dialog).getAllByRole('img')).toHaveLength(106)
     fireEvent.click(within(dialog).getByRole('button', { name: '清理这些附件' }))
 
@@ -308,6 +313,11 @@ describe('维护卡 · 投影缓存', () => {
     expect(
       within(dialog).getByText('这些是宿主会话投影的派生缓存；清理不会动会话本体、清册或附件。'),
     ).toBeInTheDocument()
+    // 派生数据可重建、不是不可恢复的删除 ⇒ 普通主按钮，不传 `danger`（ADR-0062 / ui-spec §5.2）。
+    expect(
+      within(dialog).getByRole('button', { name: '清理这些记录' })
+        .style.getPropertyValue('--sd-button-primary-fill'),
+    ).toBe('')
     fireEvent.click(within(dialog).getByRole('button', { name: '清理这些记录' }))
 
     expect(within(projection).getByText('清理中…')).toBeInTheDocument()

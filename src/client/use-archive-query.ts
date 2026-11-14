@@ -12,8 +12,8 @@
  * - **active 门**：归档档不活动时只置脏（修订号已记着"变过"）、不读；切到 active 那一拍才读——
  *   默认档是回收站，不为一个可能不打开的档在挂载时付一次全语料读。
  * - **同一拍多次失效合并到一次读**（React 批处理 + `reload` 发起前的微任务合并）。
- * - **latest-wins**：每次读一张票，旧响应不许盖新态；在飞期间的新失效发新读、旧读作废
- *   （ADR-0060 决定第 4 条：latest-wins）。没有轮询、没有定时器。
+ * - **latest-wins**：每次读一张票，旧响应不许盖新态；在飞期间的新失效只置脏、结算后追补一轮
+ *   （单飞由共用生命周期保证；旧票由 `createLatestWins` 作废，ADR-0060 决定第 4 条）。没有轮询。
  * - **快照隔离**：清单/选中/详情都不进 `trash-snapshot`——同一次挂载内缓存（本 hook 常驻挂载，
  *   切档保留已读），卸载即丢。
  */
@@ -23,6 +23,7 @@ import type { SessionDeleteRemote } from './remote.js'
 import { useArchiveRevision } from './archive-store.js'
 import { useTrashRevision } from './trash-store.js'
 import { createLatestWins, useLatest } from './store.js'
+import { useGatedRefresh } from './use-gated-refresh.js'
 
 export type ArchiveListState =
   | { readonly status: 'loading' }
@@ -98,12 +99,13 @@ export function useArchiveQuery({
     return run
   }, [doRead])
 
-  // 失效链的唯一落点：active 才读；判据只有 active 与两台修订号（其余经 useLatest/稳定回调进 doRead）。
-  useEffect(() => {
-    if (!active) return
-    void reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 失效判据就是这三个：active 与两台修订号；`reload` 是恒稳回调（useCallback 链全部稳定）。
-  }, [active, trashRevision, archiveRevision])
+  // 失效链的唯一落点：生命周期判 active/修订与合并节奏（本档每次激活都重读），这里只交 reload。
+  useGatedRefresh({
+    active,
+    revisions: [trashRevision, archiveRevision],
+    refresh: reload,
+    policy: { initialDirty: true, refreshOnActivate: true },
+  })
 
   return { list, refreshing, count, reload }
 }

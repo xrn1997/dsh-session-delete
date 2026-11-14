@@ -830,6 +830,8 @@ describe('回收站面板 · 其余行为', () => {
     expect(screen.getByText('正在读回收站…')).toBeInTheDocument()
     // 加载中也还没有行：容器不挂 grid（ADR-0028）。
     expect(screen.queryByRole('grid')).toBeNull()
+    // 挂载读排到生命周期微任务：先等它真的发出，再结算这份悬挂的响应。
+    await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve() })
     release(remoteOk(rows))
     expect(await screen.findByRole('grid')).toBeInTheDocument()
     expect(await screen.findByText('/code-review')).toBeInTheDocument()
@@ -1386,7 +1388,7 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
   })
 
   // 在飞的 `list` 不保证按发起顺序落地（对账耗时随盘上条目数摆动）——后到的旧响应不许盖掉新状态。
-  it('重读只应用**最新一次**的结果：慢的旧响应后到也不许把清单盖回去', async () => {
+  it('在飞期间失效只置脏：结算后追补一轮，最终态以新读为准（旧响应不盖新态）', async () => {
     const open = <T,>(): { promise: Promise<T>; resolve: (value: T) => void } => {
       let resolve!: (value: T) => void
       const promise = new Promise<T>((inResolve) => { resolve = inResolve })
@@ -1400,13 +1402,17 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
       .mockImplementationOnce(() => second.promise)
     renderNarrow(depsOf({ list }))
     await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
+    // 在飞期间失效只置脏：单飞，不并发第二条读。
     act(() => { invalidateTrash() })
+    await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve() })
+    expect(list).toHaveBeenCalledTimes(1)
+    // 旧读先落地：界面可以短暂看到旧清单。
+    first.resolve(remoteOk(three))
+    // 结算后恰好一轮追补，最终态以新读为准。
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
-    // 第二次**先**落地、第一次更晚才回 ⇒ 后到的那份旧数据必须被丢掉
     second.resolve(remoteOk([pick(three, 2)]))
     expect(await screen.findByText('第三条')).toBeInTheDocument()
-    first.resolve(remoteOk(three))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve() })
     expect(screen.queryByText('第一条')).toBeNull()
   })
 
@@ -2114,7 +2120,7 @@ describe('归档档（平级分段）', () => {
     fireEvent.click(within(archiveRow).getByRole('button', { name: '删除' }))
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站' }))
     await waitFor(() => {
-      expect(screen.getByText(/其中已归档的，撤销后回到「归档」/)).toBeInTheDocument()
+      expect(screen.getByText(/撤销后回到「归档」/)).toBeInTheDocument()
     })
     expect(deps.applyOutcomes).toHaveBeenCalledWith('delete', ['session-x'])
   })

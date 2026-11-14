@@ -20,8 +20,9 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { APPLY_ACTIONS, APPLY_ACTION_TABLE } from '../src/api/route-table.js'
 import { DEFAULT_CONFIG } from '../src/config.js'
-import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES } from '../src/shared/wire.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES, TRASH_DIR_NAME } from '../src/shared/wire.js'
 import { collectFiles } from './support/corpus.js'
+import { anchorOwnershipProblems, clauses, docCorpus as docFilesCorpus } from './support/doc-anchors.js'
 import { pick } from './support/fixture.js'
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../..')
@@ -73,7 +74,7 @@ function eachLine(visit: (file: string, line: string, index: number) => void): v
 }
 
 /** 指向仓内文件的相对路径：`src/…`、`tests/…`、`docs/…`、`locale/…`。 */
-const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale)\/([A-Za-z0-9_\-./]*)/g
+const PATH_REF = /(?:^|[^A-Za-z0-9_./~-])(src|tests|docs|locale|\.github)\/([A-Za-z0-9_\-./]*)/g
 /** 反引号里带目录的裸相对路径：`trash/entry.ts` 省掉 `src/` 的写法，先按仓根、再按 `src/` 解析。 */
 const BACKTICK_REL = /`([A-Za-z0-9_-]+\/[A-Za-z0-9_./-]*\.(?:ts|tsx|js|mjs|cjs|json|md|yml|yaml))`/g
 
@@ -233,19 +234,27 @@ const SECTIONS: Record<SectionHome, Set<string>> = {
   ui: numberedSections(HOME_NAME.ui),
   agents: numberedSections(HOME_NAME.agents),
 }
-const HOME_BY_TOKEN: Record<string, SectionHome> = {
-  'architecture.md': 'arch',
-  'ui-spec.md': 'ui',
-  'docs/AGENTS.md': 'agents',
+/** 点名家的 token：全前缀、裸文件名、以及短名 `ui-spec` 都归一到同一家（短名会出现在 README 里）。 */
+const HOME_TOKEN = /(docs\/AGENTS\.md|docs\/(?:architecture|ui-spec)\.md|(?<![\w/.-])(?:architecture|ui-spec)\.md|(?<![\w/.-])ui-spec(?![\w.-])|本文)/g
+const homeOfToken = (token: string): SectionHome | undefined => (
+  token === '本文' ? undefined // 自指由 HOME_OF_SELF 按文档定，见 sectionOwnership
+    : token.includes('AGENTS') ? 'agents'
+      : token.includes('architecture') ? 'arch'
+        : 'ui'
+)
+/** 「本文」是谁的自指就归谁：只有**有编号小节**的那三份文档能自指；别的文档写「本文 §N」没有可查的
+ *  编号表（由「`本文` 只许出现在自家文档」那条报红）。 */
+const HOME_OF_SELF: Record<string, SectionHome> = {
+  [HOME_NAME.arch]: 'arch',
+  [HOME_NAME.ui]: 'ui',
+  [HOME_NAME.agents]: 'agents',
 }
-/** 「本文」是谁的自指就归谁；别的文档写「本文」没有可查的编号表，交给「`§N` 必须点名家」那条。 */
-const HOME_OF_SELF: Record<string, SectionHome> = { [HOME_NAME.arch]: 'arch', [HOME_NAME.agents]: 'agents' }
 
 /** 行内每个 `§N` 归给在它**之前**最近点到的家：一行同时点两份文档时也各归各家。 */
 function sectionOwnership(line: string, relFile: string): Array<{ num: string; home: SectionHome }> {
   const homes: Array<{ at: number; home: SectionHome }> = []
-  for (const m of line.matchAll(/architecture\.md|ui-spec\.md|docs\/AGENTS\.md|本文/g)) {
-    const home = m[0] === '本文' ? HOME_OF_SELF[relFile] : HOME_BY_TOKEN[m[0]]
+  for (const m of line.matchAll(HOME_TOKEN)) {
+    const home = m[0] === '本文' ? HOME_OF_SELF[relFile] : homeOfToken(m[0])
     if (home !== undefined) homes.push({ at: m.index, home })
   }
   const out: Array<{ num: string; home: SectionHome }> = []
@@ -416,6 +425,17 @@ describe('文档门 · 职责边界', () => {
     expect(chars, `AGENTS.md ${chars} 字符；超过 8,000 先搬迁或压缩，提额要写理由`).toBeLessThanOrEqual(8000)
   })
 
+  it('`本文 §N` 只许出现在有编号小节的自家文档里', () => {
+    // 「本文」没有可查的编号表：只有那三份文档能自指；别的文档写「本文 §N」等于指回自己却没有小节号。
+    const offenders: string[] = []
+    eachLine((file, line, i) => {
+      if (!/本文\s*§\s*\d/.test(line)) return
+      if (rel(file) in HOME_OF_SELF) return
+      offenders.push(`${rel(file)}:${i + 1} → ${line.trim()}`)
+    })
+    expect(offenders, `这些文档用「本文 §N」自指但没有编号小节表：\n${offenders.join('\n')}`).toEqual([])
+  })
+
   it('点名的小节号在目标文档里真的存在', () => {
     const offenders: string[] = []
     eachLine((file, line, i) => {
@@ -492,16 +512,62 @@ describe('文档门 · 文档分层与 ADR 形状', () => {
     expect(listed.filter((id) => !files.includes(id)), '索引指向不存在的 ADR').toEqual([])
   })
 
-  it('每个 ADR 第一行是标题、紧跟标题有 Status 行', () => {
+  it('每个 ADR 第一行是标题、紧跟标题有 Status 行，且 superseded by 指向在册的那一篇', () => {
+    const registered = new Set(adrFiles().map((name) => name.slice(0, 4)))
     const bad: string[] = []
     for (const name of adrFiles()) {
       const lines = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8').split(/\r?\n/)
       if (!/^# .+/.test(lines[0] ?? '')) bad.push(`${name}: 缺标题`)
-      if (!/^Status: (accepted|superseded by \d{4})$/.test(lines[2] ?? '')) bad.push(`${name}: 缺 Status 或状态不合规`)
+      const status = /^Status: (accepted|superseded by (\d{4}))$/.exec(lines[2] ?? '')
+      if (status === null) {
+        bad.push(`${name}: 缺 Status 或状态不合规`)
+        continue
+      }
+      const target = status[2]
+      if (target !== undefined && !registered.has(target)) bad.push(`${name}: superseded by ${target}（不在册）`)
     }
     expect(bad, bad.join('\n')).toEqual([])
   })
 
+  // 锚点是「读者下一步能打开的东西」：点名的文件还在、**符号也要还在**——只查路径会让
+  // 「rename 之后锚点指向旧文件里的旧名字」静默活下来。判据按「同一子句里」的路径与含大写
+  // 符号逐段回查（剥注释后、折行按整段）；小写通用词（`disabled` / `prefetch` 这类）不判
+  // ——它们在散文里同样常见，误报比漏报更贵。
+  it('锚点里点名的符号在点名的文件里现查得到（子句归属 + 去注释回查 + 折行）', () => {
+    // 历史 ADR 的「当时」坐标（点名的路径已在 ALLOWED 里）不查符号归属：旧 ADR 正文保留，
+    // 不改写历史；当前锚点仍按子句逐个查（路径与符号必须同子句，注释里提一嘴不算实现）。
+    // ADR-FORMAT 允许锚点段折行，所以按整段（到空行）判，不只看 `锚点：` 那一物理行。
+    const historical = (paths: readonly string[]): boolean =>
+      paths.every((path) => path in ALLOWED || `src/${path}` in ALLOWED)
+    const missing: string[] = []
+    let symbolClauses = 0
+    for (const doc of docFilesCorpus()) {
+      if (!doc.file.startsWith('docs/adr/')) continue
+      let paragraph: string[] = []
+      let startIndex = 0
+      const flush = (): void => {
+        if (paragraph.length === 0) return
+        const text = paragraph.join('\n')
+        for (const clause of clauses(text)) {
+          if (clause.symbols.some((symbol) => /[A-Z]/.test(symbol))) symbolClauses += 1
+        }
+        for (const problem of anchorOwnershipProblems(text, historical)) {
+          missing.push(`${doc.file}:${startIndex} → ${problem}`)
+        }
+        paragraph = []
+      }
+      for (const [index, line] of doc.lines.entries()) {
+        if (line.trimStart().startsWith('锚点：')) { flush(); startIndex = index + 1; paragraph = [line]; continue }
+        if (paragraph.length === 0) continue
+        if (line.trim() === '') flush()
+        else paragraph.push(line)
+      }
+      flush()
+    }
+    // 非空 guard：ADR 语料读不到或解析退化成恒空时，这条先红。
+    expect(symbolClauses, 'ADR 锚点里含大写符号的子句数量异常（判据可能没在查）').toBeGreaterThan(50)
+    expect(missing, `锚点指着文件里已不存在的符号（改名/搬家后要同步锚点）：\n${missing.join('\n')}`).toEqual([])
+  })
   it('每个 ADR 都以锚点段收尾（允许折行）', () => {
     const bad = adrFiles().filter((name) => {
       const blocks = readFileSync(join(ROOT, 'docs', 'adr', name), 'utf8')
@@ -547,6 +613,38 @@ describe('文档门 · 兼容性事实单源', () => {
     const agents = read('AGENTS.md')
     expect(agents).toContain('事实源是 `package.json`')
     expect(agents).not.toContain('以 `package.json`、`README.md` 和 `tests/skeleton.test.ts` 为准')
+  })
+})
+
+describe('文档门 · README 安装命令与数据路径投影', () => {
+  // 用户照着抄的两行：装什么包、数据在哪。两个事实源各有主人（`package.json` 的 `name`、
+  // `src/shared/wire.ts` 的 `TRASH_DIR_NAME`），README 只是投影——改包名 / 改目录名这里必须跟着红。
+  const manifest = JSON.parse(read('package.json')) as { name: string }
+  const homePath = `$DSH_HOME/${TRASH_DIR_NAME}/`
+  const defaultPath = `~/.dsh/${TRASH_DIR_NAME}/`
+
+  const installDrift = (readme: string): string[] => {
+    const line = readme.split(/\r?\n/).find((candidate) => candidate.includes('dsh plugin --profile <profile> add')) ?? ''
+    const target = /add\s+([^\s`]+)/.exec(line)?.[1]
+    return target === manifest.name ? [] : [`安装命令应点名 ${manifest.name}（现在是 ${target ?? '缺失'}）`]
+  }
+  const dataPathDrift = (readme: string): string[] =>
+    [homePath, defaultPath].filter((snippet) => !readme.includes(snippet)).map((snippet) => `README 缺数据路径 ${snippet}`)
+
+  it('README 的安装命令投影 package.json 的 name', () => {
+    const drift = installDrift(read('README.md'))
+    expect(drift, drift.join('\n')).toEqual([])
+  })
+
+  it('README 的数据根与默认目录投影 wire.ts 的 TRASH_DIR_NAME', () => {
+    const drift = dataPathDrift(read('README.md'))
+    expect(drift, drift.join('\n')).toEqual([])
+  })
+
+  it('判据认得出包名与目录名各自漂移（正控）', () => {
+    const readme = read('README.md')
+    expect(installDrift(readme.replace(`add ${manifest.name}`, 'add @fake/renamed-plugin'))).not.toEqual([])
+    expect(dataPathDrift(readme.replaceAll(TRASH_DIR_NAME, 'session-bin'))).not.toEqual([])
   })
 })
 

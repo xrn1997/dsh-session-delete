@@ -21,7 +21,7 @@ import type { TrashDetailBlockWire, TrashDetailPromptWire } from '../shared/wire
 export const JUMP_PAGE_LIMIT = 20
 
 /** 跳转落位时目标行离视口顶的距离（px）：给 sticky 标题排让位。详情用户行以行内
- *  `scrollMarginTop` 消费它（`trash-detail.tsx` 的 `USER_ROW`），落位几何只有这一个来源。 */
+ *  `scrollMarginTop` 消费它（`session-detail.tsx` 的 `USER_ROW`），落位几何只有这一个来源。 */
 export const JUMP_SCROLL_MARGIN_PX = 44
 
 /** 视口顶往下这么多像素内算「这一句已经在顶上」。
