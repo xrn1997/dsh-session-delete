@@ -34,7 +34,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-session-delete
 装完**重启宿主**（Node 半不走热重载）。三种装法任选：
 
 - **npm**（推荐）：使用预构建产物，秒装、无需构建授权
-- **GitHub Release**（备选；宿主是否接受 URL 形态的 `add` 参数**尚未在本机实测**，不通就退回离线分发）：`dsh plugin --profile <profile> add https://github.com/xrn1997/dsh-session-delete/releases/latest/download/dsh-session-delete.tgz`；钉版本就把地址换成 `https://github.com/xrn1997/dsh-session-delete/releases/download/V<版本>/xrn1997-dsh-session-delete-<版本>.tgz`
+- **GitHub Release**（备选；URL 形态的 `add` 在桌面 0.2.2-rc.3 实测**不通**——宿主把它交给 bundled pnpm 拉 tarball 会失败，请改用下面的**离线分发**）：`dsh plugin --profile <profile> add https://github.com/xrn1997/dsh-session-delete/releases/latest/download/dsh-session-delete.tgz`；钉版本就把地址换成 `https://github.com/xrn1997/dsh-session-delete/releases/download/V<版本>/xrn1997-dsh-session-delete-<版本>.tgz`
 - **离线分发**：`pnpm pack` 出 tarball 后 `dsh plugin --profile <profile> add ./xrn1997-dsh-session-delete-<版本>.tgz`
 
 卸载只移除插件：`dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete`。`$DSH_HOME/session-trash/` 里已有的回收站不会被自动清理。
