@@ -34,7 +34,7 @@ dsh plugin --profile <profile> add @xrn1997/dsh-session-delete
 装完**重启宿主**（Node 半不走热重载）。三种装法任选：
 
 - **npm**（推荐）：使用预构建产物，秒装、无需构建授权
-- **GitHub Release**（不依赖 npm 发布，也不需要构建工具链）：`dsh plugin --profile <profile> add https://github.com/xrn1997/dsh-session-delete/releases/latest/download/dsh-session-delete.tgz`；钉版本就把地址换成 `https://github.com/xrn1997/dsh-session-delete/releases/download/V<版本>/xrn1997-dsh-session-delete-<版本>.tgz`。宿主不认 URL 形态的参数时，先把 `.tgz` 下到本地再按离线分发装；Releases 页还没有对应版本时，用 npm 或离线分发
+- **GitHub Release**（备选；宿主是否接受 URL 形态的 `add` 参数**尚未在本机实测**，不通就退回离线分发）：`dsh plugin --profile <profile> add https://github.com/xrn1997/dsh-session-delete/releases/latest/download/dsh-session-delete.tgz`；钉版本就把地址换成 `https://github.com/xrn1997/dsh-session-delete/releases/download/V<版本>/xrn1997-dsh-session-delete-<版本>.tgz`。宿主不认 URL 形态的参数时，先把 `.tgz` 下到本地再按离线分发装；Releases 页还没有对应版本时，用 npm 或离线分发
 - **离线分发**：`pnpm pack` 出 tarball 后 `dsh plugin --profile <profile> add ./xrn1997-dsh-session-delete-<版本>.tgz`
 
 卸载只移除插件：`dsh plugin --profile <profile> remove @xrn1997/dsh-session-delete`。`$DSH_HOME/session-trash/` 里已有的回收站不会被自动清理。

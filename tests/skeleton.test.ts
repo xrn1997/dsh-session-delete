@@ -292,6 +292,12 @@ describe('宿主要求声明与浏览器半声明', () => {
         `${name} 的 meta.detail 指向不存在的文件`).toBe(true)
       expect(manifest.files, `${name} 的详情文档不进发布清单，装好的包读不到`).toContain(detail)
       const markdown = readFileSync(fileURLToPath(new URL(`../${detail}`, import.meta.url)), 'utf8')
+      // 官方详情文档的写法是**恰好一行图片**：功能、用法与限制住 `meta.description`，不在这份
+      // Markdown 里重复。多出来的散文会让详情页出现第二份会漂移的用户文档。
+      const contentLines = markdown.split(/\r?\n/).filter((line) => line.trim() !== '')
+      expect(contentLines, `${name} 的详情文档必须恰好一行图片`).toHaveLength(1)
+      const onlyLine = contentLines[0] ?? ''
+      expect(onlyLine, `${name} 的详情文档不是一行 Markdown 图片`).toMatch(/^!\[[^\]]+\]\([^)\s]+\)$/)
       for (const match of markdown.matchAll(/!\[[^\]]*\]\(([^)\s]+)\)/g)) {
         const image = pick(match, 1)
         if (/^(?:https?:|data:)/.test(image)) continue

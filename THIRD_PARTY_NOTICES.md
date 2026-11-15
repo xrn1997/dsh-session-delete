@@ -131,8 +131,10 @@
 
 ### MIT
 
-本节适用于第 1 节的抄本（版权人 `DeepSeek`，`Copyright (c) 2026 DeepSeek`）与第 2 节表格里的
-构建期依赖（版权人见上表，各包 LICENSE 原文）。
+本节只适用于第 1 节的抄本（版权人 `DeepSeek`，`Copyright (c) 2026 DeepSeek`）。
+第 2 节表格里的构建期依赖各自由其版权人按各自的许可证授权：**版权行与许可原文以各包随 npm
+包分发的 `LICENSE` 文件为准**（`node_modules/<包>/LICENSE`；`pnpm licenses list --dev` 可按
+lockfile 复核）。本文件列出闭包清单与作者，不把上游版权行改写成 DeepSeek 的版权行。
 
 ```text
 MIT License

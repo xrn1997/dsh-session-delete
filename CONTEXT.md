@@ -74,6 +74,11 @@ _唯一实现_: `src/trash/attachments.ts` 的 `executeImageAttachmentRemoval` /
 _唯一实现_: `src/shared/project-key.ts` 的 `escapeProjectKey`（编码）、`unescapeProjectKey`（解码）与无 cwd 的字面量 `NO_CWD_PROJECT_DIR`；cwd 到目录名的判据（只有缺席落 `NO_CWD_PROJECT_DIR`，空串照常编码）住 `src/ports/host-port.ts` 的 `projectDirOfCwd`，删除计划、列表投影与对账重建共用。
 _Avoid_: 项目路径、cwd（那是宿主的原始路径；`projectDir` 是有损编码）。
 
+**会话目录段（session dir segment）**:
+会话目录名本身：`sessions/<项目目录>/<段>` 里那一段，由宿主的 `encodeSegment` 从 `sessionId` 编出（本仓逐字镜像）。**无损**、按 UTF-16 码元编：整段 `.` / `..` 特判成 `~002E` / `~002E~002E`，`[A-Za-z0-9._-]` 原样，其余码元（含字面 `~`）编成 `~XXXX`。删除把它写进条目 id，恢复照条目 id 里记下的段原地回放，不从 `sessionId` 现编；宿主换代先复核这套算法（它没暴露成服务）。
+_唯一实现_: `src/shared/session-path.ts` 的 `encodeSessionSegment`（编码）与 `decodeSessionSegment`（反解，只给「目录是唯一线索」的两处：对账的 header 缺席兜底、投影缓存的目录名保护）；仓内构造路径与条目 id 的唯一调用点住 `src/trash/entry.ts` 的 `sessionDirForId` / `sessionDirSegmentOf`。
+_Avoid_: 原目录名（编码前的存量条目才长得那样）、会话 id（原始 `sessionId` 是清册身份，不拼路径）。
+
 **缺席（absence）**:
 路径「不在」的唯一判据：`stat` 抛 `ENOENT` 或 `ENOTDIR`。权限、断挂载、I/O 等**读错误不是缺席**——那是"我们看不见"，要响亮失败、零写入，不许折成"没有"（ADR-0039）；引用扫描的「根不存在」仍按没有引用源处理。`FsPort.exists` 与 `rename` 的目标检查共用这一判据。
 _唯一实现_: `src/ports/fs-port.ts` 的 `isAbsentPath`（`src/trash/attachments.ts` 的 `isMissing` 是它的别名）。
@@ -85,7 +90,7 @@ _无单点实现_: 插件概念：清册、`session-trash/` 目录、首帧快�
 _Avoid_: 垃圾桶、删除列表（会把它说成一个 UI 或一个临时缓存）。
 
 **条目（trash entry）**:
-回收站里的一行。`id` = `<删除时刻 UTC>-<原目录名>`，**回收站目录名就是它**，恢复也靠它反推原目录名。形状与路径闸住 `src/trash/entry.ts`。
+回收站里的一行。`id` = `<删除时刻 UTC>-<目录段>`，**回收站目录名就是它**，恢复也照它把目录段原地放回。那一段是**会话目录段**（宿主编码后的目录名，见同名词条），不是原始 session id；形状与路径闸住 `src/trash/entry.ts`。
 _无单点实现_: 一条回收站行的概念；线上形状与落地形状各住 `src/shared/wire.ts` / `src/trash/entry.ts`，视图再投影，无单点实现。
 _Avoid_: 行、记录（太泛；条目专指回收站里的一行）。
 
@@ -162,12 +167,12 @@ _唯一实现_: `src/verbs/permanent-removal.ts` 的 `planTrashRemoval`（`Plann
 _唯一实现_: `src/verbs/orphan-subagents.ts` 的 `orphanGroupsOf` / `loadOrphanGroups`。
 
 **活体（live session）**:
-宿主内存里 attach 着的会话。删除 / 彻底删除 / 孤儿清理遇到成员在跑 ⇒ **整组拒绝、零副作用**；「在跑就整组拒绝」的判据住 `src/verbs/live-admission.ts`，删除时把 session 与它的 agent handle 一起摘掉（见 ADR-0008）。
+宿主内存里 attach 着的会话（`ctx.sessions` 登记过、可能带 agent handle）。**注意它与「在跑」不是一回事**：attach 但没有任何 activity 的会话仍算活体，删除不拒绝它——删除会把 session 与 agent handle 一起摘掉（`evictLive`，见 ADR-0008）。
 _无单点实现_: 宿主进程里的活会话；本插件只经宿主的 `isLive` 查询观察（身份面 `HostIdentityPort`），不从本仓拥有。
-_Avoid_: 运行中（“运行中”可能指 agent 正在跑；活体指宿主内存里 attach 着的会话）。
+_Avoid_: 运行中（那是「有活动」：turn / 后台 job / 活动定时任务等任一 activity 在场；活体只说内存里 attach 着）。
 
 **活体准入（live admission）**:
-一次写之前逐个问「这个会话在宿主内存里 attach 着吗」；任一在跑就整组拒绝、零副作用，原文点名那一个会话。**什么时候查、查哪些 id 归调用方**——永久删除的时机住 `docs/architecture.md` §4「永久删除的计划与执行」行（ADR-0027），删除与孤儿清理各自交名单。
+一次写之前逐个问「这个会话**现在有活动吗**」——判据是宿主的 `workspace/session-activity` waterfall 非空，family 不止 turn（该会话的后台 job、仍指向它的活动定时任务等也会回条目；安装态实现见宿主的 `dsh-jobs` / `dsh-schedule`），**不是**「attach 着」。任一有活动就整组拒绝、零副作用，原文点名那一个会话；没有 activity 的 idle 活体允许删除。**什么时候查、查哪些 id 归调用方**——永久删除的时机住 `docs/architecture.md` §4「永久删除的计划与执行」行（ADR-0027），删除与孤儿清理各自交名单。
 _唯一实现_: `src/verbs/live-admission.ts` 的 `assertNoLive`。
 _Avoid_: 安全检查（太泛；这里专指写之前那一次逐个问活体）。
 

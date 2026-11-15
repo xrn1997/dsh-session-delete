@@ -583,7 +583,8 @@ export function createHostPort(ctx: unknown): HostPort {
     },
 
     /** 活跃判据走宿主 `workspace/session-activity` waterfall：空数组 = 无活动；
-     *  与宿主 archiveSession 的准入同源。 */
+     *  与宿主 archiveSession 的准入同源。family 不止 turn（后台 job / 活动定时任务也会回条目），
+     *  所以只判"非空"，不按某一个 family 现推。 */
     async isLive(sessionId) {
       const activity = await host.waterfall(
         'workspace/session-activity',
