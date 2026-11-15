@@ -41,6 +41,20 @@ export interface SessionLogStats {
 const NEWLINE = 0x0a
 
 /**
+ * 单条会话日志**整本读取**的显式上限（256 MiB）。
+ *
+ * 逐帧解压把内存口径压在"最大那一帧的明文"，但 `readFile` 本身仍会把整本字节读进内存；日志大小
+ * 没有宿主上限，坏文件 / 巨型工具输出可以把它撑到任意大。凡是"读整本"的解码路（回收站详情、
+ * 附件引用扫描）都先 stat 再读，超过这个量级就按**读不出**处理——不截断、不猜：
+ * - 详情抛 `io` + 原文（读者至少知道它有多大、为什么打不开）；
+ * - 引用扫描按 `unreadable` 跳过（fail closed，宁可留孤儿也不删共享，ADR-0020）。
+ *
+ * 取值只住这一处：两个消费方引用同一个数，别各写一份。"读整本"的对立面是 `readFileHead` 那种
+ * 有界头读（对账只读 header，不该为一行付整本内存）。
+ */
+export const MAX_SESSION_LOG_BYTES = 256 * 1024 * 1024
+
+/**
  * 宿主给每一代日志的词法（逐字取自 `@deepseek-ai/dsh-session-format@0.2.0-rc.2` 的
  * `CANONICAL_LOG_FILENAME`，剥掉压缩后缀那段由我们自己在正则里补上 `.zstd`）：
  * 裸名 `session.jsonl` 是**第 0 代**，往后是 `session.vN`；`.v0`、前导零、大写、临时名都不是规范名。
@@ -78,9 +92,16 @@ export function pickSessionLog(names: readonly string[]): string | undefined {
  *
  * 回调返回 `false` = **提前停机**（后面的帧不再解——`readSessionHeader` 只要第一行）。
  * 停机后 `stats` 只是停机前那部分，别拿来做全量对账。
+ *
+ * `tolerateTruncatedTail` 只给**前缀读**用（对账的有界头读）：尾巴切在帧中间时丢掉不完整的那一帧，
+ * 前面的完整帧照常走。读整本的调用方不传——截断文件必须响亮失败，见 `frameRanges` 的注释。
  */
-// eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- 回调契约是「不关心返回值 / 返回 false 停机」：`void | false` 是它的准确形状，改成 boolean 会逼所有回调显式 return。
-export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) => void | false): SessionLogStats {
+export function walkSessionLog(
+  raw: Buffer,
+  // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- 回调契约是「不关心返回值 / 返回 false 停机」：`void | false` 是它的准确形状，改成 boolean 会逼所有回调显式 return。
+  onRecord: (record: SessionRecord) => void | false,
+  options: { readonly tolerateTruncatedTail?: boolean } = {},
+): SessionLogStats {
   const stats: SessionLogStats = { frames: 0, records: 0, unparsedLines: 0, truncatedTailBytes: 0 }
   let stopped = false
   const feed = (line: string): void => {
@@ -100,7 +121,7 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
 
   /** 上一帧没闭合的那一行。**存字节不存字符**：切在多字节字符中间的帧要拼回完整才解得对。 */
   let carry: Buffer = Buffer.alloc(0)
-  for (const { start, end } of frameRanges(raw)) {
+  for (const { start, end } of frameRanges(raw, options)) {
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `stopped` 由 `feed` 的闭包写入，TS 看不见闭包写入；删掉会让停机后的帧继续解。
     if (stopped) break
     stats.frames += 1
@@ -136,12 +157,15 @@ export function walkSessionLog(raw: Buffer, onRecord: (record: SessionRecord) =>
  * （不要求它恰是第一个可解析行：坏一行前缀不该让整条日志判不出身份）。
  * 找不到（空日志 / 全是别种记录）回 `undefined`；帧坏了照抛——那是"读不出来"，与"没有 header"是两件事。
  */
-export function readSessionHeader(raw: Buffer): SessionRecord | undefined {
+export function readSessionHeader(
+  raw: Buffer,
+  options: { readonly tolerateTruncatedTail?: boolean } = {},
+): SessionRecord | undefined {
   let header: SessionRecord | undefined
   walkSessionLog(raw, (record) => {
     if (record.type !== 'session') return
     header = record
     return false
-  })
+  }, options)
   return header
 }

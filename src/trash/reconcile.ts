@@ -17,7 +17,9 @@
  *    落在「未分组」）、`wasArchived: false`（文件侧没有归档事实；旧条目恢复走迁移支）、`title: ''`（详情有日志标题兜底）
  *    ——这是重建的固有代价，不是可以"再读读看"的东西。
  * ④ **认不出 / 读不出的目录：不动、不列**（名字不像条目、目录里没有日志、header 读不出、尺寸量不出，
- *    各跳过各的）。它是"外人放进来的东西"，不是用户动作失败：跳过即静默，绝不为它删目录或抛掉整次读数。
+ *    各跳过各的）。header 走 {@link HEADER_READ_BYTES} 的**有界头读**：只为一行 header 不付整本日志的
+ *    内存；窗口里切不出完整帧同样算认不出，不拿半截 header 冒充身份。它是"外人放进来的东西"，不是
+ *    用户动作失败：跳过即静默，绝不为它删目录或抛掉整次读数。
  * ⑤ **幂等**：再跑一遍零写入；崩在任何一步，下一次读清单接着把它修完。
  *
  * 与三个写动词的**串行化不在这里**（那是传输层的事，见 `src/api/dispatch.ts` 的到达序链）：
@@ -26,19 +28,29 @@
  */
 import { isSinglePathSegment, parseEntryId, trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
-import type { FsPort } from '../ports/fs-port.js'
+import type { FsReconcilePort } from '../ports/fs-port.js'
 import { projectDirOfCwd } from '../ports/host-port.js'
 import { pickSessionLog, readSessionHeader } from '../log/session-log.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
+import { decodeSessionSegment } from '../shared/session-path.js'
+
+/** 对账只为读 header：**有界头读**的窗口（1 MiB）。
+ *  日志的 header 是第一帧里的第一行（宿主建会话时先落它，实测远小于 1 KiB），1 MiB 留足余量；
+ *  这个数不是"日志大小上限"，而是"不为一行 header 把整本日志读进内存"的读取预算。窗口若切在
+ *  某一帧中间，头读**按前缀读的容忍口径**丢掉最后那个不完整帧（`readSessionHeader` 的
+ *  `tolerateTruncatedTail`）——header 在第一个完整帧里，照样读得到；不在这个窗口里才是"认不出"，
+ *  按下面 ④ 的口径整条跳过，不猜半截 header。 */
+const HEADER_READ_BYTES = 1024 * 1024
 
 export interface ReconcileDeps {
-  fs: FsPort
+  fs: FsReconcilePort
   manifest: ManifestPort
   home: string
 }
 
-/** 目录名是不是一条条目 id（形状契约在 `entry.ts`：`<删除时刻UTC>-<原目录名>`；
- *  原目录名还必须能安全地拼回磁盘路径——带分隔符的名字仍按"外人"跳过，不让一次对账读崩）。 */
+/** 目录名是不是一条条目 id（形状契约在 `entry.ts`：`<删除时刻UTC>-<会话目录段>`；
+ *  段是宿主 `encodeSegment` 的产物（编码前的存量条目也可能还是原始目录名），无论哪种都必须能
+ *  安全地拼回磁盘路径——带分隔符的名字仍按"外人"跳过，不让一次对账读崩）。 */
 function isEntryId(name: string): boolean {
   try {
     return isSinglePathSegment(parseEntryId(name).sessionDirName)
@@ -52,7 +64,8 @@ function isEntryId(name: string): boolean {
  * 半截行比"不列"更坏——恢复会照它把目录搬去一个错的地方（同 `detail.ts` 那条"半截正文"的口径）。
  *
  * `sessionId` 取日志 header 的 `id`（恢复之后宿主按日志 header 建索引，那才是会话身份）；
- * header 缺席这个字段才回落到目录名里那段原目录名。
+ * header 缺席这个字段才回落到目录段——反解回原始 id（编码前的存量条目段本身可能已是原始目录名，
+ * 反解对不含 `~XXXX` 形态的串原样交回）。
  */
 async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry | undefined> {
   const dir = trashDirOf(id, deps.home)
@@ -67,14 +80,15 @@ async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry |
 
   let raw: Buffer
   try {
-    raw = await deps.fs.readFile(`${dir}/${logName}`)
+    // 有界头读：header 在文件开头，读到 1 MiB 还没读到就是"认不出"（下面 ④ 的跳过口径）。
+    raw = await deps.fs.readFileHead(`${dir}/${logName}`, HEADER_READ_BYTES)
   } catch {
     return undefined
   }
 
   let header: ReturnType<typeof readSessionHeader>
   try {
-    header = readSessionHeader(raw)
+    header = readSessionHeader(raw, { tolerateTruncatedTail: true })
   } catch {
     return undefined
   }
@@ -94,7 +108,7 @@ async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry |
   const cwd = typeof header.cwd === 'string' ? header.cwd : undefined
   return {
     id,
-    sessionId: typeof header.id === 'string' && header.id !== '' ? header.id : sessionDirName,
+    sessionId: typeof header.id === 'string' && header.id !== '' ? header.id : decodeSessionSegment(sessionDirName),
     projectDir: projectDirOfCwd(cwd),
     workspaceId: '',
     wasArchived: false,

@@ -21,6 +21,10 @@
  *
  * 附件随块一起收（`attachmentsInContent`）：每块最多 20、每页最多 200；超出的**静默丢**，不另立计数——
  * "少了几张图"与"这块被截断"不是同一件事，拿一个数兼报会让两个数都对不上。
+ *
+ * **读整本之前先看大小**（`MAX_SESSION_LOG_BYTES`，取值的家与理由住 `src/log/session-log.ts`）：日志大小
+ * 没有宿主上限，逐帧解压省的是"解压后的正文"，省不掉 `readFile` 那一份整本字节。超限按读不出处理，
+ * 抛 `io` 带实际字节与上限原文——不截断成半条正文（详情是用户据以决定删不删的读数）。
  */
 import { entryWire, trashDirOf, type TrashEntry } from './entry.js'
 import type { FsDetailPort } from '../ports/fs-port.js'
@@ -36,7 +40,7 @@ import type {
   TrashDetailWire,
   TrashEntryWire,
 } from '../shared/wire.js'
-import { pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { MAX_SESSION_LOG_BYTES, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 import { descriptorLabelOf, displayNameOfLog } from './display-name.js'
 import { attachmentsInContent } from './attachments.js'
 import { visibleGroups } from './groups.js'
@@ -346,7 +350,10 @@ async function childDisplayNameOf(deps: DetailDeps, entry: TrashEntry): Promise<
     const dir = trashDirOf(entry.id, deps.home)
     const logName = pickSessionLog(await deps.fs.listFiles(dir))
     if (logName === undefined) return undefined
-    const { label, title } = displayNameOfLog(await deps.fs.readFile(`${dir}/${logName}`))
+    const logPath = `${dir}/${logName}`
+    // 同一道整本读取上限（文件头注）：名字兜底读不出就放弃，绝不为它多付一次超限读。
+    if ((await deps.fs.statFile(logPath)).size > MAX_SESSION_LOG_BYTES) return undefined
+    const { label, title } = displayNameOfLog(await deps.fs.readFile(logPath))
     return label !== '' ? label : title !== '' ? title : undefined
   } catch {
     return undefined
@@ -555,9 +562,21 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
       throw verbError('io', `回收站目录里没有会话日志：${dir}（里面有：${names.join(', ') || '空目录'}）`)
     }
 
+    const logPath = `${dir}/${logName}`
+    // 读整本之前先过大小闸：上限是"读不出"的判据，不是截断阈值（见文件头注）。
+    let logSize: number
+    try {
+      logSize = (await deps.fs.statFile(logPath)).size
+    } catch (error) {
+      throw verbError('io', `读取会话日志大小失败：${String(error)}`, error)
+    }
+    if (logSize > MAX_SESSION_LOG_BYTES) {
+      throw verbError('io', `会话日志 ${logSize} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节：${logPath}`)
+    }
+
     let raw: Buffer
     try {
-      raw = await deps.fs.readFile(`${dir}/${logName}`)
+      raw = await deps.fs.readFile(logPath)
     } catch (error) {
       throw verbError('io', `读会话日志失败：${String(error)}`, error)
     }

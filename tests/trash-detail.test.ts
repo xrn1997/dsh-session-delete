@@ -18,6 +18,7 @@ import {
 } from '../src/trash/detail.js'
 import { trashEntry } from './support/world.js'
 import { pick } from './support/fixture.js'
+import { MAX_SESSION_LOG_BYTES } from '../src/log/session-log.js'
 
 /** 游标在上一行已被 expect 钉成"有值"：这一判只是让编译器跟上，真没值是夹具与断言脱节，响亮失败。 */
 function olderCursorOf(value: number | null): number {
@@ -35,10 +36,12 @@ const frame = (...lines: string[]) =>
 const entry = (): TrashEntry =>
   trashEntry(id, { sessionId: 'session-x', workspaceId: 'ws', wasArchived: true, deletedAt: DELETED_AT, title: '清册标题', sizeBytes: 1234 })
 
-function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null; rows?: TrashEntry[] } = {}) {
+function makeDeps(log: Buffer, over: { exists?: boolean; files?: string[] | null; rows?: TrashEntry[]; size?: number } = {}) {
   const fs = {
     exists: vi.fn(async () => over.exists ?? true),
     listFiles: vi.fn(async () => over.files ?? ['session.v4.jsonl.zstd']),
+    // 详情读整本前先看大小（`MAX_SESSION_LOG_BYTES`）：缺省 0 = 远低于上限。
+    statFile: vi.fn(async () => ({ size: over.size ?? 0 })),
     readFile: vi.fn(async () => log),
   }
   // 详情认的是路由交来的 **raw 行**（/detail 是纯读，不对账）：假件照同一个 seam 造。
@@ -518,6 +521,7 @@ it('清册只走 raw 面：一次详情读只发生一次 raw()', async () => {
     fs: {
       exists: vi.fn(async () => true),
       listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+      statFile: vi.fn(async () => ({ size: 0 })),
       readFile: vi.fn(async () => body({ type: 'turn/start', time: 1 })),
     },
     rows: raw,
@@ -534,10 +538,28 @@ it('目录不在 / 目录里没有会话日志 ⇒ sessiondelete/io 带原文', 
   await expect(readTrashDetail(empty.deps)(id)).rejects.toMatchObject({ code: 'sessiondelete/io', message: /没有会话日志/ })
 })
 
+// 日志大小没有宿主上限：读整本之前先过显式上限（`MAX_SESSION_LOG_BYTES`，取值的家在
+// `src/log/session-log.ts`）。超限抛 io 带实际字节与上限原文，绝不截成半条正文，也不整本读。
+it('日志超过整本读取上限 ⇒ io 带字节原文，且一次 readFile 都不发', async () => {
+  const size = MAX_SESSION_LOG_BYTES + 1
+  const { deps, fs } = makeDeps(body({ type: 'turn/start', time: 1 }), { size })
+  await expect(readTrashDetail(deps)(id)).rejects.toMatchObject({
+    code: 'sessiondelete/io',
+    message: new RegExp(`会话日志 ${size} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节`),
+  })
+  expect(fs.readFile).not.toHaveBeenCalled()
+})
+
+it('日志正好等于整本读取上限 ⇒ 照常读（上限判的是"超过"）', async () => {
+  const { deps } = makeDeps(body({ type: 'turn/start', time: 1 }), { size: MAX_SESSION_LOG_BYTES })
+  await expect(readTrashDetail(deps)(id)).resolves.toMatchObject({ entryId: id })
+})
+
 it('读盘抛 ⇒ sessiondelete/io，原文留在 message 里', async () => {
   const fs = {
     exists: vi.fn(async () => true),
     listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+    statFile: vi.fn(async () => ({ size: 0 })),
     readFile: vi.fn(async () => { throw new Error('EACCES: permission denied') }),
   }
   const rows = createMemoryManifest([entry()])
@@ -583,6 +605,7 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
     fs: {
       exists: vi.fn(async () => true),
       listFiles: vi.fn(async () => ['session.v3.jsonl.zstd', 'session.v4.jsonl.zstd']),
+      statFile: vi.fn(async () => ({ size: 0 })),
       readFile,
     },
     rows: () => rows.list(),
@@ -734,6 +757,7 @@ it('fork 孩子的清册标题和父/兄弟撞名时，父详情读它自己的�
   const fs = {
     exists: vi.fn(async () => true),
     listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+    statFile: vi.fn(async () => ({ size: 0 })),
     readFile: vi.fn(async (path: string) => path.includes(forkKidId) ? childLog : parentLog),
   }
   const rows = createMemoryManifest([
@@ -751,6 +775,7 @@ it('fork 孩子的日志读不出：父详情照常出，孩子行回落清册�
   const fs = {
     exists: vi.fn(async () => true),
     listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+    statFile: vi.fn(async () => ({ size: 0 })),
     readFile: vi.fn(async (path: string) => {
       if (path.includes(forkKidId)) throw new Error('EACCES')
       return parentLog

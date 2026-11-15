@@ -141,3 +141,19 @@ describe('frameRanges · 坏输入响亮失败', () => {
     expect(frameRanges(Buffer.alloc(0))).toEqual([])
   })
 })
+
+describe('frameRanges · 前缀读的容忍模式（有界头读专用）', () => {
+  it('尾巴切在下一帧中间：丢掉不完整的那一帧，返回前面已完整切出的帧', () => {
+    const raw = glue(false)
+    // 切在第二帧的**末尾前 3 字节**：严格模式必然抛（帧边界算歪），容忍模式应只交第一帧。
+    const cut = must(frames[0], '第一帧').length + must(frames[1], '第二帧').length - 3
+    expect(() => frameRanges(raw.subarray(0, cut))).toThrow()
+    const ranges = frameRanges(raw.subarray(0, cut), { tolerateTruncatedTail: true })
+    expect(ranges).toEqual([{ start: 0, end: must(frames[0], '第一帧').length }])
+  })
+
+  it('第一帧就坏 ⇒ 容忍模式也返回零帧（不猜、不把半截当帧）', () => {
+    const raw = glue(false)
+    expect(frameRanges(raw.subarray(0, 3), { tolerateTruncatedTail: true })).toEqual([])
+  })
+})

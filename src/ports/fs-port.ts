@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
+import { mkdir, open, readdir, readFile, realpath, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /**
@@ -36,6 +36,12 @@ export interface FsPort {
   realpath: (p: string) => Promise<string>
   /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），不在这里。 */
   readFile: (p: string) => Promise<Buffer>
+  /** **有界头读**：只读文件开头至多 `maxBytes` 字节（文件更短就整份交回）。
+   *  对账只为读日志 header，却不必把整本日志读进内存——这是"整本读"之外的另一条读取口径，
+   *  不改变 `readFile` 的语义（它仍读整本，整本上限归 `MAX_SESSION_LOG_BYTES` 的消费方判）。
+   *  只做字节切取，不保证落在帧边界：前缀的尾巴可以切在帧中间，需要解 zstd 的调用方按自己的
+   *  容忍度判（对账走 `readSessionHeader` 的前缀容忍口径，丢掉最后那个不完整帧，见 `src/trash/reconcile.ts`）。 */
+  readFileHead: (p: string, maxBytes: number) => Promise<Buffer>
   /** 只读的单文件读数：附件渲染与独占计划都用它（不递归、不跟随目录）。 */
   statFile: (p: string) => Promise<{ size: number }>
   /** 删单个文件（不是目录）。危险能力，只挂到 `RemovalDeps` 上。 */
@@ -63,8 +69,12 @@ export const FS_REMOVAL_METHODS = ['removeDir', 'removeFile'] as const
 /** 附件渲染：读一个文件的大小与字节。 */
 export const FS_ATTACHMENT_METHODS = ['statFile', 'readFile'] as const
 
-/** 详情读取：目录在不在、挑日志文件、读日志。 */
-export const FS_DETAIL_METHODS = ['exists', 'listFiles', 'readFile'] as const
+/** 详情读取：目录在不在、挑日志文件、读日志、读日志大小（整本读取上限的判据，`MAX_SESSION_LOG_BYTES`）。 */
+export const FS_DETAIL_METHODS = ['exists', 'listFiles', 'readFile', 'statFile'] as const
+
+/** 对账：目录存在性、枚举（条目目录 / 目录里的文件）、有界头读、量尺寸。**不读整本日志**——
+ *  对账只要 header，`readFileHead` 就是为它长出来的那条口径。 */
+export const FS_RECONCILE_METHODS = ['exists', 'listDirs', 'listFiles', 'readFileHead', 'sizeOfDir'] as const
 
 /** 附件引用扫描（读侧）。 */
 export const FS_REFERENCE_SCAN_METHODS = [
@@ -86,16 +96,22 @@ export type CoreFsPort = Pick<FsPort, (typeof FS_CORE_METHODS)[number]>
 export type RemovalFsPort = CoreFsPort & Pick<FsPort, (typeof FS_REMOVAL_METHODS)[number]>
 export type FsAttachmentPort = Pick<FsPort, (typeof FS_ATTACHMENT_METHODS)[number]>
 export type FsDetailPort = Pick<FsPort, (typeof FS_DETAIL_METHODS)[number]>
+export type FsReconcilePort = Pick<FsPort, (typeof FS_RECONCILE_METHODS)[number]>
 export type FsReferenceScanPort = Pick<FsPort, (typeof FS_REFERENCE_SCAN_METHODS)[number]>
 export type FsReferenceScanRemovalPort = Pick<FsPort, (typeof FS_REFERENCE_SCAN_REMOVAL_METHODS)[number]>
 
 /** 按名单从全量端口切一片（复制方法引用；端口方法都是属性、不读 `this`）。
- *  **运行期真的只带这些方法**：ADR-0032 的收窄不是类型投影。 */
+ *  **运行期真的只带这些方法**：ADR-0032 的收窄不是类型投影。入参按 **K 的键集**收窄（不是整份
+ *  `FsPort`）：本函数只会读名单里的那几个键，而 `RemovalDeps` 那样已经切过一片的面（`RemovalFsPort`）
+ *  不必先长回全量面才能再切。 */
 export function fsSlice<const K extends readonly (keyof FsPort)[]>(
-  port: FsPort,
+  port: Pick<FsPort, K[number]>,
   keys: K,
 ): Pick<FsPort, K[number]> {
-  return Object.fromEntries(keys.map((key) => [key, port[key]])) as Pick<FsPort, K[number]>
+  // 入参只是 K 的投影（`RemovalDeps` 那样已经被切过一片的面也收）：按 `Partial<FsPort>` 取键，
+  // 名单里的键由 K 约束、由调用方保证存在。
+  const source: Partial<FsPort> = port
+  return Object.fromEntries(keys.map((key) => [key, source[key]])) as Pick<FsPort, K[number]>
 }
 
 /** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
@@ -161,6 +177,26 @@ export function createFsPort(): FsPort {
     },
     async realpath(p) { return realpath(p) },
     async readFile(p) { return readFile(p) },
+    /** 有界头读：开一次句柄、只读开头 `maxBytes` 字节（文件更短时 `read` 自己少给）。
+     *  `maxBytes` 非正数按 0 处理——"读 0 字节"是合法请求，不是参数错误；路径不在时 `open` 照
+     *  ENOENT 抛（缺席与读错误的判据仍归调用方 / `exists`，ADR-0039）。 */
+    async readFileHead(p, maxBytes) {
+      const handle = await open(p, 'r')
+      try {
+        const cap = Math.max(0, Math.floor(maxBytes))
+        const buffer = Buffer.alloc(cap)
+        let offset = 0
+        // `read` 不保证一次给满（部分文件系统/网络盘会短读）：循环到满、文件结束或出错。
+        while (offset < cap) {
+          const { bytesRead } = await handle.read(buffer, offset, cap - offset, offset)
+          if (bytesRead === 0) break
+          offset += bytesRead
+        }
+        return buffer.subarray(0, offset)
+      } finally {
+        await handle.close()
+      }
+    },
     async statFile(p) {
       return { size: (await stat(p)).size }
     },

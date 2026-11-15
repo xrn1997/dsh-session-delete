@@ -77,54 +77,64 @@ function withFrameTail(raw: Buffer, at: number): number {
  * 把 `raw` 切成帧区间。
  * @throws 起始处不是 magic、或某帧算到的末位既不是下一帧帧头也不是 EOF——**一律抛**，
  *   绝不"尽力往下解"：切错帧的后果是把半截压缩体当解压输入，那时解出来的东西不可信。
+ *
+ * `tolerateTruncatedTail` 只给**前缀读**（`readFileHead` 的有界头读）：输入是某个合法日志的开头
+ * 一段，尾巴必然可能切在帧中间，这时"少最后一帧"不叫损坏。解析到切坏的尾巴就停，返回已经切出的
+ * 完整帧；中间的损坏也会让它提前停——但头读只需要最前面那几帧（header 在第一帧），够用。
+ * **默认仍是严格**：读整本的调用方拿到截断文件必须抛，不能把半份日志当完整日志。
  */
-export function frameRanges(raw: Buffer): FrameRange[] {
+export function frameRanges(raw: Buffer, options: { readonly tolerateTruncatedTail?: boolean } = {}): FrameRange[] {
   const ranges: FrameRange[] = []
   let at = 0
   while (at < raw.length) {
-    if (!isMagicAt(raw, at)) {
-      throw new Error(`zstd 帧头缺席：偏移 ${at} 处不是 magic（前面第 ${ranges.length} 帧的边界算歪了？）`)
-    }
-    const descriptor = raw[at + 4]
-    if (descriptor === undefined) throw new Error(`zstd 帧头不完整：偏移 ${at} 之后不足 ${AFTER_DESCRIPTOR} 字节`)
-    const didFlag = descriptor & DESC_DID_FLAG
-    const singleSegment = (descriptor >> DESC_SINGLE_SHIFT) & 0x1
-    const fcsFlag = (descriptor >> DESC_FCS_SHIFT) & 0x3
-    let cursor = at + AFTER_DESCRIPTOR
-    // 单段 ⇒ 没有 Window 字节；FCS 的尺寸还要看单段位（表 4 的两列）
-    if (!singleSegment) cursor += 1
-    cursor += DID_SIZES[didFlag] as number
-    cursor += (singleSegment ? FCS_SIZES_SINGLE : FCS_SIZES_MULTI)[fcsFlag] as number
+    try {
+      if (!isMagicAt(raw, at)) {
+        throw new Error(`zstd 帧头缺席：偏移 ${at} 处不是 magic（前面第 ${ranges.length} 帧的边界算歪了？）`)
+      }
+      const descriptor = raw[at + 4]
+      if (descriptor === undefined) throw new Error(`zstd 帧头不完整：偏移 ${at} 之后不足 ${AFTER_DESCRIPTOR} 字节`)
+      const didFlag = descriptor & DESC_DID_FLAG
+      const singleSegment = (descriptor >> DESC_SINGLE_SHIFT) & 0x1
+      const fcsFlag = (descriptor >> DESC_FCS_SHIFT) & 0x3
+      let cursor = at + AFTER_DESCRIPTOR
+      // 单段 ⇒ 没有 Window 字节；FCS 的尺寸还要看单段位（表 4 的两列）
+      if (!singleSegment) cursor += 1
+      cursor += DID_SIZES[didFlag] as number
+      cursor += (singleSegment ? FCS_SIZES_SINGLE : FCS_SIZES_MULTI)[fcsFlag] as number
 
-    for (;;) {
-      const blockHeader = readUint24LE(raw, cursor)
-      cursor += BLOCK_HEADER_BYTES
-      // 截断必须在这里响亮失败，不能继续走：读回 miss 与越界是同一判据的两副面孔（缺一字节 ⇔
-      // 头三个字节落不出文件），少了这道护栏块循环每圈只推进头长却永远不 break，整个进程会卡死。
-      if (blockHeader === undefined || cursor > raw.length) {
-        throw new Error(`zstd 块头越界：帧起于 ${at}，读到偏移 ${cursor}（文件长 ${raw.length}）`)
+      for (;;) {
+        const blockHeader = readUint24LE(raw, cursor)
+        cursor += BLOCK_HEADER_BYTES
+        // 截断必须在这里响亮失败，不能继续走：读回 miss 与越界是同一判据的两副面孔（缺一字节 ⇔
+        // 头三个字节落不出文件），少了这道护栏块循环每圈只推进头长却永远不 break，整个进程会卡死。
+        if (blockHeader === undefined || cursor > raw.length) {
+          throw new Error(`zstd 块头越界：帧起于 ${at}，读到偏移 ${cursor}（文件长 ${raw.length}）`)
+        }
+        const blockType = (blockHeader >> BLOCK_TYPE_SHIFT) & 0x3
+        const blockSize = (blockHeader >> BLOCK_SIZE_SHIFT) & BLOCK_SIZE_MASK
+        // 3 是规范的 Reserved 位：真产物 36 904 帧里一次没出现过，而 Node 的解压端当场拒
+        // （"Data corruption detected"）⇒ 不照 Raw 那样吞掉块体，直接抛。
+        if (blockType === BLOCK_RESERVED) {
+          throw new Error(`zstd 保留块类型：帧起于 ${at}，偏移 ${cursor - BLOCK_HEADER_BYTES} 的块头 type=3（规范 Reserved，对面解不开）`)
+        }
+        // Raw(0) 与 Compressed(2) 后面跟 blockSize 个字节；RLE(1) 只跟 **1 字节**（重复 blockSize 次）
+        if (blockType === BLOCK_RAW || blockType === BLOCK_COMRESSED) {
+          cursor += blockSize
+        } else if (blockType === BLOCK_RLE) {
+          cursor += 1
+        }
+        if (blockHeader & BLOCK_LAST) break
       }
-      const blockType = (blockHeader >> BLOCK_TYPE_SHIFT) & 0x3
-      const blockSize = (blockHeader >> BLOCK_SIZE_SHIFT) & BLOCK_SIZE_MASK
-      // 3 是规范的 Reserved 位：真产物 36 904 帧里一次没出现过，而 Node 的解压端当场拒
-      // （"Data corruption detected"）⇒ 不照 Raw 那样吞掉块体，直接抛。
-      if (blockType === BLOCK_RESERVED) {
-        throw new Error(`zstd 保留块类型：帧起于 ${at}，偏移 ${cursor - BLOCK_HEADER_BYTES} 的块头 type=3（规范 Reserved，对面解不开）`)
+      cursor = withFrameTail(raw, cursor)
+      if (cursor !== raw.length && !isMagicAt(raw, cursor)) {
+        throw new Error(`zstd 帧边界算歪了：帧起于 ${at}，算到 ${cursor}，那里既不是下一帧帧头也不是 EOF`)
       }
-      // Raw(0) 与 Compressed(2) 后面跟 blockSize 个字节；RLE(1) 只跟 **1 字节**（重复 blockSize 次）
-      if (blockType === BLOCK_RAW || blockType === BLOCK_COMRESSED) {
-        cursor += blockSize
-      } else if (blockType === BLOCK_RLE) {
-        cursor += 1
-      }
-      if (blockHeader & BLOCK_LAST) break
+      ranges.push({ start: at, end: cursor })
+      at = cursor
+    } catch (error) {
+      if (options.tolerateTruncatedTail === true) return ranges
+      throw error
     }
-    cursor = withFrameTail(raw, cursor)
-    if (cursor !== raw.length && !isMagicAt(raw, cursor)) {
-      throw new Error(`zstd 帧边界算歪了：帧起于 ${at}，算到 ${cursor}，那里既不是下一帧帧头也不是 EOF`)
-    }
-    ranges.push({ start: at, end: cursor })
-    at = cursor
   }
   return ranges
 }

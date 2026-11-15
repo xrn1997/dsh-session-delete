@@ -162,3 +162,21 @@ it('statFile 量文件、removeFile 幂等删除，且方法能解构出来单�
   expect(await port.exists(file)).toBe(false)
   await removeFile(file) // force：已经不在也不抛
 })
+
+// 有界头读：对账只为读日志 header，不该为一行付整本日志的内存（`src/trash/reconcile.ts`）。
+it('readFileHead 只读开头 maxBytes 字节；文件更短就整份交回；可解构单独调', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'dsh-fs-head-'))
+  temps.push(dir)
+  const file = join(dir, 'log.bin')
+  await writeFile(file, 'hello world!')
+  const { readFileHead } = createFsPort()
+
+  expect((await readFileHead(file, 5)).toString('utf8')).toBe('hello')
+  // 上限大于文件：整份交回，不多补 NUL / 不发额外请求。
+  expect((await readFileHead(file, 1024)).toString('utf8')).toBe('hello world!')
+  // 非正数按 0 读，不抛（"读 0 字节"是合法请求）。
+  expect((await readFileHead(file, 0)).length).toBe(0)
+  expect((await readFileHead(file, -1)).length).toBe(0)
+  // 路径不在照 ENOENT 抛（缺席判据归调用方 / `exists`，ADR-0039）。
+  await expect(readFileHead(join(dir, 'missing'), 5)).rejects.toMatchObject({ code: 'ENOENT' })
+})

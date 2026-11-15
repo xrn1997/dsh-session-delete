@@ -12,6 +12,7 @@ import {
   scanOrphanImageAttachments,
 } from '../src/trash/attachments.js'
 import { createFakeDeps } from './support/fake-deps.js'
+import { MAX_SESSION_LOG_BYTES } from '../src/log/session-log.js'
 
 const HOME = '/h'
 const ID = `sha256:${'a'.repeat(64)}`
@@ -229,6 +230,61 @@ describe('单目录引用扫描', () => {
     const plainRead = await imageIdsOfDir(withPlain.deps, dir)
     expect(plainRead.ids.size).toBe(0)
     expect(plainRead.unreadable).toMatch(/无法确认/)
+  })
+
+  // 宿主格式迁移的暂存名（`generation.ts`：`session.migration.<token>.jsonl[.zstd].tmp`，后缀来自
+  // `logSuffix(compression)`）：它是同一会话历史日志的完整拷贝，且只在历史规范日志还在时出现——
+  // 可读规范日志已覆盖它的引用，可以忽略。没有规范日志时它仍按不可读 fail closed（拷贝里可能正藏着共享引用）。
+  it('规范日志旁的迁移暂存可忽略；没有规范日志时它仍按不可读', async () => {
+    const dir = '/h/sessions/--p--/session-migrating'
+    const canonical = 'session.v4.jsonl.zstd'
+    const zstdStage = 'session.migration.0123456789abcdef.jsonl.zstd.tmp'
+    const plainStage = 'session.migration.0123456789abcdef.jsonl.tmp'
+    // 只带压缩后缀、不带 `.jsonl` 的名字不是宿主产物：照旧按不可读处理（白名单必须是逐字的）。
+    const bogusStage = 'session.migration.0123456789abcdef.zstd.tmp'
+
+    const migrating = makeWorld({
+      logs: { [`${dir}/${canonical}`]: log(ID) },
+      files: (p) => p === dir ? [canonical, zstdStage, plainStage] : [],
+      statFile: () => ({ size: 4096 }),
+    })
+    const reading = await imageIdsOfDir(migrating.deps, dir)
+    expect(reading.unreadable).toBeUndefined()
+    expect([...reading.ids]).toEqual([ID])
+
+    const withBogus = makeWorld({
+      logs: { [`${dir}/${canonical}`]: log(ID) },
+      files: (p) => p === dir ? [canonical, bogusStage] : [],
+      statFile: () => ({ size: 4096 }),
+    })
+    expect((await imageIdsOfDir(withBogus.deps, dir)).unreadable).toMatch(/无法确认的文件/)
+
+    // 没有规范日志：即使暂存是 0 字节，也不拿"空临时文件"那条捷径当"没有引用"。
+    for (const size of [0, 4096]) {
+      const noCanonical = makeWorld({
+        logs: {},
+        files: (p) => p === dir ? [zstdStage] : [],
+        statFile: () => ({ size }),
+      })
+      const read = await imageIdsOfDir(noCanonical.deps, dir)
+      expect(read.ids.size).toBe(0)
+      expect(read.unreadable).toMatch(/没有可读的会话日志/)
+    }
+  })
+
+  // 日志大小没有宿主上限：读整本之前先看大小，超限按不可读跳过（fail closed），不为一份读不完的
+  // 引用源把整本字节压进内存，更不把它折成"没有引用"。
+  it('整本日志超过读取上限 ⇒ unreadable，不整本读', async () => {
+    const dir = '/h/sessions/--p--/session-huge'
+    const made = makeWorld({
+      logs: {},
+      files: (p) => p === dir ? ['session.v4.jsonl.zstd'] : [],
+      statFile: () => ({ size: MAX_SESSION_LOG_BYTES + 1 }),
+    })
+    const read = await imageIdsOfDir(made.deps, dir)
+    expect(read.ids.size).toBe(0)
+    expect(read.unreadable).toMatch(/超过整本读取上限/)
+    expect(made.fs.readFile).not.toHaveBeenCalled()
   })
 
   // 宿主的内核写锁与日志常态并存（以写方式打开即截断、从不写入内容、释放也不删除）：它不是会话内容。

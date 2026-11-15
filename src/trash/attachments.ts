@@ -15,7 +15,7 @@ import { isAbsentPath } from '../ports/fs-port.js'
 import type { FsReferenceScanPort, FsReferenceScanRemovalPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
 import { TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
-import { isCanonicalSessionLogName, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { isCanonicalSessionLogName, MAX_SESSION_LOG_BYTES, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 
 export interface ImageRef {
   kind: 'image'
@@ -151,8 +151,24 @@ export interface AttachmentRemovalDeps extends AttachmentReadDeps {
   fs: FsReferenceScanRemovalPort
 }
 
-/** 宿主写日志时的临时名：`session.vN.jsonl.zstd.<hash>.tmp`（内容写完后才 rename 成规范名）。 */
+/** 宿主写日志时的临时名：`session.vN.jsonl.zstd.<hash>.tmp`（内容写完后才 rename 成规范名）。
+ *  出处：asar `dsh-session-persistence-jsonl/src/index.ts` 的 `writeSyncedTempFile`：
+ *  `` `${finalPath}.${randomBytes(6).toString('hex')}.tmp` ``。 */
 const TEMP_LOG_NAME = /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]+\.tmp$/u
+
+/**
+ * 宿主**格式迁移**的暂存名：`session.migration.<token>.jsonl[.zstd].tmp`。出处：asar
+ * `dsh-session-persistence-jsonl/src/generation.ts` 的 `writeSyncedTemp`
+ * （`` `session.migration.${internals.randomToken()}${suffix}.tmp` ``，`randomToken` 是十六进制；
+ * `suffix` 是 `logSuffix(compression)` = `.jsonl.zstd` 或 `.jsonl`——**不是**裸 `.zstd`）。
+ * 它是"把历史代迁移成当代、发布前先落盘"的那份暂存。
+ *
+ * 与普通临时日志的差别决定了它**可以**在有规范日志时被忽略：迁移暂存是**同一会话历史日志的完整拷贝**
+ * （header + 全部事件），而它存在的前提是历史规范日志还在原处（宿主就是照着它迁移的）——那份可读的
+ * 规范日志已经覆盖了它的全部引用。写盘临时日志（`TEMP_LOG_NAME`）相反：它可能装着还没进规范日志的
+ * 新记录，非空就算不可读。**没有规范日志时它仍按不可读 fail closed**（`imageIdsOfDir` 的
+ * "只有临时名"那条捷径只认 `TEMP_LOG_NAME`，迁移暂存不在其中）。 */
+const MIGRATION_TEMP_LOG_NAME = /^session\.migration\.[0-9a-f]+\.jsonl(?:\.zstd)?\.tmp$/u
 
 /**
  * 宿主的内核写锁：宿主以写方式打开它即截断、**从不写入内容**、释放也从不删除（POSIX 上是
@@ -161,8 +177,10 @@ const TEMP_LOG_NAME = /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]+\
  */
 const LOCK_NAME = 'session.lock'
 
-/** 规范日志之外允许并存的两类文件：更老一代的规范日志（新代包含旧代）与 0 字节临时日志（没有消息）。
- *  其余任何文件都可能是规范日志没覆盖到的引用（例如写入中的非空临时日志），一律按不可读处理。
+/** 规范日志之外允许并存的几类文件：更老一代的规范日志（新代包含旧代）、0 字节临时日志（没有消息），
+ *  以及宿主的**格式迁移暂存**（同一会话历史日志的完整拷贝，可读规范日志已覆盖它的引用——判据见
+ *  {@link MIGRATION_TEMP_LOG_NAME}）。其余任何文件都可能是规范日志没覆盖到的引用（例如写入中的非空
+ *  临时日志），一律按不可读处理。
  *  宿主的 `session.lock` 到不了这里——它在 `imageIdsOfDir` 挑名单时就按"不是会话内容"剥掉了。 */
 async function unreadableExtraFile(
   deps: AttachmentReadDeps,
@@ -171,6 +189,7 @@ async function unreadableExtraFile(
 ): Promise<string | undefined> {
   for (const name of names) {
     if (isCanonicalSessionLogName(name)) continue
+    if (MIGRATION_TEMP_LOG_NAME.test(name)) continue
     if (!TEMP_LOG_NAME.test(name)) return `${dir}: 规范日志旁还有无法确认的文件 ${name}`
     const stat = await deps.fs.statFile(`${dir}/${name}`)
     if (stat.size > 0) return `${dir}: 规范日志旁还有非空临时日志 ${name}`
@@ -184,7 +203,10 @@ async function unreadableExtraFile(
  *  **有规范日志但目录里还有子目录也不够**：日志只覆盖本目录，子目录里的引用读它看不见——
  *  同样按不可读处理（宁可留下对象等维护卡兜底，不冒"没引用"）。
  *  **规范日志旁的文件也要过关**：老一代规范日志可以并存（新代包含旧代）；0 字节临时日志是
- *  写盘未完成的空产物，也没有引用。非空临时日志、明文日志或其他任何文件仍按不可读处理（fail closed）。
+ *  写盘未完成的空产物，也没有引用；格式迁移暂存是同一历史日志的完整拷贝，规范日志可读时忽略它。
+ *  非空临时日志、明文日志或其他任何文件仍按不可读处理（fail closed）。
+ *  **整本日志读取有上限**（`MAX_SESSION_LOG_BYTES`）：超过就按不可读处理，不为一份读不完的引用源
+ *  把整本字节压进内存，更不把它折成"没有引用"。
  *  **宿主的内核写锁不是会话内容**：0 字节的锁在判目录形状之前先剥掉——不然每个已实体化的会话目录
  *  （含搬进回收站的条目）都会被读成"读不懂"，整份引用扫描在真机上恒跳过；没有日志的锁目录因此与
  *  空目录同判。非空的锁说明我们对这个文件的理解失效（宿主不会往里写字节），仍按不可读处理。
@@ -243,7 +265,13 @@ export async function imageIdsOfDir(
     if (subdirs.length > 0) {
       return { ids: new Set(), unreadable: `${dir}: 目录里还有子目录，规范日志覆盖不到它们` }
     }
-    const scan = scanImageIdsInLog(await deps.fs.readFile(`${dir}/${log}`))
+    // 读整本之前先看大小：上限是"读不出"的判据，不是截断阈值（截断读到的引用集合不可信）。
+    const logPath = `${dir}/${log}`
+    const logSize = (await deps.fs.statFile(logPath)).size
+    if (logSize > MAX_SESSION_LOG_BYTES) {
+      return { ids: new Set(), unreadable: `${logPath}: 日志 ${logSize} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节，未扫描` }
+    }
+    const scan = scanImageIdsInLog(await deps.fs.readFile(logPath))
     // 损坏的日志：解析出来的 id 也不可信（少读的行可能正是引用），整组按不可读处理。
     if (scan.damaged !== undefined) return { ids: new Set(), unreadable: `${dir}/${log}: ${scan.damaged}` }
     return { ids: scan.ids }

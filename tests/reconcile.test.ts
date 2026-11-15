@@ -3,6 +3,7 @@
 // 世界模型：回收站根下有哪些目录、每个目录里有没有日志、日志读不读得出来、尺寸多少——一件一件翻。
 // 判据按"文件是准"给：多出的目录重建出行、目录没了的行摘掉、认不出/读不出的目录不动不列。
 import zlib from 'node:zlib'
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
 import { makeEntryId, type TrashEntry } from '../src/trash/entry.js'
 import { createMemoryManifest } from './support/memory-manifest.js'
@@ -36,6 +37,19 @@ function world(opts: {
   const manifest = createMemoryManifest(opts.seed ?? [])
   const adds = vi.fn<(entry: TrashEntry) => void>()
   const removes = vi.fn<(id: string) => void>()
+  // 对账只读 header：内容按路径交回，`readFileHead` 与 `readFile` 共用同一份世界（头读是"读同一个
+  // 文件的前 N 字节"，不是第二个世界）；`readFile` 仍留着，用来钉"对账不再整本读"那条断言。
+  const readLog = async (p: string): Promise<Buffer> => {
+    const [name, fileName] = p.slice(ROOT.length + 1).split('/') as [string, string | undefined]
+    const byName = opts.logsByFile?.[name]
+    if (fileName !== undefined && byName !== undefined && fileName in byName) {
+      // 上一行的 `in` 已证明这一格在：must 只是让编译器跟上这个证明，真缺了是夹具脱节，响亮失败。
+      return must(byName[fileName], `日志 ${name}/${fileName} 的内容`)
+    }
+    const log = opts.logs?.[name]
+    if (log === 'unreadable') throw new Error('boom')
+    return log ?? headerLog({ type: 'session', version: 4, id: 'session-x', cwd: 'C:/p' })
+  }
   const fs = {
     exists: vi.fn(async (p: string) => (p === ROOT ? opts.rootExists ?? true : true)),
     ensureDir: vi.fn(async () => {}),
@@ -47,17 +61,8 @@ function world(opts: {
       if (opts.files?.[name] !== undefined) return [...opts.files[name]]
       return opts.logs?.[name] === null ? [] : ['session.v4.jsonl.zstd']
     }),
-    readFile: vi.fn(async (p: string) => {
-      const [name, fileName] = p.slice(ROOT.length + 1).split('/') as [string, string | undefined]
-      const byName = opts.logsByFile?.[name]
-      if (fileName !== undefined && byName !== undefined && fileName in byName) {
-        // 上一行的 `in` 已证明这一格在：must 只是让编译器跟上这个证明，真缺了是夹具脱节，响亮失败。
-        return must(byName[fileName], `日志 ${name}/${fileName} 的内容`)
-      }
-      const log = opts.logs?.[name]
-      if (log === 'unreadable') throw new Error('boom')
-      return log ?? headerLog({ type: 'session', version: 4, id: 'session-x', cwd: 'C:/p' })
-    }),
+    readFile: vi.fn((p: string) => readLog(p)),
+    readFileHead: vi.fn(async (p: string, maxBytes: number) => (await readLog(p)).subarray(0, maxBytes)),
     sizeOfDir: vi.fn(async () => {
       if (opts.sizeThrows === true) throw new Error('boom')
       return 512
@@ -106,6 +111,27 @@ describe('回收站对账', () => {
     expect(entry).toMatchObject({ sessionId: 'session-fallback', projectDir: '_no-cwd' })
   })
 
+  it('header 缺席 id 且目录段是编码段 ⇒ 反解回原始 session id，不把 `~XXXX` 当成身份', async () => {
+    // 宿主把 `a~b` 落成目录段 `a~007Eb`；对账只看得到目录名，必须解回原始 id，
+    // 否则重建出来的行会拿编码段去对语料 / 投影缓存，永远匹配不上。
+    const extra = idOf('a~007Eb')
+    const { deps } = world({ dirs: [extra], logs: { [extra]: headerLog({ type: 'session', version: 4 }) } })
+    const [entry] = await reconcileTrash(deps)
+    expect(entry).toMatchObject({ sessionId: 'a~b' })
+  })
+
+  it('多帧日志超过头读窗口：前缀容忍丢掉不完整的尾帧，header 仍能重建行', async () => {
+    // 真实长会话日志 > 1 MiB 且多帧是常态；头读截在第二帧中间时，严格切帧会抛、目录就再也列不出来。
+    // 头读只要第一帧的 header——容忍模式丢掉不完整尾帧即可（`readSessionHeader` 的 `tolerateTruncatedTail`）。
+    const extra = idOf('session-multiframe')
+    const tail = zlib.zstdCompressSync(randomBytes(2 * 1024 * 1024))
+    const log = Buffer.concat([headerLog({ type: 'session', version: 4, id: 'session-multiframe', cwd: 'C:/p' }), tail])
+    expect(log.length).toBeGreaterThan(1024 * 1024)
+    const { deps } = world({ dirs: [extra], logs: { [extra]: log } })
+    const [entry] = await reconcileTrash(deps)
+    expect(entry).toMatchObject({ sessionId: 'session-multiframe', projectDir: '--C-p--' })
+  })
+
   // 空串 cwd 与"缺席 cwd"不是同一件事：宿主 `projectDir` 只在 `undefined` 时落 `_no-cwd`，
   // 删除时的 `projectDir` 也按那一支算。对账重建必须复现同一条判据，否则同一条会话在删除计划、
   // 恢复与孤儿扫描里指向两个目录。
@@ -135,7 +161,7 @@ describe('回收站对账', () => {
     const [entry] = await reconcileTrash(deps)
     // 两代的 cwd 不同 ⇒ 反推出的项目目录不同，读错代就在项目目录上说错话
     expect(entry).toMatchObject({ sessionId: 'session-multi', projectDir: '--C-develop-q--' })
-    expect(fs.readFile).toHaveBeenCalledWith(`${ROOT}/${extra}/session.v4.jsonl.zstd`)
+    expect(fs.readFileHead).toHaveBeenCalledWith(`${ROOT}/${extra}/session.v4.jsonl.zstd`, 1024 * 1024)
   })
 
   it('目录没了的行被摘掉，且摘的就是那一条', async () => {
@@ -154,6 +180,21 @@ describe('回收站对账', () => {
     expect(rows.map((r) => r.id)).toEqual([id])
     expect(adds).not.toHaveBeenCalled()
     expect(removes).not.toHaveBeenCalled()
+    expect(fs.readFile).not.toHaveBeenCalled()
+    expect(fs.readFileHead).not.toHaveBeenCalled()
+  })
+
+  // 对账只为读 header：走**有界头读**（1 MiB），不为一行 header 把整本日志读进内存。
+  // 这条同时钉住两件事：读的是哪条口径（`readFileHead` 带窗口大小），以及整本 `readFile` 一次都不发。
+  it('重建行只读日志头：走 readFileHead（1 MiB），不整本 readFile', async () => {
+    const extra = idOf('session-head')
+    const { deps, fs } = world({
+      dirs: [extra],
+      logs: { [extra]: headerLog({ type: 'session', version: 4, id: 'session-head', cwd: 'C:/p' }) },
+    })
+    const rows = await reconcileTrash(deps)
+    expect(rows.map((r) => r.id)).toEqual([extra])
+    expect(fs.readFileHead).toHaveBeenCalledWith(`${ROOT}/${extra}/session.v4.jsonl.zstd`, 1024 * 1024)
     expect(fs.readFile).not.toHaveBeenCalled()
   })
 

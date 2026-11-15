@@ -226,7 +226,7 @@ export interface FakeFsOptions extends CallLog {
 }
 
 /**
- * 内存里的 `FsPort`：11 个方法；**路径树状态机**。
+ * 内存里的 `FsPort`：12 个方法；**路径树状态机**。
  *
  * 世界 = `present`（盘上真在的目录：`seedDirs` 初值 + 写操作搬进来/建出来的）与 `absent`
  * （被写操作明确搬走/删掉的目录，墓碑）。三个读口（`exists` / `listDirs` / `sizeOfDir`）按这个世界作答，
@@ -307,7 +307,16 @@ export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
     absent.add(p)
   }
 
-  return {
+  /** 读整本与有界头读共用**同一个文件内容世界**：头读是"读同一个文件的前 N 字节"，不是第二个世界。
+   *  两条口径各自留方法替身（可以分别断言"谁被调了"），但内容都经对象上的 `readFile` 取——
+   *  用例用 `fs.readFile.mockResolvedValue(...)` 喂日志时，头读看到的是同一份。 */
+  const readFileMock = vi.fn(async (p: string) => {
+    record('readFile', [p])
+    if (over.readFile === undefined) throw new Error(`fake fs: 没有为 ${p} 准备 readFile`)
+    return over.readFile(p)
+  })
+
+  const fs = {
     exists: vi.fn(async (p: string) => existsOf(p)),
     ensureDir: vi.fn(async (p: string) => { record('ensureDir', [p]) }),
     rename: vi.fn(async (from: string, to: string) => { record('rename', [from, to]); moveTree(from, to) }),
@@ -323,11 +332,8 @@ export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
     }),
     // 内存世界是棵树：没有软链，真实路径就是自己。
     realpath: vi.fn(async (p: string) => (over.realpath === undefined ? p : await over.realpath(p))),
-    readFile: vi.fn(async (p: string) => {
-      record('readFile', [p])
-      if (over.readFile === undefined) throw new Error(`fake fs: 没有为 ${p} 准备 readFile`)
-      return over.readFile(p)
-    }),
+    readFile: readFileMock,
+    readFileHead: vi.fn<(p: string, maxBytes: number) => Promise<Buffer>>(),
     statFile: vi.fn(async (p: string) => {
       record('statFile', [p])
       if (over.statFile !== undefined) return await over.statFile(p)
@@ -338,7 +344,15 @@ export function createFakeFs(over: FakeFsOptions = {}): FakeFs {
       record('removeFile', [p])
       await over.removeFile?.(p)
     }),
-  }
+  } satisfies FakeFs
+
+  fs.readFileHead = vi.fn(async (p: string, maxBytes: number) => {
+    record('readFileHead', [p, maxBytes])
+    const raw = await fs.readFile(p)
+    return raw.subarray(0, Math.max(0, Math.floor(maxBytes)))
+  })
+
+  return fs
 }
 
 export interface FakeDepsOptions extends Omit<FakeHostOptions, 'log' | 'logMethods' | 'format'> {
