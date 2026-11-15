@@ -19,6 +19,7 @@ import {
   TRASH_DIR_LABEL,
   TRASH_DIR_NAME,
   VERB_CODES,
+  WIRE_VALUE_GUARDS,
   isDSHRemoteError,
   isRemoteResult,
   type TrashRowWire,
@@ -295,6 +296,113 @@ describe('失败的运行期判别（isDSHRemoteError）', () => {
     expect(isDSHRemoteError(new Error('x'))).toBe(false)
     expect(isDSHRemoteError(null)).toBe(false)
     expect(isDSHRemoteError('sessiondelete/io')).toBe(false)
+  })
+})
+
+describe('线上值的轻量判形（WIRE_VALUE_GUARDS）', () => {
+  // 浏览器半在用成功信封之前问一次形状：形状漂移（少一格、对象回成数组）不许喂给渲染层。
+  // 这里钉两件事：**表跟段名表逐段对齐**（加 JSON 段必须补一格），以及判形本身只认
+  // 「数组 / 对象 / 必备字段」这一层（合法最小形状放行、缺必备格拒绝）。
+
+  /** 齐全的详情基座（判形要的必填格，两档共用）。 */
+  const DETAIL_VALUE = {
+    cwd: 'C:/p',
+    createdAt: 1,
+    lastActivity: 2,
+    logTitle: '',
+    models: [] as string[],
+    turnCount: 0,
+    userMessageCount: 0,
+    assistantMessageCount: 0,
+    toolCallCount: 0,
+    injectedCount: 0,
+    blocks: [] as unknown[],
+    olderCursor: null as number | null,
+  }
+
+  /** 每个 JSON 段一份**合法最小值**（可选字段一律缺席：判形不该逼着可选出线）。 */
+  const VALID_VALUES: Record<string, unknown> = {
+    list: [{ ...ENTRY, releaseBytes: 1 }],
+    ping: 'pong',
+    config: { orphanPreviewLimit: 1, maxAttachmentBytes: 1, maxJsonRefBytes: 1 },
+    detail: { ...DETAIL_VALUE, entryId: 'entry-a' },
+    apply: [{ id: 'session-a', action: 'restore', ok: true, value: null }],
+    empty: { removed: 0, freedBytes: 0 },
+    orphans: { roots: [], totalSessions: 0, totalBytes: 0, missingParents: 0, groups: [] },
+    attachmentOrphans: { count: 0, totalBytes: 0, items: [] },
+    attachmentClean: { removed: 0, freedBytes: 0, failed: 0 },
+    projectionOrphans: { count: 0 },
+    projectionClean: { removed: 0, failed: 0 },
+    archiveList: { available: false },
+    archiveDetail: { ...DETAIL_VALUE, sessionId: 'session-a', archived: true },
+  }
+
+  const guardsOf = (): Record<string, (value: unknown) => boolean> => WIRE_VALUE_GUARDS
+
+  it('表与段名表逐段对齐：JSON 段每段一格，二进制段 `attachment` 不进表', () => {
+    const jsonRoutes = Object.keys(ROUTES).filter((name) => name !== 'attachment').sort()
+    expect(Object.keys(WIRE_VALUE_GUARDS).sort()).toEqual(jsonRoutes)
+    // 合法最小值全部放行（判形不拿可选字段当必填）。
+    for (const [name, value] of Object.entries(VALID_VALUES)) {
+      expect(`${name}:${guardsOf()[name]?.(value) === true}`, `${name} 应放行合法值`).toBe(`${name}:true`)
+    }
+  })
+
+  it('缺必备格 / 类型不对 / 把行集回成对象或 null：一律拒绝', () => {
+    const invalid: Record<string, unknown> = {
+      list: [{ id: 'a' }],
+      ping: 1,
+      config: {},
+      detail: { entryId: 'entry-a' },
+      apply: [{ id: 'session-a', action: 'restore', ok: true, value: { id: 'session-a' } }],
+      empty: { removed: 0 },
+      orphans: { roots: [] },
+      attachmentOrphans: { count: 0 },
+      attachmentClean: { removed: 0, freedBytes: 0 },
+      projectionOrphans: {},
+      projectionClean: { removed: 0 },
+      archiveList: { available: true, rows: [{}] },
+      archiveDetail: { ...DETAIL_VALUE, sessionId: 'session-a' },
+    }
+    for (const [name, value] of Object.entries(invalid)) {
+      expect(`${name}:${guardsOf()[name]?.(value) === true}`, `${name} 应拒绝不合法值`).toBe(`${name}:false`)
+    }
+    expect(WIRE_VALUE_GUARDS.list(null)).toBe(false)
+    expect(WIRE_VALUE_GUARDS.detail([])).toBe(false)
+  })
+
+  it('`apply` 的成功值按动作校形：null 幂等只属于 delete / restore；失败支要带 code + message', () => {
+    const outcome = (action: string, value: unknown): unknown => ({ id: 'e1', action, ok: true, value })
+    expect(WIRE_VALUE_GUARDS.apply([outcome('delete', null)])).toBe(true)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('restore', null)])).toBe(true)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('count', 3)])).toBe(true)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('unarchive', 1)])).toBe(true)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('purge', { removed: 1, freedBytes: 2 })])).toBe(true)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('orphan-clean', { removed: 1, freedBytes: 2 })])).toBe(true)
+
+    // 解构联合：null 只允许在两个幂等动作上；`count` 不能回对象；purge 不能回 null。
+    expect(WIRE_VALUE_GUARDS.apply([outcome('delete', { id: 'e1' })])).toBe(false)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('count', {})])).toBe(false)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('purge', null)])).toBe(false)
+    expect(WIRE_VALUE_GUARDS.apply([outcome('不存在的动作', 1)])).toBe(false)
+    // 失败支：信封对但 error 只有一半 ⇒ 拒绝。
+    expect(WIRE_VALUE_GUARDS.apply([{ id: 'e1', action: 'restore', ok: false, error: { code: 'x' } }])).toBe(false)
+    expect(WIRE_VALUE_GUARDS.apply([{ id: 'e1', action: 'restore', ok: false, error: { code: 'x', message: 'm' } }])).toBe(true)
+  })
+
+  it('详情块按判别键校：未知 kind、缺正文格、附件不是数组都拒绝', () => {
+    const block = (over: Record<string, unknown>): unknown => ({
+      kind: 'user', id: '0', time: 0, text: '', truncated: false, attachments: [], ...over,
+    })
+    const withBlock = (value: unknown): unknown => ({ ...DETAIL_VALUE, entryId: 'entry-a', blocks: [value] })
+    expect(WIRE_VALUE_GUARDS.detail(withBlock(block({})))).toBe(true)
+    expect(WIRE_VALUE_GUARDS.detail(withBlock(block({ kind: 'nope' })))).toBe(false)
+    expect(WIRE_VALUE_GUARDS.detail(withBlock(block({ text: undefined })))).toBe(false)
+    expect(WIRE_VALUE_GUARDS.detail(withBlock(block({ attachments: 'x' })))).toBe(false)
+    expect(WIRE_VALUE_GUARDS.detail(withBlock(block({
+      kind: 'tool', callId: 'c', name: 'n', status: 'ok', args: '', result: '',
+      argsTruncated: false, resultTruncated: false,
+    })))).toBe(true)
   })
 })
 

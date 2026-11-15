@@ -25,7 +25,7 @@ import {
   type ConnectionFetchServiceLike,
 } from '../src/api/connection-route.js'
 import { DEFAULT_CONFIG, type SessionDeleteConfig } from '../src/config.js'
-import { OFFICIAL_SESSION_DELETE_API_PREFIX, PARAMS, ROUTES, type ApplyOutcome } from '../src/shared/wire.js'
+import { OFFICIAL_SESSION_DELETE_API_PREFIX, PARAMS, ROUTES, WIRE_VALUE_GUARDS, type ApplyOutcome } from '../src/shared/wire.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import type { DeleteDeps } from '../src/deps.js'
@@ -38,7 +38,7 @@ import { trashEntry } from './support/world.js'
 const HOME = '/h'
 const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
 
-/** 条目 id 一律由 `makeEntryId` 产出（`恢复` 动词按 id 反推原目录名）⇒ 夹具照真实形状造，
+/** 条目 id 一律由 `makeEntryId` 产出（`恢复` 动词按 id 回放目录段）⇒ 夹具照真实形状造，
  *  不拿 `'a'` 这种手写串冒充。 */
 const entryIdOf = (sessionDirName: string) => makeEntryId(NOW, sessionDirName)
 const entry = (sessionDirName: string, over: Partial<TrashEntry> = {}): TrashEntry =>
@@ -490,6 +490,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
       method: 'POST', body: { [PARAMS.action]: 'delete', [PARAMS.ids]: ['session-abc'] },
     })
     expect(status).toBe(200)
+    expect(WIRE_VALUE_GUARDS.apply(body.value)).toBe(true)
     expect((body.value as Array<Record<string, unknown>>)[0]).toMatchObject({
       ok: true, value: { sessionId: 'session-abc', title: '会话标题', sizeBytes: 224 * 1024 },
     })
@@ -530,7 +531,7 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
   })
 
   it('apply purge 一组 id 单条；/empty 清空（回执 {removed,freedBytes}）', async () => {
-    // `entry('a')` 的 id 就是 `entryIdOf('a')`（夹具第一参是**原目录名**，不是整串 id）
+    // `entry('a')` 的 id 就是 `entryIdOf('a')`（夹具第一参是**目录段**——安全 id 下与原始 id 同形）
     const two = () => [entry('a'), entry('b')]
     const one = makeDeps({ seed: two() })
     const oneBase = await start(one.deps)
@@ -1136,6 +1137,7 @@ describe('路由层 · GET /orphans 与 apply orphan-clean（无主子会话，2
     const base = await start(deps)
     const { status, body } = await call(base, ROUTES.orphans.path)
     expect(status).toBe(200)
+    expect(WIRE_VALUE_GUARDS.orphans(body.value)).toBe(true)
     expect(body).toMatchObject({
       ok: true,
       value: {
@@ -1955,6 +1957,7 @@ describe('路由层 · GET /archive-list 与 POST /archive-detail（归档档两
     const base = await start(deps)
     const { status, body } = await call(base, ROUTES.archiveList.path)
     expect(status).toBe(200)
+    expect(WIRE_VALUE_GUARDS.archiveList(body.value)).toBe(true)
     expect(body).toMatchObject({ ok: true, value: { available: true, rows: [], totalBytes: 0, missingSizeCount: 0 } })
   })
 
@@ -1968,6 +1971,7 @@ describe('路由层 · GET /archive-list 与 POST /archive-detail（归档档两
     const base = await start(deps)
     const { status, body } = await call(base, ROUTES.archiveList.path)
     expect(status).toBe(200)
+    expect(WIRE_VALUE_GUARDS.archiveList(body.value)).toBe(true)
     expect(body).toMatchObject({
       ok: true,
       value: {
@@ -1992,6 +1996,7 @@ describe('路由层 · GET /archive-list 与 POST /archive-detail（归档档两
       body: { [PARAMS.sessionId]: 'session-a' },
     })
     expect(status).toBe(200)
+    expect(WIRE_VALUE_GUARDS.archiveDetail(body.value)).toBe(true)
     expect(body).toMatchObject({ ok: true, value: { sessionId: 'session-a', archived: true, cwd: 'C:/p', createdAt: 10 } })
   })
 
@@ -2063,6 +2068,7 @@ describe('路由层 · 孤儿投影缓存（GET /projection-orphans、POST /proj
     const base = await start(deps)
     const { status, body } = await call(base, ROUTES.projectionOrphans.path)
     expect(status).toBe(200)
+    expect(WIRE_VALUE_GUARDS.projectionOrphans(body.value)).toBe(true)
     expect(body).toEqual({ ok: true, value: { count: 1 } })
   })
 
@@ -2099,5 +2105,39 @@ describe('路由层 · 孤儿投影缓存（GET /projection-orphans、POST /proj
     expect(status).toBe(200)
     expect(body).toEqual({ ok: true, value: { removed: 0, failed: 0 } })
     expect(host.dropProjectionCache).not.toHaveBeenCalled()
+  })
+})
+
+describe('路由层 · 成功信封的值形状过浏览器半判形（wire 单源，2026-11-14）', () => {
+  /** 真路由真适配器产出的 `value` 必须能过 `WIRE_VALUE_GUARDS`：判形表的合法性不能只靠手写样例
+   *  自证——生产者的形状与浏览器半的门一旦漂移，表现是"界面永远显示取数失败"。 */
+  const expectGuarded = async (
+    name: keyof typeof WIRE_VALUE_GUARDS,
+    pending: Promise<{ status: number; body: Record<string, unknown> }>,
+  ): Promise<void> => {
+    const { status, body } = await pending
+    expect(status, name).toBe(200)
+    expect(body.ok, name).toBe(true)
+    expect(WIRE_VALUE_GUARDS[name](body.value), `${name} 的 value 没过判形`).toBe(true)
+  }
+
+  it('段名表里的读段与写回执都能过判形', async () => {
+    const { deps } = makeDeps({ seed: [entry('session-a')] })
+    const base = await start(deps)
+    await expectGuarded('ping', call(base, ROUTES.ping.path))
+    await expectGuarded('list', call(base, ROUTES.list.path))
+    await expectGuarded('detail', call(base, ROUTES.detail.path, {
+      method: 'POST',
+      body: { [PARAMS.entryId]: entryIdOf('session-a') },
+    }))
+    await expectGuarded('config', call(base, ROUTES.config.path, { method: 'POST', body: {} }))
+    await expectGuarded('attachmentOrphans', call(base, ROUTES.attachmentOrphans.path))
+    await expectGuarded('attachmentClean', call(base, ROUTES.attachmentClean.path, { method: 'POST', body: {} }))
+    await expectGuarded('archiveList', call(base, ROUTES.archiveList.path))
+    await expectGuarded('apply', call(base, ROUTES.apply.path, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-a'] },
+    }))
+    await expectGuarded('empty', call(base, ROUTES.empty.path, { method: 'POST', body: {} }))
   })
 })

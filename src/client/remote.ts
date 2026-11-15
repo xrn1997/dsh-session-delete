@@ -20,6 +20,7 @@
 import {
   PARAMS,
   ROUTES,
+  WIRE_VALUE_GUARDS,
   isRemoteResult,
   type ApplyAction,
   type ApplyOutcome,
@@ -36,6 +37,7 @@ import {
   type SessionDeleteConfigWire,
   type TrashDetailWire,
   type TrashRowWire,
+  type WireValueGuard,
 } from '../shared/wire.js'
 import { apiPath } from './api-base.js'
 import { CLIENT_UNKNOWN_CODE, missingOutcomeMessage, readSingleReceipt } from './receipt.js'
@@ -151,37 +153,138 @@ function diagnostic(status: number): RemoteFailure {
   return { code: CLIENT_UNKNOWN_CODE, message: `取数通道回的不是信封（HTTP ${String(status)}）` }
 }
 
+/** 一次普通请求的时长上限（探针另有更短的 5s 上限，见 {@link PROBE_TIMEOUT_MS}）。 */
+export const REQUEST_TIMEOUT_MS = 30_000
+
+/** 聚合读 / 批量写 / 清空的时长上限：工作量按盘上全量数据线性变长（扫描所有日志、删几百个目录），
+ *  和一次单条读共用 30s 会把「宿主还在干活」误判成超时。 */
+export const SLOW_REQUEST_TIMEOUT_MS = 120_000
+
+/** 超时的固定中文原文：通道诊断是协议原文，不随 locale（见 `docs/architecture.md` §3）。 */
+export const REQUEST_TIMEOUT_MESSAGE = '取数通道超时：宿主没有在时限内回应'
+
+/** 调用方自己中止这一趟（探测的 5s 上限）时的原文：与宿主超时分开，诊断才能指对人。 */
+export const CALLER_ABORT_MESSAGE = '取数通道打不通：请求已被调用方中止'
+
+/** 成功信封里的值形状不对时的固定中文原文（判形住 `src/shared/wire.ts` 的 `WIRE_VALUE_GUARDS`）。 */
+export const CHANNEL_SHAPE_MESSAGE = '取数通道回的值形状不对'
+
+/** 超时竞速的哨兵值：`Promise.race` 里与 `Response` 区分开（真实的 fetch 不会回这个字符串）。 */
+const TIMED_OUT = 'session-delete-request-timed-out'
+
 /**
- * 一次 HTTP 往返 → 落地面。**永不抛**：打不通（宿主没起来 / 路由没挂）、超时（AbortSignal）、
- * 回的不是信封（中间层回 `{}` / `{"error":"…"}` 这类 JSON，或 SPA 兜底的 index.html）都归一成
- * `{ ok:false, failure }`；业务失败（`ok:false` 信封）原样返回，`code` / `message` / `details` 三件不丢。
+ * 一次 HTTP 往返 → 落地面。**永不抛**：打不通（宿主没起来 / 路由没挂）、**超时**、回的不是信封
+ * （中间层回 `{}` / `{"error":"…"}` 这类 JSON，或 SPA 兜底的 index.html）、信封里的值形状不对
+ * 都归一成 `{ ok:false, failure }`；业务失败（`ok:false` 信封）原样返回，`code` / `message` /
+ * `details` 三件不丢。
+ *
+ * 超时归一个**自己的** `AbortController`：上限从请求发出算到信封读完（正文卡住也算超时）；
+ * 调用方给了 `signal` 时两者联动（任何一方 abort 都打断这一趟），调用方先 abort 时按「打不通」
+ * 落地——那是探测自己放弃这一趟，不是宿主没在时限内回应。
  */
 async function requestOutcome<T>(
   route: RouteSeg,
   payload: Record<string, unknown>,
+  guard: WireValueGuard,
+  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<RemoteOutcome<T>> {
-  let response: Response
-  try {
-    response = await fetch(apiPath(route.path), {
-      ...requestInit(route, payload),
-      ...(signal === undefined ? {} : { signal }),
-    })
-  } catch (reason) {
-    const cause = reason instanceof Error ? reason.message : String(reason)
-    return { ok: false, failure: { code: CLIENT_UNKNOWN_CODE, message: `取数通道打不通：${cause}` } }
+  const controller = new AbortController()
+  /** 超时标记放对象里：只由定时器回调写、请求体里读，`let` 布尔会被控制流收窄成"永远 false"。 */
+  const clock: { timedOut: boolean; abortedByCaller: boolean } = { timedOut: false, abortedByCaller: false }
+  /** 上限到了：标超时 + 打断 fetch；就算底层 fetch 不认 `signal`，竞速那一边也保证这一趟按时落地。 */
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeout(() => {
+      clock.timedOut = true
+      controller.abort()
+      resolve(TIMED_OUT)
+    }, timeoutMs)
+  })
+  const relayAbort = (): void => {
+    clock.abortedByCaller = true
+    controller.abort()
   }
-  let body: unknown
-  try {
-    body = await response.json()
-  } catch {
-    // 非 JSON：落成下面同一个「不是信封」诊断。
-    body = undefined
+  if (signal === undefined) {
+    // 没有调用方的 signal：这一趟只归超时管。
+  } else if (signal.aborted) {
+    clock.abortedByCaller = true
+    controller.abort()
+  } else {
+    signal.addEventListener('abort', relayAbort, { once: true })
   }
-  if (!isRemoteResult(body)) return { ok: false, failure: diagnostic(response.status) }
-  return body.ok
-    ? { ok: true, value: body.value as T }
-    : { ok: false, failure: body.error }
+  const timedOutFailure = (): RemoteOutcome<T> =>
+    ({ ok: false, failure: { code: CLIENT_UNKNOWN_CODE, message: REQUEST_TIMEOUT_MESSAGE } })
+  const callerAbortFailure = (): RemoteOutcome<T> =>
+    ({ ok: false, failure: { code: CLIENT_UNKNOWN_CODE, message: CALLER_ABORT_MESSAGE } })
+  /** 打断的唤醒面：`fetch`/`json()` 可能**不认** signal（桩件、旧中间层），不能让竞速只等它们自己醒。 */
+  const CALLER_ABORTED = 'session-delete-request-caller-aborted'
+  let onCallerAbort: (() => void) | undefined
+  const callerAborted = new Promise<typeof CALLER_ABORTED>((resolve) => {
+    onCallerAbort = () => resolve(CALLER_ABORTED)
+    if (controller.signal.aborted) onCallerAbort()
+    else controller.signal.addEventListener('abort', onCallerAbort, { once: true })
+  })
+  try {
+    let response: Response
+    try {
+      const first = await Promise.race([
+        fetch(apiPath(route.path), {
+          ...requestInit(route, payload),
+          signal: controller.signal,
+        }),
+        timeout,
+        callerAborted,
+      ])
+      if (first === TIMED_OUT) return timedOutFailure()
+      if (first === CALLER_ABORTED) {
+        return clock.timedOut ? timedOutFailure() : callerAbortFailure()
+      }
+      response = first
+    } catch (reason) {
+      if (clock.timedOut) return timedOutFailure()
+      if (clock.abortedByCaller) return callerAbortFailure()
+      const cause = reason instanceof Error ? reason.message : String(reason)
+      return { ok: false, failure: { code: CLIENT_UNKNOWN_CODE, message: `取数通道打不通：${cause}` } }
+    }
+    let body: unknown
+    // 正文读取也必须在同一颗计时器下：`AbortController` 能打断 fetch，但**不保证**已经拿到响应头之后
+    // 的 `response.json()` 会立刻 rejection（不同实现/中间层不一样）。这里把正文也放进竞速里，
+    // 超时/调用方中止都按同一落地面收口，不把「响应头到了、正文永远不结束」留给调用方吊死。
+    // `Promise.resolve().then` 把 `json()` 的**同步**抛错也折成 rejection（同一条失败面）。
+    const readBody = Promise.resolve()
+      .then(() => response.json())
+      .then((value: unknown) => ({ kind: 'json' as const, value }))
+      .catch(() => ({ kind: 'invalid' as const }))
+    const bodyOutcome = await Promise.race([
+      readBody,
+      timeout.then(() => ({ kind: 'timeout' as const })),
+      callerAborted.then(() => ({ kind: 'aborted' as const })),
+    ])
+    if (bodyOutcome.kind === 'timeout' || clock.timedOut) return timedOutFailure()
+    if (bodyOutcome.kind === 'aborted' || clock.abortedByCaller) return callerAbortFailure()
+    if (bodyOutcome.kind === 'json') body = bodyOutcome.value
+    if (!isRemoteResult(body)) return { ok: false, failure: diagnostic(response.status) }
+    if (!body.ok) return { ok: false, failure: body.error }
+    // 信封对、值不对：形状漂移不许喂给组件（少一格就是 `undefined` 上屏 / 渲染炸掉）。
+    if (!guard(body.value)) {
+      console.warn('[dsh-session-delete] 取数通道回的值形状不对，按失败处理：', route.path)
+      return { ok: false, failure: { code: CLIENT_UNKNOWN_CODE, message: CHANNEL_SHAPE_MESSAGE } }
+    }
+    return { ok: true, value: body.value as T }
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', relayAbort)
+    if (onCallerAbort !== undefined) controller.signal.removeEventListener('abort', onCallerAbort)
+  }
+}
+
+/** `createHttpRemote` 的可选覆盖。**生产调用方不传**：注册路径按段用
+ *  {@link REQUEST_TIMEOUT_MS} / {@link SLOW_REQUEST_TIMEOUT_MS} 两档。
+ *  这一格存在是为了让「超时落失败面」这条支能在测试里真的跑到，而不必等 30/120 秒墙上时间。 */
+export interface HttpRemoteOptions {
+  /** 同时覆盖普通与聚合两类上限；超时经 `AbortController` 打断 fetch。 */
+  readonly timeoutMs?: number
 }
 
 /**
@@ -191,33 +294,43 @@ async function requestOutcome<T>(
  * 鉴权归宿主 `/api` bridge（ADR-0033）。所以这条通道**只对**宿主页面打开过、带宿主身份的客户端
  * 成立（凭据是那次访问换来的 cookie，不是插件自己的秘密）。
  */
-export function createHttpRemote(): SessionDeleteRemote {
+export function createHttpRemote(options: HttpRemoteOptions = {}): SessionDeleteRemote {
+  /** 每段的上限：普通 30s、聚合读/批量写/清空 120s；测试把 `timeoutMs` 调小，超时支才跑得到。 */
+  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
+  const slowTimeoutMs = options.timeoutMs ?? SLOW_REQUEST_TIMEOUT_MS
   return {
-    // 每段的路径与方法从段名表投影；地址由 `api-base.ts` 投影。
-    ping: (signal) => requestOutcome<string>(ROUTES.ping, {}, signal),
-    list: () => requestOutcome<TrashEntryLike[]>(ROUTES.list, {}),
-    config: () => requestOutcome<SessionDeleteConfigWire>(ROUTES.config, {}),
-    saveConfig: (next) => requestOutcome<SessionDeleteConfigWire>(ROUTES.config, { ...next }),
-    scanOrphans: () => requestOutcome<OrphanReportWire>(ROUTES.orphans, {}),
-    scanAttachmentOrphans: () => requestOutcome<AttachmentOrphanReportWire>(ROUTES.attachmentOrphans, {}),
-    cleanAttachmentOrphans: () => requestOutcome<AttachmentCleanupWire>(ROUTES.attachmentClean, {}),
-    scanProjectionCacheOrphans: () => requestOutcome<ProjectionCacheOrphanReportWire>(ROUTES.projectionOrphans, {}),
-    cleanProjectionCacheOrphans: () => requestOutcome<ProjectionCacheCleanupWire>(ROUTES.projectionClean, {}),
+    // 每段的路径与方法从段名表投影；地址由 `api-base.ts` 投影；值形状先过 `WIRE_VALUE_GUARDS` 那一格。
+    ping: (signal) => requestOutcome<string>(ROUTES.ping, {}, WIRE_VALUE_GUARDS.ping, timeoutMs, signal),
+    list: () => requestOutcome<TrashEntryLike[]>(ROUTES.list, {}, WIRE_VALUE_GUARDS.list, timeoutMs),
+    config: () => requestOutcome<SessionDeleteConfigWire>(ROUTES.config, {}, WIRE_VALUE_GUARDS.config, timeoutMs),
+    saveConfig: (next) => requestOutcome<SessionDeleteConfigWire>(
+      ROUTES.config, { ...next }, WIRE_VALUE_GUARDS.config, slowTimeoutMs),
+    scanOrphans: () => requestOutcome<OrphanReportWire>(
+      ROUTES.orphans, {}, WIRE_VALUE_GUARDS.orphans, slowTimeoutMs),
+    scanAttachmentOrphans: () => requestOutcome<AttachmentOrphanReportWire>(
+      ROUTES.attachmentOrphans, {}, WIRE_VALUE_GUARDS.attachmentOrphans, slowTimeoutMs),
+    cleanAttachmentOrphans: () => requestOutcome<AttachmentCleanupWire>(
+      ROUTES.attachmentClean, {}, WIRE_VALUE_GUARDS.attachmentClean, slowTimeoutMs),
+    scanProjectionCacheOrphans: () => requestOutcome<ProjectionCacheOrphanReportWire>(
+      ROUTES.projectionOrphans, {}, WIRE_VALUE_GUARDS.projectionOrphans, slowTimeoutMs),
+    cleanProjectionCacheOrphans: () => requestOutcome<ProjectionCacheCleanupWire>(
+      ROUTES.projectionClean, {}, WIRE_VALUE_GUARDS.projectionClean, slowTimeoutMs),
     detail: (entryId, before) => requestOutcome<TrashDetailLike>(ROUTES.detail, {
       [PARAMS.entryId]: entryId,
       ...(before === undefined ? {} : { [PARAMS.before]: before }),
-    }),
-    archiveList: () => requestOutcome<ArchiveListLike>(ROUTES.archiveList, {}),
+    }, WIRE_VALUE_GUARDS.detail, timeoutMs),
+    archiveList: () => requestOutcome<ArchiveListLike>(ROUTES.archiveList, {}, WIRE_VALUE_GUARDS.archiveList, timeoutMs),
     archiveDetail: (sessionId, before, rootSessionId) => requestOutcome<ArchiveDetailLike>(ROUTES.archiveDetail, {
       [PARAMS.sessionId]: sessionId,
       ...(before === undefined ? {} : { [PARAMS.before]: before }),
       ...(rootSessionId === undefined ? {} : { [PARAMS.rootSessionId]: rootSessionId }),
-    }),
+    }, WIRE_VALUE_GUARDS.archiveDetail, timeoutMs),
+    // purge / orphan-clean 是聚合写（按全量盘上数据线性变长）；count / delete / restore / unarchive 很快。
     applyOutcomes: (action, ids) => requestOutcome<ApplyOutcome[]>(ROUTES.apply, {
       [PARAMS.action]: action,
       [PARAMS.ids]: [...ids],
-    }),
-    emptyTrash: () => requestOutcome<PurgeResultLike>(ROUTES.empty, {}),
+    }, WIRE_VALUE_GUARDS.apply, action === 'purge' || action === 'orphan-clean' ? slowTimeoutMs : timeoutMs),
+    emptyTrash: () => requestOutcome<PurgeResultLike>(ROUTES.empty, {}, WIRE_VALUE_GUARDS.empty, slowTimeoutMs),
   }
 }
 

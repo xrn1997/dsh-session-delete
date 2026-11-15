@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { APPLY_ACTIONS, ROUTE_TABLE, defineRoute, routeOf, type JsonBody, type JsonRouteSpec, type NoReadJsonRouteSpec, type RouteRead, type SliceDeps } from '../src/api/route-table.js'
+import { resolveRoute } from '../src/api/dispatch.js'
 import { ROUTES } from '../src/shared/wire.js'
 import type { ApplyAction } from '../src/shared/wire.js'
 
@@ -165,6 +166,27 @@ describe('路由表 · 段名表逐行', () => {
   it('不认识的段名回 undefined（调用方据此 404，并带出原路径）', () => {
     expect(routeOf('/nope')).toBeUndefined()
     expect(routeOf('')).toBeUndefined()
+    // 段名来自线上路径：`constructor` / `toString` 这类原型属性名必须稳定回 404，
+    // 不能从 `Record` 的索引读里"查到"一个函数、把未知路径判成已知路由。
+    for (const inherited of ['constructor', 'toString', 'hasOwnProperty', '__proto__', 'valueOf', 'isPrototypeOf']) {
+      expect(routeOf(inherited), inherited).toBeUndefined()
+    }
+  })
+
+  // 分发器那一侧必须把同一个未知段名翻成 404（不是 405、不是 200 信封）：`resolveRoute` 是
+  // 适配器直调时唯一会先跑的那一步，路由表现与状态语义在这里接上。
+  it('分发器：未知段名稳定 404（含原型属性名），不误判成已知路由', () => {
+    // 正控：已知段不在这条路上抛——不然下面的"必抛"靠 resolveRoute 什么都抛也能绿。
+    expect(() => resolveRoute('GET', ROUTES.list.path)).not.toThrow()
+    for (const rest of ['/nope', 'constructor', 'toString', '__proto__']) {
+      let thrown: unknown
+      try {
+        resolveRoute('GET', rest)
+      } catch (error) {
+        thrown = error
+      }
+      expect(thrown, rest).toMatchObject({ code: 'sessiondelete/not-found-route', httpStatus: 404 })
+    }
   })
 })
 

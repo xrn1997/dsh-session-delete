@@ -208,6 +208,29 @@ describe('connection exact Fetch 路由 · 响应', () => {
     await dispose()
   })
 
+  // `filename*` 是 RFC 5987 的 ext-value（`UTF-8''<pct-encoded>`），不是 `encodeURIComponent` 的
+  // 字符串直出：后者保留 `' ( ) *`，前两枚里的 `'` 还是 ext-value 的分隔引号、括号会被 part 参数
+  // 解析吞掉——不补转，浏览器拿到的是另一个文件名。
+  it('download 名按 RFC 5987 编 filename*：非 ASCII 走 UTF-8，撇号与圆括号补转 %XX', async () => {
+    const bytes = Buffer.from('file-bytes')
+    const made = createFakeDeps()
+    made.fs.statFile.mockResolvedValue({ size: bytes.length })
+    made.fs.readFile.mockResolvedValue(bytes)
+    const harness = makeService()
+    const dispose = registerConnectionRoutes(harness.service, createDispatcher(made.deps))
+    const query = new URLSearchParams({
+      [PARAMS.attachmentId]: `sha256:${'a'.repeat(64)}`,
+      [PARAMS.attachmentKind]: 'file',
+      [PARAMS.attachmentName]: `照片 (1)'a.txt`,
+    })
+    const response = await routeAt(harness, '/attachment').fetch(
+      new Request(`${urlOf('/attachment')}?${query.toString()}`),
+    )
+    expect(response.headers.get('content-disposition'))
+      .toBe(`attachment; filename*=UTF-8''%E7%85%A7%E7%89%87%20%281%29%27a.txt`)
+    await dispose()
+  })
+
   // 宿主正常路径会在 handler 之前按 `route?.methods.has(method)` 回 404；这里直调适配器，
   // 钉的是「即使被直接交给 handler，方法闸也不会静默放行」的防御分支。
   it('适配器直调：方法不对是 405（宿主正常路径会先回 404）', async () => {

@@ -39,6 +39,17 @@ function parseJsonBody(text: string): JsonBody {
   }
 }
 
+/** `content-disposition` 的 `filename*`：RFC 5987 的 ext-value（`UTF-8''<pct-encoded>`）。
+ *  `encodeURIComponent` 已把非 ASCII、空格、引号、分号等转成 `%XX`，但它**保留 `'()*`**——这四枚
+ *  都不是 attr-char（`'` 还是 ext-value 的分隔引号，`(` `)` 会被 part 参数解析吞掉），不补转就会在
+ *  浏览器那里被解析成另一个文件名。取值是原始字节的 UTF-8 百分号编码，不解码、不猜编码。 */
+function encodeFilenameStar(filename: string): string {
+  return encodeURIComponent(filename).replace(
+    /['()*]/gu,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  )
+}
+
 /**
  * 二进制响应的四道头（`/attachment` 专用）。判据不是口味：类型由处理函数给、长度与字节同源、
  * 不许任何中间层留下已删除会话的附件、字节与声明类型不一致时浏览器不许改猜。
@@ -51,7 +62,7 @@ function binaryHeaders(body: BinaryResponse): Record<string, string> {
     'x-content-type-options': 'nosniff',
   }
   if (body.filename !== undefined) {
-    headers['content-disposition'] = `${body.disposition}; filename*=UTF-8''${encodeURIComponent(body.filename)}`
+    headers['content-disposition'] = `${body.disposition}; filename*=UTF-8''${encodeFilenameStar(body.filename)}`
   } else if (body.disposition === 'attachment') {
     headers['content-disposition'] = 'attachment'
   }

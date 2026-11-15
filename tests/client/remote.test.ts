@@ -13,16 +13,55 @@ import {
   ROUTES,
   OFFICIAL_SESSION_DELETE_API_PREFIX,
   type ApplyOutcome,
+  type TrashEntryWire,
 } from '../../src/shared/wire.js'
 import {
   applyOne,
+  CALLER_ABORT_MESSAGE,
   createHttpRemote,
   probeChannel,
+  CHANNEL_SHAPE_MESSAGE,
+  REQUEST_TIMEOUT_MESSAGE,
+  REQUEST_TIMEOUT_MS,
+  SLOW_REQUEST_TIMEOUT_MS,
   type RemoteOutcome,
   type SessionDeleteRemote,
+  type TrashDetailLike,
 } from '../../src/client/remote.js'
 import type { TrashPanelDeps } from '../../src/client/trash-panel.js'
 import { pick } from '../support/fixture.js'
+
+/** 齐全的回收站单条详情：信封判形要求基座字段到场（少一格 ⇒ 通道按形状不对落地）。 */
+const DETAIL_VALUE: TrashDetailLike = {
+  entryId: 'e1',
+  cwd: 'C:/p',
+  createdAt: 1,
+  lastActivity: 2,
+  logTitle: '',
+  models: [],
+  turnCount: 0,
+  userMessageCount: 0,
+  assistantMessageCount: 0,
+  toolCallCount: 0,
+  injectedCount: 0,
+  blocks: [],
+  olderCursor: null,
+}
+
+/** `restore` 成功支的线上行：`TrashEntryWire` 的八格。 */
+const RESTORED_ROW: TrashEntryWire = {
+  id: 'e1',
+  sessionId: 'session-e1',
+  projectDir: '--p--',
+  workspaceId: 'ws',
+  wasArchived: false,
+  deletedAt: 1,
+  title: '恢复回来的会话',
+  sizeBytes: 1,
+}
+
+/** `GET /list` 的一行：清册八格 + 现算的 `releaseBytes`（缺它 ⇒ 形状不对）。 */
+const LIST_ROW = { ...RESTORED_ROW, releaseBytes: 1 }
 
 afterEach(() => {
   // 断言失败时也把 fetch 还原；否则下一条用例会拿着上一条的 stub 跑（新增用例不再依赖 finally）。
@@ -39,6 +78,8 @@ async function failureMessage(run: Promise<RemoteOutcome<unknown>>): Promise<str
 
 describe('createHttpRemote · 文档挂载点', () => {
   it('十三个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
+    // 这条只钉路径：假 fetch 回同一个 `[]`，多数段的形状判形会按失败落地并留 warn——收掉噪音。
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     vi.spyOn(document, 'baseURI', 'get').mockReturnValue('http://host/dsh/')
     const paths: string[] = []
     vi.stubGlobal('fetch', async (path: string) => {
@@ -86,19 +127,20 @@ describe('createHttpRemote · 文档挂载点', () => {
 describe('createHttpRemote · config 读/写共用一段', () => {
   it('两趟都是 POST：读发空对象、写带整份值；方法/路径投影自段名表', async () => {
     const calls: Array<{ path: string; method: string | undefined; body: unknown }> = []
+    const answer = { orphanPreviewLimit: 200, maxAttachmentBytes: 20971520, maxJsonRefBytes: 10485760 }
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       // 本仓只以 string 体调 fetch；类型收窄证明拿到的不是被 String 折过的对象。
       const raw = init.body
       if (typeof raw !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof raw}`)
       calls.push({ path, method: init.method, body: JSON.parse(raw) })
-      return new Response(JSON.stringify({ ok: true, value: {} }), {
+      return new Response(JSON.stringify({ ok: true, value: answer }), {
         headers: { 'content-type': 'application/json' },
       })
     })
     const next = { orphanPreviewLimit: 200, maxAttachmentBytes: 20971520, maxJsonRefBytes: 10485760 }
     const remote = createHttpRemote()
-    await expect(remote.config()).resolves.toEqual({ ok: true, value: {} })
-    await expect(remote.saveConfig(next)).resolves.toEqual({ ok: true, value: {} })
+    await expect(remote.config()).resolves.toEqual({ ok: true, value: answer })
+    await expect(remote.saveConfig(next)).resolves.toEqual({ ok: true, value: answer })
 
     const path = `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.config.path}`
     expect(calls).toEqual([
@@ -116,7 +158,7 @@ describe('createHttpRemote · detail 那一趟（各段里的 `POST /detail`）'
     const calls: Array<{ path: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       calls.push({ path, init })
-      return envelope({ entryId: 'e1', blocks: [], olderCursor: null })
+      return envelope(DETAIL_VALUE)
     })
     await expect(createHttpRemote().detail('e1')).resolves.toMatchObject({ ok: true })
     await expect(createHttpRemote().detail('e1', 12)).resolves.toMatchObject({ ok: true })
@@ -210,9 +252,22 @@ describe('createHttpRemote · 非信封 JSON 的诊断（issue #8 第 1 条）',
   })
 
   it('合法信封照旧放行：{ok:true,value} 原样落地（guard 不误伤）', async () => {
-    vi.stubGlobal('fetch', async () => json({ ok: true, value: [{ id: 'a' }] }))
-    await expect(createHttpRemote().list()).resolves.toEqual({ ok: true, value: [{ id: 'a' }] })
+    vi.stubGlobal('fetch', async () => json({ ok: true, value: [LIST_ROW] }))
+    await expect(createHttpRemote().list()).resolves.toEqual({ ok: true, value: [LIST_ROW] })
     vi.unstubAllGlobals()
+  })
+
+  it('信封对但值形状不对（行集少必备格 / 值不是数组）⇒ 落固定中文诊断，不喂给组件', async () => {
+    // 形状不对会在通道里留一条 console.warn（诊断线索）；这里只钉落地面，收掉噪音。
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    for (const value of [[{ id: 'a' }], { rows: [LIST_ROW] }, null]) {
+      vi.stubGlobal('fetch', async () => json({ ok: true, value }))
+      await expect(createHttpRemote().list()).resolves.toEqual({
+        ok: false,
+        failure: { code: 'client/unknown', message: CHANNEL_SHAPE_MESSAGE },
+      })
+      vi.unstubAllGlobals()
+    }
   })
 
   it('{ok:false,error:{code,message}} 仍是落地（返回不抛）', async () => {
@@ -327,7 +382,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
     const calls: Array<{ path: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       calls.push({ path, init })
-      return envelope([{ id: 'e1', action: 'restore', ok: true, value: { id: 'e1' } }])
+      return envelope([{ id: 'e1', action: 'restore', ok: true, value: RESTORED_ROW }])
     })
     await expect(createHttpRemote().applyOutcomes('restore', ['e1', 'e2'])).resolves.toMatchObject({ ok: true })
     expect(calls).toHaveLength(1)
@@ -355,7 +410,7 @@ describe('createHttpRemote · /apply 一段管所有动作', () => {
       new Response(JSON.stringify({
         ok: true,
         value: [
-          { id: 'a', action: 'restore', ok: true, value: { id: 'a' } },
+          { id: 'a', action: 'restore', ok: true, value: { ...RESTORED_ROW, id: 'a' } },
           { id: 'b', action: 'restore', ok: false, error: { code: 'sessiondelete/project-missing', message: '原项目目录已不存在' } },
         ],
       }), { headers: { 'content-type': 'application/json' } }))
@@ -480,7 +535,11 @@ describe('createHttpRemote · 归档两趟（`GET /archive-list` / `POST /archiv
     const calls: Array<{ path: string; init?: RequestInit }> = []
     vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
       calls.push({ path, init })
-      return envelope({ sessionId: 'session-a', blocks: [], olderCursor: null })
+      return envelope({
+        ...DETAIL_VALUE,
+        sessionId: 'session-a',
+        archived: true,
+      })
     })
     await expect(createHttpRemote().archiveDetail('session-a')).resolves.toMatchObject({ ok: true })
     await expect(createHttpRemote().archiveDetail('session-a', 7)).resolves.toMatchObject({ ok: true })
@@ -497,5 +556,102 @@ describe('createHttpRemote · 归档两趟（`GET /archive-list` / `POST /archiv
     if (typeof thirdBody !== 'string') throw new Error(`期望请求体是字符串，实得 ${typeof firstBody}`)
     expect(JSON.parse(thirdBody)).toEqual({ [PARAMS.sessionId]: 'kid-1', [PARAMS.rootSessionId]: 'session-a' })
     vi.unstubAllGlobals()
+  })
+})
+
+// 2026-11 修复：单次往返必须有上限——半开连接 / 卡住的宿主不把 `activate` 与每个动作永远吊着。
+// 缺省上限 30s；测试用 `createHttpRemote({ timeoutMs })` 把这一支跑到墙上时间之外。
+describe('取数通道 · 单次往返超时', () => {
+  /** 一个「永不 resolve」的假 fetch：只听 AbortSignal（真实 fetch 的行为），不打信号就永远挂着。 */
+  const neverSettles = (): void => {
+    vi.stubGlobal('fetch', async (_path: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => {
+        reject(new DOMException('The operation was aborted.', 'AbortError'))
+      }, { once: true })
+    }))
+  }
+
+  it('缺省上限是 30s（聚合读/清空 120s；探针另有更短的 5s，见 probeChannel）', () => {
+    expect(REQUEST_TIMEOUT_MS).toBe(30_000)
+    expect(SLOW_REQUEST_TIMEOUT_MS).toBe(120_000)
+    expect(SLOW_REQUEST_TIMEOUT_MS).toBeGreaterThan(REQUEST_TIMEOUT_MS)
+  })
+
+  it('超时：落固定中文失败（不抛、不重试），并打断这一趟的 fetch', async () => {
+    let seen: RequestInit | undefined
+    const fetchSpy = vi.fn(async (_path: string, init?: RequestInit) => {
+      seen = init
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        }, { once: true })
+      })
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    await expect(createHttpRemote({ timeoutMs: 5 }).list()).resolves.toEqual({
+      ok: false,
+      failure: { code: 'client/unknown', message: REQUEST_TIMEOUT_MESSAGE },
+    })
+    expect(seen?.signal?.aborted).toBe(true)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('底层 fetch 不认 AbortSignal、永不了结：仍按上限落地（不把调用方吊死）', async () => {
+    vi.stubGlobal('fetch', async () => new Promise<Response>(() => { /* 永不 resolve / reject */ }))
+    await expect(createHttpRemote({ timeoutMs: 5 }).list()).resolves.toEqual({
+      ok: false,
+      failure: { code: 'client/unknown', message: REQUEST_TIMEOUT_MESSAGE },
+    })
+  })
+
+  it('响应头到了但正文永远不结束：正文也在同一颗计时器下，按超时落地', async () => {
+    // 真实 fetch 的 AbortSignal 不保证让已经拿到的 Response 的 `json()` 立刻 reject；正文不竞速的话
+    // 这条用例会挂死，而注释里承诺的是「上限从请求发出算到信封读完」。
+    vi.stubGlobal('fetch', async () => ({
+      status: 200,
+      json: () => new Promise<unknown>(() => { /* 正文永不结束 */ }),
+    }) as unknown as Response)
+    await expect(createHttpRemote({ timeoutMs: 5 }).list()).resolves.toEqual({
+      ok: false,
+      failure: { code: 'client/unknown', message: REQUEST_TIMEOUT_MESSAGE },
+    })
+  })
+
+  it('调用方 signal 与超时联动：探测方 abort 这一趟按「打不通」落地，不冒充超时', async () => {
+    neverSettles()
+    const controller = new AbortController()
+    const run = createHttpRemote({ timeoutMs: 60_000 }).ping(controller.signal)
+    controller.abort()
+    const outcome = await run
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.failure.message).toContain('取数通道打不通')
+  })
+
+  it('底层 fetch 不认 AbortSignal 时调用方 abort：也要按调用方中止落地，不吊到超时', async () => {
+    vi.stubGlobal('fetch', async () => new Promise<Response>(() => { /* 无视 signal，永不 resolve */ }))
+    const controller = new AbortController()
+    const run = createHttpRemote({ timeoutMs: 60_000 }).ping(controller.signal)
+    controller.abort()
+    await expect(run).resolves.toEqual({
+      ok: false,
+      failure: { code: 'client/unknown', message: CALLER_ABORT_MESSAGE },
+    })
+  })
+
+  it('响应头到了、正文不结束，调用方 abort：按调用方中止落地，不按「不是信封」', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      status: 200,
+      json: () => new Promise<unknown>(() => { /* 正文永不结束 */ }),
+    }) as unknown as Response)
+    const controller = new AbortController()
+    const run = createHttpRemote({ timeoutMs: 60_000 }).ping(controller.signal)
+    // 等这一趟走到正文竞速（fetch 已 resolve）再中止。
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    controller.abort()
+    await expect(run).resolves.toEqual({
+      ok: false,
+      failure: { code: 'client/unknown', message: CALLER_ABORT_MESSAGE },
+    })
   })
 })

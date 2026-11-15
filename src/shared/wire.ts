@@ -626,3 +626,281 @@ export const TRASH_DIR_NAME = 'session-trash'
 
 /** 页脚/文案里带尾斜杠的那一版（`splitOn` 按它切一刀再把目录名包成 code）。 */
 export const TRASH_DIR_LABEL = `${TRASH_DIR_NAME}/`
+
+/* ── 线上值的轻量运行期判形（浏览器半落地前问一次） ────────────────────────────────
+ * 只校到「数组 / 对象 / 判别键 / 渲染必读的那几格」这一层——**不复制完整类型**：可选字段一律
+ * 「在场才校种类」，块与行的联合只认判别键与会让渲染炸掉的字段。为什么值得这一层：形状漂移
+ * （少一格、把对象回成数组、把行集回成对象）在界面上是静默的半句话或 `undefined` 上屏，运行期
+ * 只有取数通道能当场把它折成固定中文诊断（`src/client/remote.ts` 的失败面）。
+ *
+ * 键集与段名表逐段对齐：加一段 JSON 段就必须在这里补一格（`Record` 闸编译不过）；二进制的
+ * `attachment` 段不经这条 JSON 通道读，故不进表（它的响应由 `src/api/attachment.ts` 管）。
+ */
+export type WireValueGuard = (value: unknown) => boolean
+
+/** 走 JSON 信封的段名（段名表的键；二进制段以后若改走 JSON，这里与表一起改）。 */
+type JsonRouteName = Exclude<keyof typeof ROUTES, 'attachment'>
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isStringValue(value: unknown): value is string {
+  return typeof value === 'string'
+}
+
+function isFiniteNumberValue(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+function isBooleanValue(value: unknown): value is boolean {
+  return typeof value === 'boolean'
+}
+
+/** 可选字符串字段：缺席（`undefined`）放行，在场必须是字符串。 */
+function isOptionalStringValue(value: unknown): boolean {
+  return value === undefined || typeof value === 'string'
+}
+
+/** 可选数字字段：缺席放行，在场必须是有限数字（`NaN` / `Infinity` 不算读数）。 */
+function isOptionalNumberValue(value: unknown): boolean {
+  return value === undefined || isFiniteNumberValue(value)
+}
+
+function isOptionalBooleanValue(value: unknown): boolean {
+  return value === undefined || typeof value === 'boolean'
+}
+
+function isStringArrayValue(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isStringValue)
+}
+
+/** 详情的一块附件（`TrashDetailAttachmentWire` 的必填三格 + 可选读数）。 */
+function isAttachmentValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  return isStringValue(value.attachmentId)
+    && (value.kind === 'image' || value.kind === 'file')
+    && isFiniteNumberValue(value.bytes)
+    && isOptionalStringValue(value.name)
+    && isOptionalStringValue(value.mediaType)
+    && isOptionalNumberValue(value.width)
+    && isOptionalNumberValue(value.height)
+}
+
+/** 详情的一块正文：`kind` 是判别键，判别键那几支的渲染必读字段逐支校。 */
+function isDetailBlockValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  if (!isStringValue(value.id) || !isFiniteNumberValue(value.time)) return false
+  if (!Array.isArray(value.attachments) || !value.attachments.every(isAttachmentValue)) return false
+  switch (value.kind) {
+    case 'user':
+    case 'assistant':
+    case 'reasoning':
+    case 'system':
+    case 'compaction':
+      return isStringValue(value.text) && isBooleanValue(value.truncated)
+    case 'injection':
+      return isStringValue(value.sourceKind) && isStringValue(value.text) && isBooleanValue(value.truncated)
+    case 'tool':
+      return isStringValue(value.callId)
+        && isStringValue(value.name)
+        && (value.status === 'ok' || value.status === 'error' || value.status === 'unfinished')
+        && isStringValue(value.args)
+        && isStringValue(value.result)
+        && isBooleanValue(value.argsTruncated)
+        && isBooleanValue(value.resultTruncated)
+    default:
+      return false
+  }
+}
+
+/** 提问轨的一格（`TrashDetailPromptWire`）。 */
+function isPromptValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  return isStringValue(value.id) && isFiniteNumberValue(value.at) && isStringValue(value.preview)
+}
+
+/** 会话详情公共基座（`SessionDetailWire`）：两档详情共用的必填读数。 */
+function isDetailBaseFields(value: Record<string, unknown>): boolean {
+  return isStringValue(value.cwd)
+    && isFiniteNumberValue(value.createdAt)
+    && isFiniteNumberValue(value.lastActivity)
+    && isStringValue(value.logTitle)
+    && isOptionalStringValue(value.label)
+    && isStringArrayValue(value.models)
+    && isFiniteNumberValue(value.turnCount)
+    && isFiniteNumberValue(value.userMessageCount)
+    && isFiniteNumberValue(value.assistantMessageCount)
+    && isFiniteNumberValue(value.toolCallCount)
+    && isFiniteNumberValue(value.injectedCount)
+    && Array.isArray(value.blocks)
+    && value.blocks.every(isDetailBlockValue)
+    && (value.olderCursor === null || isFiniteNumberValue(value.olderCursor))
+    && (value.prompts === undefined || (Array.isArray(value.prompts) && value.prompts.every(isPromptValue)))
+}
+
+/** 清册行（`TrashEntryWire`）：清单、详情子会话段与 `apply` 成功值共用这一份身份格。 */
+function isTrashEntryFields(value: Record<string, unknown>): boolean {
+  return isStringValue(value.id)
+    && isStringValue(value.sessionId)
+    && isStringValue(value.projectDir)
+    && isStringValue(value.workspaceId)
+    && isBooleanValue(value.wasArchived)
+    && isFiniteNumberValue(value.deletedAt)
+    && isStringValue(value.title)
+    && isFiniteNumberValue(value.sizeBytes)
+    && isOptionalStringValue(value.parentEntryId)
+    && isOptionalStringValue(value.label)
+}
+
+function isTrashEntryValue(value: unknown): boolean {
+  return isRecordValue(value) && isTrashEntryFields(value)
+}
+
+/** `GET /list` 的一行：清册身份 + 现算的 `releaseBytes`（必填读数列）。 */
+function isTrashRowFields(value: Record<string, unknown>): boolean {
+  return isTrashEntryFields(value)
+    && isFiniteNumberValue(value.releaseBytes)
+    && isOptionalNumberValue(value.subagentCount)
+    && isOptionalNumberValue(value.subagentBytes)
+    && isOptionalNumberValue(value.strandedSubagents)
+    && isOptionalNumberValue(value.strandedBytes)
+    && isOptionalBooleanValue(value.workspaceMissing)
+}
+
+/** 归档清单的一行（`ArchiveRowWire`）：大小 / 时间可缺席，挑剔的只是必填那几格。 */
+function isArchiveRowFields(value: Record<string, unknown>): boolean {
+  return isStringValue(value.sessionId)
+    && isStringValue(value.projectDir)
+    && isStringValue(value.title)
+    && isOptionalStringValue(value.label)
+    && isOptionalNumberValue(value.updatedAt)
+    && (value.updatedAtSource === undefined || value.updatedAtSource === 'prompt' || value.updatedAtSource === 'created')
+    && isOptionalNumberValue(value.sizeBytes)
+    && isBooleanValue(value.subagent)
+}
+
+/** 归档详情里的只读子会话行（`ArchiveSubagentWire`）。 */
+function isArchiveChildFields(value: Record<string, unknown>): boolean {
+  return isStringValue(value.sessionId)
+    && isBooleanValue(value.archived)
+    && isStringValue(value.projectDir)
+    && isStringValue(value.title)
+    && isOptionalStringValue(value.label)
+    && isOptionalNumberValue(value.updatedAt)
+    && (value.updatedAtSource === undefined || value.updatedAtSource === 'prompt' || value.updatedAtSource === 'created')
+    && isOptionalNumberValue(value.sizeBytes)
+}
+
+function isArchiveListValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  if (value.available === false) return true
+  if (value.available !== true) return false
+  return Array.isArray(value.rows)
+    && value.rows.every((row) => isRecordValue(row) && isArchiveRowFields(row))
+    && isFiniteNumberValue(value.totalBytes)
+    && isFiniteNumberValue(value.missingSizeCount)
+}
+
+/** 附件清理读数（`AttachmentCleanupWire`）：三个计数 + 可选的跳过原因。 */
+function isAttachmentCleanupValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  return isFiniteNumberValue(value.removed)
+    && isFiniteNumberValue(value.freedBytes)
+    && isFiniteNumberValue(value.failed)
+    && isOptionalStringValue(value.skipped)
+}
+
+/** 永久删除 / 清空的聚合回执（`PurgeStatsWire`）。 */
+function isPurgeStatsValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  return isFiniteNumberValue(value.removed)
+    && isFiniteNumberValue(value.freedBytes)
+    && (value.attachments === undefined || isAttachmentCleanupValue(value.attachments))
+}
+
+function isOrphanReportValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  return isStringArrayValue(value.roots)
+    && isFiniteNumberValue(value.totalSessions)
+    && isFiniteNumberValue(value.totalBytes)
+    && isFiniteNumberValue(value.missingParents)
+    && Array.isArray(value.groups)
+    && value.groups.every((group) => isRecordValue(group)
+      && isStringValue(group.projectDir)
+      && isFiniteNumberValue(group.sessions)
+      && isFiniteNumberValue(group.bytes))
+}
+
+function isAttachmentOrphanReportValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  return isFiniteNumberValue(value.count)
+    && isFiniteNumberValue(value.totalBytes)
+    && Array.isArray(value.items)
+    && value.items.every((item) => isRecordValue(item)
+      && isStringValue(item.attachmentId)
+      && isFiniteNumberValue(item.bytes))
+}
+
+function isConfigFields(value: Record<string, unknown>): boolean {
+  return isFiniteNumberValue(value.orphanPreviewLimit)
+    && isFiniteNumberValue(value.maxAttachmentBytes)
+    && isFiniteNumberValue(value.maxJsonRefBytes)
+}
+
+/** `/apply` 的一条逐条结果：按 `action` 校成功值的形状（null 幂等只属于 delete / restore）。 */
+function isApplyOutcomeValue(value: unknown): boolean {
+  if (!isRecordValue(value)) return false
+  if (!isStringValue(value.id) || !isBooleanValue(value.ok)) return false
+  const action = value.action
+  if (!value.ok) {
+    return isRecordValue(value.error)
+      && isStringValue(value.error.code)
+      && isStringValue(value.error.message)
+  }
+  switch (action) {
+    case 'delete':
+    case 'restore':
+      return value.value === null || isTrashEntryValue(value.value)
+    case 'purge':
+    case 'orphan-clean':
+      return isPurgeStatsValue(value.value)
+    case 'count':
+    case 'unarchive':
+      return isFiniteNumberValue(value.value)
+    default:
+      return false
+  }
+}
+
+/** 段名表逐段的 JSON 值判形（`src/client/remote.ts` 的成功支只在这里问一次）。 */
+export const WIRE_VALUE_GUARDS: Record<JsonRouteName, WireValueGuard> = {
+  list: (value) => Array.isArray(value) && value.every((row) => isRecordValue(row) && isTrashRowFields(row)),
+  ping: isStringValue,
+  config: (value) => isRecordValue(value) && isConfigFields(value),
+  detail: (value) => isRecordValue(value)
+    && isDetailBaseFields(value)
+    && isStringValue(value.entryId)
+    && (value.subagents === undefined
+      || (Array.isArray(value.subagents) && value.subagents.every(isTrashEntryValue)))
+    && isOptionalNumberValue(value.subagentsTotal)
+    && isOptionalNumberValue(value.subagentsSizeBytes),
+  apply: (value) => Array.isArray(value) && value.every(isApplyOutcomeValue),
+  empty: isPurgeStatsValue,
+  orphans: isOrphanReportValue,
+  attachmentOrphans: isAttachmentOrphanReportValue,
+  attachmentClean: isAttachmentCleanupValue,
+  projectionOrphans: (value) => isRecordValue(value) && isFiniteNumberValue(value.count),
+  projectionClean: (value) => isRecordValue(value)
+    && isFiniteNumberValue(value.removed)
+    && isFiniteNumberValue(value.failed),
+  archiveList: isArchiveListValue,
+  archiveDetail: (value) => isRecordValue(value)
+    && isDetailBaseFields(value)
+    && isStringValue(value.sessionId)
+    && isBooleanValue(value.archived)
+    && (value.subagents === undefined
+      || (Array.isArray(value.subagents) && value.subagents.every((child) => isRecordValue(child) && isArchiveChildFields(child))))
+    && isOptionalNumberValue(value.subagentsTotal)
+    && isOptionalNumberValue(value.subagentsSizeBytes),
+}

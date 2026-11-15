@@ -479,7 +479,11 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = createRouteTable({
   }),
 })
 
-/** 段名 → 那一行；不认识的段名回 `undefined`（调用方抛 404，并带出原路径）。 */
+/** 段名 → 那一行；不认识的段名回 `undefined`（调用方抛 404，并带出原路径）。
+ *  **必须问 `Object.hasOwn`**：段名来自线上路径，`constructor` / `toString` 这类原型属性名会从
+ *  `Record` 的索引读里"查到"一个函数，把未知路径判成已知路由（随后以 405 / 处理期炸开的形态出现）。
+ *  这里只认表自身的键——表是 `Object.fromEntries` 建出来的，自有键恰好就是段名。 */
 export function routeOf(rest: string): RouteSpec | undefined {
+  if (!Object.hasOwn(ROUTE_TABLE, rest)) return undefined
   return (ROUTE_TABLE as Record<string, RouteSpec | undefined>)[rest]
 }
