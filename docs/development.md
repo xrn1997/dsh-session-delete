@@ -28,7 +28,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 
 ## 门（自动）
 
-门的唯一入口是 `pnpm gates`（typecheck / lint / test / build / pack dry-run，任一红即红；pack 不重复跑 build）；`pnpm typecheck` 与 `pnpm test` 仍必须同批跑，发版前确认退出码。
+门的唯一入口是 `pnpm gates`（typecheck / lint / test / build / pack dry-run，任一红即红；pack 不重复跑 build）；`pnpm typecheck` 与 `pnpm test` 仍必须同批跑，发版前确认退出码。最后一格 `pack:dry` 的执行体是 `scripts/verify-pack.mjs`：它从 `files` 独立展开期望树、与 `npm pack --dry-run --json` 的实际文件集**双向对账**（缺一件红、多一件也红、混进 sourcemap 红），并把 `lib/` 构建树逐文件对回 `files`（构建多出的产物不会出现在 npm 包里，只能从盘上查），再做 `node --check` 与 `import lib/index.js` 的插件模块面冒烟——`npm pack` 只证明能产出 tarball，不证明包里的树对得上清单。
 
 ### 编译器档位与 lint 归属
 
@@ -39,11 +39,11 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 - `no-unnecessary-condition` 的「保留」命中（闭包写入、宿主窄镜像、`lib.dom` 撒谎）逐条带注释；确证误报的 `eslint-disable` 逐条带理由，其中一类属 `react-hooks/exhaustive-deps` 看不见自定义 hook 的可见性盲区（自定义 hook 回的恒稳 ref/setter）。
 - lint 与 tsc 的分工：`tsc` 管类型形状，**`any` 归 ESLint**——`tsc` 从不拒绝显式 `any`。
 
-GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流住 `.github/workflows/ci.yml`，pnpm 版本由 `package.json` 的 `packageManager` 指定。发版工作流 `.github/workflows/release.yml` 在 `V*` tag 上调同一个 `gates`，不再另抄步骤清单——tag 不保证落在 `main` 上，产物必须自证。**真机验证不在 CI 内**，仍按下面「真机验证」走。
+GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流住 `.github/workflows/ci.yml`，**Ubuntu 与 Windows 两条腿**（主开发平台是 Windows，只在 Linux 上跑会放过路径分隔符一类回归），pnpm 版本由 `package.json` 的 `packageManager` 指定。发版工作流 `.github/workflows/release.yml` 在 `V*` tag 上调同一个 `gates`，不再另抄步骤清单——tag 不保证落在 `main` 上，产物必须自证。**真机验证不在 CI 内**，仍按下面「真机验证」走。
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
 
-**文档门是三件套**：`tests/docs-liveness.test.ts`（文档与代码注释的引用活性与引用形态、职责边界、ADR 形状、README 投影与截图清单）、`tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号在生产代码里现查得到）与 `tests/comment-altitude.test.ts`（注释不抄代码表达式）。**具体判据以这三份测试本身为准**，这里只留操作口径：路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。`tests/docs-liveness.test.ts` 与 `tests/comment-altitude.test.ts` 各自从语料里排除自身（前者正文必须引用已废称呼，后者的合成样品故意含抄写形）；自排除不是白名单。
+**文档门是三件套**：`tests/docs-liveness.test.ts`（文档与代码注释的引用活性与引用形态、职责边界、ADR 形状、README 投影与截图清单）、`tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号在生产代码里现查得到）与 `tests/comment-altitude.test.ts`（注释不抄代码表达式）；三者的共用解析器（子句切分、仓内路径解析、去注释回查）契约住 `tests/doc-anchors.test.ts`，**它比较的路径一律是仓内 POSIX 写法**（Windows 上也不许出现反斜杠，否则 `docs/adr/…` 前缀判定整批落空）。**具体判据以这些测试本身为准**，这里只留操作口径：路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。`tests/docs-liveness.test.ts` 与 `tests/comment-altitude.test.ts` 各自从语料里排除自身（前者正文必须引用已废称呼，后者的合成样品故意含抄写形）；自排除不是白名单。
 
 `pnpm typecheck` 也带一道门：`tsconfig.json` 开着 `isolatedModules` 与 `verbatimModuleSyntax`，所以 `AGENTS.md` 那条「跨插件一律 `import type`」不是风格建议——把类型面写成值 import 直接编译红，不需要靠评审记性。另一条「浏览器半一条 `@deepseek-ai/*` 的 import 都不许有，type-only 也不留」不归编译器管：宿主包就装在 `devDependencies` 里，值 import 照样解析得到。那一半的门是 `pnpm test` 里 `tests/skeleton.test.ts` 的「跨插件 import 红线」源码扫描——两半各钉各的，别把两条判据都记到 typecheck 头上。
 
@@ -96,4 +96,5 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`；工作流�
 - 回收站的运行时数据不在本仓：`$DSH_HOME/session-trash/`（本体）与 `$DSH_HOME/storages/`（内部索引，别手碰）；`DSH_HOME` 缺省是 `~/.dsh`。
 - 会话文件是**多帧** zstd，Node 自带 API 只给第一帧——读法与用例住 `src/log/zstd-frames.ts` 与 `tests/zstd-frames.test.ts`。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。
+- **文本换行由 `.gitattributes` 固定为 LF**（Windows 检出也一样）：`lib/client.js` 把样式表当字符串内联，构建机换行不同会让同一版本两条发布渠道的字节不一致；测试与文档门按 `/\r?\n/` 处理，不依赖 CRLF。
 - **`.qoder/repowiki` 是生成的知识库快照，而且不入库**（`.gitignore`）：本机那份的基线 commit 只记在 `.qoder/repowiki/knowledge/zh/_index.yaml` 里（要对照就现查那份，篇数与 hash 都不在这里抄——抄一次就多一个会腐烂的镜像）。仓内**没有**再生成它的路径（只能在 Qoder 里重跑），所以它永远可能落后于代码；它既不是事实源、也不随 clone 走，判断口径见 `docs/AGENTS.md`。新 clone 里没有这棵树是正常的。

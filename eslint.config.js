@@ -74,10 +74,11 @@ export default tseslint.config(
 
   {
     // 一次性脚本与配置入口不参与包发布，也不承载运行时不变量；类型感知规则对它们
-    // 的收益低于成本（tsdown / vitest 两份在 tsconfig 的 include 内，本文件连 program 都不进；
-    // 三者都不落进产物、也不被应用代码 import）。
-    files: ['tsdown.config.ts', 'vitest.config.ts', 'eslint.config.js'],
+    // 的收益低于成本（tsdown / vitest 两份在 tsconfig 的 include 内，本文件与 `scripts/`
+    // 连 program 都不进；它们都不落进产物、也不被应用代码 import）。
+    files: ['tsdown.config.ts', 'vitest.config.ts', 'eslint.config.js', 'scripts/**/*.mjs'],
     ...tseslint.configs.disableTypeChecked,
+    languageOptions: { globals: { ...globals.node } },
   },
 
   {

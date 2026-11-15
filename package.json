@@ -45,7 +45,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "pack:dry": "npm pack --dry-run --ignore-scripts",
+    "pack:dry": "node scripts/verify-pack.mjs",
     "prepack": "npm run build",
     "gates": "pnpm typecheck && pnpm lint && pnpm test && pnpm build && pnpm run pack:dry"
   },

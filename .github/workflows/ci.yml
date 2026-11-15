@@ -15,9 +15,16 @@ concurrency:
 
 jobs:
   gates:
-    name: gates
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      # 两条腿互不连坐：Windows 红不该让 Ubuntu 的结论也消失（诊断要能分开看）。
+      fail-fast: false
+      matrix:
+        # 主开发平台是 Windows（docs 的 PowerShell 口径），只在 Linux 上跑等于放过一类
+        # 路径分隔符回归：2026-11-14 文档锚点门就因此在 Windows 上红、在 CI 上绿过。
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
 
