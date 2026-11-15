@@ -171,6 +171,25 @@ describe('恢复动词', () => {
       .toHaveBeenCalledWith('session-abc', 'ws-1')
   })
 
+  // 条目 id 里记的是**宿主编码段**（删除那一刻写进去的）：恢复照它原地放回，不从 sessionId 现编。
+  // 值取自宿主 `encodeSegment`（`~`/中文/空格都编成 `~XXXX`）——同一份镜像向量在 session-path.test.ts。
+  it('放回位置按条目 id 里的编码段回放：session id 不安全也不影响回家', async () => {
+    const encoded = '~4F1A~8BDD~0020A~007E'
+    const unsafe: TrashEntry = {
+      ...entry,
+      id: makeEntryId(entry.deletedAt, encoded),
+      sessionId: '会话 A~',
+    }
+    const made = createLogWorld({ seed: [unsafe], archived: true, logMethods: ['rename'] })
+
+    await restore(made.deps, unsafe.id)
+
+    expect(made.fs.rename.mock.calls).toEqual([[
+      trashDirOf(unsafe.id, HOME),
+      sessionDirOf(entry.projectDir, encoded, HOME),
+    ]])
+  })
+
   it('attach 失败即把会话目录放回回收站，并把原始错误带出', async () => {
     const { d, manifest } = deps()
     ;d.host.attach =

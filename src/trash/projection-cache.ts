@@ -24,6 +24,7 @@
 import { bareSessionId, sessionIdShapes } from '../domain/closure.js'
 import { parseEntryId, type TrashEntry } from './entry.js'
 import { TRASH_DIR_NAME, type ProjectionCacheCleanupWire, type ProjectionCacheOrphanReportWire } from '../shared/wire.js'
+import { decodeSessionSegment } from '../shared/session-path.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import type { CorpusRead, SessionIdentity } from '../ports/host-port.js'
 import { verbError } from '../errors.js'
@@ -70,7 +71,8 @@ async function protectedBareIds(deps: CoreDeps, trash: readonly TrashEntry[]): P
     if (await deps.fs.exists(trashRoot)) {
       for (const name of await deps.fs.listDirs(trashRoot)) {
         try {
-          protectedIds.add(bareSessionId(parseEntryId(name).sessionDirName))
+          // 目录段是宿主 `encodeSegment` 的产物；缓存键是原始 session id，保护前反解回同一身份。
+          protectedIds.add(bareSessionId(decodeSessionSegment(parseEntryId(name).sessionDirName)))
         } catch {
           // 认不出的目录是外人：对账也不为它建行，这里不拿它保护任何缓存记录。
         }

@@ -158,10 +158,14 @@ async function sizesOf(
   }
 }
 
-/** 有界并发的逐行执行器：结果与 `items` 同序同长、同时挂起的 `fn` 不超过 `limit`、首个失败
+/** 有界并发的逐条执行器：结果与 `items` **同序同长**、同时挂起的 `fn` 不超过 `limit`、首个失败
  *  原样抛出（失败后不再起新活，已挂起的跑完即弃）。为什么不直接 `Promise.all`：它无界放飞，
- *  而各条自己 settle 的失败还会留下没人收的 rejection。 */
-async function mapLimit<T, R>(
+ *  而各条自己 settle 的失败还会留下没人收的 rejection。
+ *
+ *  **导出面**：逐行读数用它（{@link ROW_READ_CONCURRENCY}），`/list` 的盘上测量也用它
+ *  （`src/verbs/permanent-removal.ts` 的组与 kids 两级）——"有界并发"只该有这一份实现。
+ *  预算由调用方给：两个调用点的窗口大小不是同一个语义。 */
+export async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,
   fn: (item: T, index: number) => Promise<R>,

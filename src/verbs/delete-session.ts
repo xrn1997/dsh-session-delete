@@ -1,4 +1,4 @@
-import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
+import { makeEntryId, sessionDirForId, sessionDirOf, sessionDirSegmentOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { CoreDeps, DeleteSessionDeps } from '../deps.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { verbError } from '../errors.js'
@@ -54,12 +54,13 @@ export function deleteSession(deps: DeleteSessionDeps) {
 
     // 父的目录必须在盘上（不在就是"账本说有、盘上没有"，按 not-found）；
     // 孩子的目录缺席**跳过它**：宿主记录与磁盘不一致是孩子的问题，不该让父删不掉。
-    const parentDir = sessionDirOf(parentProjectDir, sessionId, deps.home)
+    // 路径按宿主的目录命名约定拼：`sessionId` 先编成宿主目录段（`sessionDirForId`），不拿原始 id 拼。
+    const parentDir = sessionDirForId(parentProjectDir, sessionId, deps.home)
     if (!(await deps.fs.exists(parentDir))) throw verbError('not-found', `会话目录不存在：${parentDir}`)
     const parent: Member = { sessionId, projectDir: parentProjectDir }
     const members: Member[] = [parent]
     for (const kid of kids) {
-      if (await deps.fs.exists(sessionDirOf(kid.projectDir, kid.sessionId, deps.home))) {
+      if (await deps.fs.exists(sessionDirForId(kid.projectDir, kid.sessionId, deps.home))) {
         members.push({ sessionId: kid.sessionId, projectDir: kid.projectDir })
       }
     }
@@ -102,13 +103,16 @@ async function memberMove(
 ): Promise<{ entry: TrashEntry; journal: Journal }> {
   const { sessionId, projectDir } = member
   const workspaceId = await deps.host.workspaceOf(sessionId)
-  const sessionDir = sessionDirOf(projectDir, sessionId, deps.home)
+  // 编码只做一次：目录与条目 id 用的是同一段（宿主目录名），不会一边编码一边不编码。
+  const sessionDirName = sessionDirSegmentOf(sessionId)
+  const sessionDir = sessionDirOf(projectDir, sessionDirName, deps.home)
   const wasArchived = await deps.host.isArchived(sessionId)
-  const trashDir = trashDirOf(makeEntryId(deletedAt, sessionId), deps.home)
+  const entryId = makeEntryId(deletedAt, sessionDirName)
+  const trashDir = trashDirOf(entryId, deps.home)
 
   // 标题与字节要靠第一步读回来；条目对象先建好，那一步就地补上（`ledger.add` 是最后一件写）。
   const entry: TrashEntry = {
-    id: makeEntryId(deletedAt, sessionId), sessionId, projectDir, workspaceId: workspaceId ?? '',
+    id: entryId, sessionId, projectDir, workspaceId: workspaceId ?? '',
     wasArchived, deletedAt, title: '', sizeBytes: 0,
     ...(parentEntryId === undefined ? {} : { parentEntryId }),
   }

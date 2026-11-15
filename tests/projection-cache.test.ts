@@ -77,6 +77,20 @@ describe('孤儿投影缓存 · 报告', () => {
     await expect(reportProjectionCacheOrphans(deps, rows)).resolves.toEqual({ count: 1 })
   })
 
+  it('手工目录的段是宿主编码段：保护前反解回原始 id，不把 `~XXXX` 当身份', async () => {
+    // 清册里没有行、语料也看不见：只剩目录名这条保护面。宿主把原始 id `a~b` 落成 `a~007Eb`，
+    // 缓存键是原始 `a~b`——不反解就会把这条缓存误报成孤儿。
+    const unindexed = makeEntryId(4, 'a~007Eb')
+    const { deps } = makeWorld({
+      seed: [],
+      corpus: [],
+      projectionCache: ['a~b', 'orphan'],
+      fs: { dirs: (p: string) => (p === TRASH_ROOT ? [unindexed] : []) },
+    })
+
+    await expect(reportProjectionCacheOrphans(deps, [])).resolves.toEqual({ count: 1 })
+  })
+
   it('语料缺席 ⇒ io：活体只有语料看得见，持久化列表不是全集，不拿它当唯一真相', async () => {
     // 就算持久化列表能读，它也只覆盖磁盘持久化：没落盘的活体会话的缓存会被误报成孤儿删掉。
     const { deps } = makeWorld({

@@ -209,15 +209,25 @@ describe('彻底删除', () => {
     expect(await manifest.list()).toHaveLength(1)
   })
 
-  it('盘上后代的 session id 非单段 ⇒ 响亮失败，不删任何目录', async () => {
+  // 宿主目录段编码（`src/shared/session-path.ts`）：`../escape` 不是"响亮失败"，而是先编成安全段
+  // `..~002Fescape` 再拼路径——寻址永远留在 `sessions/<项目>/` 下，递归删除带不出根外。
+  it('盘上后代的 session id 非单段 ⇒ 编成安全目录段后照常清，路径留在 sessions/ 下', async () => {
     const { fs, host, purge, manifest } = deps([trashEntry('p')])
     host.subagentMembersOf = vi.fn(async () => ({
       available: true as const,
       value: { p: [{ sessionId: '../escape', projectDir: '--p--' }] },
     }))
-    await expect(purge('p')).rejects.toThrow(/不是单段路径/)
-    expect(fs.removeDir).not.toHaveBeenCalled()
-    expect(await manifest.list()).toHaveLength(1)
+    const result = await purge('p')
+    const encodedDir = sessionDirOf('--p--', '..~002Fescape', HOME)
+    expect(result.removed).toBe(2)
+    expect(fs.removeDir).toHaveBeenCalledWith(encodedDir)
+    expect(encodedDir.startsWith(`${HOME}/sessions/--p--/`)).toBe(true)
+    // 一次都不拿原始 id 拼路径：被删的只有回收站条目目录与**项目目录内部**的成员目录
+    //（`..` 只是编码段里的普通字符——整段不是 `.` / `..`，路径解析不会上跳）。
+    for (const [dir] of fs.removeDir.mock.calls) {
+      expect(dir === trashDirOf('p', HOME) || dir.startsWith(`${HOME}/sessions/--p--/`)).toBe(true)
+    }
+    expect(await manifest.list()).toHaveLength(0)
   })
 
   it('清册里已经有的孩子不按盘上后代重复删', async () => {

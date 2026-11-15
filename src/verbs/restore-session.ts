@@ -62,7 +62,10 @@ export function restoreSession(deps: CoreDeps) {
   }
 }
 
-/** 放回哪儿：用删除时记进 entryId 的原目录名，不从 sessionId 现推；因此不依赖宿主的目录命名约定。 */
+/** 放回哪儿：用删除时记进 entryId 的**已编码目录段**原地回放，不从 sessionId 现编。
+ *  段是宿主 `encodeSegment` 的产物（`src/shared/session-path.ts` 是唯一编码实现），删除那一刻写进 id；
+ *  恢复只是把它接回 `sessions/<projectDir>/` 下——不重新编码，因此宿主换编码算法也不影响旧条目回家，
+ *  但**不等于**本插件不认宿主的目录命名约定：它认的就是宿主编出来的那一段。 */
 function restoreTargetDir(deps: CoreDeps, entry: TrashEntry): string {
   return sessionDirOf(entry.projectDir, parseEntryId(entry.id).sessionDirName, deps.home)
 }

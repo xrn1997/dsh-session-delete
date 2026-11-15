@@ -5,7 +5,7 @@ import type { TrashEntry } from '../src/trash/entry.js'
 const HOME = 'C:/Users/x/.dsh'
 
 describe('条目命名', () => {
-  it('id = 可排序时间戳 + 原目录名，原目录名原样保留（v4 带 session- 前缀）', () => {
+  it('id = 可排序时间戳 + 会话目录段，段原样保留（v4 带 session- 前缀）', () => {
     const id = makeEntryId(Date.UTC(2026, 8, 30, 13, 5, 0), 'session-f13e7fa3-b827-888a225c45fb')
     expect(id).toBe('20260930T130500Z-session-f13e7fa3-b827-888a225c45fb')
     expect(parseEntryId(id).sessionDirName).toBe('session-f13e7fa3-b827-888a225c45fb')
@@ -13,7 +13,7 @@ describe('条目命名', () => {
     expect(parseEntryId(id).deletedAt).toBe(Date.UTC(2026, 8, 30, 13, 5, 0))
   })
 
-  it('v3 目录名无前缀，同样原样保留', () => {
+  it('v3 目录段无前缀，同样原样保留', () => {
     const id = makeEntryId(Date.UTC(2026, 8, 30, 13, 5, 0), '02b60f41-c2dd-4595-b76f-528e40ae044e')
     expect(parseEntryId(id).sessionDirName).toBe('02b60f41-c2dd-4595-b76f-528e40ae044e')
   })
@@ -24,7 +24,7 @@ describe('条目命名', () => {
     }
   })
 
-  it('路径：本体在 sessions/<项目>/<原目录名>，回收站在 session-trash/<id>', () => {
+  it('路径：本体在 sessions/<项目>/<目录段>，回收站在 session-trash/<id>', () => {
     expect(sessionDirOf('--C-develop-GitHub-dsh-ebook--', 'session-abc', HOME))
       .toBe('C:/Users/x/.dsh/sessions/--C-develop-GitHub-dsh-ebook--/session-abc')
     expect(trashDirOf('20260930T130500Z-session-abc', HOME))

@@ -181,6 +181,41 @@ describe('删除动词', () => {
   })
 })
 
+// 宿主把 session id 编成目录段再落盘（`encodeSegment`：`~`/空格/Unicode 都编成 `~XXXX`）。
+// 删除必须按**同一段**拼源目录、写条目 id：拿原始 id 拼路径时，一旦 id 含这些字符，
+// 删除就会对一个不存在的目录报 not-found——而那条会话其实还在盘上。
+describe('删除动词 · 宿主目录段编码', () => {
+  const PROJECT = '--C-develop-GitHub-dsh-ebook--'
+
+  it('源目录与条目 id 都用编码后的目录段；清册仍记原始 sessionId', async () => {
+    // 期望值是宿主 `encodeSegment` 的输出（逐字）：沙箱里没有宿主源码，向量就在这里钉住镜像。
+    const sessionId = '会话 A~'
+    const encoded = '~4F1A~8BDD~0020A~007E'
+    const { deps: d, fs } = deps()
+    const { entry } = await deleteSession(d)(sessionId)
+
+    expect(entry.sessionId).toBe(sessionId)
+    expect(entry.id).toBe(`20260930T130500Z-${encoded}`)
+    expect(fs.rename.mock.calls).toEqual([[
+      sessionDirOf(PROJECT, encoded, HOME),
+      trashDirOf(`20260930T130500Z-${encoded}`, HOME),
+    ]])
+  })
+
+  it('孩子也按自己的编码段搬：父与孩子各落各自目录', async () => {
+    const kid = { sessionId: 'session-a~b', projectDir: '--p--' }
+    const d = deps({ members: { 'session-parent': [kid] } })
+    const { entry: parent, movedSessionIds } = await deleteSession(d.deps)('session-parent')
+
+    expect(movedSessionIds).toEqual(['session-parent', 'session-a~b'])
+    const renamedTo = d.fs.rename.mock.calls.map((call) => call[1])
+    expect(renamedTo).toContain(trashDirOf(`20260930T130500Z-session-a~007Eb`, HOME))
+    // 父行仍是未编码 id 的编码段（安全字母表 = 原样），孩子行的 parentEntryId 指向它。
+    const rows = await d.manifest.list()
+    expect(rows.find((row) => row.sessionId === 'session-a~b')?.parentEntryId).toBe(parent.id)
+  })
+})
+
 // 级联（判据住 `src/trash/groups.ts`，词表见 CONTEXT.md 的「无主子会话」条）：宿主的客户端把 `origin:"subagent"` 整排藏了 ⇒ 用户点掉的是一条父会话，
 // 而它留在盘上的孩子既看不见也占着字节（本机实测 41 条父留了 320 个目录 / 74.6 MB）。
 // 这一格把它们**一起搬进回收站**：孩子各自成目录、各自一行，`parentEntryId` 指向父那一行；恢复与彻底删除都按整组走。

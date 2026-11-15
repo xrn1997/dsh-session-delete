@@ -6,7 +6,7 @@
  * 盘上后代问一次 `workspaceOf`，`/list` 的失败面不再含账本归属读）；`workspaceOf` 只有
  * purge / orphan-clean 的删除计划（{@link planMemberRemovals}）才付——executor 摘账本要用它。
  */
-import { sessionDirOf, trashDirOf, type TrashEntry } from '../trash/entry.js'
+import { sessionDirForId, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
 import {
   executeImageAttachmentRemoval,
@@ -16,6 +16,7 @@ import {
   type ImageRemovalPlan,
 } from '../trash/attachments.js'
 import type { HostCorpusPort, SubagentMember } from '../ports/host-port.js'
+import { mapLimit } from '../trash/session-rows.js'
 import { bareSessionId, firstByBare } from '../domain/closure.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/wire.js'
@@ -67,7 +68,8 @@ export async function measureMemberDir(
   deps: CoreDeps,
   member: { readonly sessionId: string; readonly projectDir: string },
 ): Promise<MeasuredMemberDir | undefined> {
-  const dir = sessionDirOf(member.projectDir, member.sessionId, deps.home)
+  // 目录按宿主目录段拼（`sessionDirForId`）：`sessionId` 是原始 id，宿主编码后才是目录名。
+  const dir = sessionDirForId(member.projectDir, member.sessionId, deps.home)
   const probe = await probeDir(deps, dir)
   return probe.present ? { dir, bytes: probe.bytes } : undefined
 }
@@ -194,6 +196,12 @@ export interface VisibleTrashGroup extends TrashGroupView {
   readonly strandedCount: number
 }
 
+/** `/list` 只读计划的盘上测量预算：组与组内的 kids 两级各用这一份。
+ *  为什么要有界：`/list` 一次可能几百组、每组几百个孩子，无界 `Promise.all` 会把上千个
+ *  `exists` / `sizeOfDir` 一起挂起去抢同一个盘；预算与逐行读数（`ROW_READ_CONCURRENCY`）的旋钮
+ *  分家——那边是宿主投影读，这边是盘上递归量尺寸，同一个数没有同一条理由。 */
+const VISIBLE_MEASURE_CONCURRENCY = 8
+
 /**
  * `/list` 的只读计划：一行 = 一组。释放量与 purge 用同一条口径——回收站目录与成员目录**现测**，
  * 不用清册里记的 `sizeBytes`（那是删除那一刻的事实，盘上早就变了）。
@@ -201,6 +209,9 @@ export interface VisibleTrashGroup extends TrashGroupView {
  * 盘上后代经 `selectStrandedMembers` 选出（排除全部清册 id、bare id 全局只算一次）；目录不在的成员
  * 不进 `members`（与 purge 计划同口径）。成员只吃 {@link measureMembers}：**零账本读**——不再为每个
  * 盘上后代问一次 `workspaceOf`，`/list` 的失败面不再含账本归属读（归属只有 purge 摘账本才付）。
+ *
+ * 两级都有界（{@link VISIBLE_MEASURE_CONCURRENCY}）：组之间、组内 kids 各一扇窗；输出顺序仍按
+ * `groups` 原序（`mapLimit` 按 index 落位），首个失败原样抛。
  */
 export async function planVisibleTrash(
   deps: CoreDeps,
@@ -209,9 +220,9 @@ export async function planVisibleTrash(
 ): Promise<VisibleTrashGroup[]> {
   // 候选按组先选好（只读，但要问一次宿主的 subagentMembersOf）：逐组实测那一步可以并行。
   const candidates = await selectStrandedMembers(deps.host, rows, groups.map((group) => group.root.sessionId))
-  return await Promise.all(groups.map(async ({ root, kids }, index) => {
+  return await mapLimit(groups, VISIBLE_MEASURE_CONCURRENCY, async ({ root, kids }, index) => {
     const rootRow = await measureTrashRow(deps, root)
-    const kidRows = await Promise.all(kids.map((kid) => measureTrashRow(deps, kid)))
+    const kidRows = await mapLimit(kids, VISIBLE_MEASURE_CONCURRENCY, (kid) => measureTrashRow(deps, kid))
     const members = await measureMembers(deps, candidates[index] ?? [])
     const subagentBytes = kidRows.reduce((total, row) => total + row.bytes, 0)
     const strandedBytes = members.reduce((total, member) => total + member.bytes, 0)
@@ -225,7 +236,7 @@ export async function planVisibleTrash(
       strandedBytes,
       strandedCount: members.length,
     }
-  }))
+  })
 }
 
 /** 一次永久删除的只读计划：哪些目录要删、各自实测多少字节、哪些会话要先摘归档集。
@@ -275,7 +286,9 @@ export async function planTrashRemoval(
     ...targets.map((entry) => entry.sessionId),
     ...candidates.map((member) => member.sessionId),
   ])
-  const trash = await Promise.all(targets.map((entry) => measureTrashRow(deps, entry)))
+  // 批量 purge 的 targets 可能一次上百条：盘上测量同样走组测量的那份有界预算，
+  // 不拿宿主的并发换自己的省事（同一份 `mapLimit`，见 `/list` 的组测量）。
+  const trash = await mapLimit(targets, VISIBLE_MEASURE_CONCURRENCY, (entry) => measureTrashRow(deps, entry))
   const members = await planMemberRemovals(deps, candidates)
   // 剩余引用源由附件域自己扫（活动会话 + 除本次被删目录外的全部 session-trash + storages/cache）。
   const attachments = await planImageAttachmentRemoval(

@@ -1,9 +1,12 @@
 import { TRASH_DIR_NAME, type TrashEntryWire } from '../shared/wire.js'
+import { encodeSessionSegment } from '../shared/session-path.js'
 
-/** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<原目录名>`）——**它不是随手起的键**：
- *  回收站目录名就是它，恢复也按它反推出原目录名放回（CONTEXT.md 的「条目」条），所以 id 的形状有契约意义。
- *  目录名里的空白/引号照原样进 id（往返契约压倒 HTML 合法性——DOM id 的编码归浏览器半的
- *  `trash-panel.tsx`）。其余字段在删除那一刻就地取。 */
+/** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<宿主编码后的会话目录段>`）——**它不是
+ *  随手起的键**：回收站目录名就是它，恢复也按它把原目录段原地放回（CONTEXT.md 的「条目」条），所以
+ *  id 的形状有契约意义。原目录段是**宿主 `encodeSegment` 的产物**（`src/shared/session-path.ts`，
+ *  只含 `[A-Za-z0-9._~-]`），不是原始 session id：恢复照条目 id 里记下的段回放，不再从 sessionId
+ *  现编一遍。编码之前写下的**存量条目**里还可能有空白/引号，id 照原样带着它们（往返契约压倒 HTML
+ *  合法性——DOM id 的编码归浏览器半的 `trash-panel.tsx`）。其余字段在删除那一刻就地取。 */
 export interface TrashEntry {
   id: string
   sessionId: string
@@ -63,17 +66,21 @@ export function entryWire(row: TrashEntry): TrashEntryWire {
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0')
 
-export function makeEntryId(deletedAt: number, sessionDirName: string): string {
+/** 条目 id = 删除时刻 + **已编码的会话目录段**（宿主 `encodeSegment` 的产物，不是原始 session id）。
+ *  编码的唯一实现在 `src/shared/session-path.ts`；调用方拿段的方式归 {@link sessionDirSegmentOf}。 */
+export function makeEntryId(deletedAt: number, encodedSessionDirName: string): string {
   const d = new Date(deletedAt)
   const stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T` +
     `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`
-  return `${stamp}-${sessionDirName}`
+  return `${stamp}-${encodedSessionDirName}`
 }
 
 const ENTRY_ID_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-(.+)$/
 
-/** `makeEntryId` 的逆。时间戳按 UTC 拆字段再 `Date.UTC` 合回——不交给 `Date.parse`
- *  去猜（`20260930T130500Z` 不是任何被承认的日期格式，猜出来的是 NaN）。 */
+/** `makeEntryId` 的逆。交回的 `sessionDirName` 是**已编码目录段**：恢复拿它原地放回，不再解码回
+ *  session id（宿主编码是单射，从这里反推原始 id 既不需要也不该做）。时间戳按 UTC 拆字段再
+ *  `Date.UTC` 合回——不交给 `Date.parse` 去猜（`20260930T130500Z` 不是任何被承认的日期格式，
+ *  猜出来的是 NaN）。 */
 export function parseEntryId(id: string): { deletedAt: number; sessionDirName: string } {
   const m = ENTRY_ID_RE.exec(id)
   if (!m) throw new Error(`bad entry id: ${id}`)
@@ -102,11 +109,26 @@ function assertSingleSegment(value: string, label: string, allowEmpty = false): 
   }
 }
 
-/** `sessionDirName` 允许空串：恢复的预检用它取**项目根**（`sessions/<projectDir>`），不是会话目录。 */
+/** sessionId → 宿主会话目录 `sessions/<projectDir>/` 下那一段（`encodeSegment` 的**唯一调用点**）。
+ *  删除写条目 id 与 {@link sessionDirForId} 都从这里拿段：编码只发生一次，两种用途不会各编一套。 */
+export function sessionDirSegmentOf(sessionId: string): string {
+  return encodeSessionSegment(sessionId)
+}
+
+/** `sessionDirName` 是**已编码目录段**（宿主 `encodeSegment` 的产物，`sessions/<projectDir>/` 下那一段；
+ *  不是原始 session id——拿原始 id 拼路径见 `src/shared/session-path.ts` 的头注）。
+ *  允许空串：恢复的预检用它取**项目根**（`sessions/<projectDir>`），不是会话目录。 */
 export function sessionDirOf(projectDir: string, sessionDirName: string, home: string): string {
   assertSingleSegment(projectDir, '项目目录名')
   assertSingleSegment(sessionDirName, '会话目录名', true)
   return `${home}/sessions/${projectDir}/${sessionDirName}`
+}
+
+/** 原始 sessionId 的直接落点：先经 {@link sessionDirSegmentOf} 编成宿主目录段，再拼路径。
+ *  需要同时拿路径与条目 id 的调用方（删除成员）先取段、再分别交给 {@link sessionDirOf} /
+ *  {@link makeEntryId}，别编两遍。 */
+export function sessionDirForId(projectDir: string, sessionId: string, home: string): string {
+  return sessionDirOf(projectDir, sessionDirSegmentOf(sessionId), home)
 }
 
 export function trashDirOf(entryId: string, home: string): string {

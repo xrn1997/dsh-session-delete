@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import type { EvictionOutcome } from '../src/ports/host-port.js'
-import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
+import { sessionDirForId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import { visibleGroups } from '../src/trash/groups.js'
 import { verbError } from '../src/errors.js'
@@ -316,6 +316,67 @@ describe('planVisibleTrash：/list 的只读计划', () => {
     expect(group?.releaseBytes).toBe(4096 + 200)
     // 账本归属是 purge 摘账本才要读的事实：/list 一行都不许问（对照用例在 purge 那一组）。
     expect(deps.host.workspaceOf).not.toHaveBeenCalled()
+  })
+
+  // 宿主目录段编码（`sessionDirForId`）：盘上成员的 session id 含 `~` / 非 ASCII 时，目录名是
+  // 编码段而不是原始 id——拿原始 id 拼路径会量不到，计划里少算这一份残留。
+  it('盘上成员目录按宿主目录段拼：不安全的 session id 照样量得到', async () => {
+    const root = entry('session-p')
+    const dir = sessionDirForId('--p--', '会话 A~', HOME)
+    const { deps, groups } = world({
+      rows: [root],
+      sizes: { [dir]: 700 },
+      members: { 'session-p': [member('会话 A~')] },
+    })
+
+    const [group] = await planVisibleTrash(deps, [root], groups)
+
+    expect(group?.members[0]?.dir).toBe(dir)
+    expect(group?.strandedBytes).toBe(700)
+    expect(deps.fs.sizeOfDir).toHaveBeenCalledWith(dir)
+  })
+
+  // 有界并发（`VISIBLE_MEASURE_CONCURRENCY`）：组与组内 kids 两级各一扇窗。无界 `Promise.all`
+  // 在几百组 × 几百孩子的清单上会同时挂起上千个盘上递归量尺寸。
+  it('实测有界：20 个组 / 一组 20 个孩子，同时挂起的 sizeOfDir 都不超过 8', async () => {
+    const groupRows = Array.from({ length: 20 }, (_unused, index) => entry(`session-g${index}`))
+    const manyGroups = world({ rows: groupRows })
+    let inFlight = 0
+    let peak = 0
+    manyGroups.deps.fs.sizeOfDir.mockImplementation(async () => {
+      inFlight += 1
+      peak = Math.max(peak, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      inFlight -= 1
+      return 1
+    })
+
+    const planned = await planVisibleTrash(manyGroups.deps, groupRows, manyGroups.groups)
+
+    // 顺序仍按 groups 原序（`mapLimit` 按 index 落位，不是完成序）。
+    expect(planned.map((group) => group.root.id))
+      .toEqual(manyGroups.groups.map((group) => group.root.id))
+    expect(peak).toBeLessThanOrEqual(8)
+
+    // 第二级：一组二十个孩子，组内那扇窗同样不超过 8。
+    const root = entry('session-parent')
+    const kids = Array.from({ length: 20 }, (_unused, index) =>
+      entry(`session-k${index}`, { parentEntryId: root.id }))
+    const oneGroup = world({ rows: [root, ...kids] })
+    let kidInFlight = 0
+    let kidPeak = 0
+    oneGroup.deps.fs.sizeOfDir.mockImplementation(async () => {
+      kidInFlight += 1
+      kidPeak = Math.max(kidPeak, kidInFlight)
+      await new Promise((resolve) => setTimeout(resolve, 1))
+      kidInFlight -= 1
+      return 1
+    })
+
+    const [group] = await planVisibleTrash(oneGroup.deps, [root, ...kids], oneGroup.groups)
+
+    expect(group?.kids).toHaveLength(20)
+    expect(kidPeak).toBeLessThanOrEqual(8)
   })
 })
 

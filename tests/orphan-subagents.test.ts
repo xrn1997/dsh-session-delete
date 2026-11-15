@@ -127,9 +127,20 @@ describe('扫描报告与清理', () => {
     await expect(loadOrphanGroups(d, [])).rejects.toMatchObject({ code: 'sessiondelete/io' })
   })
 
-  it('非单段 session id 不拼路径：扫描响亮失败，绝不把递归删除带出 sessions/', async () => {
+  // 宿主目录段编码（`src/shared/session-path.ts`）：`../escape` 这种 id 不是被拒，而是先编成安全段
+  // `..~002Fescape` 再拼路径——扫描只在 `sessions/<项目>/` 下寻址，带不出根外。
+  // 它换来的正是"多怪 id 都不会把递归删除带出 sessions/"这件事：编码在拼路径之前就发生了。
+  it('非单段 session id 被编成安全目录段：只在 sessions/ 下寻址，绝不带出根外', async () => {
     const { d, fs } = deps([s('../escape', { parentSessionId: 'gone' })])
-    await expect(loadOrphanGroups(d, [])).rejects.toThrow(/不是单段路径/)
+    const encodedDir = sessionDirOf('--p--', '..~002Fescape', HOME)
+
+    const groups = await loadOrphanGroups(d, [])
+
+    expect(groups.map((group) => group.root.sessionId)).toEqual(['../escape'])
+    expect(fs.sizeOfDir.mock.calls.map(([p]) => p)).toEqual([encodedDir])
+    expect(encodedDir.startsWith(`${HOME}/sessions/--p--/`)).toBe(true)
+    // `..` 只是编码段里的普通字符（整段不是 `.` / `..`）：路径解析仍落在项目目录内部。
+    expect(encodedDir).not.toBe(`${HOME}/sessions/--p--/..`)
     expect(fs.removeDir).not.toHaveBeenCalled()
   })
 
