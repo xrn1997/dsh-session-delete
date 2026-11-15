@@ -51,7 +51,10 @@ export function resolveRepoPath(token: string): string | undefined {
   const bases = [token]
   if (token.endsWith('.js')) bases.push(token.replace(/\.js$/, '.ts'), token.replace(/\.js$/, '.tsx'))
   if (token.endsWith('.ts')) bases.push(token.replace(/\.ts$/, '.tsx'))
-  const candidates = PATH_TOKEN.test(token) ? bases : [...bases, ...bases.map((base) => join('src', base))]
+  // 解析结果一律保持仓内 POSIX 写法：这是**判据的形态**，不是本机路径；只有 `existsSync` 前才拼
+  // `ROOT`。Windows 的 `join` 会把反斜杠带进返回值，上层拿它和文档里的 `/` 写法比较会永远不等
+  // （2026-11-14 文档门在 Windows 上红过一次）。
+  const candidates = PATH_TOKEN.test(token) ? bases : [...bases, ...bases.map((base) => `src/${base}`)]
   return candidates.find((candidate) => existsSync(join(ROOT, candidate)))
 }
 
@@ -132,7 +135,8 @@ let docFiles: readonly DocFile[] | null = null
 export function docCorpus(): readonly DocFile[] {
   if (docFiles !== null) return docFiles
   docFiles = collectFiles(join(ROOT, 'docs'), /\.md$/, ['node_modules', 'lib', '.git', '.qoder', '.superpowers'])
-    .map((path) => ({ file: relative(ROOT, path), lines: readFileSync(path, 'utf8').split(/\r?\n/) }))
+    // `file` 是文档门的比较键（`docs/adr/…` 形态），跨平台统一 `/`；本机路径只用来读文件。
+    .map((path) => ({ file: relative(ROOT, path).replaceAll('\\', '/'), lines: readFileSync(path, 'utf8').split(/\r?\n/) }))
   return docFiles
 }
 

@@ -111,6 +111,9 @@ describe('doc-anchors · 门的正控（合成负例，CI 可复跑）', () => {
 
   it('文档语料覆盖 docs/** 的 md（两门共用一份读取）', () => {
     const corpus = docCorpus()
+    // `file` 是文档门的比较键（`docs/adr/…` 形态），任何平台都必须用 `/`：Windows 的 `relative`
+    // 会给反斜杠，`startsWith('docs/adr/')` 于是整批落空、锚点门静默变成恒绿。
+    expect(corpus.every((doc) => !doc.file.includes('\\'))).toBe(true)
     expect(corpus.some((doc) => doc.file === 'docs/architecture.md' && doc.lines.length > 0)).toBe(true)
     expect(corpus.some((doc) => doc.file.startsWith('docs/adr/') && doc.file.includes('0063'))).toBe(true)
   })
