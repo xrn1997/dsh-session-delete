@@ -1,5 +1,5 @@
 /**
- * 撤销提示（docs/ui-spec.md 状态 ③）：删除成功后一条可撤销的横幅。
+ * 撤销提示（`docs/ui-spec.md` §2 ③）：删除成功后一条可撤销的横幅。
  *
  * 现场与发布住在 `undo-notices.ts`；本文件只做组件：画通知台已有的事实，「撤销」整趟按下交给
  * `write-seats.ts` 的 `restoreFromUndo`（编排归恢复座位，见 ADR-0018 的边界）。

@@ -38,10 +38,8 @@ Status: accepted
 - **三处各修各的 effect**：同一组判据三份实现，风暴与档位门的漂移只是时间问题；这次修的正是第三份（详情 reader）写漏。
 - **用轮询兜底**：ADR-0036 的「订阅不轮询」仍成立；轮询还会制造空读，和「不可见不读」相反。
 - **给生命周期加 AbortController**：宿主通道是 exact Fetch 路由，abort 只能省客户端等待，不能消服务端已发生的读；换票 + 单飞已把重发压到有界，加 abort 只增复杂度。
-- **精确失效（A1 携带 changed ids，只重读受影响主体）**：能进一步减少整本重读，但要改 `archive-store` 的修订台契约与 A1 观察面的形状；先把节奏收口，粒度留作后续独立决定。
+- **精确失效（旁路观察携带 changed ids，只重读受影响主体）**：能进一步减少整本重读，但要改 `archive-store` 的修订台契约与旁路观察面的形状；先把节奏收口，粒度留作后续独立决定。
 - **把合并窗做成用户可调项**：内部实现细节不外露；120ms 是「短到不可感、长到能收一批写后通告」的折中，需要时改常量。
 - **强制激活无视 demand 门**：会给未来消费者留一个「无需求也读」的后门；强制的是「激活时必读」，不是「没有主体也读」。
-
-## 锚点
 
 锚点：`src/client/use-gated-refresh.ts`（`useGatedRefresh` / `GatedRefreshPolicy` / `DEFAULT_REFRESH_COALESCE_MS`）；`src/client/use-archive-query.ts`（`useArchiveQuery`）；`src/client/use-archive-detail-reader.ts`（`useArchiveDetailReader`）；`src/client/use-trash-panel-controller.ts`（`useTrashPanelController`）；`tests/client/use-gated-refresh.test.tsx`；`docs/architecture.md` §3/§4；ADR-0036（订阅不轮询）；ADR-0060（归档档分开的现场与失效链）；ADR-0048（首帧快照与挂载读）。

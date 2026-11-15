@@ -152,14 +152,14 @@ function contributions(t: Translate): readonly SlotContribution[] {
       payload: 't',
       component: PickRow,
     },
-    // ② 撤销提示的常驻宿主（不在菜单里，理由见 §头注）
+    // 撤销提示的常驻宿主（不在菜单里，理由见 §头注）
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.undo-toast` }, payload: 'deps+t', component: UndoToast },
-    // ②' 确认框的常驻宿主（必须脱离菜单子树的生命周期，见 delete-confirm.tsx）
+    // 删除确认框的常驻宿主（必须脱离菜单子树的生命周期，见 delete-confirm.tsx）
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-confirm` }, payload: 'deps+t', component: DeleteConfirmHost },
-    // ②'' 批量删除的两件浮层：浮条跟着勾选重绘，确认框必须脱离行子树的生命周期
+    // 批量浮条与确认框：浮条跟着勾选重绘，确认框必须脱离行子树的生命周期
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-bar` }, payload: 'deps+t', component: BatchBar },
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-confirm` }, payload: 'deps+t', component: BatchConfirmHost },
-    // ③ 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们只出一个 glyph。
+    // 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们只出一个 glyph。
     // 名字走 thunk：宿主 `resolveSlotLabel` 在每次重读时求值并在语言变化时重读。
     {
       slot: PANEL_SLOT,
@@ -167,9 +167,9 @@ function contributions(t: Translate): readonly SlotContribution[] {
       payload: 'none',
       component: TrashPanelIcon,
     },
-    // ③' 中央面板：同字 key；清单本体（自带页面骨架与滚动）。
+    // 中央面板：同字 key；清单本体（自带页面骨架与滚动）。
     { slot: MAIN_SLOT, spec: { name: MAIN_SLOT, key: PANEL_ID }, payload: 'deps+t', component: TrashPanel },
-    // ④ 插件设置页的两张卡（可调项 + 维护）：宿主按 **bundle 包名**寻址这个 keyed 子槽位。
+    // 插件设置页的两张卡（可调项 + 维护）：宿主按 **bundle 包名**寻址这个 keyed 子槽位。
     { slot: SETTINGS_SLOT, spec: { name: SETTINGS_SLOT, key: PLUGIN_ID }, payload: 'deps+t', component: SettingsCards },
   ]
 }
@@ -230,7 +230,7 @@ async function activate(client: ClientContextLike): Promise<void> {
 
   // 菜单两行有双轨协商（数据动作 / legacy + 迟到切换），归 context-menu-actions。
   installSessionMenus(client, t)
-  // A1：宿主归档集的旁路观察（可选服务 `workspaces`，窄镜像、缺席安静降级）——
+  // 归档旁路观察：宿主归档集的可选服务（`workspaces`，窄镜像、缺席安静降级）——
   // 归档档实时反映宿主侧归档/解除归档（不轮询；失效只戳 archive-store，重读归查询）。
   // `effect` 与 activation 守卫同一判据：老宿主没有这一格时不许把注册后面的一整串打掉。
   if (typeof client.effect === 'function') {

@@ -21,7 +21,7 @@ Status: accepted
 
 - **不改成格子级导航**：行级 ↑↓ 是既定交互（`docs/ui-spec.md`「键盘」），这次只换语义载体。容器上的 `aria-activedescendant` 不是实际光标载体：焦点落在行上（roving tabindex），它保留原状，不替代行焦点。
 - 多选语义不变：勾选仍映射 `aria-selected` + `aria-multiselectable`，勾选框仍是行内控件。
-- 行的 DOM id 由 DOM 侧编码保证合法（`domRowId`），不改 `makeEntryId`——那个 id 的形状是目录名往返契约（恢复要反推原目录名），归数据层。
+- 行的 DOM id 由 DOM 侧编码保证合法（`domIdOf`），不改 `makeEntryId`——那个 id 的形状是目录名往返契约（恢复要反推原目录名），归数据层。
 - **列数一致靠显式声明**：条目行恒为两格（常态：内容 + 动作；多选态：勾选框占内容前的一格、动作列退场），组头行只有一格——容器挂 `aria-colcount`、组头格挂 `aria-colspan` 横跨整行，读屏的列播报因此不乱；组头行也是 `row`（界面家见 `docs/ui-spec.md` ④）。
 
 ## 被否掉的替代

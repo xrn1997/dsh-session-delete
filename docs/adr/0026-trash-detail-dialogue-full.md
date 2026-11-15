@@ -45,4 +45,4 @@ Status: accepted
 - **一次返回全部块、只提高总闸**：超大工具结果仍会被截，且一次 JSON 可能几 MB；分页把“能翻到全部历史”和“单次响应有界”拆成两件事。
 - **继续隐藏注入、只加思考/工具折叠**：最接近宿主 Chat，但满足不了“全部”，也会留下那条“另有 N 条未显示”的提示。
 
-锚点：`docs/architecture.md` §4（详情主人行与块渲染行）；`docs/ui-spec.md` ⑥；`src/trash/detail.ts`；`src/client/trash-detail.tsx`；`src/client/use-trash-panel-controller.ts`；`src/shared/wire.ts`；`tests/trash-detail.test.ts`；`tests/client/trash-detail.test.tsx`。
+锚点：`docs/architecture.md` §4（详情主人行与块渲染行）；`docs/ui-spec.md` ⑥；`src/trash/detail.ts`；`src/client/session-detail.tsx`（通用壳 / 块视图 / 分页）；`src/client/detail-blocks.ts`（过程块分组）；`src/client/use-detail-pager.ts`（分页）；`src/client/trash-detail.tsx`（回收站投影）；`src/client/use-trash-panel-controller.ts`；`src/shared/wire.ts`；`tests/trash-detail.test.ts`；`tests/client/trash-detail.test.tsx`。

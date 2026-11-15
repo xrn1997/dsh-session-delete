@@ -1654,7 +1654,7 @@ function kidDeps(): FakeRemote {
 }
 
 describe('回收站面板 · 子会话详情', () => {
-  /** 子会话段默认收起（ui-spec 状态⑥）：点摘要条才展开出孩子行。 */
+  /** 子会话段默认收起（`docs/ui-spec.md` §2 ⑥）：点摘要条才展开出孩子行。 */
   function openSubagents(): void {
     fireEvent.click(must(document.querySelector<HTMLButtonElement>('[data-dsh-session-delete="session-subagents-toggle"]'), '子会话摘要条'))
   }
@@ -1714,7 +1714,7 @@ describe('回收站面板 · 子会话详情', () => {
   })
 
   // 孩子视图不是死路：孩子的详情读失败时宽档既没有段（失败态不画正文）也没有「返回清单」，
-  // 清单行就是那一扇出口——`select` 无条件收掉孩子视图（判据住 ADR-0055 与状态⑥）。
+  // 清单行就是那一扇出口——`select` 无条件收掉孩子视图（判据住 ADR-0055 与 `docs/ui-spec.md` §2 ⑥）。
   it('宽档：孩子详情读失败后点清单行仍能脱身', async () => {
     const deps = kidDeps()
     renderWide(deps)
@@ -2022,7 +2022,7 @@ describe('归档档（平级分段）', () => {
     const deps = makeArchiveDeps()
     const { container } = renderNarrow(deps)
 
-    // 归档档下钻 → 切到回收站档 → 一次 Esc → 回归档档：还在详情里。
+    // 归档档下钻 → 切到回收站档 → 一次 Esc → 回归档：还在详情里。
     fireEvent.click(archiveTab())
     await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
     const archiveGrid = screen.getByRole('grid', { name: '归档' })

@@ -38,7 +38,7 @@ import {
 // 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
 beforeEach(() => {
   resetClientState()
-  // A1 的可选服务缺席在激活期会 `console.info` 留因（安静降级）；这组用例只看入口注册，
+  // 归档旁路观察的可选服务缺席在激活期会 `console.info` 留因（安静降级）；这组用例只看入口注册，
   // 不把降级提示刷进测试输出。
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
 })

@@ -10,7 +10,7 @@ ADR-0037 决定 `Config` 走本地 Standard Schema，代价是 `Config.listConfi
 
 ## 决定
 
-1. **新段 `/config`（POST）**：空体（`null` / `{}`）读当前值，带字段写；读是纯的、写进到达序链——`configEditor.edit` 会让这一行重启，不能和删除 / 恢复交错。与 `/detail` 一样用 POST 表达读，段数从九变十。
+1. **新段 `/config`（POST）**：空体（`null` / `{}`）读当前值，带字段写；读是纯的、写进到达序链——`configEditor.edit` 会让这一行重启，不能和删除 / 恢复交错。与 `/detail` 一样用 POST 表达读，段数多一段。
 2. **形状与范围只住 `wire.ts`**：`SessionDeleteConfigWire` 是线上形状，`CONFIG_LIMITS` 是闭区间整数范围；`src/config.ts` 的 `SessionDeleteConfig` 是前者的别名，归一也读同一份 `CONFIG_LIMITS`。表单与 Node 半不会各写一份范围。
 3. **写只走 `configEditor`**：`ctx.fiber.entry` 与 `ctx.get('configEditor')` 在组合根取；写支把它们交给 `src/verbs/config.ts`，`edit(entry, current => ({ ...current, ...next }))`。编辑器缺席 / entry 缺席回 `io` 并点名 `cordis.patch.yml`；编辑器拒绝回 `io` 并带原因；值本身不合法回 400（适配器把路由码折成 `io`，请求对不对看状态码）。
 4. **表单住既有 `plugins.bundle.config` 卡**：不另开 `plugins.row.config`。后者的 key 是 `<包名>#<patch 行 id>`，客户端要知道 patch 行 id；前者按 bundle 包名寻址，是客户端本来就有的身份。两张卡同属一个槽位占用者：「可调项」在上，「维护」在下。

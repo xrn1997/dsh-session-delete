@@ -6,7 +6,7 @@
  * 但**读同一份实现**：分的是状态，不是判据。
  *
  * 失效接线（ADR-0060 决定第 4 条的三条来源）：
- * - 自救动作（解除归档）后只戳 `invalidateArchive()`（**不**直呼 reload；A1 随后的同一变化
+ * - 自救动作（解除归档）后只戳 `invalidateArchive()`（**不**直呼 reload；旁路观察随后的同一变化
  *   合并进同一次读，latest-wins 只管旧响应不盖新态）；
  * - 归档档删除落地走的是既有删除座位（`write-seats.ts`）：座位只戳回收站修订，归档查询
  *   订阅同一条修订——恢复一条已归档会话让它**回「归档」**（`wasArchived` 保留，ADR-0008）；
@@ -242,7 +242,7 @@ export function useArchivePanelController(input: {
       deps,
       ids,
       gate,
-      // 自救动作只戳失效台（不直呼 reload）：A1 的同轮变化合并进同一次读。
+      // 自救动作只戳失效台（不直呼 reload）：旁路观察的同轮变化合并进同一次读。
       refresh: () => { invalidateArchive(); return Promise.resolve() },
     })
     // 被闸挡回的那一趟什么都没跑：成败由在飞那一趟说。

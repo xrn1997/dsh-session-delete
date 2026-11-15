@@ -16,20 +16,17 @@ type(scope): 描述
 ## Issue 与 PR
 
 - 工单住 GitHub Issues，用 `gh` CLI；标签与 triage 约定见 `docs/agents/issue-tracker.md` 与 `docs/agents/triage-labels.md`。
-- 功能请求走 Issue，说清场景与期望；PR 建议关联已有 Issue，并写清改动面与验证证据。
+- 功能请求走 Issue，说清场景与期望；PR 建议关联已有 Issue，并写清改动面与验证证据。外部 PR 不当作功能请求。
 - 维护者可能要求先讨论再合并；外部 PR 与功能请求分开处理。
 
 ## 提交前
 
-- 至少跑 `pnpm typecheck` 与 `pnpm test`，**两条命令同批跑并确认退出码**。完整门控见 `docs/development.md`。
-- 文档改动会过三件套：`tests/docs-liveness.test.ts`（路径、引用形态、ADR、README 投影、截图）、`tests/context-terms.test.ts`（`CONTEXT.md` 的符号）与 `tests/comment-altitude.test.ts`（代码注释）。改路径、改 ADR 编号、改 README 兼容性投影都要同批改门。
-- 客户端半改动必须先在有可见浏览器的隔离 home 验过；Node 半改动要重启宿主。完整走法见 `docs/development.md` 的「真机验证」。
+- 至少跑 `pnpm typecheck` 与 `pnpm test`，**两条命令同批跑并确认退出码**；完整门控 `pnpm gates` 与文档门三件套的判据见 `docs/development.md` 的「门（自动）」。
+- 客户端半改动必须先在有可见浏览器的隔离 home 验过；Node 半改动要重启宿主。走法见 `docs/development.md` 的「真机验证」。
 - 行为变化同步更新测试与相关文档；架构级决定写 ADR，格式见 `docs/adr/ADR-FORMAT.md`。
 
 ## 发版边界
 
 - 版本号、tag 与 `npm publish` 由维护者执行；贡献者不要自行 bump 或发布。
-- `V*` tag push 触发发版工作流，把预构建 tarball 挂成 GitHub Release 资产；`npm publish` 仍在 CI 外、由维护者手动执行。两条渠道靠同一个 tag 对齐，细节见 `docs/development.md`「发版流程」；不恢复 `prepare`、不把 `lib/` 入库（理由见 `ADR-0025`）。
-- 发版前跑 `pnpm gates`（typecheck / lint / test / build / pack dry-run），跑法见 `docs/development.md` 的「发版流程」。
-- 发版流程与 `files` 精确清单见 `docs/development.md`；发布历史见 `CHANGELOG.md`。
-- 贡献按 Apache-2.0 授权，与仓库许可一致。
+- 发版步骤、两条渠道的资产与 `files` 精确清单全住 `docs/development.md` 的「发版流程」；这里只规定谁能发。
+- 发布历史见 `CHANGELOG.md`；贡献按 Apache-2.0 授权，与仓库许可一致。

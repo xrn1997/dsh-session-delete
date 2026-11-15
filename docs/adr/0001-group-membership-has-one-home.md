@@ -20,13 +20,14 @@ Status: accepted
 
 ## 决定
 
-1. 组语义收进 `src/trash/groups.ts`，**interface 只有三个纯函数**，都吃 `readonly TrashEntry[]`：
+1. 组语义收进 `src/trash/groups.ts`，**interface 只有四个纯函数**，都吃 `readonly TrashEntry[]`：
    - `visibleGroups(rows): { root, kids }[]`——清单露面的一行 = 组根（`/list` 的行装配要的是 `root` 与
      `kids` 两样，所以给带 `kids` 的那一版，而不是只回一排行）；
    - `groupOf(rows, id): TrashEntry[]`——一条 id 所属的整组（含「父自己是孩子时只回自己」）；
    - `claimOf(original, current, id): GroupClaim`——判别联合的三态（`absent` / `carried` / `fresh`）；
      **只有 `fresh` 带当前这一组**，carried / absent 没有组可带。调用方只读 `verdict`，
      boolean 谓词那一层不提供。
+   - `withoutGroup(rows, id): TrashEntry[]`——把一条 id 所属的整组从快照里摘掉，回一份新快照（组语义仍只读 `groupOf`）。
 2. 判据原文只在这一个文件里写：**接得住孩子的只有组根**。
 3. purge 改用与其余三处同一条判据（当时的动词名 `purgeTrash`，那段 glue 已被清册作用域吸收——见 `src/verbs/trash-scope.ts`）——这是**行为变化**：嵌套组不再连带删除孙代。
 4. 补一条嵌套组的回归测试（父行自己也是孩子时，彻底删除只清它自己）。

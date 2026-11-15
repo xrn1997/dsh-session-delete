@@ -416,7 +416,7 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
   })
 
   it('行那条描边复用选中态那枚 token，不新造颜色（2026-10-15 实测）', () => {
-    // 不按字面多行比：仓库里 CSS 是 CRLF，钉"选择器 + 那条 outline 用的 token"这一件事就够。
+    // 不按字面多行比：源文件的工作树换行可能被本机工具写成 CRLF，钉"选择器 + 那条 outline 用的 token"这一件事就够。
     // 选中态 token 走本插件的别名层（`--sd-*`），别名解析到的仍是宿主那枚
     // `--dsw-alias-button-ghost-active-border`（见 ui.css 头注：私有 token 带公开兜底）。
     expect(css).toMatch(

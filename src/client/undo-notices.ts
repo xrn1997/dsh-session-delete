@@ -41,7 +41,7 @@ const noticeStore = createStore<UndoNotice | null>(null)
 /**
  * 一条**待显示**的撤销失败：撤销在飞时横幅被新删除覆盖、或被面板恢复 / 清空熄灭，失败就失去了
  * 落点。`failNotice` 到那时把原文留在这里，等当前没有横幅时由 `undo-toast.tsx` 顶上并到时清掉
- * ——失败不因为横幅先走一步而被吞掉（docs/ui-spec.md 状态 ③「失败原文要落回这一条」的反面）。
+ * ——失败不因为横幅先走一步而被吞掉（`docs/ui-spec.md` §2 ③ 的「旧撤销的失败留到空档再上屏」说的就是这一格）。
  */
 export interface UndoFailureNotice {
   /** 每次发布递增：Toast 靠它重挂载、重新计停留。 */
@@ -108,7 +108,7 @@ export function resetUndoNotice(): void {
   failureStore.reset()
 }
 
-/** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/ui-spec.md` §2 状态 ③ 只指到这里，不抄这个数。 */
+/** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/ui-spec.md` §2 ③ 只指到这里，不抄这个数。 */
 export const UNDO_HOLD_MS = 6000
 
 /** 这次撤销开始时的那条横幅还在吗——期间被新删除覆盖、或由面板恢复熄灭时，旧请求不许改写它。 */

@@ -1,5 +1,5 @@
 /**
- * A1：宿主归档集的**旁路观察**——浏览器半可选读宿主客户端服务
+ * 宿主归档集的**旁路观察**——浏览器半可选读宿主客户端服务
  * `ctx.get('workspaces').list`（`getSnapshot().archivedSessionIds` / `subscribe`），
  * 归档集一变就 `invalidateArchive()`。零新增宿主↔Node 面（ADR-0036「订阅不轮询」的路子）。
  *
@@ -11,7 +11,7 @@
  *   `ctx.inject(['workspaces'], child => …)` 的 **scoped 等待**切过去；等待装在 child 上，
  *   服务就绪才回调、条目卸载时随 child 一起收。
  * - 服务缺席 / 形状不符 / 安装期读面抛错 ⇒ **安静降级**（console.info 一句留因，不抛、不戳）：
- *   A1 不可用时归档档退化为"打开时重取 + 自己动作后重取"（`useArchiveQuery` 本来就有这两条腿）。
+ *   旁路观察不可用时归档档退化为"打开时重取 + 自己动作后重取"（`useArchiveQuery` 本来就有这两条腿）。
  * - 只在**归档集数组内容**变化时戳（逐元素比较）：无关的 workspace 变更不许把归档档拉起来重读。
  */
 import type { ClientContextLike } from './context.js'
@@ -84,7 +84,7 @@ function watchList(list: WorkspacesListLike): () => void {
     if (typeof off === 'function') unsubscribe = off
     else console.info('[dsh-session-delete] workspaces.list.subscribe 没有交回退订函数：退订只能置失效标记（安静降级）')
   } catch (error) {
-    console.info(`[dsh-session-delete] workspaces 归档观察安装失败：A1 不可用（安静降级）：${String(error)}`)
+    console.info(`[dsh-session-delete] workspaces 归档观察安装失败：归档旁路观察不可用（安静降级）：${String(error)}`)
     active = false
     return () => {}
   }
@@ -115,7 +115,7 @@ function waitForWorkspaces(client: ClientContextLike): (() => void) | undefined 
       watchFor(child, false)
     })
   } catch (error) {
-    console.info(`[dsh-session-delete] 等待 workspaces 服务失败：A1 归档观察不可用（安静降级）：${String(error)}`)
+    console.info(`[dsh-session-delete] 等待 workspaces 服务失败：归档旁路观察不可用（安静降级）：${String(error)}`)
     return undefined
   }
   return typeof off === 'function'
@@ -137,7 +137,7 @@ function watchFor(client: ClientContextLike, allowWait: boolean): () => void {
     const waiting = waitForWorkspaces(client)
     if (waiting !== undefined) return waiting
   }
-  console.info('[dsh-session-delete] workspaces 服务缺席或形状不符：A1 归档观察不可用（安静降级）')
+  console.info('[dsh-session-delete] workspaces 服务缺席或形状不符：归档旁路观察不可用（安静降级）')
   return () => {}
 }
 

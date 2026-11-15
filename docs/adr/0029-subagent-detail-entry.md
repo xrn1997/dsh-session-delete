@@ -27,7 +27,7 @@ Status: superseded by 0055
 ## 后果
 
 - 详情线上多两格可选：`subagents`（孩子摘要）与只在截断时出线的 `subagentsTotal`，是「清册字段按 entryId 配对」的唯一例外；界面不拿空数组冒充缺席。
-- 详情主体可以是孩子：分页、失败与重试都跟着主体走。孩子视图的清场、unknown 与返回/Esc 次序住 `docs/ui-spec.md` 状态⑥与键盘节；词汇「孩子视图」住 `CONTEXT.md`。
+- 详情主体可以是孩子：分页、失败与重试都跟着主体走。孩子视图的清场、unknown 与返回/Esc 次序住 `docs/ui-spec.md` §2 ⑥ 与 §3（键盘）；词汇「孩子视图」住 `CONTEXT.md`。
 
 ## 被否掉的替代
 
@@ -36,4 +36,4 @@ Status: superseded by 0055
 - **摘要放 `TrashRowWire`**：入口在详情，`/list` 每行白背一份孩子清单，读放大且多数行用不上。
 - **新开 `/children` 段**：raw 清册行里现成的事实（`parentEntryId` 指向谁）不值一段新契约面；复用 `/detail` 与 `TrashEntryWire` 就够。
 
-锚点：`docs/ui-spec.md` §2（状态⑥）与 §3（键盘）；`src/client/use-trash-panel-controller.ts`（`childView`）；`src/shared/wire.ts`（`TrashDetailWire.subagents` / `subagentsTotal`）；`src/trash/entry.ts`（`entryWire`）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT`）；`src/trash/groups.ts`（折进判据）；`src/client/trash-detail.tsx`；`tests/client/use-trash-panel-controller.test.tsx`；ADR-0001（组语义）；ADR-0026（详情正文）。
+锚点：`docs/ui-spec.md` §2（⑥）与 §3（键盘）；`src/client/use-trash-panel-controller.ts`（`childView`）；`src/shared/wire.ts`（`TrashDetailWire.subagents` / `subagentsTotal`）；`src/trash/entry.ts`（`entryWire`）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT`）；`src/trash/groups.ts`（折进判据）；`src/client/trash-detail.tsx`；`tests/client/use-trash-panel-controller.test.tsx`；ADR-0001（组语义）；ADR-0026（详情正文）。

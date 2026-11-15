@@ -263,7 +263,7 @@ export function SessionList<R>({
                     {...intentPrefetchHandlers(prefetch, row)}
                     onClick={() => {
                       // 多选态下点行说的是「勾上/取消这一条」，不再切换详情：两套语义同时活在一次点击里
-                      // 一定有一套是错的（docs/ui-spec.md 状态④）。
+                      // 一定有一套是错的（`docs/ui-spec.md` §2 ④）。
                       if (selection.selectMode) {
                         selection.toggleCheck(view.id)
                         return

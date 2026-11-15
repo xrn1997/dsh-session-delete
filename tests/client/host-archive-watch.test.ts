@@ -1,5 +1,5 @@
 /**
- * A1：宿主归档集的旁路观察（`host-archive-watch.ts`）。
+ * 宿主归档集的旁路观察（`host-archive-watch.ts`）。
  *
  * 窄镜像只认两格（`workspaces.list.getSnapshot().archivedSessionIds` / `list.subscribe`）；
  * 服务缺席、形状不符、安装期读面抛错一律**安静降级**（不抛、不戳）——可选服务不许拖垮激活。
@@ -44,7 +44,7 @@ function workspacesWith(ids: string[]): FakeWorkspaces & { emit: () => void } {
   }
 }
 
-describe('A1 · host-archive-watch', () => {
+describe('归档旁路观察 · host-archive-watch', () => {
   beforeEach(() => {
     resetArchiveStore()
     // 降级路径会 console.info 留因；用例只看行为，别把提示刷进输出。

@@ -1,4 +1,4 @@
-# 文本换行统一为 LF（index 与工作树；Windows 检出也一样）。
+# 入库文本统一为 LF（`eol=lf` 让检出一律 LF；工作树仍可能被本机工具写成 CRLF，git 按属性归一后再入库）。
 #
 # 为什么不是口味：`lib/client.js` 把 UI 样式表当**字符串**内联，构建机的换行会让同一版本
 # 的 npm 包与 GitHub Release 资产字节不一致（审计发现过 CSS 内联串里 `\r\n` vs `\n`）；

@@ -40,7 +40,7 @@ export type RouteBody = 'none' | 'query' | 'config' | 'entry' | 'apply' | 'sessi
  *  - `detail`：单条详情（用 POST 表达一个读，判据在 `src/api/route-table.ts` 的 detail 行）。
  *  - `apply`：批量执行一个动作（`delete` / `restore` / `purge` / `count` / `orphan-clean` / `unarchive`），逐条回 `ApplyOutcome`。
  *  - `empty`：清空回收站（聚合回执，不按条回）。
- *  - `orphans`：无主子会话的扫描报告（纯读）。清理是 `/apply` 的第五个动作，
+ *  - `orphans`：无主子会话的扫描报告（纯读）。清理走 `/apply` 的 `orphan-clean` 动作，
  *    这一段只负责"有多少、在哪、多大"。
  *  - `attachment`：附件原始字节（全仓唯一的二进制响应段；按查询串寻址，失败仍回 JSON 信封）。
  *  - `attachmentOrphans`：无引用图片对象的扫描报告（纯读；数量/字节 + 供预览的对象清单）。

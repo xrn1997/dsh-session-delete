@@ -8,7 +8,7 @@ Status: accepted
 
 ADR-0029 把子会话的查看入口定在详情，并且当时逐条常显。落地后两股作用力对上了：这一段的用途是**删前核对**（永久删除按整组释放），核对是删除前那一刻的动作，不是读详情时的常态；而正文才是详情的主任务——逐条列表常驻在会话信息与正文之间，孩子多时即便展开体已经限高内滚，也固定吃掉一截纵向版面。同时「这条有几个孩子」本身是核对要的事实，收起列表不能把它一起藏掉。
 
-会话信息那张表不受影响：它全是核对读数，默认就该看得见（`docs/ui-spec.md` 状态⑥）。要收的只是**列表**。
+会话信息那张表不受影响：它全是核对读数，默认就该看得见（`docs/ui-spec.md` §2 ⑥）。要收的只是**列表**。
 
 ## 决定
 
@@ -34,4 +34,4 @@ ADR-0029 把子会话的查看入口定在详情，并且当时逐条常显。�
 - **只收列表、不挂标题排徽标**：滚进正文后就看不见「有几个孩子」，删前核对的事实断供，收起就变成藏。
 - **把徽标做成跳转到确认框**：确认框念的是整组释放量，徽标要的是展开列表逐条看，两件事；让一个控件兼职两个落点会把点错的代价抬到危险动作附近。
 
-锚点：`src/client/session-detail.tsx`（标题排徽标）；`src/client/subagent-section.tsx`（段头摘要条、展开体与三样派生读数）；`docs/ui-spec.md` §2 状态⑥（子会话段）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT` / `subagentsSizeBytes`）；`tests/client/trash-detail.test.tsx`；ADR-0029（已被本篇取代；入口、组语义与单级导航见本篇「沿用」节）；ADR-0001（组语义）。
+锚点：`src/client/session-detail.tsx`（标题排徽标）；`src/client/subagent-section.tsx`（段头摘要条、展开体与三样派生读数）；`docs/ui-spec.md` §2 ⑥（子会话段）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT` / `subagentsSizeBytes`）；`tests/client/trash-detail.test.tsx`；ADR-0029（已被本篇取代；入口、组语义与单级导航见本篇「沿用」节）；ADR-0001（组语义）。

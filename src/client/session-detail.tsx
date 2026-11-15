@@ -109,7 +109,7 @@ const SHELL: CSSProperties = {
   minWidth: 0,
 }
 
-/** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（docs/ui-spec.md 状态⑥）。
+/** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（`docs/ui-spec.md` §2 ⑥）。
  *  标题排按紧凑按钮（`ui.css` 的 `.sd-button-sm`）预留高度：宽档父详情没有返回键、孩子视图有，
  *  不预留时下方会话信息会在父子切换时跳 6px。
  *
@@ -148,7 +148,7 @@ const HOLD_NOTICE: CSSProperties = {
 
 /**
  * 会话信息表：一张两列表，行序按「认出这条会话 → 时间定位 → 精确核对 → 调试属性」排
- * （docs/ui-spec.md 状态⑥）。标签列自动宽、值列吃余宽；长串省略号收、全称走 `title`。
+ * （`docs/ui-spec.md` §2 ⑥）。标签列自动宽、值列吃余宽；长串省略号收、全称走 `title`。
  * 不做折叠、不做卡片：这类信息是给核对用的，默认就该看得见。
  */
 const META: CSSProperties = {
@@ -432,7 +432,7 @@ function toolStatus(status: 'ok' | 'error' | 'unfinished', t: Translate): string
 }
 
 /** 工作步骤展示的档位（学宿主「工作步骤展示」那四档；回收站的轮次全部已结束，
- *  所以落成「过程块显示多少」这一件事）。`docs/ui-spec.md` 状态⑥ 是判据的家。 */
+ *  所以落成「过程块显示多少」这一件事）。`docs/ui-spec.md` §2 ⑥ 是判据的家。 */
 type ViewMode = 'compact' | 'standard' | 'detailed' | 'verbose'
 
 const VIEW_MODES: readonly { readonly key: ViewMode; readonly label: CopyKey }[] = [

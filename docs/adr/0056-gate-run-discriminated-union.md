@@ -6,7 +6,7 @@ Status: accepted
 
 ## 背景
 
-闸的既有判据（ADR-0030 收编的那枚）是：同一实例同一时刻只跑一趟，连点的第二下被同步挡回、**不执行**。挡回的那一趟什么都没落地，它的界面后果归在飞的那一趟——框不收、失败不追加、详情账本不丢。
+闸的既有判据（住 `src/client/busy-gate.ts`）是：同一实例同一时刻只跑一趟，连点的第二下被同步挡回、**不执行**。挡回的那一趟什么都没落地，它的界面后果归在飞的那一趟——框不收、失败不追加、详情账本不丢。
 
 `T | undefined` 形状下这个语义只能靠「`undefined` 表示没跑」兼职表达，两处吃亏：
 
@@ -21,7 +21,7 @@ Status: accepted
 
 ## 边界
 
-- 闸只拥有 busy 生命周期与同实例防重：不排队、不防抖、不重读（那是 `runWrite` 的整趟），本篇只翻返回值的形状，不翻这些判据（归 ADR-0030）。
+- 闸只拥有 busy 生命周期与同实例防重：不排队、不防抖、不重读（那是 `runWrite` 的整趟），本篇只翻返回值的形状，不翻这些判据（判据住 `src/client/busy-gate.ts`）。
 - 这是浏览器半的本地类型：不进 `src/shared/wire.ts`，不是线上形状，Node 半无感。
 
 ## 后果
@@ -35,4 +35,4 @@ Status: accepted
 - **挡回时抛错**：连点是常态交互不是异常，抛错会把「点快了」渲染成错误面，还要在每个调用点 try/catch。
 - **挡回时排队执行**：连点的第二下会真发第二次请求，与「同一 tick 只发一次」的既有判据冲突，且把闸做成了队列（边界里明确不拥有）。
 
-锚点：`src/client/busy-gate.ts`（`GateRun` / `BusyGate.around`）；`src/client/write-seats.ts`（六个座位与模块私有的 `runWrite`）；`src/client/use-trash-query.ts`（`emptyTrash`）；`tests/client/busy-gate.test.tsx`；`tests/client/write-seats.test.ts`；ADR-0030（闸的判据与 `gates` 总门）。
+锚点：`src/client/busy-gate.ts`（`GateRun` / `BusyGate.around`）；`src/client/write-seats.ts`（六个座位与模块私有的 `runWrite`）；`src/client/use-trash-query.ts`（`emptyTrash`）；`tests/client/busy-gate.test.tsx`；`tests/client/write-seats.test.ts`。

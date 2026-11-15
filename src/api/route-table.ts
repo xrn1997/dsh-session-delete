@@ -46,7 +46,7 @@ const BODY_KIND = {
 } as const satisfies Record<RouteBody, BodyKind>
 
 /** 读的是 wire 那一格（`ROUTES.x.body`），本表不写第二份：无字段与查询串段不读；
- *  带 JSON 字段的段（config / entry / apply）读一次。`defineRoute` 据此填行的 `body`。 */
+ *  带 JSON 字段的段（config / entry / apply / sessionId）读一次。`defineRoute` 据此填行的 `body`。 */
 export function bodyOf(route: { readonly body: RouteBody }): BodyKind {
   return BODY_KIND[route.body]
 }
@@ -72,7 +72,7 @@ export interface RouteRead {
 }
 
 /** deps 切片（ADR-0032）：每一段只声明自己要的那一面。读与探测各段拿基础面，`attachment` 段另多一条
- *  宿主 `attachments` 读面，两个删盘段多删除能力，`/apply` 是唯一拿全量面的行，`/config` 只多
+ *  宿主 `attachments` 读面，三个写段多删除能力（`/empty`、`/attachment-clean`、`/projection-clean`），`/apply` 是唯一拿全量面的行，`/config` 只多
  *  configEditor + entry 两件（段的 run 里长出超面调用就是编译错；dispatch 也只按这一格注入，
  *  运行期收窄住 `src/api/dispatch.ts` 的 `slicesOf`）。 */
 export type RouteSlice = 'core' | 'removal' | 'full' | 'attachment' | 'config'

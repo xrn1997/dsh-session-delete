@@ -18,7 +18,7 @@ Status: accepted
 2. **引用元数据只做校验输入**：客户端把详情里的引用字段放进查询串；它们不参与路径推导，id 仍是唯一寻址。服务返回的归一化 ref 决定响应的媒体类型；服务校验不过就是一次读取失败（200 + `io` 信封），不折成 404。
 3. **直接 fs 是 fallback**：服务缺席、成员形状不符、或旧客户端没带够元数据时，仍走 `attachmentPathOf(home, kind, id)` + stat/read + 魔数 + `maxAttachmentBytes` 闸（默认 20 MiB）；这条路径保留给 `engines.dsh` 下界与旧客户端。
 4. **20 MiB 上限仍由插件守**：服务的图片策略与文件流本身没有本插件承诺的响应上限；`readImage` 的返回字节与 `readFileStream` 的累加都在插件侧再判一次（默认 20 MiB，可配，ADR-0037）。
-5. **deps 切成第四片**：`DeleteDeps` 多一个 `attachments`，`SliceDeps` 多 `attachment: CoreDeps & { attachments }`；只有 `attachment` 段拿它，动词的 `CoreDeps` 面不变。
+5. **deps 多 `attachment` 一片**：`DeleteDeps` 多一个 `attachments`，`SliceDeps` 多 `attachment: CoreDeps & { attachments }`；只有 `attachment` 段拿它，动词的 `CoreDeps` 面不变。
 6. **孤儿扫描/删除不走这个端口**：宿主没有对象列表/删除 API；`src/trash/attachments.ts` 的直接 fs 继续负责扫描与删除。宿主虽有 `imageHostPath` / `fileHostPath`，但孤儿对象只有 `id` / `bytes`，凑不出完整 ref；扫描路径仍只由 `attachmentPathOf(home, kind, id)` 推导。
 
 ## 边界

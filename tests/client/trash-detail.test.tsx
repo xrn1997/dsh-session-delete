@@ -1,4 +1,4 @@
-// 回收站的详情块：四态 + 可折叠的正文块 + 分页（docs/ui-spec.md）
+// 回收站的详情块：五态（含保持）+ 可折叠的正文块 + 分页（docs/ui-spec.md）
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { zhTranslate, type Translate } from '../../src/client/copy.js'
@@ -106,7 +106,7 @@ function withBlocks(blocks: TrashDetailBlockWire[], over: Over = {}) {
   return at({ kind: 'ready', subject: entry, detail: { ...detail, blocks } }, over)
 }
 
-/** 逐块折叠的判据住在「详细」档：默认「标准」把连续的过程块收成一组（docs/ui-spec.md 状态⑥）。 */
+/** 逐块折叠的判据住在「详细」档：默认「标准」把连续的过程块收成一组（`docs/ui-spec.md` §2 ⑥）。 */
 function detailedMode(): void {
   fireEvent.click(screen.getByRole('button', { name: '详细' }))
 }

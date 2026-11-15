@@ -62,7 +62,8 @@ purge 照旧清这一组；其余目标按组整体处理。
   `rollbackReason('摘账本失败', e)` 里的那个词）；
 - journal 独占：**相反顺序**退化、逐条失败收集、以及「某一步退不干净时不许让原错误独走」这条语义；
   `details.rollbackFailures` 的**合并与措辞**住在 `src/errors.ts` 的 `withRollbackFailures`，
-  journal 是它唯一的调用方（**2026-10-20 就地订正**：本行原文把"合并"也记在 journal 名下，与代码、
+  journal 与永久删除的执行器（`src/verbs/permanent-removal.ts` 的 `executeRemoval`，承 ADR-0040 的归档态回滚）都调它
+  （**2026-10-20 就地订正**：本行原文把"合并"也记在 journal 名下，与代码、
   `member-journal.ts` 头注③ 和 `docs/architecture.md` §4 都不同源——按本仓口径，翻案个别条目就地补括注）；
 - 三个动词变成三条**策略**：各自只声明「这个成员要按什么顺序做哪几步」，
   不再各自手写嵌套 `try/catch` 与 `failures` 数组。
@@ -86,7 +87,7 @@ purge 照旧清这一组；其余目标按组整体处理。
   删除的结果是 `{ entry, movedSessionIds }`；批量请求仍归 `batch.ts`，同批已带走集与组级顺序
   分别住 `batch-carried.ts` / `move-group.ts`。
 - 22 处 `rollbackReason(` 变成步骤标签（数据），8 处 `withRollbackFailures(` 收进 `member-journal.ts`
-  （`journalFailure` 与组级 `rollbackJournals` 各一处）。
+  （`createJournal` 的失败出口与组级 `rollbackJournals` 各一处）。
 - 测试落点前移：**步骤顺序**与**回滚顺序**可以拿一个假 journal 直接断言（现有测试已经在用
   `calls.push(...)` 记顺序，形态不用改），不必每次都跑完整动词。
 - 验收断言（`tests/client/remote.test.ts` 的「注入面 · 一个动作只有一条路」）：回收站面板的依赖面里不再同时出现 `applyOutcomes` 与 `restore`。

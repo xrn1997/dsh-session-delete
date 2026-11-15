@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Session delete",
-    "description": "Choose Delete from a session row's ⋯ menu to move it to Trash in the sidebar, where it can be restored at any time; permanent deletion is a separate, confirmed action. Running sessions cannot be deleted and Trash never expires; all data stays on this machine.",
+    "description": "Choose Delete from a session row's ⋯ menu and confirm to move it to Trash in the sidebar, where it can be restored at any time; permanent deletion is a separate, confirmed action. Running sessions cannot be deleted and Trash never expires; all data stays on this machine.",
     "detail": "docs/DETAIL.md"
   }
 }

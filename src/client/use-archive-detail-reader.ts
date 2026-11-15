@@ -83,7 +83,7 @@ export function useArchiveDetailReader(input: {
 
   // 归档集变了 ⇒ 账本里每条的 `subagents[].archived` 与主体的 `archived`（wire）都可能过期：
   // 整本作废并重读当前主体；其余条目等重新选中时自然重读。`useArchiveRevision` 只在本档自己的
-  // A1 / 自救动作 / 恢复删除后递增（ADR-0060 决定第 4 条），不做轮询。
+  // 旁路观察 / 自救动作 / 恢复删除后递增（ADR-0060 决定第 4 条），不做轮询。
   // 节奏（档位门 / dirty / 单飞 / 合并窗）归共用生命周期。**作废落在 refresh 里、不落 revision 当场**：
   // `clearAll` 会把账本与在飞登记一起清掉，而通用读者在「主体在场、账本为空、没在读」时会由兜底
   // effect 立刻补读——当场作废等于给每一发修订开一条绕过窗口与单飞的读。放进 refresh：窗口到点先

@@ -17,7 +17,7 @@ ADR-0027 决定 2 曾让 `/list` 与 purge 共用 `planMemberRemovals`；那一�
 
 ## 后果
 
-- `/list` 不再为每个盘上后代多开一次 `workspaceOf`，也不再把账本归属读失败拉进清单的失败面。
+- `/list` 不再为每个盘上后代多开一次 `workspaceOf`；它另有一条逐组根的只读判别 `isWorkspaceMissing`（供 `workspaceMissing` 那一格），失败面只覆盖这一格。
 - 行上说的释放量仍是清空真删的合计；两边量的是同一套盘上字节，只剩两次读之间的盘上变化。
 
 ## 被否掉的替代
