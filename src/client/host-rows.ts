@@ -123,6 +123,16 @@ export function pickableRowOf(sessionId: string): HostRowInfo | undefined {
 }
 
 /**
+ * 比 {@link pickableRowOf} 宽一档：只看「登记过没有」，不看跑不跑。
+ * 模式内的整行点击守卫用它判「吞不吞这一下」——在跑的行不勾选（与置灰勾选框同口径），
+ * 但那一行仍是本插件接管的可见会话行，点整行必须照旧被吃掉（否则会打开正在跑的会话）。
+ * 没登记的行才完全放行（别的列表 / 本插件没接管的行）。
+ */
+export function registeredHostRowOf(sessionId: string): HostRowInfo | undefined {
+  return rowInfo.get(sessionId)?.info
+}
+
+/**
  * 「当前可见」的可选行：**已登记**的会话行（槽位开关还挂在渲染树上）——折叠组、归档过滤外的行
  * 没有挂载，因此没有登记；在跑的行跳过（与置灰勾选框同口径）。标题/运行态来自登记值；
  * 顺序是登记顺序（宿主按列表顺序挂载行）。

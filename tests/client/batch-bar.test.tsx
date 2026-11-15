@@ -1,5 +1,5 @@
 // 批量删除浮条（2026-10-17）：多选模式、计数、已选清单、行点击选择与确认框。
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton } from '../../src/client/batch-select.js'
 import { BatchBar } from '../../src/client/batch-bar.js'
@@ -126,6 +126,30 @@ describe('浮条', () => {
     expect(screen.queryByText(/子会话/)).not.toBeInTheDocument()
   })
 
+  it('新增勾选后到新读数回来之前：不拿旧 counts 给新名单求和（整句先不说）', async () => {
+    const deferred: Array<(value: RemoteOutcome<ApplyOutcome[]>) => void> = []
+    const applyOutcomes = vi.fn(
+      () => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => deferred.push(resolve)),
+    )
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
+    // 第一轮读数：名单 [a]，a 带 2 个子会话。
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(1))
+    pick(deferred, 0)(remoteOk(countOutcomes(['a'], { a: 2 })))
+    fireEvent.click(await screen.findByRole('button', { name: '查看已选' }))
+    expect(await screen.findByText('含 2 个子会话，跟着整组走')).toBeInTheDocument()
+
+    // 新增 b：旧读数只覆盖 [a]，不许拿来给 [a, b] 求和（那会把 b 按 0 算，报一个偏小的 2）。
+    act(() => { togglePick({ sessionId: 'b', title: 'B' }) })
+    expect(screen.queryByText(/含 \d+ 个子会话，跟着整组走/)).not.toBeInTheDocument()
+
+    // 新读数（a: 2、b: 1）落地才报 3。
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledTimes(2))
+    pick(deferred, 1)(remoteOk(countOutcomes(['a', 'b'], { a: 2, b: 1 })))
+    expect(await screen.findByText('含 3 个子会话，跟着整组走')).toBeInTheDocument()
+  })
+
   it('旧响应不落地：后发的勾选才是准的', async () => {
     const deferred: Array<(value: RemoteOutcome<ApplyOutcome[]>) => void> = []
     const applyOutcomes = vi.fn(
@@ -184,6 +208,18 @@ describe('浮条', () => {
     expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '全选' })).toBeInTheDocument()
     expect(screen.queryByText(/已选 /)).not.toBeInTheDocument()
+  })
+
+  it('未登记的行不吞点击：其它列表 / 本插件没接管的行照常走宿主自己的行为', () => {
+    enterSelection()
+    const { applyOutcomes } = countOnly()
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
+    // 行在 DOM 里、键也长得对，但没有槽位组件登记过它 ⇒ 不属于本插件的可见可选集合。
+    const { title, opened } = fakeRow('not-registered')
+
+    fireEvent.click(title)
+    expect(opened()).toBe(1)
+    expect(getPicks()).toEqual([])
   })
 
   it('模式内点整行切换选中，并挡住行自己的 onClick（会话切换）', () => {

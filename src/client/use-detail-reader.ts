@@ -42,6 +42,10 @@ export interface DetailReaderInput<S, D extends DetailBody> {
   readonly topLevel: boolean
   /** 上一条已就绪的详情是否仍在清单里：被清单换版收走就不再顶住画面。 */
   readonly present: (id: string) => boolean
+  /** 主体换成「还没读过」的那一条时要不要**自动补读**（兜底那一支）。缺省 true。
+   *  窄档方向键只移选中、详情栏并不在眼前：那里给 false，别为每一次按键打一条 `/detail`；
+   *  显式 `ensure`（点行 / 下钻 / 重试 / 预取）一律照常读。 */
+  readonly autoRead?: boolean
 }
 
 export interface DetailReader<S, D extends DetailBody> {
@@ -121,7 +125,7 @@ function useInFlight(): readonly [string | null, InFlight] {
 }
 
 export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInput<S, D>): DetailReader<S, D> {
-  const { fetch, ledger, subject, idOf, topLevel, present } = input
+  const { fetch, ledger, subject, idOf, topLevel, present, autoRead = true } = input
   /** 输入引用归一，形状同 `store.ts` 的 `useLatest`，但写回**必须留在渲染期**：读路与补页在子组件
    *  的 effect 里问「现在画的是哪一条」，而同一次提交里父侧 effect 排在子侧之后——提交后才写回就让它们读到旧主体。 */
   const subjectRef = useRef<S | null>(subject)
@@ -306,13 +310,15 @@ export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInpu
   /**
    * 兜底那一支的收口：这一条**没有在读、账本里也没有**（账本淘汰 / 被 forget 时才会到这）。
    * 不补这一拍，骨架会一直挂着（详情块的 loading 面没有重试键）。`ensure` 自带在飞去重。
+   * `autoRead=false`（窄档只移选中）时这条兜底不补——显式 `ensure` 才是唯一的读入口。
    */
   const orphaned = subject !== null && detail.kind === 'loading' && detailShown !== idOf(subject)
   useEffect(() => {
+    if (!autoRead) return
     // 判空在前：`orphaned` 的定义已含「subject 非空」，放后面会被别名收窄判成永假分支。
     if (subject === null || !orphaned) return
     void ensure(idOf(subject))
-  }, [orphaned, subject, idOf, ensure])
+  }, [autoRead, orphaned, subject, idOf, ensure])
 
   // 记下最后一条已就绪的详情（保持用）；idle 清掉；失败不清（上一条仍该顶住下一次切换）。
   useEffect(() => {

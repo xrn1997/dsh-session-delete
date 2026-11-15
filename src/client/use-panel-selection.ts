@@ -23,8 +23,10 @@ export interface PanelSelection<R> {
   readonly selected: R | null
   /** 动作失败原文按行存（键 = 行身份）：切走再回来还在，别行的成败不串台。 */
   readonly actionFailure: Readonly<Record<string, string>>
-  /** 把选中落到这一行，并把读路交回 `onPick`（自动选中与显式点行走同一条）。 */
-  pick: (row: R) => Promise<void>
+  /** 把选中落到这一行，并把读路交回 `onPick`（自动选中与显式点行走同一条）。
+   *  `options.read` 决定这一下要不要真去读详情：缺省 true（宽档 / 点行 / 自动选中）；
+   *  窄档方向键只移选中，交 `{ read: false }`。 */
+  pick: (row: R, options?: { read?: boolean }) => Promise<void>
   /** 收起选中（窄档返回：详情槽交还给清单）。 */
   drop: () => void
   /** 一次动作进入时清掉这些行的旧失败。 */
@@ -44,8 +46,8 @@ export interface PanelSelectionInput<R> {
   canAutoSelect: boolean
   /** 挂载续位的选中 id（首帧快照）；没有就留空。 */
   initialId?: string | null
-  /** 选中落定后要跑的读路。 */
-  onPick: (row: R) => void | Promise<void>
+  /** 选中落定后要跑的读路。`options.read = false` = 只移选中、不读详情（窄档方向键）。 */
+  onPick: (row: R, options: { read: boolean }) => void | Promise<void>
   /** 那一行被清单收走时调用方自己的清场（丢账本、作废在飞读数、收附属导航态）。 */
   onGone?: (id: string) => void
 }
@@ -76,9 +78,9 @@ export function usePanelSelection<R>({
     [rows, selectedId, keyOf],
   )
 
-  const pick = useCallback(async (row: R): Promise<void> => {
+  const pick = useCallback(async (row: R, options: { read?: boolean } = {}): Promise<void> => {
     setSelectedId(keyOf(row))
-    await onPickRef.current(row)
+    await onPickRef.current(row, { read: options.read ?? true })
   }, [keyOf])
 
   const drop = useCallback((): void => {

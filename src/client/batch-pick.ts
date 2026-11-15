@@ -10,7 +10,7 @@
  */
 import { useEffect } from 'react'
 import { addPicks, togglePick, useSelection, type PickItem } from './batch-selection-store.js'
-import { pickableRowOf, readVisibleSelectableRows } from './host-rows.js'
+import { pickableRowOf, readVisibleSelectableRows, registeredHostRowOf } from './host-rows.js'
 
 /** 全选：把当前可见可选行按登记序追加；已在名单里的由 `addPicks` 自己跳过，原有选中保持在前。 */
 export function selectAllVisible(): void {
@@ -43,7 +43,8 @@ const INTERACTIVE_IN_ROW =
  * 边界：行里的按钮 / 链接 / 输入 / 菜单项一律放行（否则 ⋯ 菜单、归档、置顶、单删都点不动）；
  * 双击的第二下与 dblclick 不翻转（第一下已经选中，第二下不能又反掉，也不能打开宿主的重命名）。
  * 认行靠 `data-row-key="session:…"`——**这是本文件唯一一处 DOM 读**（ADR-0034）：宿主将来改掉这个
- * 属性，最差是模式内点行不生效，勾选框本身仍在。模式外不挂监听：这时点行必须还是宿主的"打开会话"。
+ * 属性，最差是模式内点行不生效，勾选框本身仍在。**先查登记再吞事件**：没登记的行（别的列表 / 本插件
+ * 没接管的会话行）一个默认行为都不改。模式外不挂监听：这时点行必须还是宿主的"打开会话"。
  */
 export function useSelectionRowClickGuard(): void {
   const selecting = useSelection().selecting
@@ -53,15 +54,20 @@ export function useSelectionRowClickGuard(): void {
       if (!(event.target instanceof Element)) return
       const row = event.target.closest('[data-row-key^="session:"]')
       if (row === null) return
+      const key = row.getAttribute('data-row-key') ?? ''
+      if (!key.startsWith('session:')) return
+      const sessionId = key.slice('session:'.length)
+      if (sessionId === '') return
+      // **先确认这一行是本插件登记过的可见会话行，再决定吞不吞事件**：没登记 = 不在本插件的
+      // 可见集合里（别的列表 / 本插件没接管的行）。那些地方必须保持宿主原本的行为——吞掉
+      // click 的捕获阶段会让它们连自己的 onClick 都收不到（静默失效，比不选中更糟）。
+      // 登记过但**在跑**的行仍要吃掉这一下（不许点整行打开它），只是不勾选。
+      if (registeredHostRowOf(sessionId) === undefined) return
       if (event.target.closest(INTERACTIVE_IN_ROW) !== null) return
       // 先吃掉：宿主行的 onClick / 标题的 dblclick 都在后面
       event.preventDefault()
       event.stopPropagation()
       if (event.type === 'dblclick' || (event.type === 'click' && event.detail > 1)) return
-      const key = row.getAttribute('data-row-key') ?? ''
-      if (!key.startsWith('session:')) return
-      const sessionId = key.slice('session:'.length)
-      if (sessionId === '') return
       const info = pickableRowOf(sessionId)
       if (info === undefined) return
       togglePick({ sessionId, title: info.title })

@@ -234,6 +234,54 @@ describe('批量确认框', () => {
     expect(screen.queryByText('含 5 个子会话，将一起移入回收站。')).not.toBeInTheDocument()
   })
 
+  it('旧批次的成功不清掉后来发布的批次（clear 带 expected 比较）', async () => {
+    // A 在飞时用户又发布了 B（框按 seq 重挂载成 B）。A 晚到的成功只许收 A 自己。
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      if (action === 'count') return remoteOk(countOutcomes(ids))
+      return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve })
+    })
+    requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+
+    act(() => { requestDeleteBatch([{ sessionId: 'b', title: 'B' }]) })
+    expect(await screen.findByText('B')).toBeInTheDocument()
+
+    await act(async () => { release(remoteOk(deleteOutcomes(['a']))) })
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByText('B')).toBeInTheDocument()
+  })
+
+  it('旧批次的部分失败不收缩后来发布的批次（shrink 带 expected 比较）', async () => {
+    // A = [a1, a2] 在飞；期间发布 B = [a1, b]。A 晚到的部分失败只收 a1——旧实现会把 B 的名单
+    // 收缩成 [a1]（条数、目标列表全被旧实例改写）。
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      if (action === 'count') return remoteOk(countOutcomes(ids))
+      return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve })
+    })
+    requestDeleteBatch([
+      { sessionId: 'a1', title: 'A1' },
+      { sessionId: 'a2', title: 'A2' },
+    ])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 2 条' }))
+
+    act(() => {
+      requestDeleteBatch([
+        { sessionId: 'a1', title: 'A1' },
+        { sessionId: 'b', title: 'B' },
+      ])
+    })
+    expect(await screen.findByText('删除这些 2 个会话？')).toBeInTheDocument()
+
+    await act(async () => { release(remoteOk(deleteOutcomes(['a1', 'a2'], ['a1']))) })
+    // B 的框不受旧失败影响：还是 2 条、还是「删除这些 2 个会话？」。
+    expect(screen.getByText('删除这些 2 个会话？')).toBeInTheDocument()
+    expect(screen.getByText('B')).toBeInTheDocument()
+  })
+
   it('整批失败：失败原文落行、不发撤销横幅，但回收站照样收到失效通告', async () => {
     const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
       remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ids)),

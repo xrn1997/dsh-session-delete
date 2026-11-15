@@ -24,6 +24,7 @@ import { DeleteMenuItem } from './delete-menu-item.js'
 import { PLUGIN_ID, PLUGIN_KEY_PREFIX } from './plugin.js'
 import type { Translate } from './copy.js'
 import { runningOf, useSessionLive, type SessionsStateLike, type UseSessions } from './session-live.js'
+import { withErrorBoundary } from './ui/ErrorBoundary.js'
 import { IconCheckOutlineRegular, IconTrashOutlineRegular } from './ui/icons.js'
 
 /** legacy 菜单槽：只在 contextMenus 不可用时注册（0.2.2+ 的内置动作已迁到数据动作）。 */
@@ -93,32 +94,39 @@ export function createSessionMenuContribution(
   t: Translate,
   sessionList?: ObservableSnapshotLike<SessionsStateLike>,
 ): MenuContributionLike {
+  /** 解析器跑在宿主菜单渲染路径上：抛出去会把整张会话菜单打空。吞成"这两行这次不出现"，
+   *  原文留给 console——菜单少了入口是可见的，宿主白屏不是。 */
   const resolve = (target: MenuTarget): readonly MenuActionLike[] => {
-    const live = liveOf(sessionList, target.sessionId)
-    return [
-      {
-        id: 'batch-select',
-        label: isSelecting() ? t('list.select.exit') : t('list.select.enter'),
-        icon: { key: ICON_BATCH },
-        separatorBefore: true,
-        afterContent: true,
-        run: () => {
-          if (isSelecting()) exitSelection()
-          else enterSelection()
+    try {
+      const live = liveOf(sessionList, target.sessionId)
+      return [
+        {
+          id: 'batch-select',
+          label: isSelecting() ? t('list.select.exit') : t('list.select.enter'),
+          icon: { key: ICON_BATCH },
+          separatorBefore: true,
+          afterContent: true,
+          run: () => {
+            if (isSelecting()) exitSelection()
+            else enterSelection()
+          },
         },
-      },
-      {
-        id: 'delete',
-        label: deleteLabel(t, live),
-        disabled: live,
-        icon: { key: ICON_DELETE },
-        danger: true,
-        afterContent: true,
-        run: () => {
-          requestDelete({ sessionId: target.sessionId, title: target.displayTitle })
+        {
+          id: 'delete',
+          label: deleteLabel(t, live),
+          disabled: live,
+          icon: { key: ICON_DELETE },
+          danger: true,
+          afterContent: true,
+          run: () => {
+            requestDelete({ sessionId: target.sessionId, title: target.displayTitle })
+          },
         },
-      },
-    ]
+      ]
+    } catch (error) {
+      console.error('[dsh-session-delete] 会话菜单动作解析失败，本次不提供这两行：', error)
+      return []
+    }
   }
 
   return {
@@ -224,9 +232,11 @@ export function installSessionMenus(client: ClientContextLike, t: Translate): vo
     }
     try {
       target.slots.inject('contextMenu.icon', () =>
-        target.slots.register({ name: 'contextMenu.icon', key: ICON_BATCH }, IconCheckOutlineRegular))
+        target.slots.register({ name: 'contextMenu.icon', key: ICON_BATCH },
+          withErrorBoundary(IconCheckOutlineRegular as ComponentType<never>, t('common.renderFailed'))))
       target.slots.inject('contextMenu.icon', () =>
-        target.slots.register({ name: 'contextMenu.icon', key: ICON_DELETE }, IconTrashOutlineRegular))
+        target.slots.register({ name: 'contextMenu.icon', key: ICON_DELETE },
+          withErrorBoundary(IconTrashOutlineRegular as ComponentType<never>, t('common.renderFailed'))))
     } catch (error) {
       console.warn('[dsh-session-delete] context menu 图标注册失败：', error)
     }
@@ -237,10 +247,12 @@ export function installSessionMenus(client: ClientContextLike, t: Translate): vo
   const registerLegacy = (target: ClientContextLike): Array<() => void> => {
     const disposers: Array<() => void> = []
     for (const row of LEGACY_ROWS) {
+      // 与贡献表的注册处同一条：legacy 行也是一条独立贡献，崩了只收起这一行。
+      const guard = withErrorBoundary(row.component as ComponentType<never>, t('common.renderFailed'))
       const dispose = target.slots.inject(SESSION_MENU_SLOT, () =>
         target.slots.register(
           { name: SESSION_MENU_SLOT, id: `${PLUGIN_ID}.${row.suffix}`, order: row.order, inject: () => ({ t }) },
-          row.component,
+          guard,
         ))
       if (typeof dispose === 'function') disposers.push(dispose as () => void)
     }

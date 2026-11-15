@@ -645,12 +645,12 @@ export function SessionDetail<S, D extends SessionDetailWire>({
   }, [shownId, scrollRef])
 
   // 提示只在保持超过静默窗口后出现：本地读数通常在这之前落地，用户看不到 loading 字样。
+  // `holdId` 从 A 换成 B（保持对象换了）时先把上一条的提示收掉：那一句「正在读…」说的是 A，
+  // 跟着搬给 B 会让新主体一开口就挂着旧提示——必须从 B 自己的静默窗口重新计时。
   const holdId = holding ? subjectId : null
   useEffect(() => {
-    if (holdId === null) {
-      setHoldNotice(false)
-      return
-    }
+    setHoldNotice(false)
+    if (holdId === null) return
     const timer = setTimeout(() => { setHoldNotice(true) }, HOLD_NOTICE_DELAY_MS)
     return () => { clearTimeout(timer) }
   }, [holdId])

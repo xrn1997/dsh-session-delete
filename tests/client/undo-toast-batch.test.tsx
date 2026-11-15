@@ -12,6 +12,8 @@ import {
   dismissUndoNotice,
   publishUndoBatchNotice,
   publishUndoNotice,
+  UNDO_HOLD_MS,
+  useUndoFailure,
   useUndoNotice,
 } from '../../src/client/undo-notices.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
@@ -153,6 +155,63 @@ describe('按条目熄灭撤销横幅', () => {
     await act(async () => { resolveApply(remoteOk(restoreOutcomes(['e1']))) })
 
     expect(view.result.current).toMatchObject({ kind: 'one', entryId: 'e2' })
+  })
+})
+
+describe('撤销失败不静默（横幅先走一步）', () => {
+  // 撤销在飞时横幅可能先没了：面板里恢复 / 彻底删除某条会熄灭指向它的横幅，新删除会覆盖它。
+  // 那一刻失败再 `failNotice` 已经没有落点——旧实现直接 return，失败被吞。现在留一条待显示。
+  it('横幅在飞期间被熄灭：失败另起一条待显示，到时自动清掉', async () => {
+    vi.useFakeTimers()
+    try {
+      let failApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+      const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => {
+        failApply = resolve
+      }))
+      publishUndoNotice({ entryId: 'e1', title: 'T' })
+      const failureView = renderHook(() => useUndoFailure())
+      render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+      fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+
+      // 面板把这条恢复了 ⇒ 横幅熄灭（整条清掉），撤销那一趟还在飞。
+      act(() => { dismissUndoNotice(['e1']) })
+      expect(failureView.result.current).toBeNull()
+
+      await act(async () => {
+        failApply(remoteFail({ code: 'sessiondelete/trash-empty', message: '回收站里没有这一条' }))
+      })
+      // 横幅没了，失败原文仍要上屏（另起一条待显示），且只等停留时长就清掉。
+      expect(screen.getByText('回收站里没有这一条')).toBeInTheDocument()
+      expect(failureView.result.current?.failure).toBe('回收站里没有这一条')
+
+      act(() => { vi.advanceTimersByTime(UNDO_HOLD_MS + 1100) })
+      expect(failureView.result.current).toBeNull()
+      expect(screen.queryByText('回收站里没有这一条')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('当前有横幅时不抢戏：待显示失败让位给横幅；横幅收掉后再顶上', async () => {
+    let failApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => {
+      failApply = resolve
+    }))
+    publishUndoNotice({ entryId: 'e1', title: 'T' })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+
+    // 在飞期间来了新删除：新横幅覆盖现场；旧撤销随后失败 ⇒ 落待显示队，不盖新横幅。
+    act(() => { publishUndoNotice({ entryId: 'e2', title: 'U' }) })
+    await act(async () => {
+      failApply(remoteFail({ code: 'sessiondelete/io', message: '旧撤销失败的原因' }))
+    })
+    expect(screen.queryByText('旧撤销失败的原因')).not.toBeInTheDocument()
+    expect(screen.getByText(/U 已移入回收站/)).toBeInTheDocument()
+
+    // 新横幅收掉后，旧失败顶上（它是用户仍该知道的结论）。
+    act(() => { dismissUndoNotice(['e2']) })
+    expect(await screen.findByText('旧撤销失败的原因')).toBeInTheDocument()
   })
 })
 

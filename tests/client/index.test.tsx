@@ -450,6 +450,13 @@ describe('apply 的装配面', () => {
     expect(settingsRow?.id).toBeUndefined()
   })
 
+  it('每条槽位贡献都包在错误边界里（单条目渲染崩溃只收起那一格，不空白宿主）', async () => {
+    const { registered } = await bootstrap()
+    for (const row of registered) {
+      expect(row.component.displayName, `${row.name} 未包错误边界`).toMatch(/^withErrorBoundary\(/)
+    }
+  })
+
   it('0.2.2+：两行菜单改注册为 contextMenus 数据动作，legacy 菜单槽不再占用', async () => {
     interface Contribution {
       id: string
@@ -483,6 +490,10 @@ describe('apply 的装配面', () => {
     expect(injected).not.toContain(MENU_SLOT)
     expect(injected.filter((key) => key === 'contextMenu.icon')).toHaveLength(2)
     expect(registered.filter((row) => row.name === MENU_SLOT)).toHaveLength(0)
+    // 两个 icon 贡献也各自包一层边界（context-menu-actions 的注册处同样是"单条目"）。
+    const iconRows = registered.filter((row) => row.name === 'contextMenu.icon')
+    expect(iconRows).toHaveLength(2)
+    for (const iconRow of iconRows) expect(iconRow.component.displayName).toMatch(/^withErrorBoundary\(/)
 
     expect(contributions).toHaveLength(1)
     const contribution = contributions[0]
@@ -782,9 +793,9 @@ describe('deps 装配：信封的失败支落到界面上的后果', () => {
   })
 
   it('单条支展成裸值时撤销拿到真的条目 id（不是信封本体）', async () => {
-    const apply = vi.fn(async (action: 'delete' | 'restore', ids: string[]) => ({
+    const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({
       ok: true as const,
-      value: ids.map((id) => ({ id, action, ok: true as const, value: ROW })),
+      value: okOutcomes(action, ids),
     }))
     const { registered } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)
@@ -876,9 +887,9 @@ describe('菜单收起 = 行子树卸载（真 Menu 的那条门）', () => {
   })
 
   it('按下这一行后菜单关掉、行没了——确认框仍在、且「移入回收站」点得到', async () => {
-    const apply = vi.fn(async (action: 'delete', ids: string[]) => ({
+    const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({
       ok: true as const,
-      value: ids.map((id) => ({ id, action, ok: true as const, value: ROW })),
+      value: okOutcomes(action, ids),
     }))
     const { registered } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)

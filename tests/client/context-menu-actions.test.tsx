@@ -1,5 +1,5 @@
 import { act, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isSelecting } from '../../src/client/batch-selection-store.js'
 import {
   createSessionMenuContribution,
@@ -108,5 +108,18 @@ describe('0.2.2 contextMenus 数据动作', () => {
     expect(b.contribution.observe?.(TARGET)).toBeUndefined()
     const actions = await b.contribution.resolve(TARGET)
     expect(actions[1]).toMatchObject({ label: '删除', disabled: false })
+  })
+
+  it('resolve 里抛错：吞成「这两行这次不出现」，原文进 console，不把整张菜单打空', async () => {
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const b = bench()
+    // 让读取阶段抛：目标是线上投影的活对象，字段 getter 抛错是真实存在的失败形态。
+    const hostile = {
+      get sessionId(): string { throw new Error('投影坏了') },
+      displayTitle: 'x',
+    }
+    await expect(Promise.resolve(b.contribution.resolve(hostile))).resolves.toEqual([])
+    expect(warn.mock.calls.some((call) => String(call[0]).includes('会话菜单动作解析失败'))).toBe(true)
+    warn.mockRestore()
   })
 })

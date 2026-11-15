@@ -39,6 +39,7 @@ import { createHttpRemote, probeChannel, type SessionDeleteRemote } from './remo
 import { SettingsCards } from './settings-cards.js'
 import { TrashPanelIcon } from './trash-entry.js'
 import { TrashPanel } from './trash-panel.js'
+import { withErrorBoundary } from './ui/ErrorBoundary.js'
 import { installPointerModality } from './ui/styles.js'
 import { UndoToast } from './undo-toast.js'
 
@@ -183,9 +184,12 @@ function registerContributions(
     const inject = row.payload === 'none'
       ? undefined
       : row.payload === 'deps+t' ? () => ({ deps, t }) : () => ({ t })
+    // 每条贡献各自一颗错误边界：一条渲染崩了只收起它自己那一块（宿主那一格不许被连坐成空白）。
+    // Props 形状由宿主按座位派发、彼此不同，边界这一层只关心"包住它"，所以擦成 `never` 面再包。
+    const guard = withErrorBoundary(row.component as ComponentType<never>, t('common.renderFailed'))
     client.slots.inject(row.slot, () => client.slots.register(
       inject === undefined ? row.spec : { ...row.spec, inject },
-      row.component,
+      guard,
     ))
   }
 }

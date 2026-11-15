@@ -199,7 +199,6 @@
   border-bottom: 0.5px solid var(--sd-border-l3);
   border-top: none;
   font: var(--dsw-font-markdown-table-head);
-  max-width: 320px;
   max-width: min(30vw, 320px);
   min-width: 100px;
 }
@@ -208,7 +207,6 @@
   padding: 10px 16px;
   border-bottom: 0.5px solid var(--dsw-alias-border-l2);
   font: var(--dsw-font-markdown-table);
-  max-width: 320px;
   max-width: min(30vw, 320px);
   min-width: 100px;
 }

@@ -5,7 +5,8 @@
  * 它不查自己的行、不认行选择器：焦点动作由调用方注入 focusRow，行的 DOM 查询留在清单那一侧
  * （`session-list.tsx` 的 `useRowFocus`）；
  * 唯一的文档查询是 Esc 让路判据（问 ui/top-layer.ts 当前有没有打开的 dialog/menu）。
- * 只读事件的 target 判断这一下该不该归清单：行内按钮/勾选框的 Enter/Space 是人家的激活键。
+ * 只读事件的 target 判断这一下该不该归清单：**按 key 判**——方向键只在可编辑控件里让路
+ * （按钮上的 ↓ 仍走清单），Enter / Space 只在按钮 / 链接 / 输入 / 菜单项上归控件。
  *
  * 判据（界面现状见 docs/ui-spec.md「键盘」）：
  * - 方向键走环：未选中时 ↓ 落第一条、↑ 落最后一条；到端回卷。
@@ -54,12 +55,39 @@ export interface TrashNav {
   onListKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void
 }
 
-/** 事件是不是清单自己的：从行（`role="row"`）或容器起来才算；行内按钮 / 勾选框的 Enter / Space
- *  归它们自己。测试里的窄事件没有 `target`，按清单自己的处理。 */
-function isListOwnedEvent(event: ReactKeyboardEvent<HTMLElement>): boolean {
+/**
+ * 键盘归属按**键**判，不按"target 在不在行里"一刀切：
+ * - 方向键（↑↓）走的是光标：可编辑控件（文本类 input / textarea / select / contenteditable）里
+ *   那是它们自己的光标移动，不归清单；其余位置（行、行的子元素、行内按钮与勾选框）都归清单——
+ *   按钮不吃方向键，聚焦在「恢复」上按 ↓ 仍该移到下一行。
+ * - Enter / Space 是**激活键**：按钮 / 链接 / 输入 / 菜单项（及等价 role）归控件自己；清单只收
+ *   从行或行内非控件元素起来的那一下。
+ */
+// 注意：逗号**之前**全体是一个 `input` 复合选择器（多条 `:not(...)` 必须连续拼在 `input` 后面）；
+// 逗号之后才是并列的 textarea / select / contenteditable。重排或插行会让选择器静默变形。
+const EDITABLE_SELECTOR =
+  'input:not([type="button"]):not([type="submit"]):not([type="reset"]):not([type="checkbox"])'
+  + ':not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]), '
+  + 'textarea, select, [contenteditable]:not([contenteditable="false"])'
+
+const ACTIVATABLE_SELECTOR = [
+  'button, a, input, select, textarea',
+  '[role="menuitem"], [role="menu"], [role="button"], [role="link"]',
+  '[role="checkbox"], [role="menuitemcheckbox"], [role="menuitemradio"]',
+  '[role="option"], [role="switch"], [role="tab"]',
+].join(', ')
+
+/** `target` 是否落在某个选择器命中的元素里（含自身）。 */
+function within(target: HTMLElement, selector: string): boolean {
+  return typeof target.closest === 'function' && target.closest(selector) !== null
+}
+
+/** 事件是不是清单自己的。`activation=true` 问的是 Enter/Space（只在控件上让路），
+ *  否则问方向键（只在可编辑控件里让路）。测试里的窄事件没有 `target`，按清单自己的处理。 */
+function isListOwnedEvent(event: ReactKeyboardEvent<HTMLElement>, activation: boolean): boolean {
   const target = event.target as HTMLElement | null | undefined
   if (target == null || target === event.currentTarget) return true
-  return typeof target.getAttribute === 'function' && target.getAttribute('role') === 'row'
+  return !within(target, activation ? ACTIVATABLE_SELECTOR : EDITABLE_SELECTOR)
 }
 
 /** 这条 Esc 该不该归清单处理（回答的是"清单收不收这一下"，不是"target 在不在作用域里"）。
@@ -85,9 +113,11 @@ export function useTrashNav<R>(input: TrashNavInput<R>): TrashNav {
   const tabStopId = activeDescendantId ?? (first === undefined ? null : idOf(first))
 
   const onListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLElement>): void => {
-    if (ordered.length === 0 || !isListOwnedEvent(event)) return
+    if (ordered.length === 0) return
     const index = ordered.findIndex((row) => idOf(row) === selectedId)
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      // 方向键在可编辑控件里归它自己（光标移动）；行内按钮 / 勾选框上仍归清单。
+      if (!isListOwnedEvent(event, false)) return
       event.preventDefault()
       const step = event.key === 'ArrowDown' ? 1 : -1
       const next = index < 0 ? (step > 0 ? 0 : ordered.length - 1) : (index + step + ordered.length) % ordered.length
@@ -100,6 +130,8 @@ export function useTrashNav<R>(input: TrashNavInput<R>): TrashNav {
       return
     }
     if (event.key === 'Enter' || event.key === ' ') {
+      // Enter / Space 是激活键：按钮 / 链接 / 输入 / 菜单项的那一下归它们自己。
+      if (!isListOwnedEvent(event, true)) return
       // 选中行被折叠时 `index` 是 -1；拿 tab 落点的那一条就是焦点所在，Enter / Space 该落在它上面。
       const target = ordered[index >= 0 ? index : 0]
       if (target === undefined) return

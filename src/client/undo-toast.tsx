@@ -10,7 +10,14 @@
 import { zhTranslate, type Translate } from './copy.js'
 import { useBusyGate } from './busy-gate.js'
 import type { OneShotDeps } from './remote.js'
-import { clearUndoNotice, UNDO_HOLD_MS, useUndoNotice, type UndoNotice } from './undo-notices.js'
+import {
+  clearUndoFailure,
+  clearUndoNotice,
+  UNDO_HOLD_MS,
+  useUndoFailure,
+  useUndoNotice,
+  type UndoNotice,
+} from './undo-notices.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
 import { restoreFromUndo } from './write-seats.js'
@@ -18,10 +25,26 @@ import { restoreFromUndo } from './write-seats.js'
 /**
  * 常驻的撤销提示宿主。挂 `shell.overlay`（框架级浮层；槽位说明原文 "a toast stack or a status
  * pill all belong here"）：没有待撤销的事时什么都不渲染。
+ *
+ * 两种来源共用这一个宿主：**当前横幅**优先；横幅不在时顶上一条待显示的撤销失败（在飞期间
+ * 横幅被新删除覆盖或被面板恢复熄灭，失败原文不能跟着消失）。
  */
 export function UndoToast({ deps, t = zhTranslate }: { deps: OneShotDeps; t?: Translate }) {
   const current = useUndoNotice()
-  if (current === null) return null
+  const pendingFailure = useUndoFailure()
+  if (current === null) {
+    if (pendingFailure === null) return null
+    // 失败原文只剩这一句（没有撤销动作可给）：到时自己清掉，不留一条没有落点的旧失败。
+    return (
+      <Toast
+        key={`undo-failure-${String(pendingFailure.seq)}`}
+        text={pendingFailure.failure}
+        icon={<IconWarningOutlineRegular size={16} />}
+        holdMs={UNDO_HOLD_MS}
+        onDone={clearUndoFailure}
+      />
+    )
+  }
   // 每条通知一个以 seq 为 key 的躯体：闸跟着通知走——旧撤销还在飞时来了新删除，新横幅的
   // 「撤销」不许被旧那一趟按灰（issue #8 第 8 条的在飞闸按通知隔离）。
   return <NoticeToast key={current.seq} deps={deps} current={current} t={t} />

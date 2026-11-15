@@ -48,14 +48,19 @@ export function requestDeleteBatch(
   }))
 }
 
-export function clearDeleteBatchRequest(): void {
-  requestStore.set(null)
+/** 收起确认框（用户点「取消」/「关闭」、或整批成功后收工）。
+ *  **带 expected 比较**：一次批量在飞时用户可能已经发布了**下一批**请求（框按 seq 重挂载）。
+ *  旧实例晚到的成功只许收自己那一批，不许把后来发布的那批一起清掉。 */
+export function clearDeleteBatchRequest(expected?: BatchDeleteRequest): void {
+  requestStore.update((current) => (expected === undefined || current === expected ? null : current))
 }
 
-/** 重试轮之后把现场收缩到失败名单（框里只剩还没办成的那几条）。 */
-function shrinkRequestToFailures(failedSessionIds: readonly string[]): void {
+/** 重试轮之后把现场收缩到失败名单（框里只剩还没办成的那几条）。
+ *  **带 expected 比较**：旧实例晚到的部分失败不许收缩后来发布的那一批（否则新框的名单被旧失败
+ *  改写，条数与逐条目标全错）。 */
+function shrinkRequestToFailures(expected: BatchDeleteRequest, failedSessionIds: readonly string[]): void {
   requestStore.update((current) => {
-    if (current === null) return current
+    if (current !== expected) return current
     const keep = new Set(failedSessionIds)
     return { ...current, items: current.items.filter((item) => keep.has(item.sessionId)) }
   })
@@ -160,11 +165,11 @@ function BatchConfirmDialog({
     const failed = result.value
     current.shrinkSelection?.([...failed.keys()])
     if (failed.size === 0) {
-      clearDeleteBatchRequest()
+      clearDeleteBatchRequest(current)
       return
     }
     setFailures(failed)
-    shrinkRequestToFailures([...failed.keys()])
+    shrinkRequestToFailures(current, [...failed.keys()])
   }
 
   return (
@@ -176,7 +181,7 @@ function BatchConfirmDialog({
         ? t('dialog.batch.retry', { n: failedIds.length })
         : t('batch.run', { n: ids.length })}
       busy={gate.busy}
-      onCancel={clearDeleteBatchRequest}
+      onCancel={() => { clearDeleteBatchRequest(current) }}
       onConfirm={() => void run()}
     >
       <div data-dsh-session-delete="batch-target-card" style={BATCH_TARGET_CARD}>

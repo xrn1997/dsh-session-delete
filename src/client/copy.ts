@@ -22,6 +22,8 @@ const ZH = {
   'common.justNow': '刚刚',
   'common.ago': '{n}{unit}前',
   'common.retry': '重试',
+  // 槽位条目的错误边界（`ui/ErrorBoundary.tsx`）：单个贡献渲染崩了只收起它自己那一块。
+  'common.renderFailed': '这一块暂时显示不出来（其余部分照常）',
 
   'panel.tabs.label': '面板档位',
   'trash.title': '回收站',
@@ -335,6 +337,7 @@ const EN: Record<CopyKey, string> = {
   'common.justNow': 'just now',
   'common.ago': '{n}{unit} ago',
   'common.retry': 'Retry',
+  'common.renderFailed': 'This section cannot be displayed right now (everything else keeps working)',
 
   'panel.tabs.label': 'Panel views',
   'trash.title': 'Trash',
@@ -439,8 +442,8 @@ const EN: Record<CopyKey, string> = {
   'maintenance.checkFailed': 'Check failed',
   'maintenance.notScanned': 'Not checked yet',
   'maintenance.none': 'Nothing found',
-  'maintenance.orphans.count': '{count}',
-  'maintenance.attachments.count': '{count}',
+  'maintenance.orphans.count': '{count} item(s)',
+  'maintenance.attachments.count': '{count} item(s)',
   'maintenance.attachments.scanFailed': 'Check failed: {message}',
   'maintenance.attachments.cleaned': 'Cleaned {count} ({size})',
   'maintenance.attachments.cleanFailed': '{count} attachments could not be cleaned ({removed} cleaned)',
@@ -455,7 +458,7 @@ const EN: Record<CopyKey, string> = {
   'maintenance.projection.title': 'Projection cache',
   'maintenance.projection.hint':
     'Records in the host session_projcache with no matching session or trash entry. Checking only reads; cleanup touches only these derived records.',
-  'maintenance.projection.count': '{count}',
+  'maintenance.projection.count': '{count} record(s)',
   'maintenance.projection.found': 'Found {count} projection-cache records with no matching session',
   'maintenance.projection.scanFailed': 'Check failed: {message}',
   'maintenance.projection.confirm': 'Clean {count} projection-cache records?',

@@ -56,7 +56,7 @@ describe('选中面 · 宽档自动选中', () => {
   it('接住屏幕上的第一条并把这一行交给读路', () => {
     const { view, picked } = mount(rows, { canAutoSelect: true })
     expect(view.result.current.selected?.id).toBe('a2')
-    expect(picked).toHaveBeenCalledWith(a2)
+    expect(picked).toHaveBeenCalledWith(a2, { read: true })
   })
 
   it('走的是展开后的屏幕顺序：第一条所在组折叠 ⇒ 接住剩下那组的第一条', () => {
@@ -148,9 +148,17 @@ describe('选中面 · pick 与 drop', () => {
     const { view, picked } = mount(rows, { canAutoSelect: false })
     await act(async () => { await view.result.current.pick(b1) })
     expect(view.result.current.selectedId).toBe('b1')
-    expect(picked).toHaveBeenCalledWith(b1)
+    expect(picked).toHaveBeenCalledWith(b1, { read: true })
     act(() => { view.result.current.drop() })
     expect(view.result.current.selectedId).toBeNull()
     expect(view.result.current.selected).toBeNull()
+  })
+
+  // 窄档方向键：只移选中、不读详情。读不读是 `pick` 的显式参数，读路由调用方按它决定。
+  it('pick({read:false}) 仍落选中，但把 read:false 交给读路', async () => {
+    const { view, picked } = mount(rows, { canAutoSelect: false })
+    await act(async () => { await view.result.current.pick(b1, { read: false }) })
+    expect(view.result.current.selectedId).toBe('b1')
+    expect(picked).toHaveBeenCalledWith(b1, { read: false })
   })
 })

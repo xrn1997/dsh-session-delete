@@ -224,12 +224,14 @@ body {
 /* ────────────────────────── Modal ────────────────────────── */
 
 /* 整视口层（figma Mask + Dialog）：蒙层 + 居中卡片。四边留 24px，上下按外壳公布的浮层内缩加宽，
-   高卡片才不会顶到外壳。卡片按这个内边距盒取尺寸：消费方用 `max-height:100%` 收口，不自己算视口。 */
+   高卡片才不会顶到外壳。卡片按这个内边距盒取尺寸：消费方用 `max-height:100%` 收口，不自己算视口。
+   **层级压过瞬时通告**（`.sd-toast` / `.sd-tooltip-bubble[data-portal]` 的 1100）：确认框一开，
+   底下的撤销动作与浮条都点不到——框先消失而写还在跑会让人以为「没动」（2026-11 裁决）。 */
 .sd-modal-root {
   pointer-events: auto;
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: 1200;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -392,12 +394,14 @@ body {
 /* ────────────────────────── Toast ────────────────────────── */
 
 /* 淡出延迟由组件以 `--dsh-toast-hold` 给出 ⇒ 同一个值同时驱动卸载计时器与这段动画，
-   两者不可能再对不上。淡出**时长**仍需与组件里的 FADE_MS 一致（没有 owner 会改它）。 */
+   两者不可能再对不上。淡出**时长**仍需与组件里的 FADE_MS 一致（没有 owner 会改它）。
+   **层级低于确认框**（`.sd-modal-root` 1200）：框开着时撤销动作不许被点到（2026-11 裁决）。
+   图片灯箱也是 Modal ⇒ 预览开着时错误横幅会被蒙层盖住，这是同一条让位的代价（取消 / Esc
+   随时能关掉灯箱）。 */
 .sd-toast {
   position: fixed;
   top: 40px;
   left: 50%;
-  /* 高过图片灯箱底层的 1000：预览开着时报错也必须读得到。 */
   z-index: 1100;
   /* 通告不截点击。 */
   pointer-events: none;
@@ -806,11 +810,11 @@ button.sd-disclosure-leading {
 
 /* 本插件自造的第四条（不是抄本，见文件头点名）：批量删除的浮条。宿主没有"浮条"这件控件，形状照
    本插件自己的浮层口径来——固定底部居中，表面/描边/圆角/高程四件全走 token（与单删那张目标卡同源）。
-   **层级必须低于确认框（`.sd-modal-root` 1000）**：2026-10-17 真机发现浮条在 1100 时会盖住确认框、
-   还能抢它的按钮；撤销横幅与 Tooltip 是瞬时通告、保持 1100。列方向：清单在上、操作行在下；
-   清单限高可滚，默认收起（见 `batch-bar.tsx`）。**宽度按内容展开**（`max-content`，最多视口减 48）：
-   只写 `left:50% + width:auto` 时 shrink-to-fit 只拿左半屏，新增「全选/取消全选」后会把「退出多选」
-   挤到第二行；窄到 max-width 还放不下才由 `.sd-batch-bar-main` 的 `flex-wrap` 兜底。 */
+   **层级必须低于确认框（`.sd-modal-root` 1200）**：2026-10-17 真机发现浮条在 1100 时会盖住确认框、
+   还能抢它的按钮；撤销横幅与 Tooltip 是瞬时通告、保持 1100（同样低于确认框）。列方向：清单在上、
+   操作行在下；清单限高可滚，默认收起（见 `batch-bar.tsx`）。**宽度按内容展开**（`max-content`，
+   最多视口减 48）：只写 `left:50% + width:auto` 时 shrink-to-fit 只拿左半屏，新增「全选/取消全选」
+   后会把「退出多选」挤到第二行；窄到 max-width 还放不下才由 `.sd-batch-bar-main` 的 `flex-wrap` 兜底。 */
 .sd-batch-bar {
   position: fixed;
   bottom: 24px;

@@ -11,8 +11,9 @@
  *
  * 那个 K 是**勾选变化后防抖 300ms 的一次批量 count**（`/apply` 的 `action:'count'`，一组 id 一次），
  * 并且带**最新票守卫**：在飞的旧响应不许盖掉新名单的读数（compare-and-set 住 `createLatestWins`，
- * 防抖本身仍在下面这个 effect 里）。
- * 读不到就整句不说——K 是合计，缺一条就是假数（「不许拿 0 冒充没有」）。
+ * 防抖本身仍在下面这个 effect 里）。**读数与它对应的那份名单绑在一起存**：名单对不上（刚勾了一条、
+ * 新读还在窗口里）就整句不说——拿旧读数求新名单的和，会把新增那条按 0 算出一个偏小的假数。
+ * 读不到也整句不说——K 是合计，缺一条就是假数（「不许拿 0 冒充没有」）。
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import { fetchCounts } from './batch-select.js'
@@ -29,6 +30,20 @@ import { IconCloseOutlineRegular } from './ui/icons.js'
 /** 勾选变化后到发问之间的等待：连勾十条不该发十次 count。 */
 const COUNT_DEBOUNCE_MS = 300
 
+/** 一次计数读数与它对应的**那一份名单**。两者必须同进同退：名单变了而读数还没回来时，
+ *  旧读数不许被当成新名单的合计（新增一条会按 0 参与求和 ⇒ 显示偏小的假数）。 */
+interface CountSnapshot {
+  readonly ids: readonly string[]
+  readonly counts: ReadonlyMap<string, number>
+}
+
+/** 两份名单是不是同一组 id（顺序无关：读数只关心"谁在里面"）。 */
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false
+  const wanted = new Set(left)
+  return right.every((id) => wanted.has(id))
+}
+
 export function BatchBar({
   deps,
   t = zhTranslate,
@@ -42,7 +57,7 @@ export function BatchBar({
   // 渲染期只读快照：可见行登记住 host-rows.ts、点击守卫住 batch-pick.ts，这里不读 DOM。
   // 浮条常驻，但行快照只在多选态订阅：模式外每次行登记都不该把它叫醒。
   const visibleRows = useVisibleSelectableRows(selecting)
-  const [counts, setCounts] = useState<Map<string, number> | null>(null)
+  const [snapshot, setSnapshot] = useState<CountSnapshot | null>(null)
   const [expanded, setExpanded] = useState(false)
   const [latest] = useState(createLatestWins)
 
@@ -51,7 +66,7 @@ export function BatchBar({
     const ticket = latest.issue()
     const timer = setTimeout(() => {
       void fetchCounts(deps, ids).then((result) => {
-        if (ticket.current) setCounts(result)
+        if (ticket.current) setSnapshot(result === null ? null : { ids, counts: result })
       })
     }, COUNT_DEBOUNCE_MS)
     return () => clearTimeout(timer)
@@ -63,8 +78,11 @@ export function BatchBar({
   }, [selecting, picks.length])
 
   if (!selecting) return null
-  // 只合计**当前名单**：退模式/清空后 counts 里可能还留着上一批的读数，不能拿它冒充这一批。
-  const kids = counts === null ? 0 : picks.reduce((sum, item) => sum + (counts.get(item.sessionId) ?? 0), 0)
+  const pickedIds = picks.map((item) => item.sessionId)
+  // 读数只对**同一份名单**成立：勾选刚变、新一轮 count 还在 300ms 窗口里时，旧读数整句不说
+  // （拿旧 Map 求新名单的和会把新增那条按 0 算，显示一个偏小的假数）。
+  const counted = snapshot !== null && sameIds(snapshot.ids, pickedIds) ? snapshot : null
+  const kids = counted === null ? null : pickedIds.reduce((sum, id) => sum + (counted.counts.get(id) ?? 0), 0)
   const allPicked = areAllVisibleRowsSelected(visibleRows, picks)
   return (
     <div className="sd-batch-bar" data-dsh-session-delete="batch-bar">
@@ -72,12 +90,13 @@ export function BatchBar({
         <>
           <div className="sd-batch-bar-list-head">
             <span>{t('batch.bar.count', { n: picks.length })}</span>
-            {kids > 0 ? <span>{t('batch.bar.kids', { k: kids })}</span> : null}
+            {kids !== null && kids > 0 ? <span>{t('batch.bar.kids', { k: kids })}</span> : null}
           </div>
           <ul className="sd-batch-bar-list">
             {picks.map((item) => {
               const title = item.title === '' ? t('common.untitled') : item.title
-              const rowKids = counts?.get(item.sessionId) ?? 0
+              // 逐行 chip 同理：读数不属于这一份名单时一个字都不说，不拿 0 冒充"没有子会话"。
+              const rowKids = counted?.counts.get(item.sessionId) ?? 0
               return (
                 <li className="sd-batch-bar-item" key={item.sessionId}>
                   <span className="sd-batch-bar-title" title={item.title === '' ? undefined : item.title}>

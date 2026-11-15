@@ -38,6 +38,19 @@ export type UndoNotice = {
 
 const noticeStore = createStore<UndoNotice | null>(null)
 
+/**
+ * 一条**待显示**的撤销失败：撤销在飞时横幅被新删除覆盖、或被面板恢复 / 清空熄灭，失败就失去了
+ * 落点。`failNotice` 到那时把原文留在这里，等当前没有横幅时由 `undo-toast.tsx` 顶上并到时清掉
+ * ——失败不因为横幅先走一步而被吞掉（docs/ui-spec.md 状态 ③「失败原文要落回这一条」的反面）。
+ */
+export interface UndoFailureNotice {
+  /** 每次发布递增：Toast 靠它重挂载、重新计停留。 */
+  seq: number
+  failure: string
+}
+
+const failureStore = createStore<UndoFailureNotice | null>(null)
+
 /** 删除成功后发布一条撤销提示（单条）。 */
 export function publishUndoNotice(input: { entryId: string; title: string; archived?: boolean }): void {
   noticeStore.publish((seq) => ({
@@ -89,9 +102,10 @@ export function useUndoNotice(): UndoNotice | null {
   return noticeStore.use()
 }
 
-/** 测试专用：现场与 seq 归零，用例之间互不串味。 */
+/** 测试专用：现场与 seq 归零（横幅与待显示失败一起），用例之间互不串味。 */
 export function resetUndoNotice(): void {
   noticeStore.reset()
+  failureStore.reset()
 }
 
 /** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/ui-spec.md` §2 状态 ③ 只指到这里，不抄这个数。 */
@@ -102,8 +116,23 @@ export function ownsNotice(current: UndoNotice): boolean {
   return noticeStore.get() === current
 }
 
-/** 撤销失败：把原因换到同一条横幅上（seq 递增 ⇒ Toast 重挂载、重新计停留）。 */
+/** 撤销失败：把原因换到同一条横幅上（seq 递增 ⇒ Toast 重挂载、重新计停留）。
+ *  **横幅已经不在了**（在飞期间被新删除覆盖、或面板恢复 / 清空把它熄灭）时不静默：原文献给
+ *  待显示队，`undo-toast.tsx` 在当前没有横幅时把它顶上来（到时清掉）。 */
 export function failNotice(current: UndoNotice, message: string): void {
-  if (!ownsNotice(current)) return
+  if (!ownsNotice(current)) {
+    failureStore.publish((seq) => ({ seq, failure: message }))
+    return
+  }
   noticeStore.publish((seq) => ({ ...current, seq, failure: message }))
+}
+
+/** 供 Toast 订阅：当前没有撤销横幅时要顶上来的那条失败。 */
+export function useUndoFailure(): UndoFailureNotice | null {
+  return failureStore.use()
+}
+
+/** 待显示的失败已经上屏（到时或用户看过）：清掉它。 */
+export function clearUndoFailure(): void {
+  failureStore.set(null)
 }

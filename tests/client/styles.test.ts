@@ -6,6 +6,8 @@
  * `installPointerModality` 挂进 effect 的那一行是装配代码，不在这里重复渲染整条入口。
  */
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { installPointerModality, isPointerModality } from '../../src/client/ui/styles.js'
 
 describe('指针模态监听器', () => {
@@ -19,5 +21,38 @@ describe('指针模态监听器', () => {
     dispose()
     window.dispatchEvent(new Event('pointerdown'))
     expect(isPointerModality()).toBe(false)
+  })
+})
+
+// 浮层层级是**用户能看见的规矩**：确认框开着时底下的撤销横幅 / 浮条不许还抢得到点击。
+// 这里直接读样式表文本（与 skeleton 的读法同源）；数值不在文档里抄，断言的只是相对次序。
+describe('浮层层级', () => {
+  const css = readFileSync(join(process.cwd(), 'src/client/ui/ui.css'), 'utf8')
+
+  const zIndexOf = (selector: string): number => {
+    const start = css.indexOf(`${selector} {`)
+    expect(start, `没找到 ${selector}`).toBeGreaterThanOrEqual(0)
+    const match = /z-index:\s*(\d+)/.exec(css.slice(start))
+    if (match === null) throw new Error(`${selector} 没有 z-index`)
+    return Number(match[1])
+  }
+
+  it('确认框压过撤销横幅与批量浮条：框打开时撤销动作不许还能点', () => {
+    const modal = zIndexOf('.sd-modal-root')
+    expect(zIndexOf('.sd-toast')).toBeLessThan(modal)
+    expect(zIndexOf('.sd-batch-bar')).toBeLessThan(modal)
+  })
+})
+
+// 抄来的表里一条属性写两遍时，前一条是死代码（后一条覆盖它）。2026-11 清掉表格宽度那一处。
+describe('markdown.css 没有写两遍的表宽', () => {
+  const css = readFileSync(join(process.cwd(), 'src/client/ui/markdown.css'), 'utf8')
+
+  it.each(['.sd-md th', '.sd-md td'])('%s 只有一条 max-width（没被后一条覆盖成死代码）', (selector) => {
+    const start = css.indexOf(`${selector} {`)
+    expect(start, `没找到 ${selector}`).toBeGreaterThanOrEqual(0)
+    const block = css.slice(start, css.indexOf('}', start))
+    expect(block.match(/max-width:/g) ?? []).toHaveLength(1)
+    expect(block).toContain('max-width: min(30vw, 320px)')
   })
 })

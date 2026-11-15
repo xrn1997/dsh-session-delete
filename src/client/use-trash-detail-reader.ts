@@ -28,6 +28,10 @@ export interface TrashDetailReaderInput {
   readonly topLevel: boolean
   /** 上一条已就绪的详情是否仍在清单里：被清单换版收走就不再顶住画面。 */
   readonly present: (entryId: string) => boolean
+  /** 主体换成「还没读过」的那一条时要不要自动补读。窄档（详情栏不在眼前）给 false：
+   *  方向键只移选中，不切详情状态；点行 / 下钻 / 重试这些显式读照常（焦点停留 ≥150ms 的意图预取
+   *  另算一条口径，见 `src/client/use-prefetch.ts`）。 */
+  readonly autoRead?: boolean
 }
 
 /** 对外形状就是通用那一台（主体键 `subject` = 清册行）：回收站实例不再抄一份字段清单。 */
@@ -53,5 +57,6 @@ export function useTrashDetailReader(input: TrashDetailReaderInput): TrashDetail
     idOf: entryIdOf,
     topLevel: input.topLevel,
     present: input.present,
+    autoRead: input.autoRead ?? true,
   })
 }

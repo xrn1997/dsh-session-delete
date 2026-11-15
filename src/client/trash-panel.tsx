@@ -297,6 +297,8 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     query,
     ordered,
     canAutoSelect: split,
+    // 布局事实：窄档方向键只移选中（详情栏不在眼前），宽档 / 下钻才读详情。
+    readOnPick: split,
     active: trashActive,
   })
 

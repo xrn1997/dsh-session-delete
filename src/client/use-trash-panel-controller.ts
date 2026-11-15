@@ -56,6 +56,11 @@ export interface TrashPanelControllerInput {
   query: Pick<TrashQuery, 'list' | 'reload' | 'emptyTrash' | 'noteAttachmentCleanup'>
   ordered: readonly TrashEntryLike[]
   canAutoSelect: boolean
+  /** 宽档（左右两栏）为真：**没有 drill 的选中**也读详情。窄档给 false——方向键只移选中，
+   *  详情栏并不在眼前；下钻（`{ drill: true }`）与点行照常读。缺省 true（测试与"详情栏常驻"的场合）。
+   *  它管的是**选中这一条路**：焦点停留 ≥150ms 时的意图预取（`src/client/use-prefetch.ts`，ADR-0051）
+   *  仍会热身读一次，那是另一条口径，别拿这里的 `false` 当"窄档一条 `/detail` 都不发"。 */
+  readOnPick?: boolean
   /** 回收站档是否在眼前：不活动只记失效（修订号），不读清单。 */
   active: boolean
 }
@@ -113,6 +118,8 @@ export interface TrashPanelController {
 
 export function useTrashPanelController(input: TrashPanelControllerInput): TrashPanelController {
   const { deps, gate, query, ordered, canAutoSelect, active } = input
+  /** 布局事实：宽档没有 drill 的选中也读详情；窄档方向键只移选中（见输入注释）。 */
+  const readOnPick = input.readOnPick ?? true
   const { list, reload, emptyTrash, noteAttachmentCleanup } = query
   const entries = listView(list).rows
 
@@ -132,7 +139,10 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     canAutoSelect,
     // 挂载时只读一次首帧快照：选中行与详情一起续上，回来第一帧就是上次的样子。
     initialId: initialSnapshot?.selectedId ?? null,
-    onPick: (entry) => ensureDetail(entry.id),
+    // 只移选中（窄档方向键）时 `read:false`：不读详情，详情栏本来也不在眼前。
+    onPick: (entry, pickOptions) => {
+      if (pickOptions.read) void ensureDetail(entry.id)
+    },
     // 那一行被清单收走：丢掉它的详情账本、作废在飞读数，孩子视图与下钻跟着让位
     // （孩子是从这条父行点进来的，父让位了就没有第二道门）。选中 id 由选中面清。
     onGone: (entryId) => {
@@ -170,7 +180,15 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     retry: retryDetail,
     clearOlderFailure,
     reset: resetReader,
-  } = useTrashDetailReader({ deps, subject, topLevel: childView === null, present })
+  } = useTrashDetailReader({
+    deps,
+    subject,
+    topLevel: childView === null,
+    present,
+    // 窄档只移选中时不自动补读（方向键不切详情状态、也不为每一格立即读）；下钻 / 点行 / 重试仍显式读。
+    // 焦点停留 ≥150ms 时预取照样热身（ADR-0051）——这一格不负责那条口径。
+    autoRead: readOnPick || drilled,
+  })
 
   // 挂载读一次清单；别处动过回收站（侧栏菜单里删了一条、或撤销了另一条）时，这一拍再重读。
   // 档位不活动只记修订、不读；切回来那一拍补一趟（挂载那次靠 initialDirty）。
@@ -198,17 +216,17 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
   }, [gate.busy, list.status, pending])
 
   /**
-   * 选一条：命中账本就直接摆（不经过 loading），没命中才去读那条会话自己的日志。
-   * `drill` 是窄档的第二步语义（点行 = 选中并下钻；方向键 = 只移动选中）。
+   * 选一条：窄档点行 = 选中并下钻（`{ drill: true }`，读详情）；方向键 = 只移动选中（`read:false`，
+   * 这一下不读）；宽档右栏常驻，选中即读。命中账本时 `ensure` 只摆、不重读。
    * 选清单行就是回清单：孩子视图跟着收掉（详情主体交还给选中那条）。
    */
   const select = useCallback(
     async (entry: TrashEntryLike, options: { drill?: boolean } = {}): Promise<void> => {
       setChildView(null)
       if (options.drill === true) setDrilled(true)
-      await pick(entry)
+      await pick(entry, { read: options.drill === true || readOnPick })
     },
-    [pick],
+    [pick, readOnPick],
   )
 
   /** 意图预取：只热身详情账本，不动选中/下钻，也不碰详情上屏槽——不会把保持中的上一条顶成

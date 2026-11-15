@@ -44,9 +44,12 @@ export function requestDelete(input: { sessionId: string; title: string }): void
   requestStore.publish((seq) => ({ seq, sessionId: input.sessionId, title: input.title }))
 }
 
-/** 收起确认框（用户点「取消」/「关闭」、或删除成功后收工）。 */
-function clearDeleteRequest(): void {
-  requestStore.set(null)
+/** 收起确认框（用户点「取消」/「关闭」、或删除成功后收工）。
+ *  **必带 expected 比较**：一次删除在飞时用户可能已经发布了**下一条**请求（框按 seq 重挂载）。
+ *  旧实例晚到的成功只许收自己那一条，不许把后来发布的请求一起清掉（那会让新框凭空消失）。
+ *  没有"无条件清"这一档：复位走 {@link resetDeleteRequest}，收框一律交 `current`。 */
+function clearDeleteRequest(expected: DeleteRequest): void {
+  requestStore.update((current) => (current === expected ? null : current))
 }
 
 /** 供宿主组件订阅。 */
@@ -122,7 +125,8 @@ function DeleteConfirmDialog({
       setFailure(run.value)
       return
     }
-    clearDeleteRequest()
+    // 只收**自己这条**请求：在飞期间可能已经发布了新的删除请求（新框），旧成功不许连坐清掉它。
+    clearDeleteRequest(current)
   }
 
   return (
@@ -132,7 +136,7 @@ function DeleteConfirmDialog({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('dialog.confirm')}
       busy={gate.busy}
-      onCancel={clearDeleteRequest}
+      onCancel={() => { clearDeleteRequest(current) }}
       onConfirm={() => void confirm()}
     >
       <div style={TARGET_CARD}>

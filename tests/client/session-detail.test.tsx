@@ -4,7 +4,7 @@
  * `subagents` 缺席（那一条没有孩子）⇒ 子会话段**不画**，两档同一判据（段的呈现归
  * `subagent-section.tsx`，两档各自的行集与数据来源归 `trash-detail.tsx` / `archive-detail.tsx`）。
  */
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { SessionDetail, type DetailInfoRow, type SessionDetailProps } from '../../src/client/session-detail.js'
 import { zhTranslate } from '../../src/client/copy.js'
@@ -39,6 +39,27 @@ function detailElement(over: Partial<SessionDetailProps<Row, SessionDetailWire>>
   }
   return <SessionDetail {...props} />
 }
+
+describe('保持提示', () => {
+  // 保持对象从 A 换到 B：那一句「正在读…」说的是 A，不许跟着搬给 B；B 得从自己的静默窗口重新计时。
+  it('holdId A→B：先收掉 A 的提示，再从 B 的 300ms 窗口后重出', () => {
+    vi.useFakeTimers()
+    try {
+      const holding = (id: string) => ({ kind: 'holding' as const, subject: { id }, detail: core() })
+      const { rerender } = render(detailElement({ state: holding('a'), subjectId: 'a' }))
+      act(() => { vi.advanceTimersByTime(300) })
+      expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
+
+      rerender(detailElement({ state: holding('b'), subjectId: 'b' }))
+      expect(screen.queryByText('正在读这条会话…')).not.toBeInTheDocument()
+
+      act(() => { vi.advanceTimersByTime(300) })
+      expect(screen.getByText('正在读这条会话…')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('通用详情视图（SessionDetail）', () => {
   it('正文面从 SessionDetailWire 取（计量行/工作步骤/正文块都渲染；提问轨在面板层、不在这里）', () => {

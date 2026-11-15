@@ -199,6 +199,77 @@ describe('清单导航 · Enter / Space', () => {
   })
 })
 
+describe('清单导航 · 按键归属按 key 判', () => {
+  // 旧判据是「target 有没有 role=row」一刀切：行内按钮/勾选框上的所有键都被拦掉，
+  // 聚焦在「恢复」按钮上按 ↓ 清单不动。现在方向键只在可编辑控件里让路，Enter/Space 才只看控件。
+  it('↑↓ 在行内按钮 / 勾选框上仍归清单：聚焦按钮按 ↓ 移到下一行', () => {
+    const h = harness()
+    const m = h.mount({ selectedId: 'a' })
+    const button = document.createElement('button')
+    const down = keyDown('ArrowDown', button)
+
+    act(() => { m.result.current.onListKeyDown(down.event) })
+    expect(down.prevented()).toBe(true)
+    expect(h.select).toHaveBeenCalledWith(B)
+    expect(h.focusRow).toHaveBeenCalledWith('b')
+
+    // 勾选框同理：方向键不是它的激活键，仍该走清单。
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    act(() => { m.result.current.onListKeyDown(keyDown('ArrowUp', checkbox).event) })
+    expect(h.select).toHaveBeenLastCalledWith(C)
+  })
+
+  it('↑↓ 在可编辑控件里归控件自己：文本框 / 多行 / 下拉 / contenteditable 都不移动清单', () => {
+    const h = harness()
+    const m = h.mount({ selectedId: 'a' })
+    const textInput = document.createElement('input')
+    const textarea = document.createElement('textarea')
+    const selectBox = document.createElement('select')
+    const editable = document.createElement('div')
+    editable.setAttribute('contenteditable', '')
+
+    for (const target of [textInput, textarea, selectBox, editable]) {
+      for (const key of ['ArrowDown', 'ArrowUp']) {
+        const event = keyDown(key, target)
+        act(() => { m.result.current.onListKeyDown(event.event) })
+        expect(event.prevented()).toBe(false)
+      }
+    }
+    expect(h.select).not.toHaveBeenCalled()
+    expect(h.focusRow).not.toHaveBeenCalled()
+  })
+
+  it('Enter / Space 只在控件上归控件：按钮 / 链接 / 输入 / 菜单项不劫持', () => {
+    const h = harness()
+    const m = h.mount({ selectedId: 'b' })
+    const anchor = document.createElement('a')
+    anchor.href = '#'
+    const menuitem = document.createElement('div')
+    menuitem.setAttribute('role', 'menuitem')
+    const button = document.createElement('button')
+    const textInput = document.createElement('input')
+
+    for (const target of [button, anchor, textInput, menuitem]) {
+      for (const key of ['Enter', ' ']) {
+        const event = keyDown(key, target)
+        act(() => { m.result.current.onListKeyDown(event.event) })
+        expect(event.prevented()).toBe(false)
+      }
+    }
+    expect(h.select).not.toHaveBeenCalled()
+    expect(h.toggleCheck).not.toHaveBeenCalled()
+  })
+
+  it('行内非控件元素上的 Enter / Space 仍归清单（行是 role=row，可聚焦的就是它）', () => {
+    const h = harness()
+    const m = h.mount({ selectedId: 'b' })
+    const span = document.createElement('span')
+    act(() => { m.result.current.onListKeyDown(keyDown('Enter', span).event) })
+    expect(h.select).toHaveBeenLastCalledWith(B, { drill: true })
+  })
+})
+
 describe('清单导航 · tab 落点', () => {
   it('tab 落点：选中行可见就用它，被折叠时落到第一条可见行', () => {
     const h = harness()

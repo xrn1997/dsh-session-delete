@@ -127,6 +127,8 @@ interface Over {
   list?: TrashListState
   ordered?: readonly TrashEntryLike[]
   canAutoSelect?: boolean
+  /** 布局事实：宽档为 true（无 drill 的选中也读详情）；窄档 false（方向键只移选中）。缺省 true。 */
+  readOnPick?: boolean
   /** 回收站档是否活动；缺省 true = 面板正看着回收站档。 */
   active?: boolean
   busy?: boolean
@@ -161,6 +163,7 @@ function harness() {
     },
     ordered: over.ordered ?? [],
     canAutoSelect: over.canAutoSelect ?? false,
+    ...(over.readOnPick === undefined ? {} : { readOnPick: over.readOnPick }),
     active: over.active ?? true,
   })
   return { deps, reload, emptyTrash, noteAttachmentCleanup, input }
@@ -923,6 +926,65 @@ describe('面板控制器 · 自动选中', () => {
     await waitFor(() => expect(m.result.current.selectedId).toBe('b'))
     expect(m.deps.detail).toHaveBeenCalledWith('b')
     expect(m.result.current.drilled).toBe(false)
+  })
+})
+
+describe('面板控制器 · 窄档方向键不读详情', () => {
+  // 窄档详情栏不在眼前：方向键只移选中。此前 `select` 无论 drill 都 pick→ensureDetail，
+  // 每按一次 ↓ 就多一条立即的 `/detail`（十行清单划一遍 = 十条）。真机上焦点停留 ≥150ms 仍会
+  // 按 ADR-0051 预取热身，那是另一条口径——这里钉的只是「选中这一条路不读」。
+  it('readOnPick=false（窄档）：无 drill 的选中只移选中、不调 /detail；下钻才读', async () => {
+    const m = mount({ entries: [A, B], ordered: [A, B], readOnPick: false })
+
+    await act(async () => { await m.result.current.select(A) })
+    expect(m.result.current.selectedId).toBe('a')
+    expect(m.result.current.drilled).toBe(false)
+    expect(m.deps.detail).not.toHaveBeenCalled()
+
+    await act(async () => { await m.result.current.select(B) })
+    expect(m.result.current.selectedId).toBe('b')
+    expect(m.deps.detail).not.toHaveBeenCalled()
+
+    // 下钻是显式读：Enter / 点行那一下照常读详情。
+    await act(async () => { await m.result.current.select(B, { drill: true }) })
+    expect(m.result.current.drilled).toBe(true)
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.deps.detail).toHaveBeenCalledWith('b')
+  })
+
+  it('readOnPick=true（宽档）：右栏常驻，无 drill 的选中照旧读详情', async () => {
+    const m = mount({ entries: [A], ordered: [A], readOnPick: true })
+    await act(async () => { await m.result.current.select(A) })
+    expect(m.deps.detail).toHaveBeenCalledWith('a')
+  })
+
+  it('缺省（不传 readOnPick）保持选中即读：这是详情栏常驻场合的旧契约', async () => {
+    const m = mount({ entries: [A], ordered: [A] })
+    await act(async () => { await m.result.current.select(A) })
+    expect(m.deps.detail).toHaveBeenCalledWith('a')
+  })
+
+  it('窄档移选中后拖宽（readOnPick false→true）：兜底补读一次，不留永久 loading', async () => {
+    const m = mount({ entries: [A], ordered: [A], readOnPick: false })
+    await act(async () => { await m.result.current.select(A) })
+    expect(m.deps.detail).not.toHaveBeenCalled()
+    expect(m.result.current.detail.kind).toBe('loading')
+
+    // 布局变宽：readOnPick / autoRead 翻真，兜底 effect 接管这一条（宽档详情栏就在眼前）。
+    m.update({ entries: [A], ordered: [A], readOnPick: true })
+    await waitFor(() => expect(m.deps.detail).toHaveBeenCalledWith('a'))
+    await waitFor(() => expect(m.result.current.detail.kind).toBe('ready'))
+  })
+
+  it('窄档移动选中不读，但命中账本的详情仍可直接摆出（切换不经过网络）', async () => {
+    const m = mount({ entries: [A, B], ordered: [A, B], readOnPick: false })
+    // 先读一次 A（下钻），再回清单换到 B：B 不在账本，且窄档不自动补读。
+    await act(async () => { await m.result.current.select(A, { drill: true }) })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    act(() => { m.result.current.back() })
+    await act(async () => { await m.result.current.select(B) })
+    expect(m.deps.detail).toHaveBeenCalledTimes(1)
+    expect(m.result.current.detail.kind).toBe('loading')
   })
 })
 

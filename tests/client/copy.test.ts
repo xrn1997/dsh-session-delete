@@ -329,6 +329,13 @@ describe('维护卡文案', () => {
     expect(en('maintenance.notScanned')).toBe('Not checked yet')
     expect(en('maintenance.cleaning')).toBe('Cleaning…')
     expect(en('maintenance.checkFailed')).toBe('Check failed')
+    // 量词不能省：状态行只有裸数字时英文读不出「几条 / 几条记录」（zh 的「个 / 条」同理）。
+    // 仓内没有复数框架，用 `item(s)` / `record(s)` 覆盖单复数（`1 items` 是用户可见的语法错误）。
+    expect(en('maintenance.orphans.count', { count: 1 })).toBe('1 item(s)')
+    expect(en('maintenance.orphans.count', { count: 3 })).toBe('3 item(s)')
+    expect(en('maintenance.attachments.count', { count: 106 })).toBe('106 item(s)')
+    expect(en('maintenance.projection.count', { count: 1 })).toBe('1 record(s)')
+    expect(en('maintenance.projection.count', { count: 3 })).toBe('3 record(s)')
     expect(en('maintenance.attachments.cleanError', { message: 'disk busy' })).toBe(
       'Attachment cleanup failed: disk busy',
     )

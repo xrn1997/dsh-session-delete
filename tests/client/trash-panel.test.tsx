@@ -567,6 +567,24 @@ describe('回收站面板 · 键盘', () => {
     expect(screen.getByText('先看改动')).toBeInTheDocument()
   })
 
+  it('窄档方向键只移选中、不读详情；Enter 下钻那一下才读', async () => {
+    const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
+    renderNarrow(deps)
+    const first = await screen.findByRole('row', { name: /第一条/ })
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
+    expect(screen.getByRole('row', { name: /第一条/ })).toHaveAttribute('aria-selected', 'true')
+    // 方向键只移选中：这一步不碰 `/detail`（详情栏也还没进屏）。
+    expect(deps.detail).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
+    expect(screen.getByRole('row', { name: /第二条/ })).toHaveAttribute('aria-selected', 'true')
+    expect(deps.detail).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(screen.getByRole('row', { name: /第二条/ }), { key: 'Enter' })
+    await waitFor(() => { expect(deps.detail).toHaveBeenCalledWith('b') })
+    expect(await screen.findByRole('button', { name: '← 返回清单' })).toBeInTheDocument()
+  })
+
   it('ArrowUp 从第一条回到最后一条（清单里是环，不是撞墙）', async () => {
     const deps = makeDeps({ list: vi.fn(async () => remoteOk(two)) })
     renderNarrow(deps)
@@ -603,7 +621,7 @@ describe('回收站面板 · 键盘', () => {
 
   it('条目 id 含空白：DOM id 合法且与 aria-activedescendant 同源，data-entry-id 仍是原始 id', async () => {
     // 目录名只挡路径分隔符，空白是合法字符：HTML id 归 DOM 侧编码，entry id 本身不许改形
-    // （它是回收站目录名，恢复要按它反推原目录名）。issue #8 第 7 条。
+    // （它是回收站目录名，恢复要按它回放目录段）。issue #8 第 7 条。
     const awkward = [{ ...pick(rows, 0), id: '20261019T120000Z-my session', title: '带空白的那条' }]
     const { container } = renderWide(makeDeps({ list: vi.fn(async () => remoteOk(awkward)) }))
     const row = await screen.findByRole('row', { name: /带空白的那条/ })

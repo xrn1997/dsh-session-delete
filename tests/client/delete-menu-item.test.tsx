@@ -119,6 +119,24 @@ describe('确认框', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  it('旧请求的成功不清掉后来发布的请求（clear 带 expected 比较）', async () => {
+    // A 在飞时用户又对 B 发了删除请求（框按 seq 重挂载成 B）。A 晚到的成功只许收 A 自己，
+    // 旧实现无条件 set(null) 会把 B 的框一起清掉——用户什么都没点，框凭空消失。
+    let release: (value: unknown) => void = () => {}
+    const del = vi.fn(() => new Promise((resolve) => { release = resolve }))
+    renderScene({ sessionId: 'session-a', title: '会话甲' }, deps(fakeApply({ delete: del })))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+
+    act(() => { requestDelete({ sessionId: 'session-b', title: '会话乙' }) })
+    expect(await screen.findByText('会话乙')).toBeInTheDocument()
+
+    await act(async () => { release({ id: 'e1' }) })
+    // B 的框还在（而且画的是 B，不是被旧成功顺手收掉的空白）。
+    expect(screen.getByRole('dialog', { name: '删除这个会话？' })).toBeInTheDocument()
+    expect(screen.getByText('会话乙')).toBeInTheDocument()
+  })
+
   it('确认框正文明说可恢复，主按钮不是红色的动作名', () => {
     renderScene({ sessionId: 's', title: 't' }, deps(fakeApply({ delete: vi.fn() })))
     fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
