@@ -140,12 +140,21 @@ jobs:
           NODE
           node "$RUNNER_TEMP/verify-tarball.cjs" "$TGZ"
 
-      # 同一份 artifact 两个用途：dry run 的产物；tag 运行时给 publish job 交接。
+      # Release 正文：从 `CHANGELOG.md` 该版条目与 `package.json` 事实投影（规则住
+      # `scripts/release-notes.mjs`），不用 `--generate-notes` 的 commit 列表——用户要读的是
+      # 「这一版能干什么、怎么装、升级注意什么」。放在 Gates 之后生成：正文「发布验证」一节
+      # 说的就是本工作流实跑通过的那些门，没跑过不许写。
+      - name: Generate release notes
+        run: node scripts/release-notes.mjs dist/release-notes.md
+
+      # 同一份 artifact 三个用途：dry run 的产物与正文预览；tag 运行时给 publish job 交接。
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v7
         with:
           name: dsh-session-delete-tarball
-          path: dist/*.tgz
+          path: |
+            dist/*.tgz
+            dist/release-notes.md
           if-no-files-found: error
 
   publish:
@@ -159,7 +168,9 @@ jobs:
       contents: write
       actions: read
     steps:
-      # gh release create --generate-notes 要读本地 git 历史与上一个 tag。
+      # 正文用 build job 交接的 notes 文件（从 CHANGELOG 投影，compare 链接也在里面），不再
+      # `--generate-notes`；`--verify-tag` 确认 tag 已存在，防 GitHub 隐式建出指向别的提交的 tag。
+      # fetch-depth: 0 留完整历史，失败排查时好用。
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -182,5 +193,5 @@ jobs:
             gh release upload "$tag" dist/*.tgz --clobber
             if [ "${#prerelease[@]}" -gt 0 ]; then gh release edit "$tag" --prerelease; fi
           else
-            gh release create "$tag" dist/*.tgz --verify-tag --title "$tag" --generate-notes "${prerelease[@]}"
+            gh release create "$tag" dist/*.tgz --verify-tag --title "$tag" --notes-file dist/release-notes.md "${prerelease[@]}"
           fi
