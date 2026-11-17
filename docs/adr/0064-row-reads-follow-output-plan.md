@@ -16,7 +16,7 @@ Status: accepted
 
 1. **三层接口，住在 `src/trash/session-rows.ts`。** `readRowSurfaces(deps, ids, policy)` 只做批量面（标题批量、活动整表、大小整表；ids 是调用方要显示的行）；`projectRowFacts(deps, surfaces, targets)` 只做逐行面（旧宿主标题回退与 label），保序、同长、缺席不落键；`sizeTotalsForIds(ids, sizes)` 按 id 集合算合计与缺席计数。原 `projectSessionRows` / `sizeTotals` 保留为兼容包装，归档清单不动。
 2. **逐行读有界并发。** label 与旧宿主标题回退共用同一个内部 `mapLimit`，并发预算 `ROW_READ_CONCURRENCY = 8`：模块常量，不做用户可调项。首错原样抛，失败后不再领新活；两路读的并集也被 8 封顶，不是每路各 8。
-3. **按输出计划读。** 归档详情先算 `limit`（`SUBAGENT_SUMMARY_LIMIT` 或调用方 limits），`displayed = kids.slice(0, limit)`；批量面只传 displayed 的 id，逐行面只投影 displayed，`isArchived` 只读 displayed。显示外的孩子零逐行读。
+3. **按输出计划读。** 归档详情先算 `limit`（`src/trash/subagent-summary.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 或调用方 limits），`displayed = kids.slice(0, limit)`；批量面只传 displayed 的 id，逐行面只投影 displayed，`isArchived` 只读 displayed。显示外的孩子零逐行读。
 4. **合计不跟输出计划走。** 摘要的 `subagentsSizeBytes` 报的是全部孩子的和：`sizeTotalsForIds(kids 全部 id, surfaces.sizes)`；大小缺席计数同样按全部孩子算，wire 的「并非全部孩子都缺大小才给合计」口径不变。
 5. **语义零变化。** 行内容与顺序、wire 形状、`sizeFailure` 两档策略、缺席格不落键、截断总数、label 为空不落键、旧宿主标题回退链全部与旧实现逐项等价；只减少读的数量。
 
@@ -39,4 +39,4 @@ Status: accepted
 
 ## 锚点
 
-锚点：`src/trash/session-rows.ts`（`ROW_READ_CONCURRENCY` / `readRowSurfaces` / `projectRowFacts` / `sizeTotalsForIds` / `projectSessionRows`）；`src/trash/archive-detail.ts`（`readArchiveSubagents`）；`src/api/archive-rows.ts`（`assembleArchiveRows`）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT`）；`tests/session-rows.test.ts`；`tests/archive-detail.test.ts`；`docs/architecture.md` §4；ADR-0055（子会话摘要上限）；ADR-0060（归档档的详情读路边界的另一面）。
+锚点：`src/trash/session-rows.ts`（`ROW_READ_CONCURRENCY` / `readRowSurfaces` / `projectRowFacts` / `sizeTotalsForIds` / `projectSessionRows`）；`src/trash/archive-detail.ts`（`readArchiveSubagents`）；`src/api/archive-rows.ts`（`assembleArchiveRows`）；`src/trash/subagent-summary.ts`（`SUBAGENT_SUMMARY_LIMIT` / `summarizeSubagents` / `displayedSubagentCount`）；`tests/session-rows.test.ts`；`tests/archive-detail.test.ts`；`docs/architecture.md` §4；ADR-0055（子会话摘要上限）；ADR-0060（归档档的详情读路边界的另一面）。

@@ -1,6 +1,6 @@
 /**
  * 回收站的详情读路：通用机制（`use-detail-reader.ts`）的**薄实例**——
- * 账本 = `trash-snapshot.ts` 的模块级账本（键 = 条目 id），fetch = `deps.detail`。
+ * 账本 = `trash-snapshot.ts` 的跨挂载账本（挂在场景实例里，键 = 条目 id），fetch = `deps.detail`。
  * 对外形状就是通用 `DetailState`（主体键 `subject`）：视图与控制器的语义住
  * `trash-detail.tsx` / `use-trash-panel-controller.ts`，机制只住通用层一份。
  */
@@ -37,7 +37,7 @@ export interface TrashDetailReaderInput {
 /** 对外形状就是通用那一台（主体键 `subject` = 清册行）：回收站实例不再抄一份字段清单。 */
 export type TrashDetailReader = DetailReader<TrashEntryWire, TrashDetailLike>
 
-/** 回收站账本 seam：`trash-snapshot.ts` 的模块级账本三函数原样接上（写时复制与淘汰口径都在那头）。 */
+/** 回收站账本 seam：`trash-snapshot.ts` 的跨挂载账本三函数原样接上（写时复制与淘汰口径都在那头）。 */
 const TRASH_LEDGER: DetailLedger<TrashDetailLike> = {
   read: readCachedTrashDetail,
   write: writeTrashDetail,

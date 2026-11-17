@@ -134,7 +134,7 @@ export function useDetailReader<S, D extends DetailBody>(input: DetailReaderInpu
   idOfRef.current = idOf
 
   /**
-   * 这一份挂载还在不在。账本（尤其回收站那台模块级的）跨挂载存活，而请求属于某一次挂载：
+   * 这一份挂载还在不在。账本（尤其回收站那台挂在场景实例里的）跨挂载存活，而请求属于某一次挂载：
    * 切走面板后晚到的读数不许再写账本（ADR-0048 边界）。StrictMode 的
    * 挂载→卸载→再挂载由 setup 里重新置真接住。
    */

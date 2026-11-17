@@ -19,11 +19,12 @@ const mocks = vi.hoisted(() => {
     clearUndoNotice: vi.fn(),
   }
 })
-vi.mock('../../src/client/trash-store.js', () => ({
-  invalidateTrash: mocks.invalidateTrash,
-  // 复位册（`reset-client-state.ts`）会调它；这份用例不碰清单现场，给一个空实现即可。
-  resetTrashStore: () => undefined,
-}))
+// 现场模块现在是场景实例的工厂：spread 真品拿到工厂与 reset（`resetClientState` 造默认场景要用），
+// 只把本用例断言的那几个动作换成调用记录。
+vi.mock('../../src/client/trash-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/client/trash-store.js')>()
+  return { ...actual, invalidateTrash: mocks.invalidateTrash }
+})
 // 通知台只套一层**调用记录**，实现仍是真品（`mockImplementation` 挂在下面那几个 hoisted spy 上）：
 // `ownsNotice` 按引用比 store 里的那一条，连 store 一起替身掉的话，
 // 「restoreFromUndo 拥有整趟」断言的就是替身自己（判据没被验过）。
@@ -53,13 +54,15 @@ vi.mock('../../src/client/undo-notices.js', async (importOriginal) => {
     clearUndoNotice: mocks.clearUndoNotice,
   }
 })
-vi.mock('../../src/client/main-view.js', () => ({
-  afterDelete: mocks.afterDelete,
-  afterRestore: mocks.afterRestore,
-  forgetMainView: mocks.forgetMainView,
-  // 复位册（`reset-client-state.ts`）会调它；重开记忆不在这份用例的断言面里。
-  resetMainView: () => undefined,
-}))
+vi.mock('../../src/client/main-view.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/client/main-view.js')>()
+  return {
+    ...actual,
+    afterDelete: mocks.afterDelete,
+    afterRestore: mocks.afterRestore,
+    forgetMainView: mocks.forgetMainView,
+  }
+})
 // 详情账本的清理也只套一层调用记录、实现仍是真品（`writeTrashDetail` / `readCachedTrashDetail` /
 // 复位册都照旧走真 store）：外部恢复座位交的是模块真品，收尾序列要知道账本清理排在哪一格。
 vi.mock('../../src/client/trash-snapshot.js', async (importOriginal) => {
@@ -80,7 +83,7 @@ import {
   publishUndoBatchNotice, publishUndoNotice, useUndoNotice,
   type UndoNotice,
 } from '../../src/client/undo-notices.js'
-import { outcomes, trashRow } from './support/outcomes.js'
+import { outcomes, restoreOutcomes, trashRow } from './support/outcomes.js'
 import { applyDeps, remoteFail, remoteOk } from './support/fake-remote.js'
 import { resetClientState } from '../../src/client/reset-client-state.js'
 import {
@@ -669,5 +672,81 @@ describe('收尾顺序（按 action 各一条）', () => {
     const orphan = await applyDeps(applyOutcomes).applyOutcomes('orphan-clean', ['r1'])
     expect(orphan.ok).toBe(true)
     expect(mocks.order).toEqual([])
+  })
+})
+
+/**
+ * 逐条失败的落点收进座位（`FailureSink`）：五个写入面原先各写一遍「清旧失败 → 跑座位 →
+ * if blocked return → 铺逐条失败」。现在座位在 apply 前 `clear`（闸外，被挡回也清过）、
+ * 跑完 `set`（顶层失败也铺同一句原文）；调用方只交落点与呈现材质。
+ */
+describe('失败落点（FailureSink）', () => {
+  /** 记调用序的落点：clear / set 与 apply / refresh 落进同一条序列，判据是先后而不是散点。 */
+  function recordingSink(order: string[]): {
+    clear: (ids: readonly string[]) => void
+    set: (failures: ReadonlyMap<string, string>) => void
+  } {
+    return {
+      clear: (ids) => { order.push(`clear:${ids.join(',')}`) },
+      set: (failures) => {
+        order.push(`set:${[...failures].map(([id, message]) => `${id}=${message}`).join(',')}`)
+      },
+    }
+  }
+
+  it('apply 之前先清旧失败、跑完铺回逐条失败：顶层失败也是这一趟的结论（同一句按 id）', async () => {
+    const order: string[] = []
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      order.push('apply')
+      return remoteFail({ code: 'sessiondelete/io', message: '通道断了' })
+    })
+    const refreshAfterWrite = vi.fn(async () => { order.push('refresh') })
+    const run = await restoreFromPanel({
+      deps: applyDeps(applyOutcomes), ids: ['e1', 'e2'], entries: null, gate: gate(),
+      refreshAfterWrite, writeSucceeded: vi.fn(),
+      failureSink: recordingSink(order),
+    })
+    expect(run.kind === 'ran' && run.value.ok).toBe(false)
+    // clear 在闸外、apply 之前；set 在 refresh 之后（与原先调用点「座位返回后再铺」同时序）。
+    expect(order).toEqual(['clear:e1,e2', 'apply', 'refresh', 'set:e1=通道断了,e2=通道断了'])
+  })
+
+  it('被闸挡回：落点已经清过，但一个失败都不铺（没跑），一次 /apply 都不发', async () => {
+    const order: string[] = []
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([]))
+    const blocked: BusyGate = { busy: true, around: async () => ({ kind: 'blocked' }) }
+    await expect(
+      deleteSessionsFromBatch(applyDeps(applyOutcomes), ['s1', 's1', 's2'], blocked, recordingSink(order)),
+    ).resolves.toEqual({ kind: 'blocked' })
+    // 去重保序后的那一份交给 clear（与发请求的 id 表同一口径）；这一趟没跑 ⇒ 没有 set。
+    expect(order).toEqual(['clear:s1,s2'])
+    expect(applyOutcomes).not.toHaveBeenCalled()
+  })
+
+  it('成功且逐条无失败：铺回空表（调用方落点上的旧原文不许留着）', async () => {
+    const sets: ReadonlyMap<string, string>[] = []
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(restoreOutcomes(['e1'])))
+    const run = await restoreFromPanel({
+      deps: applyDeps(applyOutcomes), ids: ['e1'], entries: null, gate: gate(),
+      refreshAfterWrite: vi.fn(async () => {}), writeSucceeded: vi.fn(),
+      failureSink: { clear: () => {}, set: (failures) => { sets.push(failures) } },
+    })
+    expect(run.kind).toBe('ran')
+    expect(sets).toHaveLength(1)
+    expect(sets[0]?.size).toBe(0)
+  })
+
+  it('单删座位的失败也铺回同一落点：clear 拿请求 id，set 拿这一条的原文', async () => {
+    const order: string[] = []
+    const applyOutcomes = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
+      outcomes('delete', ['s1'], { s1: { message: '删不动' } })))
+    const run = await deleteSessionFromMenu(
+      applyDeps(applyOutcomes),
+      { sessionId: 's1', title: '标题', failureSink: recordingSink(order) },
+      gate(),
+    )
+    expect(order).toEqual(['clear:s1', 'set:s1=删不动'])
+    // 交回的 value 只服务「框关不关」这一个呈现分支；原文落点已由座位铺好。
+    expect(run).toEqual({ kind: 'ran', value: '删不动' })
   })
 })

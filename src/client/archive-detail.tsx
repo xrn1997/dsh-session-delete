@@ -10,7 +10,6 @@
  */
 import type { Translate } from './copy.js'
 import type { ArchiveDetailLike } from './remote.js'
-import type { DetailState } from './use-detail-reader.js'
 import type { ArchiveDetailSubject } from './use-archive-detail-reader.js'
 import { detailNameOf, displayNameOf } from './trash-view.js'
 import { fileSizeText } from './ui/format.js'
@@ -19,32 +18,32 @@ import {
   timeText,
   type DetailInfoRow,
   type DetailNav,
-  type DetailPager,
 } from './session-detail.js'
+import type { DetailFrame } from './use-detail-frame.js'
 import { useSubagentSection } from './subagent-section.js'
 
 export interface ArchiveDetailProps {
-  state: DetailState<ArchiveDetailSubject, ArchiveDetailLike>
+  /** 详情帧（`use-detail-frame.ts`）：归档档的读路来源 + 分页读面 + 提问轨，面板拼一次、这里原样转交。 */
+  frame: DetailFrame<ArchiveDetailSubject, ArchiveDetailLike>
   busy: boolean
   wide: boolean
   /** 与回收站档同一面导航（按会话 id 交接，`DetailNav`）；孩子视图由 `parentContext` 在场判定。 */
   detailNav: DetailNav
   onRetry: () => void
   onBack: () => void
-  pager: DetailPager
   t: Translate
 }
 
 export function ArchiveDetail({
-  state,
+  frame,
   busy,
   wide,
   detailNav,
   onRetry,
   onBack,
-  pager,
   t,
 }: ArchiveDetailProps) {
+  const { state } = frame
   const row = state.kind === 'idle' ? null : state.subject
   const detail = state.kind === 'ready' || state.kind === 'holding' ? state.detail : undefined
   const project = detail === undefined || detail.cwd === '' ? t('trash.project.unknown') : detail.cwd
@@ -84,7 +83,7 @@ export function ArchiveDetail({
   })
   return (
     <SessionDetail
-      state={state}
+      frame={frame}
       subjectId={row?.sessionId ?? ''}
       // 大小只住信息表那一行；标题排的 head 只交显示名（计量行不再重复同一个数）。
       head={{ displayName: row === null ? '' : detailNameOf(row, detail, displayNameOf(row, t)), sizeText: null }}
@@ -95,7 +94,6 @@ export function ArchiveDetail({
       onRetry={onRetry}
       onBack={onBack}
       detailNav={detailNav}
-      pager={pager}
       t={t}
     />
   )

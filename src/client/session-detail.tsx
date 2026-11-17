@@ -7,6 +7,9 @@
  * - `infoRows`：信息表行集（回收站七行 / 归档五行，各档自己投影）；
  * - `subagents`：子会话段的徽标与段体（两档都传；没有孩子 ⇒ 缺席 = 不画，呈现归 `subagent-section.tsx`）。
  *
+ * 两档共用的接线（读路状态 + 分页读面 + 提问轨）由 `use-detail-frame.ts` 拼成**详情帧**；
+ * 这份代码只消费帧里的 `state` / `pager` 两格，行的投影由两档包装交进来。
+ *
  * 三条界面约束（两档同守）：
  * - 动作留在清单行右侧；详情只负责看。
  * - 正文是**块**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给
@@ -17,7 +20,6 @@
 import {
   type CSSProperties,
   type ReactNode,
-  type RefObject,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -26,7 +28,6 @@ import {
 import { AttachmentStrip } from './attachment-view.js'
 import { absoluteText, localeProbe, stepsText, type CopyKey, type Translate } from './copy.js'
 import type { SessionDetailWire, TrashDetailBlockWire, TrashDetailInjectionBlockWire, TrashDetailTextBlockWire } from '../shared/wire.js'
-import type { DetailState } from './use-detail-reader.js'
 import { MarkdownBody } from './markdown.js'
 import { Button } from './ui/Button.js'
 import {
@@ -36,20 +37,8 @@ import {
 } from './ui/icons.js'
 import { ELLIPSIS, QUIET_DANGER, TABULAR_NUMS } from './ui/recipe.js'
 import { hasDialogue, isDisclosureBlock, threadItems } from './detail-blocks.js'
-import { useDetailPager } from './use-detail-pager.js'
+import { useDetailFramePager, type DetailFrameView } from './use-detail-frame.js'
 import { JUMP_SCROLL_MARGIN_PX } from './use-prompt-rail.js'
-
-/** 分页这一块（在飞/失败 + 滚动容器）整体过手：两档详情投影各自转交，谁画正文谁拆开用。
- *  四样东西是一个概念（分页读面）的四个格子，打包走一个名字，不再逐样穿透组件边界。 */
-export interface DetailPager {
-  /** 更早一页正在读。 */
-  loadingOlder: boolean
-  /** 更早一页读失败的原文；正文本身仍是 ready。 */
-  olderFailure: string | null
-  onLoadOlder: () => void
-  /** 详情栏的滚动容器；prepend 更早一页后按高度差补偿滚动位置。 */
-  scrollRef?: RefObject<HTMLDivElement | null>
-}
 
 /** 详情的导航面（孩子视图的开与回）：类型定义住在这里（视图定 prop 形状），
  *  控制器 `import type` 它避免环。判据（谁在场、title 给什么）住控制器的 `detailNav` 派生。
@@ -81,7 +70,9 @@ export interface SubagentSectionProps {
 }
 
 export interface SessionDetailProps<S, D extends SessionDetailWire> {
-  state: DetailState<S, D>
+  /** 详情帧（`use-detail-frame.ts`）里壳消费的那两格：读路状态与分页读面。
+   *  `rail` 归栏外壳、`canNavigate` 归控制器与轨、行投影归两档包装——壳不碰它们。 */
+  frame: DetailFrameView<S, D>
   /** 主体身份（换条复位滚动、body 重挂载的 key、保持提示的判据都按它）。 */
   subjectId: string
   /** 标题与大小与**选中行**配对：列表行给 display name 与大小，详情不重算。 */
@@ -94,7 +85,6 @@ export interface SessionDetailProps<S, D extends SessionDetailWire> {
   onRetry: () => void
   onBack: () => void
   detailNav: DetailNav
-  pager: DetailPager
   t: Translate
 }
 
@@ -614,7 +604,7 @@ function renderBlock(block: TrashDetailBlockWire, context: BlockRenderContext): 
 
 
 export function SessionDetail<S, D extends SessionDetailWire>({
-  state,
+  frame,
   subjectId,
   head,
   infoRows,
@@ -624,9 +614,9 @@ export function SessionDetail<S, D extends SessionDetailWire>({
   onRetry,
   onBack,
   detailNav,
-  pager,
   t,
 }: SessionDetailProps<S, D>) {
+  const { state, pager } = frame
   const { scrollRef } = pager
   const holding = state.kind === 'holding'
   const shownId = state.kind === 'idle' ? null : subjectId
@@ -679,10 +669,10 @@ export function SessionDetail<S, D extends SessionDetailWire>({
   const body = detail === undefined ? null : (
     <ReadyBody
       key={subjectId}
+      frame={frame}
       head={head}
       infoRows={infoRows}
       detail={detail}
-      pager={pager}
       subagentBody={subagents?.body}
       t={t}
     />
@@ -805,11 +795,12 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 /** 有内容态的投影口：`head` / `infoRows` / `subagents` 由两档各自的视图给，正文与工作步骤在这里画。 */
-interface ReadyBodyProps {
+interface ReadyBodyProps<S, D extends SessionDetailWire> {
+  /** 详情帧：这里只消费 `pager` 那一格（翻页入口与分页失败面挂在它上面）；正文由上层拆成 `detail`。 */
+  frame: DetailFrameView<S, D>
   head: { readonly displayName: string; readonly sizeText: string | null }
   infoRows: readonly DetailInfoRow[]
-  detail: SessionDetailWire
-  pager: DetailPager
+  detail: D
   /** 子会话段（两档共用的投影槽）；缺席不画。 */
   subagentBody: ReactNode
   t: Translate
@@ -823,22 +814,14 @@ interface ReadyBodyProps {
  * 工作步骤档位与折叠状态只活在这个组件里；切条目用 `key={subjectId}` 重挂载，不会把 A 的
  * 展开状态带到 B。
  */
-function ReadyBody({ head, infoRows, detail, pager, subagentBody, t }: ReadyBodyProps) {
-  const { loadingOlder, olderFailure, onLoadOlder, scrollRef } = pager
+function ReadyBody<S, D extends SessionDetailWire>({ frame, head, infoRows, detail, subagentBody, t }: ReadyBodyProps<S, D>) {
+  const { loadingOlder, olderFailure } = frame.pager
   const [mode, setMode] = useState<ViewMode>('standard')
   /** 标准档「工作步骤」组的开合（按组后那条对话块的 id 记，prepend 不换键）。 */
   const [openGroups, setOpenGroups] = useState<ReadonlySet<string>>(() => new Set())
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set())
   /** 手动「加载更早」、简洁档自动连翻与 prepend 后的滚动锚点整块住在 hook 里。 */
-  const { loadOlder } = useDetailPager({
-    blocks: detail.blocks,
-    olderCursor: detail.olderCursor,
-    loadingOlder,
-    olderFailure,
-    compact: mode === 'compact',
-    onLoadOlder,
-    scrollRef,
-  })
+  const { loadOlder } = useDetailFramePager(frame, detail, mode === 'compact')
 
 
   // memo 的语言探针：渲染时算好交给 MarkdownBody，切语言这一拍它跟着变（借哪句住 copy.ts 的 localeProbe）。

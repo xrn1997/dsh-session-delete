@@ -11,7 +11,6 @@ import {
   PAGE_CHAR_LIMIT,
   PER_BLOCK_CHAR_CAP,
   PROMPT_PREVIEW_LIMIT,
-  SUBAGENT_SUMMARY_LIMIT,
   createDetailFold,
   readTrashDetail,
   type DetailDeps,
@@ -567,6 +566,23 @@ it('读盘抛 ⇒ sessiondelete/io，原文留在 message 里', async () => {
   await expect(readTrashDetail(deps)(id)).rejects.toMatchObject({ code: 'sessiondelete/io', message: /EACCES/ })
 })
 
+// 整本读取的 seam 把 stat 与 read 分成两条落点：两条 io 原文各自保留，且 stat 失败时一次 readFile 都不发。
+it('日志大小读不出 ⇒ io 带"读取会话日志大小失败"那条原文', async () => {
+  const fs = {
+    exists: vi.fn(async () => true),
+    listFiles: vi.fn(async () => ['session.v4.jsonl.zstd']),
+    statFile: vi.fn(async () => { throw new Error('EACCES: stat') }),
+    readFile: vi.fn(async () => body({ type: 'turn/start', time: 1 })),
+  }
+  const rows = createMemoryManifest([entry()])
+  const deps: DetailDeps = { fs, rows: () => rows.list(), home: '/h' }
+  await expect(readTrashDetail(deps)(id)).rejects.toMatchObject({
+    code: 'sessiondelete/io',
+    message: '读取会话日志大小失败：Error: EACCES: stat',
+  })
+  expect(fs.readFile).not.toHaveBeenCalled()
+})
+
 it('日志解不开 ⇒ io 带"第 N 帧"那句原文，绝不回半条正文', async () => {
   const payload = Buffer.from(rec({ type: 'turn/start', time: 1 }) + '\n', 'utf8')
   const blockHeader = (size: number) => {
@@ -621,11 +637,10 @@ it('同一目录两代并存 ⇒ 读的是最新那代（旧代是截了尾巴�
   expect(detail.lastActivity).toBe(16)
 })
 
-it('生产的四个闸就是这四位数字（改它必须是有意的，别让它悄悄漂）', () => {
+it('生产的三个闸就是这三位数字（改它必须是有意的，别让它悄悄漂）', () => {
   expect(PER_BLOCK_CHAR_CAP).toBe(16_000)
   expect(PAGE_BLOCK_LIMIT).toBe(30)
   expect(PAGE_CHAR_LIMIT).toBe(500_000)
-  expect(SUBAGENT_SUMMARY_LIMIT).toBe(200)
 })
 
 const kidId = makeEntryId(DELETED_AT, 'session-kid')

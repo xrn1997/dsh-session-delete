@@ -1,6 +1,8 @@
 import zlib from 'node:zlib'
 import { describe, expect, it } from 'vitest'
+import { normalizeParentIds } from '../../src/ports/host-port.js'
 import { makeEntryId } from '../../src/trash/entry.js'
+import { createFakeHost } from './fake-deps.js'
 import { createLogWorld, failureOf, trashEntry } from './world.js'
 
 describe('条目记录', () => {
@@ -51,6 +53,31 @@ describe('被拒绝的错误', () => {
     const boom = Object.assign(new Error('boom'), { code: 'sessiondelete/io' })
     expect(await failureOf(Promise.reject(boom))).toBe(boom)
     await expect(failureOf(Promise.resolve(1))).rejects.toThrow(/expected the call to reject/)
+  })
+})
+
+// 父 id 清单归一（丢空 / 去重保序）**只有一份**：生产的 `membersFor` 与本文件用的假 adapter 都调
+// `normalizeParentIds`。这条用例直接钉那份判据，另一条钉假件确实经它出键——假件自己抄一份口径时，
+// 生产判据一改这里就红，而不是假件继续对着旧口径绿。
+describe('父 id 清单归一判据（生产与假件共用一份）', () => {
+  it('丢空 id、重复只算第一次、保序；返回新数组且不改入参', () => {
+    const input = ['session-b', '', 'session-a', 'session-b', '']
+    expect(normalizeParentIds(input)).toEqual(['session-b', 'session-a'])
+    expect(input).toEqual(['session-b', '', 'session-a', 'session-b', ''])
+    // 顺序稳定：同一份输入多次求值、以及去掉重复项后，键序都不变。
+    expect(normalizeParentIds(input)).toEqual(normalizeParentIds(input))
+    expect(normalizeParentIds(['session-b', 'session-a', 'session-b']))
+      .toEqual(normalizeParentIds(['session-b', 'session-a']))
+    // 边界：全是空 id / 空表都归一成空表（`membersFor` 据此在问宿主之前返回）。
+    expect(normalizeParentIds(['', ''])).toEqual([])
+    expect(normalizeParentIds([])).toEqual([])
+  })
+
+  it('假 adapter 的 subagentMembersOf 用同一份归一：键集与键序都照它', async () => {
+    const host = createFakeHost({ counts: { 'session-a': 2, 'session-b': 1 } })
+    const read = await host.subagentMembersOf(['session-b', '', 'session-a', 'session-b'])
+    expect(read.available).toBe(true)
+    expect(read.available ? Object.keys(read.value) : []).toEqual(['session-b', 'session-a'])
   })
 })
 

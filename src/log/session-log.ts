@@ -14,6 +14,7 @@
  *    toString('utf8') 只看整行。真被切断的尾巴（写一半）跳过并计数，绝不因为一行就抛整个读数。
  */
 import zlib from 'node:zlib'
+import type { FsPort } from '../ports/fs-port.js'
 import { frameRanges } from './zstd-frames.js'
 
 /** 一行 JSONL 的最小面：`type` / `time` 之外都留在 `data`（或记录根）上，由调用方按 `type` 自己判。 */
@@ -44,15 +45,48 @@ const NEWLINE = 0x0a
  * 单条会话日志**整本读取**的显式上限（256 MiB）。
  *
  * 逐帧解压把内存口径压在"最大那一帧的明文"，但 `readFile` 本身仍会把整本字节读进内存；日志大小
- * 没有宿主上限，坏文件 / 巨型工具输出可以把它撑到任意大。凡是"读整本"的解码路（回收站详情、
- * 附件引用扫描）都先 stat 再读，超过这个量级就按**读不出**处理——不截断、不猜：
- * - 详情抛 `io` + 原文（读者至少知道它有多大、为什么打不开）；
- * - 引用扫描按 `unreadable` 跳过（fail closed，宁可留孤儿也不删共享，ADR-0020）。
+ * 没有宿主上限，坏文件 / 巨型工具输出可以把它撑到任意大。凡是"读整本"的解码路都经
+ * {@link readWholeSessionLog}，超过这个量级就按**读不出**处理——不截断、不猜。
  *
  * 取值只住这一处：两个消费方引用同一个数，别各写一份。"读整本"的对立面是 `readFileHead` 那种
  * 有界头读（对账只读 header，不该为一行付整本内存）。
  */
 export const MAX_SESSION_LOG_BYTES = 256 * 1024 * 1024
+
+/** 一条会话日志**整本**的读取结果。判别联合：调用方只映射落点，不再自己记得「先 stat 再 read、
+ *  超过上限不许读」这条顺序。 */
+export type WholeSessionLogRead =
+  | { readonly ok: true; readonly raw: Buffer }
+  /** 超过 {@link MAX_SESSION_LOG_BYTES}：`size` 是 stat 读到的字节数；**一个字节都没读**。 */
+  | { readonly ok: false; readonly kind: 'too-large'; readonly size: number }
+  /** stat 或 read 抛错；`stage` 区分是哪一步（详情两条原文不同，引用扫描同判「读不出」）。 */
+  | { readonly ok: false; readonly kind: 'unreadable'; readonly stage: 'stat' | 'read'; readonly cause: unknown }
+
+/**
+ * 会话日志整本读取的**唯一入口**：先 `statFile`、比上限、再 `readFile`。
+ *
+ * 这条顺序是不变量而不是建议——绕过它直接 `readFile` 会把一份没有宿主上限的日志整本压进内存。
+ * 读错误**不折成缺席**（ADR-0039）：stat / read 的抛出原样进 `unreadable` 的 `cause`，由调用方按
+ * 自己的落点翻译（详情抛 `io` 原文、引用扫描记 `unreadable` 跳过、名字兜底放弃）。上限恰等于
+ * `MAX_SESSION_LOG_BYTES` 仍照常读：判的是「超过」。
+ */
+export async function readWholeSessionLog(
+  fs: Pick<FsPort, 'statFile' | 'readFile'>,
+  path: string,
+): Promise<WholeSessionLogRead> {
+  let size: number
+  try {
+    size = (await fs.statFile(path)).size
+  } catch (cause) {
+    return { ok: false, kind: 'unreadable', stage: 'stat', cause }
+  }
+  if (size > MAX_SESSION_LOG_BYTES) return { ok: false, kind: 'too-large', size }
+  try {
+    return { ok: true, raw: await fs.readFile(path) }
+  } catch (cause) {
+    return { ok: false, kind: 'unreadable', stage: 'read', cause }
+  }
+}
 
 /**
  * 宿主给每一代日志的词法（逐字取自 `@deepseek-ai/dsh-session-format@0.2.0-rc.2` 的

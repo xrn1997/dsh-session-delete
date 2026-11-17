@@ -22,9 +22,10 @@
  * 附件随块一起收（`attachmentsInContent`）：每块最多 20、每页最多 200；超出的**静默丢**，不另立计数——
  * "少了几张图"与"这块被截断"不是同一件事，拿一个数兼报会让两个数都对不上。
  *
- * **读整本之前先看大小**（`MAX_SESSION_LOG_BYTES`，取值的家与理由住 `src/log/session-log.ts`）：日志大小
- * 没有宿主上限，逐帧解压省的是"解压后的正文"，省不掉 `readFile` 那一份整本字节。超限按读不出处理，
- * 抛 `io` 带实际字节与上限原文——不截断成半条正文（详情是用户据以决定删不删的读数）。
+ * **整本读取（stat / 上限 / readFile 的顺序）归 `src/log/session-log.ts` 的 `readWholeSessionLog`**：日志
+ * 大小没有宿主上限，逐帧解压省的是"解压后的正文"，省不掉 `readFile` 那一份整本字节。这里只把它的
+ * 判别结果翻成落点：详情抛 `io` 带实际字节与上限原文（不截断成半条正文——详情是用户据以决定删不删的
+ * 读数），名字兜底放弃（`undefined`）。
  */
 import { entryWire, trashDirOf, type TrashEntry } from './entry.js'
 import type { FsDetailPort } from '../ports/fs-port.js'
@@ -40,10 +41,11 @@ import type {
   TrashDetailWire,
   TrashEntryWire,
 } from '../shared/wire.js'
-import { MAX_SESSION_LOG_BYTES, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { MAX_SESSION_LOG_BYTES, pickSessionLog, readWholeSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 import { descriptorLabelOf, displayNameOfLog } from './display-name.js'
 import { attachmentsInContent } from './attachments.js'
 import { visibleGroups } from './groups.js'
+import { summarizeSubagents, SUBAGENT_SUMMARY_LIMIT } from './subagent-summary.js'
 import { trashEmpty, verbError } from '../errors.js'
 
 /** 每块文字的上限（字符）。正文、工具参数、工具结果各自吃这一刀。 */
@@ -58,8 +60,6 @@ export const PROMPT_PREVIEW_LIMIT = 80
 const MAX_ATTACHMENTS_PER_BLOCK = 20
 /** 一页最多带多少张附件上线。 */
 const MAX_ATTACHMENTS_PER_PAGE = 200
-/** 子会话摘要最多列多少条；超出时只过线前 N 条，总数另走 `subagentsTotal`。 */
-export const SUBAGENT_SUMMARY_LIMIT = 200
 
 export type TrashDetail = TrashDetailWire
 
@@ -79,7 +79,8 @@ export interface DetailLimits {
   pageBlocks: number
   /** 一页正文的总字符闸；缺省 `PAGE_CHAR_LIMIT`。 */
   pageChars?: number
-  /** 子会话摘要的条数闸；缺省 `SUBAGENT_SUMMARY_LIMIT`。 */
+  /** 子会话摘要的条数闸；缺省 `SUBAGENT_SUMMARY_LIMIT`（条数闸 / 总数 / 合计的判据住
+   *  `src/trash/subagent-summary.ts`）。 */
   subagents?: number
 }
 
@@ -351,9 +352,10 @@ async function childDisplayNameOf(deps: DetailDeps, entry: TrashEntry): Promise<
     const logName = pickSessionLog(await deps.fs.listFiles(dir))
     if (logName === undefined) return undefined
     const logPath = `${dir}/${logName}`
-    // 同一道整本读取上限（文件头注）：名字兜底读不出就放弃，绝不为它多付一次超限读。
-    if ((await deps.fs.statFile(logPath)).size > MAX_SESSION_LOG_BYTES) return undefined
-    const { label, title } = displayNameOfLog(await deps.fs.readFile(logPath))
+    // 同一道整本读取（文件头注）：名字兜底读不出就放弃，绝不为它多付一次超限读。
+    const read = await readWholeSessionLog(deps.fs, logPath)
+    if (!read.ok) return undefined
+    const { label, title } = displayNameOfLog(read.raw)
     return label !== '' ? label : title !== '' ? title : undefined
   } catch {
     return undefined
@@ -563,23 +565,18 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
     }
 
     const logPath = `${dir}/${logName}`
-    // 读整本之前先过大小闸：上限是"读不出"的判据，不是截断阈值（见文件头注）。
-    let logSize: number
-    try {
-      logSize = (await deps.fs.statFile(logPath)).size
-    } catch (error) {
-      throw verbError('io', `读取会话日志大小失败：${String(error)}`, error)
+    // 整本读取（含大小闸）归 `readWholeSessionLog`；这里只把三种失败翻成各自的 io 原文。
+    const read = await readWholeSessionLog(deps.fs, logPath)
+    if (!read.ok) {
+      if (read.kind === 'too-large') {
+        throw verbError('io', `会话日志 ${read.size} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节：${logPath}`)
+      }
+      if (read.stage === 'stat') {
+        throw verbError('io', `读取会话日志大小失败：${String(read.cause)}`, read.cause)
+      }
+      throw verbError('io', `读会话日志失败：${String(read.cause)}`, read.cause)
     }
-    if (logSize > MAX_SESSION_LOG_BYTES) {
-      throw verbError('io', `会话日志 ${logSize} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节：${logPath}`)
-    }
-
-    let raw: Buffer
-    try {
-      raw = await deps.fs.readFile(logPath)
-    } catch (error) {
-      throw verbError('io', `读会话日志失败：${String(error)}`, error)
-    }
+    const raw = read.raw
 
     const fold = createDetailFold(limits, before)
     /** 子会话的显示名（bare id → label）：父日志的 `subagent/catalog` 事件逐孩子记着委派时的
@@ -613,7 +610,13 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
     // 自己占清单行；详情不重复给它们开入口。
     const kids = visibleGroups(all).find((group) => group.root.id === record.id)?.kids ?? []
     if (kids.length > 0) {
-      const limit = limits.subagents ?? SUBAGENT_SUMMARY_LIMIT
+      // 条数闸、总数出线与合计出线归 `subagent-summary.ts`：这里只交「孩子总数 + 全量合计 / 缺席计数」。
+      // 清册每行都记着删除那一刻的目录字节（必填）⇒ 合计恒出线、缺席计数恒 0。
+      const summary = summarizeSubagents({
+        count: kids.length,
+        limit: limits.subagents,
+        sizes: { sum: kids.reduce((sum, kid) => sum + kid.sizeBytes, 0), missing: 0 },
+      })
       // 行 = `entryWire`（清册事实，与 `/list` 同一份投影）+ 可选 label（日志里读出来的显示名兜底，
       // 两份来源不同、不混在 `entryWire` 里——它只搬清册里真有的事实）。
       // 没有 catalog 登记、标题又和父/兄弟撞名的 fork 孩子：它没有 descriptor label，但自己的日志
@@ -629,7 +632,7 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
       const ambiguous = (kid: TrashEntry): boolean =>
         kid.title === '' || kid.title === record.title || (titleCounts.get(kid.title) ?? 0) > 1
       const listed: TrashEntryWire[] = []
-      for (const kid of kids.slice(0, limit)) {
+      for (const kid of kids.slice(0, summary.displayed)) {
         const label = subagentLabels.get(bareSessionId(kid.sessionId))
         if (label !== undefined) {
           listed.push({ ...entryWire(kid), label })
@@ -643,10 +646,11 @@ export function readTrashDetail(deps: DetailDeps, limits: DetailLimits = DEFAULT
         listed.push(own === undefined || own === kid.title ? entryWire(kid) : { ...entryWire(kid), label: own })
       }
       detail.subagents = listed
-      // 合计按**全部**孩子算：摘要条报的是清册大小合计，不是已列前 N 条的和（ADR-0055）。
-      detail.subagentsSizeBytes = kids.reduce((sum, kid) => sum + kid.sizeBytes, 0)
+      // 合计按**全部**孩子算（判据住 `subagent-summary.ts`）：摘要条报的是清册大小合计，不是已列前 N 条的和
+      // （ADR-0055）；清册大小必填 ⇒ 这一格恒出线。
+      detail.subagentsSizeBytes = summary.sizeBytes
       // 超闸只报「前 N 条 + 总数」，不静默截断：整组仍按整组释放，删前核对的合计由确认框念。
-      if (kids.length > limit) detail.subagentsTotal = kids.length
+      if (summary.total !== undefined) detail.subagentsTotal = summary.total
     }
     return detail
   }

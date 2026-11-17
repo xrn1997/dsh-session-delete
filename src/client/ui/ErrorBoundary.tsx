@@ -10,6 +10,7 @@
  * 一次；刷新页面 / HMR 换代才是恢复路径。文案由注册处按 `t` 给（见 `copy.ts`）。
  */
 import { Component, type ComponentType, type ErrorInfo, type ReactElement, type ReactNode } from 'react'
+import { ClientSceneProvider, type ClientScene } from '../scene.js'
 
 export interface ErrorBoundaryProps {
   /** 崩溃时上屏的本地化文案（注册处按 `t` 给）。 */
@@ -65,10 +66,15 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 export function withErrorBoundary<P extends object>(
   Wrapped: ComponentType<P>,
   fallback: string,
+  scene?: ClientScene,
 ): ComponentType<P> {
   const Guarded = (props: P): ReactElement => (
     <ErrorBoundary fallback={fallback}>
-      <Wrapped {...props} />
+      {/* 注册面把同一个场景实例交给每个贡献：跨槽位共享靠实例本身，不靠 React 树。
+          生产传实例；测试/旧调用点省略 ⇒ 组件里的 `useClientScene()` 回退默认场景。 */}
+      {scene === undefined
+        ? <Wrapped {...props} />
+        : <ClientSceneProvider scene={scene}><Wrapped {...props} /></ClientSceneProvider>}
     </ErrorBoundary>
   )
   // 先认显式 `displayName`，再认函数/类的名字（宿主调试面板与测试都靠它认出这是哪一颗被隔离过）。

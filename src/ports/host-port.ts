@@ -431,15 +431,27 @@ async function descendantsByParent(
   return children
 }
 
+/**
+ * 语料读面的父 id 清单归一：**丢空 id、重复只算第一次、保序**，返回新数组（不改入参）。
+ *
+ * 为什么要导出：`subagentMembersOf` 的键集（{@link membersFor} 的 BFS 起点）与 `tests/support/fake-deps.ts`
+ * 的假 adapter 是同一件事——假件过去自己抄了一份口径，生产改判据时假件不红、动词用例继续对着旧口径绿。
+ * 现在两边调同一个函数：口径一改，生产与假件一起红。空 id 不是父、重复 id 只能产生一份键。
+ */
+export function normalizeParentIds(parentIds: readonly string[]): string[] {
+  const wanted: string[] = []
+  for (const id of parentIds) if (id.length > 0 && !wanted.includes(id)) wanted.push(id)
+  return wanted
+}
+
 /** {@link HostCorpusPort.subagentMembersOf} 的那一次 BFS：这里只负责问宿主，某个根的后代闭包
  *  由纯部件的 `closureOf` 在交回的索引上收（深度不设上限、防环、首见去重都在那一处）。
- *  空清单在调用宿主之前就返回（不为一张空表扫全库）。 */
+ *  空清单在调用宿主之前就返回（不为一张空表扫全库）；入参先过 {@link normalizeParentIds}。 */
 async function membersFor(
   sessionQuery: SessionQueryLike,
   parentIds: readonly string[],
 ): Promise<Record<string, readonly SubagentMember[]>> {
-  const wanted: string[] = []
-  for (const id of parentIds) if (id.length > 0 && !wanted.includes(id)) wanted.push(id)
+  const wanted = normalizeParentIds(parentIds)
   if (wanted.length === 0) return {}
   const children = await descendantsByParent(sessionQuery, wanted)
   const out: Record<string, readonly SubagentMember[]> = {}

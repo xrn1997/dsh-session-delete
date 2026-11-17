@@ -34,11 +34,12 @@ export interface FsPort {
   listDirs: (p: string) => Promise<string[]>
   /** 解析符号链接后的真实路径。递归走目录时防环用：跟随软链之后，目录图不再是树。 */
   realpath: (p: string) => Promise<string>
-  /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），不在这里。 */
+  /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），
+   *  本方法不做任何上限判断：会话日志的整本读取走 `readWholeSessionLog`（stat → 上限 → read 的顺序住那里）。 */
   readFile: (p: string) => Promise<Buffer>
   /** **有界头读**：只读文件开头至多 `maxBytes` 字节（文件更短就整份交回）。
    *  对账只为读日志 header，却不必把整本日志读进内存——这是"整本读"之外的另一条读取口径，
-   *  不改变 `readFile` 的语义（它仍读整本，整本上限归 `MAX_SESSION_LOG_BYTES` 的消费方判）。
+   *  不改变 `readFile` 的语义（它仍读整本，整本上限由 `src/log/session-log.ts` 的 `readWholeSessionLog` 判）。
    *  只做字节切取，不保证落在帧边界：前缀的尾巴可以切在帧中间，需要解 zstd 的调用方按自己的
    *  容忍度判（对账走 `readSessionHeader` 的前缀容忍口径，丢掉最后那个不完整帧，见 `src/trash/reconcile.ts`）。 */
   readFileHead: (p: string, maxBytes: number) => Promise<Buffer>
@@ -69,7 +70,7 @@ export const FS_REMOVAL_METHODS = ['removeDir', 'removeFile'] as const
 /** 附件渲染：读一个文件的大小与字节。 */
 export const FS_ATTACHMENT_METHODS = ['statFile', 'readFile'] as const
 
-/** 详情读取：目录在不在、挑日志文件、读日志、读日志大小（整本读取上限的判据，`MAX_SESSION_LOG_BYTES`）。 */
+/** 详情读取：目录在不在、挑日志文件、读日志（整本读取经 `readWholeSessionLog`，stat / 上限的顺序不在这里判）。 */
 export const FS_DETAIL_METHODS = ['exists', 'listFiles', 'readFile', 'statFile'] as const
 
 /** 对账：目录存在性、枚举（条目目录 / 目录里的文件）、有界头读、量尺寸。**不读整本日志**——

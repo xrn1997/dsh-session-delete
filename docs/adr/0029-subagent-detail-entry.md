@@ -13,7 +13,7 @@ Status: superseded by 0055
 ## 决定
 
 1. **入口住详情、不住清单**：父详情的会话信息后有「子会话」段（确有折进这一条的孩子时），段标题带已列条数与这些孩子的清册大小合计（超条数闸时另标总数，见第 2 条），逐条列标题/大小/删除时间、可点；点一条详情切到该子会话，同一套会话信息 + 正文 + 分页。清单不长孩子行。这一段的用途是**删前核对**（永久删除按整组释放），不是导航装饰。
-2. **孩子身份随 `TrashDetailWire.subagents` 过线，复用 `TrashEntryWire`**：缺席 = 没有孩子，不是空数组。这是详情线上唯一带清册事实的一格（`src/client/remote.ts` 头注的例外）；投影住 `src/trash/entry.ts` 的 `entryWire`（`/list` 的 `toWire` 与详情共用同一份显式字面量），只搬清册里真有的事实、不带只读数。摘要只取**折进这一条**的孩子（折的判据复用 `src/trash/groups.ts` 的 `visibleGroups`）；条数过 `src/trash/detail.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 闸，超出只列前 N 条并让 `subagentsTotal` 过线。孩子的详情仍按它自己的 `entryId` 走同一个 `POST /detail`（pure/raw），缓存、在飞与分页和选中行共用一条读路。
+2. **孩子身份随 `TrashDetailWire.subagents` 过线，复用 `TrashEntryWire`**：缺席 = 没有孩子，不是空数组。这是详情线上唯一带清册事实的一格（`src/client/remote.ts` 头注的例外）；投影住 `src/trash/entry.ts` 的 `entryWire`（`/list` 的 `toWire` 与详情共用同一份显式字面量），只搬清册里真有的事实、不带只读数。摘要只取**折进这一条**的孩子（折的判据复用 `src/trash/groups.ts` 的 `visibleGroups`）；条数过 `src/trash/subagent-summary.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 闸，超出只列前 N 条并让 `subagentsTotal` 过线。孩子的详情仍按它自己的 `entryId` 走同一个 `POST /detail`（pure/raw），缓存、在飞与分页和选中行共用一条读路。
 3. **孩子视图是离清单的单级导航态**：`src/client/use-trash-panel-controller.ts` 的 `childView` 只持一个槽位，不叠导航栈；`selectedId` 与组语义不动，返回回到清单选中那条的详情，点清单行即收掉孩子视图。组动作（恢复/彻底删除按整组）不因孩子视图改变——它只是看，不是新的动作单位。
 
 ## 不做的事
@@ -36,4 +36,4 @@ Status: superseded by 0055
 - **摘要放 `TrashRowWire`**：入口在详情，`/list` 每行白背一份孩子清单，读放大且多数行用不上。
 - **新开 `/children` 段**：raw 清册行里现成的事实（`parentEntryId` 指向谁）不值一段新契约面；复用 `/detail` 与 `TrashEntryWire` 就够。
 
-锚点：`docs/ui-spec.md` §2（⑥）与 §3（键盘）；`src/client/use-trash-panel-controller.ts`（`childView`）；`src/shared/wire.ts`（`TrashDetailWire.subagents` / `subagentsTotal`）；`src/trash/entry.ts`（`entryWire`）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT`）；`src/trash/groups.ts`（折进判据）；`src/client/trash-detail.tsx`；`tests/client/use-trash-panel-controller.test.tsx`；ADR-0001（组语义）；ADR-0026（详情正文）。
+锚点：`docs/ui-spec.md` §2（⑥）与 §3（键盘）；`src/client/use-trash-panel-controller.ts`（`childView`）；`src/shared/wire.ts`（`TrashDetailWire.subagents` / `subagentsTotal`）；`src/trash/entry.ts`（`entryWire`）；`src/trash/subagent-summary.ts`（`SUBAGENT_SUMMARY_LIMIT`）；`src/trash/groups.ts`（折进判据）；`src/client/trash-detail.tsx`；`tests/client/use-trash-panel-controller.test.tsx`；ADR-0001（组语义）；ADR-0026（详情正文）。

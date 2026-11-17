@@ -110,12 +110,15 @@ export const CONFIG_LIMITS = {
  *  两域都是 string（线上形状）；这里不引入品牌类型——错域不靠类型拦，交给各动词在运行期按自己的
  *  语义处理，批处理不猜格式。
  *
- *  **动作六面清单**（只指路：不抄各家的表达式，也不做动作逐条的映射表——映射表会随任何一家漂）：
- *  一个动作的口径散在六个家，改一个动作六处一起看。值型（成功值的线上形状）就在本文件的
- *  {@link ApplyValueByAction}；静态纯度（纯读还是写）住 `src/api/route-table.ts` 的 `APPLY_ACTION_TABLE`；
- *  执行住 `src/verbs/batch.ts` 的 `applyActions`；逐条回执怎么判读住 `src/client/receipt.ts` 的 `readReceipt`；
- *  写后收尾（何时结算、什么跟着失效）住 `src/client/write-seats.ts` 的 `settleWrite`；上屏文案的键住
- *  `src/client/copy.ts` 的 `CopyKey`。判据各住各家、各带各的闸，这里只负责让人找得到门。 */
+ *  **动作六面清单**（只指路：不抄各家的表达式）：
+ *  一个动作的口径散在六个家，改一个动作六处一起看。**可枚举的三格静态事实**（规范动作序 / 静态纯度 /
+ *  成功值形状族 / 慢请求档）收在 `src/shared/apply-actions.ts` 的 `APPLY_ACTION_INDEX`——索引不参与
+ *  运行时分派，其余各家不读表，由 `tests/apply-actions-matrix.test.ts` 双向核对「新动作不漏」。
+ *  值型（成功值的线上形状）就在本文件的 {@link ApplyValueByAction}；静态纯度与路由记录住
+ *  `src/api/route-table.ts` 的 `APPLY_ACTION_TABLE`（从索引投影）；执行住 `src/verbs/batch.ts` 的
+ *  `applyActions`；逐条回执怎么判读住 `src/client/receipt.ts` 的 `readReceipt`；写后收尾（何时结算、
+ *  什么跟着失效）住 `src/client/write-seats.ts` 的 `settleWrite`；上屏文案的键住 `src/client/copy.ts`
+ *  的 `CopyKey`。判据各住各家、各带各的闸，这里只负责让人找得到门。 */
 export type ApplyAction = 'delete' | 'restore' | 'purge' | 'count' | 'orphan-clean' | 'unarchive'
 
 /** 每个动作的成功值：`count` 是一个数（拿不到就是 0，界面上那半句整句不出现）；
@@ -303,7 +306,7 @@ export interface TrashDetailWire extends SessionDetailWire {
   /** 跟着这条父条目一起进回收站、并**折进这一行**的孩子（清册里 `parentEntryId` 指向它，
    *  且组语义接得住——折的判据复用 `src/trash/groups.ts` 的 `visibleGroups`），按清册原序。
    *  确有孩子时出线；**缺席 = 没有孩子**，不是空数组。孩子的详情仍按 `entryId` 走同一个 `/detail`。
-   *  最多过线 `src/trash/detail.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 条，超出时 `subagentsTotal` 给总数。
+   *  最多过线 `src/trash/subagent-summary.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 条（判据住该 module 的 `summarizeSubagents`），超出时 `subagentsTotal` 给总数。
    *  这是详情线上唯一带清册事实的一格：孩子不在客户端清单里，没有「按 entryId 与清单配对」
    *  那条路可走（`src/client/remote.ts` 头注的例外说明）。 */
   subagents?: TrashEntryWire[]
@@ -374,7 +377,7 @@ export interface ArchiveDetailWire extends SessionDetailWire {
    *  闭包放行的只读孩子。状态行认这一格，不认客户端快照或导航道。 */
   archived: boolean
   /** 主体自己已归档且有孩子时出线；**缺席 = 没有孩子，或这一条是仅凭根放行的孩子读**，
-   *  不是空数组。最多过线 `SUBAGENT_SUMMARY_LIMIT` 条。 */
+   *  不是空数组。最多过线 `src/trash/subagent-summary.ts` 的 `SUBAGENT_SUMMARY_LIMIT` 条（判据住该 module 的 `summarizeSubagents`）。 */
   subagents?: ArchiveSubagentWire[]
   /** 子会话总数；**只在 `subagents` 被条数闸截断时出线**。 */
   subagentsTotal?: number

@@ -1,7 +1,14 @@
 // 会话日志的逐帧读法：帧 → 明文 → 一行一条 JSON 记录（src/log/zstd-frames.ts）
 import zlib from 'node:zlib'
-import { describe, expect, it } from 'vitest'
-import { pickSessionLog, readSessionHeader, walkSessionLog, type SessionRecord } from '../src/log/session-log.js'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  MAX_SESSION_LOG_BYTES,
+  pickSessionLog,
+  readSessionHeader,
+  readWholeSessionLog,
+  walkSessionLog,
+  type SessionRecord,
+} from '../src/log/session-log.js'
 
 const frame = (...lines: string[]) =>
   zlib.zstdCompressSync(Buffer.from(lines.filter(Boolean).join('\n') + '\n', 'utf8'))
@@ -145,5 +152,67 @@ describe('pickSessionLog：同一目录多代并存时选哪一代', () => {
 
   it('只有非 zstd 明文日志时返回 undefined（本插件的读法逐帧解 zstd，读不了明文）', () => {
     expect(pickSessionLog(['session.jsonl', 'session.v4.jsonl'])).toBeUndefined()
+  })
+})
+
+// 整本读取的唯一入口：先 stat、比 MAX_SESSION_LOG_BYTES、再 readFile。调用方不再自己记得这条顺序。
+describe('readWholeSessionLog：整本读取的 seam', () => {
+  /** 只实现 seam 要的两格；`stat` 可以抛（测 stat 失败的落点）。 */
+  const wholeLogFs = (
+    stat: () => { size: number },
+    raw: Buffer = Buffer.from('xx'),
+  ) => ({
+    statFile: vi.fn(async () => stat()),
+    readFile: vi.fn(async () => raw),
+  })
+
+  it('先 stat 再 read，正常情况交回整本字节', async () => {
+    const raw = frame(rec({ type: 'session', id: 's' }))
+    const fs = wholeLogFs(() => ({ size: raw.length }), raw)
+    await expect(readWholeSessionLog(fs, '/h/session.v4.jsonl.zstd')).resolves.toEqual({ ok: true, raw })
+    expect(fs.statFile).toHaveBeenCalledWith('/h/session.v4.jsonl.zstd')
+    expect(fs.readFile).toHaveBeenCalledWith('/h/session.v4.jsonl.zstd')
+  })
+
+  it('超过上限：交回 too-large 与实测字节，一次 readFile 都不发', async () => {
+    const fs = wholeLogFs(() => ({ size: MAX_SESSION_LOG_BYTES + 1 }))
+    await expect(readWholeSessionLog(fs, '/h/huge.zstd')).resolves.toEqual({
+      ok: false,
+      kind: 'too-large',
+      size: MAX_SESSION_LOG_BYTES + 1,
+    })
+    expect(fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('正好等于上限：照常读（判的是"超过"）', async () => {
+    const raw = Buffer.from('edge')
+    const fs = wholeLogFs(() => ({ size: MAX_SESSION_LOG_BYTES }), raw)
+    await expect(readWholeSessionLog(fs, '/h/edge.zstd')).resolves.toEqual({ ok: true, raw })
+  })
+
+  it('stat 抛错 ⇒ unreadable(stage: stat) 带原抛出物，不读字节', async () => {
+    const boom = new Error('EACCES: stat')
+    const fs = wholeLogFs(() => { throw boom })
+    await expect(readWholeSessionLog(fs, '/h/locked.zstd')).resolves.toEqual({
+      ok: false,
+      kind: 'unreadable',
+      stage: 'stat',
+      cause: boom,
+    })
+    expect(fs.readFile).not.toHaveBeenCalled()
+  })
+
+  it('read 抛错 ⇒ unreadable(stage: read) 带原抛出物（不折成缺席）', async () => {
+    const boom = new Error('EIO: read')
+    const fs = {
+      statFile: vi.fn(async () => ({ size: 0 })),
+      readFile: vi.fn(async () => { throw boom }),
+    }
+    await expect(readWholeSessionLog(fs, '/h/bad.zstd')).resolves.toEqual({
+      ok: false,
+      kind: 'unreadable',
+      stage: 'read',
+      cause: boom,
+    })
   })
 })

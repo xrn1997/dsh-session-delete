@@ -2,7 +2,7 @@
  * 「删除」确认框，挂在 shell.overlay 上；菜单行只负责发请求。
  *
  * 宿主菜单行随菜单关闭而卸载，确认框若住在行内会被连坐卸载，因此把请求与确认拆开：
- * 菜单行把 {sessionId,title} 写进模块级 store，DeleteConfirmHost 在 overlay 读取并提交。
+ * 菜单行把 {sessionId,title} 写进场景实例里的请求现场，DeleteConfirmHost 在 overlay 读取并提交。
  * 这样提交、失败原文、重试与撤销提示都在菜单子树之外，开合菜单不影响它们。
  */
 import { useEffect, useState } from 'react'
@@ -10,6 +10,7 @@ import { useBusyGate } from './busy-gate.js'
 import { ConfirmDialog } from './confirm-dialog.js'
 import { zhTranslate, type Translate } from './copy.js'
 import { applyOne, type OneShotDeps } from './remote.js'
+import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'
 import { Tag } from './ui/Tag.js'
 import { deleteSessionFromMenu } from './write-seats.js'
@@ -37,29 +38,49 @@ export interface DeleteRequest {
   title: string
 }
 
-const requestStore = createStore<DeleteRequest | null>(null)
+/** 一台「删除」确认框请求现场：发布 / 按 expected 收框 / 订阅 / 收场。 */
+export interface DeleteRequestScene {
+  /** 菜单行调用：请求删除这个会话（确认框由 overlay 上的宿主渲染）。 */
+  request(input: { sessionId: string; title: string }): void
+  /** 收起确认框（用户点「取消」/「关闭」、或删除成功后收工）。
+   *  **必带 expected 比较**：一次删除在飞时用户可能已经发布了**下一条**请求（框按 seq 重挂载）。
+   *  旧实例晚到的成功只许收自己那一条，不许把后来发布的请求一起清掉（那会让新框凭空消失）。
+   *  没有"无条件清"这一档：复位走 `reset`，收框一律交 `current`。 */
+  clear(expected: DeleteRequest): void
+  /** 供宿主组件订阅。 */
+  use(): DeleteRequest | null
+  /** 场景收场：现场与 seq 归零。 */
+  reset(): void
+}
 
-/** 菜单行调用：请求删除这个会话（确认框由 overlay 上的宿主渲染）。 */
+export function createDeleteRequestScene(): DeleteRequestScene {
+  const requestStore = createStore<DeleteRequest | null>(null)
+  return {
+    request(input): void {
+      requestStore.publish((seq) => ({ seq, sessionId: input.sessionId, title: input.title }))
+    },
+    clear(expected: DeleteRequest): void {
+      requestStore.update((current) => (current === expected ? null : current))
+    },
+    use(): DeleteRequest | null {
+      return requestStore.use()
+    },
+    reset(): void {
+      requestStore.reset()
+    },
+  }
+}
+
+/* ── 兼容自由函数（旧调用点与测试）：委托默认场景的实例 ────────────────────────── */
+
+/** 菜单行调用：请求删除这个会话（默认场景，确认框由 overlay 上的宿主渲染）。 */
 export function requestDelete(input: { sessionId: string; title: string }): void {
-  requestStore.publish((seq) => ({ seq, sessionId: input.sessionId, title: input.title }))
+  getDefaultClientScene().deleteRequest.request(input)
 }
 
-/** 收起确认框（用户点「取消」/「关闭」、或删除成功后收工）。
- *  **必带 expected 比较**：一次删除在飞时用户可能已经发布了**下一条**请求（框按 seq 重挂载）。
- *  旧实例晚到的成功只许收自己那一条，不许把后来发布的请求一起清掉（那会让新框凭空消失）。
- *  没有"无条件清"这一档：复位走 {@link resetDeleteRequest}，收框一律交 `current`。 */
-function clearDeleteRequest(expected: DeleteRequest): void {
-  requestStore.update((current) => (current === expected ? null : current))
-}
-
-/** 供宿主组件订阅。 */
+/** 供宿主组件订阅（生产走 Provider 的那一份；测试无 Provider 回退默认场景）。 */
 export function useDeleteRequest(): DeleteRequest | null {
-  return requestStore.use()
-}
-
-/** 测试专用：现场与 seq 归零，用例之间互不串味。 */
-export function resetDeleteRequest(): void {
-  requestStore.reset()
+  return useClientScene().deleteRequest.use()
 }
 
 /**
@@ -110,23 +131,31 @@ function DeleteConfirmDialog({
     return () => { alive = false }
   }, [deps, current.sessionId])
 
+  const scene = useClientScene()
+
   const confirm = async (): Promise<void> => {
-    setFailure(null)
+    // 逐条失败落点交给座位：apply 前清旧原文（被挡回也清过）、跑完按 id 铺回。这里只保留两个
+    // 呈现分支——挡回不动框，失败不关框。
     const run = await deleteSessionFromMenu(
       deps,
-      { sessionId: current.sessionId, title: current.title },
+      {
+        sessionId: current.sessionId,
+        title: current.title,
+        failureSink: {
+          clear: () => { setFailure(null) },
+          set: (failures) => { setFailure(failures.get(current.sessionId) ?? null) },
+        },
+      },
       gate,
     )
     // `blocked` 是闸把这一趟挡回来了（连点的第二下）：这一趟没跑 ⇒ 框不收、这里不再追加失败
-    // （进入时清旧失败那一下已在同一动作里发生），界面后果全归在飞那一趟（收了就会把那一趟的
-    // 失败原文丢在已经卸载的框上）。
+    // （旧原文已经由座位清过），界面后果全归在飞那一趟（收了就会把那一趟的失败原文丢在已经
+    // 卸载的框上）。
     if (run.kind === 'blocked') return
-    if (run.value !== null) {
-      setFailure(run.value)
-      return
-    }
+    // 失败原文已由座位的落点铺好；这一支只回答「框关不关」。
+    if (run.value !== null) return
     // 只收**自己这条**请求：在飞期间可能已经发布了新的删除请求（新框），旧成功不许连坐清掉它。
-    clearDeleteRequest(current)
+    scene.deleteRequest.clear(current)
   }
 
   return (
@@ -136,7 +165,7 @@ function DeleteConfirmDialog({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('dialog.confirm')}
       busy={gate.busy}
-      onCancel={() => { clearDeleteRequest(current) }}
+      onCancel={() => { scene.deleteRequest.clear(current) }}
       onConfirm={() => void confirm()}
     >
       <div style={TARGET_CARD}>

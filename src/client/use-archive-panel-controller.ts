@@ -24,10 +24,10 @@ import { invalidateArchive } from './archive-store.js'
 import { displayNameOf } from './trash-view.js'
 import type { ArchiveDetailSubject } from './use-archive-detail-reader.js'
 import { childSubjectOf, useArchiveDetailReader } from './use-archive-detail-reader.js'
-import type { DetailState } from './use-detail-reader.js'
 import type { DetailNav } from './session-detail.js'
 import type { ArchiveQuery } from './use-archive-query.js'
 import { usePanelSelection } from './use-panel-selection.js'
+import { panelDetailNav, useGuardedLoadOlder, type PanelTabController } from './use-panel-tab.js'
 import { unarchiveFromArchiveTab } from './write-seats.js'
 
 /** 归档档离清单的孩子视图：父仍是清单选中那条已归档行，看的却是它的一个子会话。 */
@@ -36,38 +36,19 @@ export interface ArchiveChildView {
   readonly child: ArchiveSubagentWire
 }
 
-export interface ArchivePanelController {
-  readonly busy: boolean
-  readonly selected: ArchiveRowWire | null
+export interface ArchivePanelController
+  extends PanelTabController<ArchiveRowWire, ArchiveDetailSubject, ArchiveDetailLike> {
   /** 当前活动行（说「详情正画着这一条」）：选中行优先；没有选中（窄档方向键只移光标）时回落到
    *  光标，光标行已被清单收走就落空（不拿旧行冒充）。清单的活动高亮与导航落点都读它。 */
   readonly activeId: string | null
   /** 正在看哪个孩子（离清单的详情导航态；null = 看清单选中那条）。单级是设计。 */
   readonly childView: ArchiveChildView | null
-  readonly detail: DetailState<ArchiveDetailSubject, ArchiveDetailLike>
-  /** 「保持期拒绝导航/跳转」判据（`use-detail-reader` 的唯一出口）：`openChild` / `loadOlder` 的守卫
-   *  与详情栏 `disabled` 都只问它，不再各自重推保持。 */
-  readonly canNavigate: boolean
-  readonly loadingOlder: boolean
-  readonly olderFailure: string | null
-  /** 失败原文按行落：不冻结清单与动作，行内各自显示。 */
-  readonly actionFailure: Readonly<Record<string, string>>
-  /** 详情的导航面（开孩子 / 预取 / 回父）：面板只转交，不自己拼（判据住控制器，与回收站同款）。 */
-  readonly detailNav: DetailNav
+  /** 失败原文按行落：不冻结清单与动作，行内各自显示（该成员由共享控制面声明）。 */
   select: (row: ArchiveRowWire) => Promise<void>
   /** 记光标；`drill`（Enter/Space 那一下）或分栏（`split`）时才真正选中并读详情——窄档方向键只移光标。 */
   selectRow: (row: ArchiveRowWire, options?: { drill?: boolean }) => Promise<void>
-  /** 窄档返回：孩子视图先回父，再按一次交还清单；宽档无此步。 */
-  back: () => void
   /** 意图预取（清单行与孩子行同一条）：只热身账本，读哪一条的根由 `rootOf` 判。 */
   prefetch: (sessionId: string) => void
-  /** 打开父详情里的一个孩子；id 若就是清单里的一行（已归档会话本体）⇒ 选那一行、不进孩子视图
-   *  （ADR-0061 寻址）。否则进只读孩子视图（父行做只读根）。单级：孩子视图里不再开下一层。 */
-  openChild: (sessionId: string) => Promise<void>
-  /** 回到父详情（孩子视图开着时）。 */
-  closeChild: () => void
-  loadOlder: () => Promise<void>
-  retry: () => void
   /** 单条/批量解除归档：`/apply` 的 `unarchive`，无确认框（幂等）、无撤销座位。 */
   unarchive: (ids: readonly string[]) => Promise<void>
   /** 单删：`requestDelete({ sessionId, title: 显示名 })` → `DeleteConfirmHost`
@@ -174,13 +155,9 @@ export function useArchivePanelController(input: {
   }, [split, pick])
 
   /**
-   * 更早一页（守卫问 `canNavigate`，保持期一趟都不发）：那一帧画的是上一条的正文，翻页会把它的
-   * 游标读进新主体（ADR-0049）。分页机制本体在读路。
+   * 更早一页：保持期守卫（ADR-0049）与另一档共用 `useGuardedLoadOlder`；分页机制本体在读路。
    */
-  const loadOlder = useCallback(async (): Promise<void> => {
-    if (!canNavigate) return
-    await loadOlderDetail()
-  }, [canNavigate, loadOlderDetail])
+  const loadOlder = useGuardedLoadOlder(canNavigate, loadOlderDetail)
 
   /** 父行被清单换版收走（解除归档 / 删除 / 语料消失）⇒ 孩子视图失去只读根：关掉并丢账本。 */
   useEffect(() => {
@@ -224,30 +201,28 @@ export function useArchivePanelController(input: {
    *   显示名**（`displayNameOf`，label 优先；未命名兜底也在那条），onBack 收孩子视图。
    * - `selected` 为 null（清单换版把父行收走的那一帧）⇒ `parentContext` 缺席：返回键不能指着不存在的父。
    */
-  const detailNav = useMemo<DetailNav>(() => {
-    if (childView === null) {
-      return {
-        onOpenChild: (childId: string): void => { void openChild(childId) },
-        onPrefetchChild: (childId: string): void => { prefetch(childId) },
-      }
-    }
-    if (selected === null) return {}
-    return { parentContext: { title: displayNameOf(selected, t), onBack: closeChild } }
-  }, [childView, selected, openChild, closeChild, prefetch, t])
+  const detailNav = useMemo<DetailNav>(() => panelDetailNav({
+    childViewOpen: childView !== null,
+    selected,
+    // 返回键念**选中行的显示名**（label 优先；未命名兜底在 `displayNameOf` 里）。
+    parentTitle: (row) => displayNameOf(row, t),
+    openChild,
+    prefetchChild: prefetch,
+    closeChild,
+  }), [childView, selected, openChild, closeChild, prefetch, t])
 
   const unarchive = useCallback(async (ids: readonly string[]): Promise<void> => {
-    // 行失败是面板的本地状态：进门前清这一批的旧原文，落定后按 outcome 回填——座位只交结局。
-    clearRowFailures(ids)
     const run = await unarchiveFromArchiveTab({
       deps,
       ids,
       gate,
       // 自救动作只戳失效台（不直呼 reload）：旁路观察的同轮变化合并进同一次读。
       refresh: () => { invalidateArchive(); return Promise.resolve() },
+      // 行失败是面板的本地状态：座位在 apply 前清这一批的旧原文（被挡回也清过）、跑完按 id 铺回。
+      failureSink: { clear: clearRowFailures, set: setRowFailures },
     })
-    // 被闸挡回的那一趟什么都没跑：成败由在飞那一趟说。
+    // 被闸挡回的那一趟什么都没跑：成败由在飞那一趟说（旧原文已经清过）。
     if (run.kind === 'blocked') return
-    setRowFailures(run.value.failures)
   }, [deps, gate, clearRowFailures, setRowFailures])
 
   const requestDeleteOne = useCallback((row: ArchiveRowWire): void => {

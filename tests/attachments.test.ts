@@ -287,6 +287,19 @@ describe('单目录引用扫描', () => {
     expect(made.fs.readFile).not.toHaveBeenCalled()
   })
 
+  it('整本日志的 stat 读不出 ⇒ unreadable，不整本读（不折成"没有引用"）', async () => {
+    const dir = '/h/sessions/--p--/session-locked'
+    const made = makeWorld({
+      logs: {},
+      files: (p) => p === dir ? ['session.v4.jsonl.zstd'] : [],
+      statFile: () => { throw new Error('EACCES: stat') },
+    })
+    const read = await imageIdsOfDir(made.deps, dir)
+    expect(read.ids.size).toBe(0)
+    expect(read.unreadable).toContain('EACCES')
+    expect(made.fs.readFile).not.toHaveBeenCalled()
+  })
+
   // 宿主的内核写锁与日志常态并存（以写方式打开即截断、从不写入内容、释放也不删除）：它不是会话内容。
   it('规范日志旁的 0 字节 session.lock 不算读不懂的文件', async () => {
     const dir = '/h/sessions/--p--/session-locked'

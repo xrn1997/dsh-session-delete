@@ -11,8 +11,11 @@
  * 所以关闭/重开是**一段生命周期**，不是一个 id：删除成功后 `afterDelete` 关掉当前
  * 主视图并记下"这一条是我们关掉的"；撤销成功后 `afterRestore` 只重开自己记过的那些。调用方不再
  * 各自判定该不该关、也不再把会话 id 塞进撤销提示传一圈——判据全在这一处。两次重开排队时只有最新
- * 那条会打开（等待本身住 `src/client/pending-open.ts` 的票与订阅），`resetMainView()` 清掉这份记忆
+ * 那条会打开（等待本身住 `src/client/pending-open.ts` 的票与订阅），`reset` 清掉这份记忆
  * 并取消在等的重开。
+ *
+ * 形状：**可实例化的现场**（`createMainViewScene`）——`client`、`closedByUs`、在等重开都在实例里，
+ * 由 `scene.ts` 的 `ClientScene` 聚合；自由函数委托默认场景（兼容旧调用点与测试）。
  *
  * **不 import 宿主客户端包**（AGENTS.md 红线）：只通过 `ctx.get('uiWorkspace')` 可选读服务，
  * 形状不符/服务缺席都安静退回，绝不影响插件激活。字段与方法名来自上面两个包的产物原文；
@@ -20,6 +23,7 @@
  */
 import type { ClientContextLike } from './context.js'
 import { createPendingOpen } from './pending-open.js'
+import { getDefaultClientScene } from './scene.js'
 
 interface SnapshotStoreLike<T> {
   /** 返回值允许空：宿主 `getSnapshot()` 在"还没装好"那一拍可能回 null / undefined；
@@ -44,29 +48,18 @@ interface UiWorkspaceLike {
  *  判据本身仍在 `uiWorkspaceOf` 里（同一处，只有一份）。 */
 type ReadyUiWorkspace = UiWorkspaceLike & Required<Pick<UiWorkspaceLike, 'clearMain' | 'openSession'>>
 
-let client: ClientContextLike | undefined
-/** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开；面板恢复用 `forgetMainView` 清掉。 */
-let closedByUs = new Set<string>()
-/** 在等的重开：票、订阅、放弃 timer 与 cleanup 都归这个句柄（`src/client/pending-open.ts`）。 */
-const pendingOpen = createPendingOpen()
-
-/** 入口激活时绑一次；之后每次调用再读服务（客户端插件激活顺序早于 `uiWorkspace` 也没关系）。 */
-export function bindMainView(ctx: ClientContextLike): void {
-  client = ctx
-  // 插件卸载时把在等的重开与记忆一起收掉；测试的窄 ctx 没有 effect 时安静跳过。
-  if (typeof ctx.effect === 'function') {
-    ctx.effect(() => () => {
-      pendingOpen.cancel()
-      closedByUs = new Set()
-    }, 'session-delete: main-view')
-  }
-}
-
-/** 测试专用：模块级现场归零（记忆清空、在等的重开作废），用例之间互不串味。 */
-export function resetMainView(): void {
-  pendingOpen.cancel()
-  client = undefined
-  closedByUs = new Set()
+/** 一台主视图收尾现场：绑定宿主 / 关主视图 / 重开 / 遗忘 / 收场。 */
+export interface MainViewScene {
+  /** 入口激活时绑一次；之后每次调用再读服务（客户端插件激活顺序早于 `uiWorkspace` 也没关系）。 */
+  bind(ctx: ClientContextLike): void
+  /** 测试/场景收场：记忆清空、在等的重开作废。 */
+  reset(): void
+  /** 删除成功后调用：当前主视图若在这批里，把它关掉并记下"这一条是我们关掉的"（供撤销重开）。 */
+  afterDelete(sessionIds: readonly string[]): void
+  /** 撤销恢复成功后调用：把**我们自己关掉的**那几个会话重新打开（只认 `afterDelete` 记过的）。 */
+  afterRestore(sessionIds: readonly string[]): void
+  /** 面板恢复已经替这些会话完成结算：只忘掉我们关过的那几条，不重开、不抢焦点。 */
+  forget(sessionIds: readonly string[]): void
 }
 
 /** 宿主服务是否可用：把检查写成类型谓词，调用点拿到的就是 `ReadyUiWorkspace`。
@@ -78,107 +71,143 @@ function isReadyUiWorkspace(candidate: UiWorkspaceLike | null | undefined): cand
   return true
 }
 
-function uiWorkspaceOf(): ReadyUiWorkspace | undefined {
-  try {
-    const candidate = client?.get?.('uiWorkspace') as UiWorkspaceLike | null | undefined
-    return isReadyUiWorkspace(candidate) ? candidate : undefined
-  } catch {
-    return undefined
-  }
-}
+export function createMainViewScene(): MainViewScene {
+  let client: ClientContextLike | undefined
+  /** 我们自己关掉的主视图会话：只有这里记过的，撤销恢复后才会重开；面板恢复用 `forget` 清掉。 */
+  let closedByUs = new Set<string>()
+  /** 在等的重开：票、订阅、放弃 timer 与 cleanup 都归这个句柄（`src/client/pending-open.ts`）。 */
+  const pendingOpen = createPendingOpen()
 
-function currentSessionOf(ui: UiWorkspaceLike): string | undefined {
-  try {
-    return ui.selection?.getSnapshot()?.sessionId
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * 删除成功后调用：当前主视图若在这批里，把它关掉并记下"这一条是我们关掉的"（供撤销重开）。
- * 关不掉/不是当前会话都什么都不做——这只是界面收尾，绝不让删除结果变红。
- */
-export function afterDelete(sessionIds: readonly string[]): void {
-  if (sessionIds.length === 0) return
-  // 新的删除也是新动作：旧的撤销重开等待让位，哪怕删的不是当前会话。
-  pendingOpen.cancel()
-  const ui = uiWorkspaceOf()
-  if (ui === undefined) return
-  const current = currentSessionOf(ui)
-  if (current === undefined || !sessionIds.includes(current)) return
-  try {
-    ui.clearMain()
-    closedByUs.add(current)
-  } catch {
-    // Main-view cleanup must never turn a delete result red.
-  }
-}
-
-/**
- * 撤销恢复成功后调用：把**我们自己关掉的**那几个会话重新打开（只认 `afterDelete` 记过的）。
- *
- * 一批里只有最后一条会开（`targets[targets.length - 1]`）：主视图一次只装一个会话，而撤销恢复
- * 的成功条数可能多于一条；`openWhenListed` 的最新票守卫保证前一条的等待不会后落地抢焦点。
- * 任何更新的删除/恢复都会先作废旧等待；这里只负责「这一次要开哪一条」。
- */
-export function afterRestore(sessionIds: readonly string[]): void {
-  if (sessionIds.length === 0) return
-  // 新的恢复也是新动作：先作废旧的等待；命中自己关过的会话时再开一个新的等待。
-  pendingOpen.cancel()
-  const targets = sessionIds.filter((id) => closedByUs.has(id))
-  if (targets.length === 0) return
-  for (const id of targets) closedByUs.delete(id)
-  const last = targets[targets.length - 1]
-  if (last === undefined) return
-  openWhenListed(last)
-}
-
-/**
- * 面板恢复已经替这些会话完成了“回来”的结算：只忘掉我们关过的那几条，不重开、不抢焦点。
- * 它不动 `reopen`：同一会话不会既在等重开、又躺在回收站里等面板恢复；在等的重开属于另一条动作。
- */
-export function forgetMainView(sessionIds: readonly string[]): void {
-  for (const id of sessionIds) closedByUs.delete(id)
-}
-
-/**
- * 把会话重新打开：`api-session/added` 从宿主发出到客户端摘要表落地有一拍（WS 与 HTTP 响应各走
- * 各的），`openSession` 的目标必须先出现在清单里才不会抛「unknown session」——先查一次快照，没有就
- * **订阅**宿主快照 store；出现且票仍是当前、焦点没被抢走时打开。最多等 2 秒，一个放弃 timer，不轮询。
- * 期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
- *
- * 这段状态机住 `src/client/pending-open.ts` 的 `createPendingOpen`：这里只把「查什么、能不能开、
- * 怎么开」交进去；取消也只剩 `pendingOpen.cancel()` 一次。没有 `subscribe` 的旧 store 直接放弃
- * 等待，不退回轮询（ADR-0036）。
- */
-function openWhenListed(sessionId: string): void {
-  const ui = uiWorkspaceOf()
-  if (ui === undefined) return
-  const store = ui.sessions?.list
-  if (store === undefined) return
-  const subscribe = typeof store.subscribe === 'function' ? store.subscribe.bind(store) : undefined
-  const listReady = (): boolean => {
+  function uiWorkspaceOf(): ReadyUiWorkspace | undefined {
     try {
-      return store.getSnapshot()?.byId?.[sessionId] !== undefined
+      const candidate = client?.get?.('uiWorkspace') as UiWorkspaceLike | null | undefined
+      return isReadyUiWorkspace(candidate) ? candidate : undefined
     } catch {
-      return false
+      return undefined
     }
   }
-  const canTakeFocus = (): boolean => {
-    const current = currentSessionOf(ui)
-    return current === undefined || current === sessionId
+
+  function currentSessionOf(ui: UiWorkspaceLike): string | undefined {
+    try {
+      return ui.selection?.getSnapshot()?.sessionId
+    } catch {
+      return undefined
+    }
   }
-  pendingOpen.schedule({
-    subscribe,
-    isReady: listReady,
-    canOpen: canTakeFocus,
-    open: () => {
+
+  /**
+   * 把会话重新打开：`api-session/added` 从宿主发出到客户端摘要表落地有一拍（WS 与 HTTP 响应各走
+   * 各的），`openSession` 的目标必须先出现在清单里才不会抛「unknown session」——先查一次快照，没有就
+   * **订阅**宿主快照 store；出现且票仍是当前、焦点没被抢走时打开。最多等 2 秒，一个放弃 timer，不轮询。
+   * 期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
+   *
+   * 这段状态机住 `src/client/pending-open.ts` 的 `createPendingOpen`：这里只把「查什么、能不能开、
+   * 怎么开」交进去；取消也只剩 `pendingOpen.cancel()` 一次。没有 `subscribe` 的旧 store 直接放弃
+   * 等待，不退回轮询（ADR-0036）。
+   */
+  function openWhenListed(sessionId: string): void {
+    const ui = uiWorkspaceOf()
+    if (ui === undefined) return
+    const store = ui.sessions?.list
+    if (store === undefined) return
+    const subscribe = typeof store.subscribe === 'function' ? store.subscribe.bind(store) : undefined
+    const listReady = (): boolean => {
       try {
-        ui.openSession(sessionId)
+        return store.getSnapshot()?.byId?.[sessionId] !== undefined
       } catch {
-        // 主视图服务换代：放弃重开，行仍在清单里。
+        return false
+      }
+    }
+    const canTakeFocus = (): boolean => {
+      const current = currentSessionOf(ui)
+      return current === undefined || current === sessionId
+    }
+    pendingOpen.schedule({
+      subscribe,
+      isReady: listReady,
+      canOpen: canTakeFocus,
+      open: () => {
+        try {
+          ui.openSession(sessionId)
+        } catch {
+          // 主视图服务换代：放弃重开，行仍在清单里。
+        }
+      },
+    })
+  }
+
+  const scene: MainViewScene = {
+    bind(ctx: ClientContextLike): void {
+      client = ctx
+      // 插件卸载时把在等的重开与记忆一起收掉；测试的窄 ctx 没有 effect 时安静跳过。
+      if (typeof ctx.effect === 'function') {
+        ctx.effect(() => () => {
+          pendingOpen.cancel()
+          closedByUs = new Set()
+        }, 'session-delete: main-view')
       }
     },
-  })
+    reset(): void {
+      pendingOpen.cancel()
+      client = undefined
+      closedByUs = new Set()
+    },
+    afterDelete(sessionIds: readonly string[]): void {
+      if (sessionIds.length === 0) return
+      // 新的删除也是新动作：旧的撤销重开等待让位，哪怕删的不是当前会话。
+      pendingOpen.cancel()
+      const ui = uiWorkspaceOf()
+      if (ui === undefined) return
+      const current = currentSessionOf(ui)
+      if (current === undefined || !sessionIds.includes(current)) return
+      try {
+        ui.clearMain()
+        closedByUs.add(current)
+      } catch {
+        // Main-view cleanup must never turn a delete result red.
+      }
+    },
+    afterRestore(sessionIds: readonly string[]): void {
+      if (sessionIds.length === 0) return
+      // 新的恢复也是新动作：先作废旧的等待；命中自己关过的会话时再开一个新的等待。
+      pendingOpen.cancel()
+      const targets = sessionIds.filter((id) => closedByUs.has(id))
+      if (targets.length === 0) return
+      for (const id of targets) closedByUs.delete(id)
+      const last = targets[targets.length - 1]
+      if (last === undefined) return
+      openWhenListed(last)
+    },
+    forget(sessionIds: readonly string[]): void {
+      for (const id of sessionIds) closedByUs.delete(id)
+    },
+  }
+  return scene
+}
+
+/* ── 兼容自由函数（旧调用点与测试）：委托默认场景的实例 ────────────────────────── */
+
+/** 入口激活时绑一次（默认场景）。 */
+export function bindMainView(ctx: ClientContextLike): void {
+  getDefaultClientScene().mainView.bind(ctx)
+}
+
+/** 测试专用：默认场景的主视图现场归零（记忆清空、在等的重开作废）。 */
+export function resetMainView(): void {
+  getDefaultClientScene().mainView.reset()
+}
+
+/** 删除成功后调用（默认场景）：当前主视图若在这批里，把它关掉并记下。 */
+export function afterDelete(sessionIds: readonly string[]): void {
+  getDefaultClientScene().mainView.afterDelete(sessionIds)
+}
+
+/** 撤销恢复成功后调用（默认场景）：重开我们自己关掉的会话。 */
+export function afterRestore(sessionIds: readonly string[]): void {
+  getDefaultClientScene().mainView.afterRestore(sessionIds)
+}
+
+/** 面板恢复后遗忘（默认场景）：只忘、不重开。 */
+export function forgetMainView(sessionIds: readonly string[]): void {
+  getDefaultClientScene().mainView.forget(sessionIds)
 }

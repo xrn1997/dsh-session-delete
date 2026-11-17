@@ -1,24 +1,25 @@
 /**
- * 批量删除的确认框——挂在 `shell.overlay` 上的宿主，加它读的那个模块级现场。
+ * 批量删除的确认框——挂在 `shell.overlay` 上的宿主，加它读的那个请求现场（场景实例里的一份）。
  *
  * 与单删那张框的关系：**页脚与关框规则共壳**（`confirm-dialog.tsx`，裁决见 ADR-0052），业务面
  * 仍然各是各的——批量形的标题随条数、目标卡逐条列、执行是一次批量 `apply`、失败面按行回；
  * 单删的 `busy` / 失败面没有被拖进来。卡片样式（`TARGET_CARD`）与 hint、子会话那两句**复用**单删的，
  * 一句不造第二个键。
  *
- * 现场是模块级的（同 `delete-confirm.tsx` / `undo-notices.ts`）：请求从浮条那颗按钮发来，确认框住在
+ * 请求现场住在场景实例里（同 `delete-confirm.tsx` / `undo-notices.ts`）：请求从浮条那颗按钮发来，确认框住在
  * `shell.overlay` 上——它必须活在行开关那棵子树之外（槽位行随宿主重排而卸载，见 `delete-confirm.tsx` 头注）。
  *
  * 这张框不认识任何一方的选中集：宿主浮条与回收站面板的归档档都发请求进来，**执行后怎么收缩自己的
  * 勾选由发请求那一面交钩子**（`shrinkSelection`）。框自己只收缩请求现场（重试轮只发失败 id）。
  */
-import { useEffect, useState, type ReactElement } from 'react'
+import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
 import { useBusyGate } from './busy-gate.js'
 import { fetchCounts } from './batch-select.js'
 import { ConfirmDialog } from './confirm-dialog.js'
 import { TARGET_CARD } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
 import type { OneShotDeps } from './remote.js'
+import { getDefaultClientScene, useClientScene } from './scene.js'
 import type { PickItem } from './batch-selection-store.js'
 import { createStore } from './store.js'
 import { Tag } from './ui/Tag.js'
@@ -33,47 +34,72 @@ export interface BatchDeleteRequest {
   shrinkSelection?: (failedSessionIds: readonly string[]) => void
 }
 
-const requestStore = createStore<BatchDeleteRequest | null>(null)
+/** 一台「批量删除」确认框请求现场：发布 / 按 expected 收框与收缩 / 订阅 / 收场。 */
+export interface BatchConfirmScene {
+  /** 请求确认这一批。空名单不发框。`shrinkSelection` 是调用方自己的选中集收尾，缺席 = 这一面没有要收缩的选中集。 */
+  request(items: readonly PickItem[], shrinkSelection?: (failedSessionIds: readonly string[]) => void): void
+  /** 收起确认框（用户点「取消」/「关闭」、或整批成功后收工）。
+   *  **带 expected 比较**：一次批量在飞时用户可能已经发布了**下一批**请求（框按 seq 重挂载）。
+   *  旧实例晚到的成功只许收自己那一批，不许把后来发布的那批一起清掉。 */
+  clear(expected?: BatchDeleteRequest): void
+  /** 重试轮之后把现场收缩到失败名单（框里只剩还没办成的那几条）。
+   *  **带 expected 比较**：旧实例晚到的部分失败不许收缩后来发布的那一批（否则新框的名单被旧失败
+   *  改写，条数与逐条目标全错）。 */
+  shrinkToFailures(expected: BatchDeleteRequest, failedSessionIds: readonly string[]): void
+  /** 供浮条与装配面订阅。 */
+  use(): BatchDeleteRequest | null
+  /** 场景收场：现场与 seq 归零。 */
+  reset(): void
+}
 
-/** 请求确认这一批。空名单不发框。`shrinkSelection` 是调用方自己的选中集收尾，缺席 = 这一面没有要收缩的选中集。 */
+export function createBatchConfirmScene(): BatchConfirmScene {
+  const requestStore = createStore<BatchDeleteRequest | null>(null)
+  return {
+    request(items, shrinkSelection): void {
+      if (items.length === 0) return
+      requestStore.publish((seq) => ({
+        seq,
+        items: [...items],
+        ...(shrinkSelection === undefined ? {} : { shrinkSelection }),
+      }))
+    },
+    clear(expected?: BatchDeleteRequest): void {
+      requestStore.update((current) => (expected === undefined || current === expected ? null : current))
+    },
+    shrinkToFailures(expected: BatchDeleteRequest, failedSessionIds: readonly string[]): void {
+      requestStore.update((current) => {
+        if (current !== expected) return current
+        const keep = new Set(failedSessionIds)
+        return { ...current, items: current.items.filter((item) => keep.has(item.sessionId)) }
+      })
+    },
+    use(): BatchDeleteRequest | null {
+      return requestStore.use()
+    },
+    reset(): void {
+      requestStore.reset()
+    },
+  }
+}
+
+/* ── 兼容自由函数（旧调用点与测试）：委托默认场景的实例 ────────────────────────── */
+
+/** 请求确认这一批（默认场景）。 */
 export function requestDeleteBatch(
   items: readonly PickItem[],
   shrinkSelection?: (failedSessionIds: readonly string[]) => void,
 ): void {
-  if (items.length === 0) return
-  requestStore.publish((seq) => ({
-    seq,
-    items: [...items],
-    ...(shrinkSelection === undefined ? {} : { shrinkSelection }),
-  }))
+  getDefaultClientScene().batchConfirm.request(items, shrinkSelection)
 }
 
-/** 收起确认框（用户点「取消」/「关闭」、或整批成功后收工）。
- *  **带 expected 比较**：一次批量在飞时用户可能已经发布了**下一批**请求（框按 seq 重挂载）。
- *  旧实例晚到的成功只许收自己那一批，不许把后来发布的那批一起清掉。 */
+/** 收起确认框（默认场景）。 */
 export function clearDeleteBatchRequest(expected?: BatchDeleteRequest): void {
-  requestStore.update((current) => (expected === undefined || current === expected ? null : current))
+  getDefaultClientScene().batchConfirm.clear(expected)
 }
 
-/** 重试轮之后把现场收缩到失败名单（框里只剩还没办成的那几条）。
- *  **带 expected 比较**：旧实例晚到的部分失败不许收缩后来发布的那一批（否则新框的名单被旧失败
- *  改写，条数与逐条目标全错）。 */
-function shrinkRequestToFailures(expected: BatchDeleteRequest, failedSessionIds: readonly string[]): void {
-  requestStore.update((current) => {
-    if (current !== expected) return current
-    const keep = new Set(failedSessionIds)
-    return { ...current, items: current.items.filter((item) => keep.has(item.sessionId)) }
-  })
-}
-
-/** 供浮条与装配面订阅。 */
+/** 供浮条与装配面订阅（生产走 Provider 的那一份；测试无 Provider 回退默认场景）。 */
 export function useDeleteBatchRequest(): BatchDeleteRequest | null {
-  return requestStore.use()
-}
-
-/** 测试专用：现场与 seq 归零，用例之间互不串味。 */
-export function resetBatchConfirm(): void {
-  requestStore.reset()
+  return useClientScene().batchConfirm.use()
 }
 
 /** 常驻的批量确认框宿主。没有待确认的批量删除时什么都不渲染。 */
@@ -112,12 +138,15 @@ const TARGET_META = { fontSize: 12, lineHeight: '18px', color: 'var(--sd-label-t
 /**
  * 目标卡要能装几十条：选中很多条时卡片不能把弹框撑出视口，标题与底部按钮必须保持可见。
  * 沿用回收站批量恢复确认框的 280px 先例——**只在卡片内部滚**，头与动作行留在框里。
+ *
+ * **必须渲染期构造，不能是模块顶层常量**：`delete-confirm → scene → batch-confirm → delete-confirm`
+ * 是一条模块环，从 `delete-confirm` 入口进入时本模块先求值，顶层展开 `TARGET_CARD` 拿到的是
+ * 未初始化值（原生 ESM 为 TDZ，Vitest 变换下为 `undefined`），卡片会静默丢配方。
+ * 判据：`tests/client/scene-cycle.test.tsx`。
  */
-const BATCH_TARGET_CARD = {
-  ...TARGET_CARD,
-  maxHeight: 280,
-  overflow: 'auto',
-} as const
+function batchTargetCard(): CSSProperties {
+  return { ...TARGET_CARD, maxHeight: 280, overflow: 'auto' }
+}
 
 function BatchConfirmDialog({
   request: current,
@@ -155,21 +184,30 @@ function BatchConfirmDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 「开框一次问一遍计数」是刻意的：`current.items` 跟着 `seq`，把它放进依赖会在重试收缩名单时再问一遍。
   }, [deps, current.seq])
 
+  const scene = useClientScene()
+
   const run = async (): Promise<void> => {
-    setFailures(new Map())
     // 首轮发全部；重试轮只发失败的那些——上一轮已把请求现场收缩到失败名单，`current.items` 就是那一批。
-    const result = await deleteSessionsFromBatch(deps, current.items.map((item) => item.sessionId), gate)
-    // 被闸挡回的那一趟什么都没跑：不改勾选、不收框，也不再追加失败（进入时清旧失败那一下已在同一
-    // 动作里发生）——界面后果全部归在飞的那一趟（判据住 `busy-gate.ts`）。
+    // 逐条失败落点交给座位：apply 前清旧失败（被挡回也清过）、跑完铺回；这里只留勾选收缩与收框。
+    const result = await deleteSessionsFromBatch(
+      deps,
+      current.items.map((item) => item.sessionId),
+      gate,
+      {
+        clear: () => { setFailures(new Map()) },
+        set: (failures) => { setFailures(failures) },
+      },
+    )
+    // 被闸挡回的那一趟什么都没跑：不改勾选、不收框，也不再追加失败（旧原文已经由座位清过）——
+    // 界面后果全部归在飞的那一趟（判据住 `busy-gate.ts`）。
     if (result.kind === 'blocked') return
     const failed = result.value
     current.shrinkSelection?.([...failed.keys()])
     if (failed.size === 0) {
-      clearDeleteBatchRequest(current)
+      scene.batchConfirm.clear(current)
       return
     }
-    setFailures(failed)
-    shrinkRequestToFailures(current, [...failed.keys()])
+    scene.batchConfirm.shrinkToFailures(current, [...failed.keys()])
   }
 
   return (
@@ -181,10 +219,10 @@ function BatchConfirmDialog({
         ? t('dialog.batch.retry', { n: failedIds.length })
         : t('batch.run', { n: ids.length })}
       busy={gate.busy}
-      onCancel={() => { clearDeleteBatchRequest(current) }}
+      onCancel={() => { scene.batchConfirm.clear(current) }}
       onConfirm={() => void run()}
     >
-      <div data-dsh-session-delete="batch-target-card" style={BATCH_TARGET_CARD}>
+      <div data-dsh-session-delete="batch-target-card" style={batchTargetCard()}>
         {current.items.map((item) => {
           const kids = counts === null ? 0 : (counts.get(item.sessionId) ?? 0)
           const failure = failures.get(item.sessionId)

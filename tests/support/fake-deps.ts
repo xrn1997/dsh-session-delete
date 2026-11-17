@@ -21,14 +21,15 @@
  */
 import { vi } from 'vitest'
 import type { FsPort } from '../../src/ports/fs-port.js'
-import type {
-  CorpusLogRead,
-  CorpusRead,
-  EvictionOutcome,
-  HostPort,
-  ProjectionCacheDropResult,
-  SessionIdentity,
-  SubagentMember,
+import {
+  normalizeParentIds,
+  type CorpusLogRead,
+  type CorpusRead,
+  type EvictionOutcome,
+  type HostPort,
+  type ProjectionCacheDropResult,
+  type SessionIdentity,
+  type SubagentMember,
 } from '../../src/ports/host-port.js'
 import type { TrashEntry } from '../../src/trash/entry.js'
 import { createTrashLedger, type TrashLedger } from '../../src/trash/ledger.js'
@@ -129,13 +130,10 @@ export function createFakeHost(over: FakeHostOptions = {}): FakeHost {
   const isLive = (sessionId: string): boolean =>
     typeof over.live === 'function' ? over.live(sessionId) : over.live ?? false
   /** `subagentMembersOf` 的值：`counts` 是"只关心条数"的语法糖（造等长的占位成员，身份不会上盘）。
-   *  空 id 与重复 id 的处置与真实 `membersFor` 同一口径：丢掉空 id、重复 id 只算第一次（保序）。 */
+   *  父 id 的归一（丢空 / 去重保序）调生产的 `normalizeParentIds`——**不是第二本账**：口径改了两边一起红。 */
   const membersOf = (parentIds: readonly string[]): Record<string, readonly SubagentMember[]> => {
     const out: Record<string, readonly SubagentMember[]> = {}
-    const seen = new Set<string>()
-    for (const id of parentIds) {
-      if (id.length === 0 || seen.has(id)) continue
-      seen.add(id)
+    for (const id of normalizeParentIds(parentIds)) {
       const count = over.counts?.[id]
       out[id] = count === undefined
         ? over.members?.[id] ?? []

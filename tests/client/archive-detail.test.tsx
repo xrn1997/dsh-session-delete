@@ -12,6 +12,8 @@ import type { ArchiveDetailLike } from '../../src/client/remote.js'
 import type { ArchiveDetailSubject } from '../../src/client/use-archive-detail-reader.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
 import type { DetailState } from '../../src/client/use-detail-reader.js'
+import type { DetailFrame, DetailPager } from '../../src/client/use-detail-frame.js'
+import type { DetailRail } from '../../src/client/use-detail-rail.js'
 import { must } from '../support/fixture.js'
 
 const row = (over: Partial<ArchiveRowWire> = {}): ArchiveRowWire => ({
@@ -29,15 +31,31 @@ const detailOf = (over: Partial<ArchiveDetailLike> = {}): ArchiveDetailLike => (
   injectedCount: 0, blocks: [], olderCursor: null, ...over,
 })
 
+/** 投影测试不碰提问轨（轨只在栏外壳里渲染）：给一份空轨，只为满足帧的形状。 */
+const EMPTY_RAIL: DetailRail = {
+  prompts: [], loadedIds: new Set(), hasRail: false, disabled: false,
+  handle: { activeId: null, busyId: null, notice: null, jump: () => {} },
+}
+
+const pagerOf = (over: Partial<DetailPager> = {}): DetailPager => ({
+  loadingOlder: false, olderFailure: null, onLoadOlder: vi.fn(), ...over,
+})
+
+function frameOf(
+  state: DetailState<ArchiveDetailSubject, ArchiveDetailLike>,
+  pager: DetailPager = pagerOf(),
+): DetailFrame<ArchiveDetailSubject, ArchiveDetailLike> {
+  return { state, pager, rail: EMPTY_RAIL }
+}
+
 function detailElement(state: DetailState<ArchiveDetailSubject, ArchiveDetailLike>, over: Partial<ArchiveDetailProps> = {}) {
   const props: ArchiveDetailProps = {
-    state,
+    frame: frameOf(state),
     busy: false,
     wide: true,
     detailNav: {},
     onRetry: vi.fn(),
     onBack: vi.fn(),
-    pager: { loadingOlder: false, olderFailure: null, onLoadOlder: vi.fn() },
     t: zhTranslate,
     ...over,
   }

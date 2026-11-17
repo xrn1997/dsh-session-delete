@@ -34,4 +34,4 @@ ADR-0029 把子会话的查看入口定在详情，并且当时逐条常显。�
 - **只收列表、不挂标题排徽标**：滚进正文后就看不见「有几个孩子」，删前核对的事实断供，收起就变成藏。
 - **把徽标做成跳转到确认框**：确认框念的是整组释放量，徽标要的是展开列表逐条看，两件事；让一个控件兼职两个落点会把点错的代价抬到危险动作附近。
 
-锚点：`src/client/session-detail.tsx`（标题排徽标）；`src/client/subagent-section.tsx`（段头摘要条、展开体与三样派生读数）；`docs/ui-spec.md` §2 ⑥（子会话段）；`src/trash/detail.ts`（`SUBAGENT_SUMMARY_LIMIT` / `subagentsSizeBytes`）；`tests/client/trash-detail.test.tsx`；ADR-0029（已被本篇取代；入口、组语义与单级导航见本篇「沿用」节）；ADR-0001（组语义）。
+锚点：`src/client/session-detail.tsx`（标题排徽标）；`src/client/subagent-section.tsx`（段头摘要条、展开体与三样派生读数）；`docs/ui-spec.md` §2 ⑥（子会话段）；`src/trash/subagent-summary.ts`（`SUBAGENT_SUMMARY_LIMIT` / `summarizeSubagents`）；`src/trash/detail.ts`（`subagentsSizeBytes` 的装配）；`tests/client/trash-detail.test.tsx`；ADR-0029（已被本篇取代；入口、组语义与单级导航见本篇「沿用」节）；ADR-0001（组语义）。

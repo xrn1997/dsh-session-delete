@@ -17,6 +17,7 @@
  * - 失败在线上是 {code,message,details?} 普通对象；本通道把它原样当数据交回，既不补标记位也不抛
  *   （标记位判别 isDSHRemoteError 的家在 src/shared/wire.ts，读它的是 Node 半），这里不 import 任何宿主客户端包。
  */
+import { APPLY_ACTION_INDEX } from '../shared/apply-actions.js'
 import {
   PARAMS,
   ROUTES,
@@ -325,11 +326,12 @@ export function createHttpRemote(options: HttpRemoteOptions = {}): SessionDelete
       ...(before === undefined ? {} : { [PARAMS.before]: before }),
       ...(rootSessionId === undefined ? {} : { [PARAMS.rootSessionId]: rootSessionId }),
     }, WIRE_VALUE_GUARDS.archiveDetail, timeoutMs),
-    // purge / orphan-clean 是聚合写（按全量盘上数据线性变长）；count / delete / restore / unarchive 很快。
+    // 慢请求分档由动作索引（`src/shared/apply-actions.ts`）的 `slow` 投影：purge / orphan-clean 是聚合写
+    // （按全量盘上数据线性变长），count / delete / restore / unarchive 很快。
     applyOutcomes: (action, ids) => requestOutcome<ApplyOutcome[]>(ROUTES.apply, {
       [PARAMS.action]: action,
       [PARAMS.ids]: [...ids],
-    }, WIRE_VALUE_GUARDS.apply, action === 'purge' || action === 'orphan-clean' ? slowTimeoutMs : timeoutMs),
+    }, WIRE_VALUE_GUARDS.apply, APPLY_ACTION_INDEX[action].slow ? slowTimeoutMs : timeoutMs),
     emptyTrash: () => requestOutcome<PurgeResultLike>(ROUTES.empty, {}, WIRE_VALUE_GUARDS.empty, slowTimeoutMs),
   }
 }

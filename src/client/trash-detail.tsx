@@ -12,8 +12,8 @@ import {
   SessionDetail,
   type DetailInfoRow,
   type DetailNav,
-  type DetailPager,
 } from './session-detail.js'
+import type { DetailFrame } from './use-detail-frame.js'
 import type { DetailState } from './use-detail-reader.js'
 import { rowName, useSubagentSection } from './subagent-section.js'
 import { detailNameOf } from './trash-view.js'
@@ -24,7 +24,8 @@ import { detailNameOf } from './trash-view.js'
 export type TrashDetailState = DetailState<TrashEntryWire, TrashDetailLike>
 
 export interface TrashDetailProps {
-  state: TrashDetailState
+  /** 详情帧（`use-detail-frame.ts`）：回收站档的读路来源 + 分页读面 + 提问轨，面板拼一次、这里原样转交。 */
+  frame: DetailFrame<TrashEntryWire, TrashDetailLike>
   /** 有写操作在飞（动作按钮住在清单行里，这里只用来把「重试」按住）。 */
   busy: boolean
   /** 宽档不画「返回清单」——同屏就有清单，那一步多余。孩子视图另有一颗返回，见 `detailNav.parentContext`。 */
@@ -33,7 +34,6 @@ export interface TrashDetailProps {
   onBack: () => void
   /** 孩子视图的开与回（控制器派生，判据见 `DetailNav`）：缺席 = 不画入口/返回，组件只画状态，不自己造动作。 */
   detailNav: DetailNav
-  pager: DetailPager
   t: Translate
 }
 
@@ -63,15 +63,15 @@ function trashInfoRows(entry: TrashEntryWire, detail: TrashDetailLike, t: Transl
 
 
 export function TrashDetail({
-  state,
+  frame,
   busy,
   wide,
   onRetry,
   onBack,
   detailNav,
-  pager,
   t,
 }: TrashDetailProps) {
+  const { state } = frame
   const shownId = state.kind === 'idle' ? null : state.subject.id
   const entry = state.kind === 'idle' ? null : state.subject
   const detail = state.kind === 'ready' || state.kind === 'holding' ? state.detail : undefined
@@ -100,7 +100,7 @@ export function TrashDetail({
 
   return (
     <SessionDetail
-      state={state}
+      frame={frame}
       subjectId={shownId ?? ''}
       head={{ displayName: title, sizeText: entry === null ? null : fileSizeText(entry.sizeBytes) }}
       infoRows={entry === null || detail === undefined ? [] : trashInfoRows(entry, detail, t)}
@@ -110,7 +110,6 @@ export function TrashDetail({
       onRetry={onRetry}
       onBack={onBack}
       detailNav={detailNav}
-      pager={pager}
       t={t}
     />
   )

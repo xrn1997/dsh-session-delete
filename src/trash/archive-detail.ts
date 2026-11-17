@@ -26,8 +26,9 @@ import type { ArchiveDetailWire, ArchiveSubagentWire } from '../shared/wire.js'
 import type { SessionRecord } from '../log/session-log.js'
 import type { CorpusEvent, CorpusLogRead } from '../ports/host-port.js'
 import { bareSessionId } from '../domain/closure.js'
-import { createDetailFold, SUBAGENT_SUMMARY_LIMIT, type DetailLimits } from './detail.js'
+import { createDetailFold, type DetailLimits } from './detail.js'
 import { projectRowFacts, readRowSurfaces, sizeTotalsForIds } from './session-rows.js'
+import { displayedSubagentCount, summarizeSubagents } from './subagent-summary.js'
 import { verbError, type VerbError } from '../errors.js'
 
 /** `readSession` 抛的宿主失败码（`SessionQueryError.code`）：未知 id / 已无盘上记录。 */
@@ -135,9 +136,9 @@ async function readArchiveSubagents(
   const kids = members.value[sessionId] ?? []
   if (kids.length === 0) return undefined
 
-  // 条数闸先落：只对**显示的**孩子付逐行读与归档态读，显示外的一条逐行读都不发（输出计划）。
-  const limit = limits?.subagents ?? SUBAGENT_SUMMARY_LIMIT
-  const displayed = kids.slice(0, limit)
+  // 条数闸先落：只对**显示的**孩子付逐行读与归档态读，显示外的一条逐行读都不发（输出计划；
+  // 条数闸的判据住 `subagent-summary.ts`）。
+  const displayed = kids.slice(0, displayedSubagentCount(kids.length, limits?.subagents))
   // 与归档清单同一份读面，只换两条策略：大小读失败**不许**坏正文（`absent` ⇒ 逐行缺大小），
   // 子会话没有「创建时间」这一格可回落 ⇒ 读不到提问时间就整格缺席。
   const surfaces = await readRowSurfaces(deps, displayed.map((kid) => kid.sessionId), { sizeFailure: 'absent' })
@@ -150,7 +151,13 @@ async function readArchiveSubagents(
   // 「读不出不画」策略），不拿 false 冒充「未归档」。
   const archived = await Promise.all(displayed.map((kid) => deps.host.isArchived(kid.sessionId)))
   // 摘要条报的是**全部**孩子的合计，不是已列前 N 条的和（ADR-0055）；超闸只报总数，不静默截断。
+  // 这三条判据（显示条数之外）归 `subagent-summary.ts`：这里只交合计 / 缺席计数。
   const totals = sizeTotalsForIds(kids.map((kid) => kid.sessionId), surfaces.sizes)
+  const summary = summarizeSubagents({
+    count: kids.length,
+    limit: limits?.subagents,
+    sizes: { sum: totals.totalBytes, missing: totals.missingSizeCount },
+  })
   const rows = facts.flatMap((fact, index): ArchiveSubagentWire[] => {
     const kid = displayed[index]
     const isArchived = archived[index]
@@ -168,8 +175,8 @@ async function readArchiveSubagents(
   })
   return {
     rows,
-    ...(kids.length > limit ? { total: kids.length } : {}),
-    ...(totals.missingSizeCount === kids.length ? {} : { sizeBytes: totals.totalBytes }),
+    ...(summary.total === undefined ? {} : { total: summary.total }),
+    ...(summary.sizeBytesIncluded ? { sizeBytes: summary.sizeBytes } : {}),
   }
 }
 

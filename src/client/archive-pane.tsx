@@ -11,17 +11,33 @@
  *
  * 「最后活动」与「创建于」是归档档自己的口径（`updatedAtSource`），与回收站的「删除于」不是同一句；
  * 数据标签按档不同，界面语言按档相同（ADR-0060 边界）。
+ *
+ * 本文件同时是**归档档的 adapter 与四格视图**（`ARCHIVE_TAB_ADAPTER` / `ArchiveTabView`）：装配线住
+ * `use-panel-tab.ts`、四格版面住 `panel-tab.tsx`，这里只回答归档这一档与回收站不同的那几格
+ * （行身份 / 分组键 / 光标活动行 / 窄档下钻判据 / 预取参数域 / 详情帧的档位门）。
  */
 import type { RefObject } from 'react'
 import { absoluteText, agoText, type Translate } from './copy.js'
 import type { ArchiveRowWire } from '../shared/wire.js'
-import { BULK_DANGER, displayNameOf, type ProjectGroup } from './trash-view.js'
+import { BULK_DANGER, displayNameOf, groupByProject, type ProjectGroup } from './trash-view.js'
 import { ListEmpty, ListLoading, ListNotice, SessionList, type ListDom, type SessionRowView } from './session-list.js'
+import type { ArchiveDetailLike } from './remote.js'
+import type { ArchiveDetailSubject } from './use-archive-detail-reader.js'
 import type { ArchiveQuery } from './use-archive-query.js'
+import { useArchiveQuery } from './use-archive-query.js'
 import type { ListSelection } from './use-list-selection.js'
-import type { ArchivePanelController } from './use-archive-panel-controller.js'
+import { useArchivePanelController, type ArchivePanelController } from './use-archive-panel-controller.js'
 import type { TrashNav } from './trash-nav.js'
-import { useDelayedPrefetch } from './use-prefetch.js'
+import type { DelayedPrefetch } from './use-prefetch.js'
+import { ArchiveDetail } from './archive-detail.js'
+import { PanelTabFrame, type PanelTabFrameLayout } from './panel-tab.js'
+import {
+  usePanelTab,
+  type PanelTab,
+  type PanelTabAdapter,
+  type PanelTabContext,
+  type PanelTabControllerContext,
+} from './use-panel-tab.js'
 import { Button } from './ui/Button.js'
 import { Tooltip } from './ui/Tooltip.js'
 import { fileSizeText } from './ui/format.js'
@@ -40,10 +56,12 @@ export interface ArchiveListProps {
   query: ArchiveQuery
   selection: ListSelection<ArchiveRowWire>
   groups: readonly ProjectGroup<ArchiveRowWire>[]
-  controller: Pick<ArchivePanelController, 'selectRow' | 'prefetch' | 'unarchive' | 'requestDeleteOne' | 'actionFailure' | 'busy'>
-  /** 清单的 grid 节点：面板的 `useRowFocus` 按 `ARCHIVE_LIST_DOM.idAttr` 查询它。 */
+  controller: Pick<ArchivePanelController, 'selectRow' | 'unarchive' | 'requestDeleteOne' | 'actionFailure' | 'busy'>
+  /** 意图预取（装配线 `usePanelTab` 建一份，两档同一套延时与去重；视图不再自己建）。 */
+  prefetch: DelayedPrefetch<ArchiveRowWire>
+  /** 清单的 grid 节点：档的装配线（`usePanelTab`）的 `useRowFocus` 按 `ARCHIVE_LIST_DOM.idAttr` 查询它。 */
   listRef: RefObject<HTMLDivElement>
-  /** 键盘契约（导航状态住面板，窄档下钻时清单卸载也不丢 Esc 与焦点交还）。 */
+  /** 键盘契约（导航状态住档的装配线，窄档下钻时清单卸载也不丢 Esc 与焦点交还）。 */
   nav: TrashNav
   /** 当前活动行（选中行优先，回落光标）：说「详情正画着这一条」，也只在非多选态参与 `aria-selected`。
    *  光标与活动行都住控制器（`activeId` / `selectRow`），清单不再自己回报光标。 */
@@ -53,8 +71,7 @@ export interface ArchiveListProps {
 }
 
 /** 清单列：四态里非「有行」的三档各交一块普通内容；有行时只交读数与动作给 `SessionList`。 */
-export function ArchiveList({ query, selection, groups, controller, listRef, nav, activeId, onRetry, t }: ArchiveListProps) {
-  const prefetchRow = useDelayedPrefetch((row: ArchiveRowWire) => { controller.prefetch(row.sessionId) })
+export function ArchiveList({ query, selection, groups, controller, prefetch, listRef, nav, activeId, onRetry, t }: ArchiveListProps) {
   const state = query.list
   const notice = state.status === 'loading' ? <ListLoading label={t('archive.loading')} />
     : state.status === 'failure' ? (
@@ -143,7 +160,7 @@ export function ArchiveList({ query, selection, groups, controller, listRef, nav
       groups={groups}
       selection={selection}
       nav={nav}
-      prefetch={prefetchRow}
+      prefetch={prefetch}
       activeId={activeId}
       rowOf={rowOf}
       t={t}
@@ -235,4 +252,126 @@ export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) 
       </span>
     </div>
   )
+}
+
+/* ── 归档档 adapter 与四格视图（装配线与帧在 `use-panel-tab.ts` / `panel-tab.tsx`） ────────── */
+
+/** 归档档的清单读 hook：依赖由面板交，档位门原样转给 `use-archive-query.ts`。 */
+function useArchiveTabQuery(ctx: PanelTabContext): ArchiveQuery {
+  return useArchiveQuery({ deps: ctx.deps, active: ctx.active })
+}
+
+/** 归档档的控制器：自动选中的档位派生（active && split）与光标/下钻包装住控制器自己。 */
+function useArchiveTabController(
+  ctx: PanelTabControllerContext<ArchiveQuery, ArchiveRowWire>,
+): ArchivePanelController {
+  return useArchivePanelController({
+    deps: ctx.deps,
+    gate: ctx.gate,
+    query: ctx.query,
+    ordered: ctx.ordered,
+    active: ctx.active,
+    split: ctx.split,
+    t: ctx.t,
+  })
+}
+
+/** 归档档 adapter：两档差异里属于归档的那一半（装配线不认识这些格子的语义）。 */
+export const ARCHIVE_TAB_ADAPTER: PanelTabAdapter<
+  ArchiveQuery, ArchiveRowWire, ArchiveDetailSubject, ArchiveDetailLike, ArchivePanelController
+> = {
+  dom: ARCHIVE_LIST_DOM,
+  idOf: archiveRowIdOf,
+  viewOf: (query) => ({
+    rows: query.list.status === 'ready' ? query.list.rows : null,
+    refreshing: query.refreshing,
+    failure: query.list.status === 'failure' ? query.list.message : null,
+    loading: query.list.status === 'loading',
+    empty: query.list.status === 'ready' && query.list.rows.length === 0,
+  }),
+  groupsOf: (rows, t) => groupByProject(rows, t, {
+    // 仅排序哨兵：显示口径住本文件（缺席说「时间未知」），不在这里念时间。
+    timeOf: (row) => row.updatedAt ?? 0,
+    projectDirOf: (row) => row.projectDir,
+  }),
+  useQuery: useArchiveTabQuery,
+  useController: useArchiveTabController,
+  // 活动行：选中优先；窄档方向键只移光标时回落到光标（判据住控制器）。
+  activeRowId: (controller) => controller.activeId,
+  // 归档档没有回收站那样的独立 drilled 位：窄档选中即下钻，宽档不回退。
+  navDrilled: (controller, split) => !split && controller.selected !== null,
+  navSelect: (controller) => controller.selectRow,
+  // 预取参数域是会话 id（回收站是清册行）：行 → 读路在这里收窄。
+  prefetchOf: (controller) => (row) => { controller.prefetch(row.sessionId) },
+  // 窄档下选中即等价于下钻（selectRow 只在 drill / split 时真正选中）。
+  detailMountedNarrow: (controller) => controller.selected !== null,
+  // 归档档不活动时详情帧不挂轨监听（原 `archivePaneMounted` 的档位门，行为不变）。
+  framePaneMounted: (_controller, facts) => facts.active && facts.detailMounted,
+}
+
+/** 归档档装配完的现场（面板只拿它交给 `ArchiveTabView` 与 header）。 */
+export type ArchivePanelTab = PanelTab<
+  ArchiveQuery, ArchiveRowWire, ArchiveDetailSubject, ArchiveDetailLike, ArchivePanelController
+>
+
+export interface ArchiveTabViewProps {
+  readonly tab: ArchivePanelTab
+  readonly layout: PanelTabFrameLayout
+  readonly t: Translate
+}
+
+/**
+ * 归档档的四格视图：清单列 / 工具行 / 页脚三件仍住本文件，详情投影 `ArchiveDetail` 原样转交；
+ * 四格容器与分栏/下钻分支由 `PanelTabFrame` 画（与回收站档同一份）。
+ */
+export function ArchiveTabView({ tab, layout, t }: ArchiveTabViewProps) {
+  const { query, selection, controller, groups } = tab
+  const list = (
+    <ArchiveList
+      query={query}
+      selection={selection}
+      groups={groups}
+      controller={controller}
+      prefetch={tab.prefetch}
+      listRef={tab.listRef}
+      nav={tab.nav}
+      activeId={tab.activeId}
+      onRetry={() => { void query.reload() }}
+      t={t}
+    />
+  )
+  const detail = {
+    kind: ARCHIVE_LIST_DOM.kind,
+    scrollRef: tab.scrollRef,
+    rail: tab.frame.rail,
+    children: (
+      <ArchiveDetail
+        frame={tab.frame}
+        busy={controller.busy}
+        wide={tab.split}
+        detailNav={controller.detailNav}
+        onRetry={() => controller.retry()}
+        onBack={() => controller.back()}
+        t={t}
+      />
+    ),
+  }
+  return (
+    <PanelTabFrame
+      split={tab.split}
+      detailMounted={tab.detailMounted}
+      listWidth={layout.listWidth}
+      handleProps={layout.handleProps}
+      toolbar={<ArchiveToolbar selection={selection} groups={groups} t={t} />}
+      list={list}
+      detail={detail}
+      footer={<ArchiveFooter selection={selection} controller={controller} t={t} />}
+      t={t}
+    />
+  )
+}
+
+/** 面板用的装配入口：一档 = 共享装配线 + 归档 adapter（面板只调一次）。 */
+export function useArchiveTab(ctx: PanelTabContext): ArchivePanelTab {
+  return usePanelTab(ARCHIVE_TAB_ADAPTER, ctx)
 }

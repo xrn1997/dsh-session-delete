@@ -1,14 +1,18 @@
 /**
  * 清册读数的取数编排：一次 `/list`、一张最新票、一句附件回执。
  *
+ * 「一次读怎么落地」（票 / 挂载归属 / `refreshing` / 失败上屏 / 首帧初值）已收进
+ * `src/client/use-panel-list-read.ts` 的两档共用实现；这一层只留**回收站自己的数据语义**：
+ * 首帧快照的读入与写回、附件回执的拼句与「最新写赢」、清空这条聚合写。
+ *
  * 三条承重规矩：
- * - 最新票：在飞的旧清单读不许盖掉新状态。
  * - 读不到就说读不到：失败进 `unknown`（原文上屏），不折成"空的"。
  * - 附件读数只住在写动作的回执里：清单重读读不出来，所以它单独一条提示、**最新的写赢**。
  * - 首帧快照：挂载时若有一份上次成功的清单，先按 `ready` 画它并标 `refreshing`，再静默重读；
  *   重读失败整份丢掉（快照不许把旧行续命成"此刻的事实"）。快照本体住 `trash-snapshot.ts`。
  * - 挂载归属：请求属于发起它的那次挂载。卸载后晚到的结论（成功或失败）一律不写模块级快照——
- *   快照是跨挂载共享的，旧挂载的结论不是"此刻的事实"。
+ *   快照是跨挂载共享的，旧挂载的结论不是"此刻的事实"；这一条在共用 hook 里，`emptyTrash`
+ *   自己的晚到分支仍按挂载判（见下）。
  *
  * 输入的引用**不需稳定**：`deps` / `t` / `gate` 经 `useLatest` 归一（判据住 `store.ts`），
  * 返回的三个回调身份恒稳，可安全进调用方 effect 的依赖。
@@ -26,10 +30,11 @@ import {
   reloadSucceeded,
 } from './trash-snapshot.js'
 import { dismissUndoNotice } from './undo-notices.js'
-import { createLatestWins, useLatest } from './store.js'
+import { useLatest } from './store.js'
 import type { Translate } from './copy.js'
 import { attachmentSkippedSentence } from './receipt.js'
 import type { AttachmentCleanupWire } from '../shared/wire.js'
+import { usePanelListRead, type PanelReadOutcome } from './use-panel-list-read.js'
 
 export type TrashQueryDeps = Pick<SessionDeleteRemote, 'list' | 'emptyTrash'>
 
@@ -85,6 +90,13 @@ export interface TrashQuery {
   emptyTrash: () => Promise<GateRun<boolean>>
 }
 
+/** 回收站清单的读：形状折成共用落地面；首帧快照与失败丢快照落在这里。 */
+async function readTrashList(deps: TrashQueryDeps): Promise<PanelReadOutcome<TrashEntryLike, null>> {
+  const outcome = await deps.list()
+  if (!outcome.ok) return { kind: 'failure', message: outcome.failure.message }
+  return { kind: 'rows', rows: outcome.value, meta: null }
+}
+
 export function useTrashQuery({
   deps,
   t,
@@ -95,12 +107,28 @@ export function useTrashQuery({
   /** 面板的一枚全局闸：清空这条写动作把整趟包在里面（面板的 `busy`）。 */
   gate: BusyGate
 }): TrashQuery {
-  /** 挂载时只读一次首帧快照；之后由 `reload` 成功支写回、失败支整份丢掉。 */
-  const [initialSnapshot] = useState(readTrashSnapshot)
-  const [list, setList] = useState<TrashListState>(() => initialSnapshot === null
+  const read = usePanelListRead<TrashEntryLike, null>({
+    // 首帧快照只在挂载读一次；之后由成功读数写回、失败支整份丢掉。
+    initial: () => {
+      const snapshot = readTrashSnapshot()
+      return snapshot === null ? null : { rows: snapshot.rows, meta: null }
+    },
+    read: () => readTrashList(deps),
+    onSuccess: (rows) => { reloadSucceeded(rows) },
+    onFailure: () => { reloadFailed() },
+  })
+
+  /** 共用 hook 交回的稳定动作（`useLatest` 归一后的 ref 上取），不把每拍换新身份的 `read` 对象带进依赖。 */
+  const { reload, fail: failRead } = read
+  const list: TrashListState = read.state.status === 'loading'
     ? { status: 'loading' }
-    : { status: 'ready', rows: initialSnapshot.rows })
-  const [refreshing, setRefreshing] = useState(initialSnapshot !== null)
+    : read.state.status === 'ready'
+      ? { status: 'ready', rows: read.state.rows }
+      : read.state.status === 'failure'
+        ? { status: 'unknown', failure: read.state.message }
+        // 回收站的 `read` 不可能回 absent（三支是两档共用类型面）：真发生按读失败处理。
+        : { status: 'unknown', failure: t('trash.readFailed') }
+
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null)
 
   /** 输入引用归一（判据住 `store.ts` 的 `useLatest`）：回调经它读最新输入，身份恒稳。
@@ -108,42 +136,12 @@ export function useTrashQuery({
    *  `emptyTrash` 的依赖（那会让回调每次读数换身份）。 */
   const latest = useLatest({ deps, t, gate, list })
 
-  /**
-   * 这一份挂载还在不在。清单快照是**模块级**的，而请求属于某一次挂载：切走面板后晚到的响应
-   * 不许再写快照——否则旧读数会盖掉新挂载刚写下的行，还会按旧行把新行仍引用的详情剪掉
-   * （`reloadSucceeded` 的 `previousIds` 读的是当前快照）。StrictMode 的挂载→卸载→再挂载
-   * 由 setup 里重新置真接住。
-   */
+  /** 清空这条写自己的挂载归属：不受共用读 hook 的 alive 管（它管的是清单读）。 */
   const alive = useRef(true)
   useEffect(() => {
     alive.current = true
     return () => { alive.current = false }
   }, [])
-
-  /** 清单进入 `unknown` 的唯一落点：旧行与首帧快照一起作废，重读在飞标记一起收掉。 */
-  const failList = useCallback((failure: string): void => {
-    reloadFailed()
-    setRefreshing(false)
-    setList({ status: 'unknown', failure })
-  }, [])
-
-  /** 清单的唯一读法：签到一张票再发请求；输给后发的读时这一次什么都不落地（不让旧响应盖掉新状态）。 */
-  const [reloadLatest] = useState(createLatestWins)
-  const reload = useCallback(async (): Promise<void> => {
-    const ticket = reloadLatest.issue()
-    setRefreshing(true)
-    const outcome = await latest.current.deps.list()
-    if (!alive.current || !ticket.current) return
-    if (!outcome.ok) {
-      // 读不到就整份丢掉：旧行不许继续冒充此刻的回收站（`unknown` 不向下游交行）。
-      failList(outcome.failure.message)
-      return
-    }
-    reloadSucceeded(outcome.value)
-    setRefreshing(false)
-    setList({ status: 'ready', rows: outcome.value })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 回的恒稳 ref（自定义 hook，规则看不见），读的是 `.current`。
-  }, [reloadLatest, failList])
 
   /**
    * 附件读数上屏：`skipped`（这一轮部分或整体没敢清）优先于 `failed`（逐文件真出错）——前者是原因，
@@ -179,11 +177,10 @@ export function useTrashQuery({
       // 挂载已经不在：这一趟的结论归后来那次挂载，不许拿旧失败清掉它刚写下的快照。
       if (!alive.current) return false
       // 清空失败在这块界面上的落点就是"清单未知"：回收站此刻是什么样我们不知道，旧行也不能继续可操作。
-      // 同时作废在飞的清单读——晚到的旧读不能把这一拍又盖回 ready；首帧快照也一起丢掉。
-      reloadLatest.invalidate()
-      failList(outcome.failure.message)
-      // 这一趟没拿到回执：不能断言附件清没清，旧读数也不许继续当"最近一次写"的后果挂在那儿。
-      noteAttachmentCleanup(undefined)
+      // 同时作废在飞的清单读——晚到的旧读不能把这一拍又盖回 ready；首帧快照也一起丢掉（fail 里
+      // 的 onFailure 是同一份丢快照判据）。
+      failRead(outcome.failure.message)
+      setAttachmentNotice(null)
       return false
     }
     // 按条目名单熄灭横幅：命中才收，未命中的（含在飞期间新发布的）原样留着。这一步只碰名单内的
@@ -199,12 +196,12 @@ export function useTrashQuery({
     // 已经发生的事情与"此刻清单长什么样"无关）。
     noteAttachmentCleanup(outcome.value.attachments)
     return true
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 的恒稳 ref（规则看不见自定义 hook）。
-  }), [reload, reloadLatest, failList, noteAttachmentCleanup])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `latest` 是 `useLatest` 的恒稳 ref（规则看不见自定义 hook）；`read.fail` / `read.reload` 由共用 hook 保证身份恒稳。
+  }), [failRead, reload, noteAttachmentCleanup])
 
   return {
     list,
-    refreshing,
+    refreshing: read.refreshing,
     attachmentNotice,
     noteAttachmentCleanup,
     reload,

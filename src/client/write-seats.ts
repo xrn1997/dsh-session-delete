@@ -18,6 +18,11 @@
  *   旧清单还在屏上，同一个动作能被再点一次；调用方不再自己 `around`。同一枚闸已有任务在飞时
  *   这一趟**不跑**（连点不发第二条），交回 `{ kind: 'blocked' }`：座位照它收「这一趟没跑」，
  *   不伪造 outcome。
+ * - **逐条失败落点经 `FailureSink` 交进来**：apply 之前先 `clear`（放在闸外，所以被挡回的那一趟
+ *   也清过旧原文——与五个调用点原先各自写的行为一致）；跑完把这一趟的失败表 `set` 回去
+ *   （顶层失败也是这一趟的结论：同一句原文按 id 铺，与成功支同一条时序，排在 refresh 之后）。
+ *   调用方不再自己拼「清旧失败 → 跑 → 铺失败」这三步；被挡回那一趟的界面分支（收不收框、
+ *   动不动勾选）仍归调用方。
  *
  * 收尾四条判据（`settleWrite`，按 action 各一条固定序列；为什么按 action 收成一处见 ADR-0013）：
  * - **跨槽位在信封成功时就跑**：`afterDelete` / `afterRestore` 与 `invalidate` 不管逐条成败都跑
@@ -88,13 +93,29 @@ export interface WriteFailure<A extends SeatedAction> {
 
 export type WriteOutcome<A extends SeatedAction = SeatedAction> = WriteSuccess<A> | WriteFailure<A>
 
+/**
+ * 一次写入的**逐条失败落点**：调用方把它那一面（面板的行失败表 / 确认框的本地失败态）交进来，
+ * 座位负责「apply 前清旧原文、跑完按 id 铺回这一趟失败」这两步。
+ *
+ * 为什么不让调用方各拼一遍：五个写入面原先各写同一条配方（清旧失败 → 跑座位 → if blocked return →
+ * 按 id 铺失败），其中「被挡回的那一趟也已经清过」与「顶层失败也铺」两条只在实现里、没在接口上。
+ * 现在这两条由座位执行；**blocked 的界面分支仍留调用方**（收不收框、动不动勾选是各面的呈现）。
+ */
+export interface FailureSink {
+  /** 进入动作时清掉这些 id 的旧失败原文（同一 id 去重保序后调用；被闸挡回也调用）。 */
+  clear(ids: readonly string[]): void
+  /** 这一趟的逐条失败表（信封成功或顶层失败都交；没有失败时是空 Map）。被挡回时不调用。 */
+  set(failures: ReadonlyMap<string, string>): void
+}
+
 /** 会话行菜单的单删座位：一条会话、`single` 读法、成功发单条撤销横幅。交回这条会话的失败原文。
  *  两支判别：`{ kind:'blocked' }` = 闸把这一趟挡回来了、什么都没跑（框不收，等在飞那一趟的结论——
  *  先收就会把它的失败原文落在已经卸载的确认框上）；`{ kind:'ran', value }` 里 `value` 是这一条的
- *  失败原文，`null` = 跑了、这一条没有失败要说。 */
+ *  失败原文，`null` = 跑了、这一条没有失败要说。接了 `failureSink` 的调用方用 `value` 判「框关不关」，
+ *  原文的落点已由座位铺好（两处读的是同一份失败表）。 */
 export async function deleteSessionFromMenu(
   deps: OneShotDeps,
-  input: { sessionId: string; title: string },
+  input: { sessionId: string; title: string; failureSink?: FailureSink },
   gate: BusyGate,
 ): Promise<GateRun<string | null>> {
   const run = await runWrite({
@@ -108,6 +129,7 @@ export async function deleteSessionFromMenu(
       publishUndo: ({ entryIds, archived }) => publishUndoNotice({ entryId: entryIds[0], title: input.title, archived }),
     },
     gate,
+    failureSink: input.failureSink,
   })
   // 挡回来的一趟不伪造「这条没有失败」：原样交回 blocked，让框留在原地。
   if (run.kind === 'blocked') return run
@@ -116,11 +138,12 @@ export async function deleteSessionFromMenu(
 
 /** 批量删除座位（宿主会话列表的多选浮条与面板归档档的页脚共用 → 批量确认框）：一次 `/apply`，撤销名单只收 ok 支的条目 id（跟着组走的幂等条不单列）。
  *  只收 id：标题是发请求那一面的呈现，不参与这一次写入。**被闸挡回时交回 `{kind:'blocked'}`**——这一趟没跑，
- *  浮条与确认框都不许照着它收缩名单或关框（那会吞掉在飞那一趟的结果）。 */
+ *  浮条与确认框都不许照着它收缩名单或关框（那会吞掉在飞那一趟的结果）。`failureSink` 的语义见 {@link FailureSink}。 */
 export async function deleteSessionsFromBatch(
   deps: OneShotDeps,
   ids: readonly string[],
   gate: BusyGate,
+  failureSink?: FailureSink,
 ): Promise<GateRun<ReadonlyMap<string, string>>> {
   const outcome = await runWrite({
     deps,
@@ -131,6 +154,7 @@ export async function deleteSessionsFromBatch(
       publishUndo: ({ entryIds, n, archived }) => publishUndoBatchNotice({ entryIds, n, archived }),
     },
     gate,
+    failureSink,
   })
   return outcome.kind === 'blocked' ? outcome : { kind: 'ran', value: outcome.value.failures }
 }
@@ -183,6 +207,8 @@ interface PanelWriteInput<A extends 'restore' | 'purge'> {
   /** 属性声明：这两枚回调被摘下来交给 `runWrite`（转交而不是当方法调），实现不读 `this`。 */
   refreshAfterWrite: (outcome: WriteOutcome<A>) => Promise<void>
   writeSucceeded: (ids: readonly string[]) => void
+  /** 逐条失败的落点（面板自己的行失败表）：清旧原文 / 铺这一趟的失败由座位执行。 */
+  failureSink?: FailureSink
 }
 
 /** 面板恢复另要两样：单条读法，以及 already-gone 回执缺行时反查 sessionId 的当前清单。 */
@@ -209,6 +235,7 @@ export function restoreFromPanel(input: PanelRestoreInput): Promise<GateRun<Writ
     },
     gate: input.gate,
     refresh: input.refreshAfterWrite,
+    failureSink: input.failureSink,
   })
 }
 
@@ -225,6 +252,7 @@ export function purgeFromPanel(input: PanelWriteInput<'purge'>): Promise<GateRun
     },
     gate: input.gate,
     refresh: input.refreshAfterWrite,
+    failureSink: input.failureSink,
   })
 }
 
@@ -237,6 +265,8 @@ export function unarchiveFromArchiveTab(input: {
   ids: readonly string[]
   gate: BusyGate
   refresh: (outcome: WriteOutcome<'unarchive'>) => void | Promise<void>
+  /** 逐条失败的落点（归档档自己的行失败表）：清旧原文 / 铺这一趟的失败由座位执行。 */
+  failureSink?: FailureSink
 }): Promise<GateRun<WriteOutcome<'unarchive'>>> {
   return runWrite({
     deps: input.deps,
@@ -245,6 +275,7 @@ export function unarchiveFromArchiveTab(input: {
     presentation: noPresentation('unarchive'),
     gate: input.gate,
     refresh: input.refresh,
+    failureSink: input.failureSink,
   })
 }
 
@@ -371,6 +402,8 @@ interface WriteInput<A extends SeatedAction> {
   /** 写完（顶层失败或信封成功，无论逐条成败）后的重读策略；成败与 `anySuccess` 都在 outcome 里，
    *  是否真的重读由调用方决定。 */
   readonly refresh?: (outcome: WriteOutcome<A>) => void | Promise<void>
+  /** 逐条失败的落点；不给 = 这一面没有行级失败要铺（外部撤销座位把失败写回横幅）。见 {@link FailureSink}。 */
+  readonly failureSink?: FailureSink | undefined
 }
 
 /** 签名上的分岔就是判据：**没传闸 ⇒ 这一趟一定跑**，回真结果；**传了闸 ⇒ 可能被同一枚闸的在飞那一趟
@@ -381,8 +414,13 @@ interface WriteInput<A extends SeatedAction> {
 function runWrite<A extends SeatedAction>(input: WriteInput<A> & { readonly gate: BusyGate }): Promise<GateRun<WriteOutcome<A>>>
 function runWrite<A extends SeatedAction>(input: WriteInput<A> & { readonly gate?: undefined }): Promise<WriteOutcome<A>>
 async function runWrite<A extends SeatedAction>(input: WriteInput<A>): Promise<GateRun<WriteOutcome<A>> | WriteOutcome<A>> {
+  // 请求 id 去重保序在闸外一次算好：失败落点的 `clear` 也按这一份（被闸挡回也要清，见 FailureSink）。
+  const ids = [...new Set(input.ids)]
+  // 失败落点先清后铺：`clear` 落在这里（闸外）——挡回来的那一趟一次 /apply 都不发，旧原文照样作废；
+  // 这一趟没跑就没有结论可铺，所以只有 lifecycle 里才 `set`。
+  input.failureSink?.clear(ids)
+
   const lifecycle = async (): Promise<WriteOutcome<A>> => {
-    const ids = [...new Set(input.ids)]
     const outcome = await input.deps.applyOutcomes(input.action, ids)
 
     if (!outcome.ok) {
@@ -391,6 +429,8 @@ async function runWrite<A extends SeatedAction>(input: WriteInput<A>): Promise<G
         ok: false, action: input.action, ids, failure: outcome.failure, failures,
       }
       await input.refresh?.(failed)
+      // 顶层失败也是这一趟的结论：同一句原文按 id 铺回调用方那一面，时序与成功支一致（refresh 之后）。
+      input.failureSink?.set(failures)
       return failed
     }
 
@@ -402,6 +442,7 @@ async function runWrite<A extends SeatedAction>(input: WriteInput<A>): Promise<G
     }
     settleWrite(success, input.presentation ?? noPresentation(input.action))
     await input.refresh?.(success)
+    input.failureSink?.set(failures)
     return success
   }
 

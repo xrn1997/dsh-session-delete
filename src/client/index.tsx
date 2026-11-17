@@ -39,6 +39,7 @@ import { createHttpRemote, probeChannel, type SessionDeleteRemote } from './remo
 import { SettingsCards } from './settings-cards.js'
 import { TrashPanelIcon } from './trash-entry.js'
 import { TrashPanel } from './trash-panel.js'
+import { createClientScene, installClientScene, type ClientScene } from './scene.js'
 import { withErrorBoundary } from './ui/ErrorBoundary.js'
 import { installPointerModality } from './ui/styles.js'
 import { UndoToast } from './undo-toast.js'
@@ -179,6 +180,7 @@ function registerContributions(
   client: ClientContextLike,
   deps: SessionDeleteRemote,
   t: Translate,
+  scene: ClientScene,
 ): void {
   for (const row of contributions(t)) {
     const inject = row.payload === 'none'
@@ -186,7 +188,8 @@ function registerContributions(
       : row.payload === 'deps+t' ? () => ({ deps, t }) : () => ({ t })
     // 每条贡献各自一颗错误边界：一条渲染崩了只收起它自己那一块（宿主那一格不许被连坐成空白）。
     // Props 形状由宿主按座位派发、彼此不同，边界这一层只关心"包住它"，所以擦成 `never` 面再包。
-    const guard = withErrorBoundary(row.component as ComponentType<never>, t('common.renderFailed'))
+    // 场景实例随贡献表里每条槽位贡献进它的子树：宿主各槽位是独立 React 树，跨槽位共享靠同一个实例（不是树）。
+    const guard = withErrorBoundary(row.component as ComponentType<never>, t('common.renderFailed'), scene)
     client.slots.inject(row.slot, () => client.slots.register(
       inject === undefined ? row.spec : { ...row.spec, inject },
       guard,
@@ -211,6 +214,10 @@ function registerContributions(
  * 漏一半的代价是**宿主那句响亮的抛错**，不是静默降级。
  */
 async function activate(client: ClientContextLike): Promise<void> {
+  // 浏览器半的跨槽位现场收在一份场景里：注册面造一份、装成默认场景（旧自由函数与它同一份账）、
+  // 再由每个贡献的 Provider 带给组件（宿主槽位之间没有共同父级，共享靠实例本身）。
+  // 已有默认场景时沿用（测试常在 apply 前先摆现场；HMR 二次激活也不换新账）。
+  const scene = installClientScene(createClientScene())
   bindMainView(client)
   // 探测是一次往返（有 5s 上限，但这道守卫不拿它当卸载信号）；期间宿主可能已经卸载本条目
   // （HMR / 条目销毁）。卸载标记必须抢在探测之前登记，回来先看它——续拍再注册就是把贡献
@@ -237,7 +244,7 @@ async function activate(client: ClientContextLike): Promise<void> {
     client.effect(() => installArchiveHostWatch(client), 'session-delete: archive host watch')
   }
   // 其余贡献是一张表、一个注册循环（槽位 / id / order / 注入面 / 组件各一格）。
-  registerContributions(client, deps, t)
+  registerContributions(client, deps, t, scene)
 }
 
 /**

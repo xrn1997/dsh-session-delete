@@ -15,7 +15,7 @@ import { isAbsentPath } from '../ports/fs-port.js'
 import type { FsReferenceScanPort, FsReferenceScanRemovalPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
 import { TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
-import { isCanonicalSessionLogName, MAX_SESSION_LOG_BYTES, pickSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
+import { isCanonicalSessionLogName, MAX_SESSION_LOG_BYTES, pickSessionLog, readWholeSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 
 export interface ImageRef {
   kind: 'image'
@@ -205,8 +205,8 @@ async function unreadableExtraFile(
  *  **规范日志旁的文件也要过关**：老一代规范日志可以并存（新代包含旧代）；0 字节临时日志是
  *  写盘未完成的空产物，也没有引用；格式迁移暂存是同一历史日志的完整拷贝，规范日志可读时忽略它。
  *  非空临时日志、明文日志或其他任何文件仍按不可读处理（fail closed）。
- *  **整本日志读取有上限**（`MAX_SESSION_LOG_BYTES`）：超过就按不可读处理，不为一份读不完的引用源
- *  把整本字节压进内存，更不把它折成"没有引用"。
+ *  **整本日志读取有上限**（`readWholeSessionLog`，值住 `MAX_SESSION_LOG_BYTES`）：超限与读错误都按不可读
+ *  处理，不为一份读不完的引用源把整本字节压进内存，更不把它折成"没有引用"。
  *  **宿主的内核写锁不是会话内容**：0 字节的锁在判目录形状之前先剥掉——不然每个已实体化的会话目录
  *  （含搬进回收站的条目）都会被读成"读不懂"，整份引用扫描在真机上恒跳过；没有日志的锁目录因此与
  *  空目录同判。非空的锁说明我们对这个文件的理解失效（宿主不会往里写字节），仍按不可读处理。
@@ -265,13 +265,19 @@ export async function imageIdsOfDir(
     if (subdirs.length > 0) {
       return { ids: new Set(), unreadable: `${dir}: 目录里还有子目录，规范日志覆盖不到它们` }
     }
-    // 读整本之前先看大小：上限是"读不出"的判据，不是截断阈值（截断读到的引用集合不可信）。
+    // 整本读取（含大小闸）归 `readWholeSessionLog`：超限与读错误都按不可读跳过（fail closed）——
+    // 上限是"读不出"的判据，不是截断阈值（截断读到的引用集合不可信）。
     const logPath = `${dir}/${log}`
-    const logSize = (await deps.fs.statFile(logPath)).size
-    if (logSize > MAX_SESSION_LOG_BYTES) {
-      return { ids: new Set(), unreadable: `${logPath}: 日志 ${logSize} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节，未扫描` }
+    const read = await readWholeSessionLog(deps.fs, logPath)
+    if (!read.ok) {
+      return {
+        ids: new Set(),
+        unreadable: read.kind === 'too-large'
+          ? `${logPath}: 日志 ${read.size} 字节超过整本读取上限 ${MAX_SESSION_LOG_BYTES} 字节，未扫描`
+          : String(read.cause),
+      }
     }
-    const scan = scanImageIdsInLog(await deps.fs.readFile(logPath))
+    const scan = scanImageIdsInLog(read.raw)
     // 损坏的日志：解析出来的 id 也不可信（少读的行可能正是引用），整组按不可读处理。
     if (scan.damaged !== undefined) return { ids: new Set(), unreadable: `${dir}/${log}: ${scan.damaged}` }
     return { ids: scan.ids }

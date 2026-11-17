@@ -107,8 +107,13 @@ _Avoid_: 全部展开 / 全部折叠（旧的单开关已删）；筛选、过�
 
 **提问轨（prompt rail）**:
 详情右缘的提问导航：有用户提问时出现，一句一格，悬停 / 键盘聚焦出预览，点一下跳到那句。它不占正文布局、不设开合；未加载的那句点了先按游标补页到它进窗再落位。
-_唯一实现_: `src/client/prompt-rail.tsx` 的 `PromptRail`；当前哪句与补页循环住 `src/client/use-prompt-rail.ts` 的 `usePromptRail`；两档共用的接线住 `src/client/use-detail-rail.ts` 的 `useDetailRail`；索引由 `src/trash/detail.ts` 的 `createDetailFold` 产出（线上形状 `TrashDetailPromptWire`）。
+_唯一实现_: `src/client/prompt-rail.tsx` 的 `PromptRail`；当前哪句与补页循环住 `src/client/use-prompt-rail.ts` 的 `usePromptRail`；轨的三条判据住 `src/client/use-detail-rail.ts` 的 `useDetailRail`，两档接线住 `src/client/use-detail-frame.ts` 的 `useDetailFrame`；索引由 `src/trash/detail.ts` 的 `createDetailFold` 产出（线上形状 `TrashDetailPromptWire`）。
 _Avoid_: 轮次轨 / turn rail（宿主按 turn 分格；这里按用户提问分格）；时间线（那是回收站清单的说法）。
+
+**档（panel tab）**:
+回收站面板里与另一档**平级**的一份内容（回收站档 / 归档档）：一条装配线（清单读数 → 分组 → 选择面 → 控制器 → 键盘导航 → 意图预取 → 详情帧）+ 四格版面（工具行 / 清单 / 详情 / 页脚）。两档状态各一份、互不读写（ADR-0060 第 4 条）；两档差异全在 adapter（行身份 / 行读数 / 分组键 / 导航三格 / 预取参数域 / 详情挂载判据）。
+_唯一实现_: `src/client/use-panel-tab.ts` 的 `usePanelTab` / `PanelTabAdapter` / `PanelTabController` / `panelDetailNav` / `useGuardedLoadOlder`；四格版面住 `src/client/panel-tab.tsx` 的 `PanelTabFrame`；两档视图件住 `src/client/trash-tab.tsx` 的 `TrashTabView` 与 `src/client/archive-pane.tsx` 的 `ArchiveTabView`。
+_Avoid_: 标签页 / tab（宿主 tab 是导航控件；这里的「档」是面板内平级内容与它的装配线）；面板（面板是容器，档是其中一份）。
 
 **未分组（ungrouped）**:
 回收站清单里原工作区已从宿主账本删掉的条目统一归入的组；该组永远沉底，因为它不是一个可比较的项目。它与「未记录项目」（空 cwd）不是同一件事。
@@ -211,6 +216,11 @@ _Avoid_: 轮询、定时重开（等待由 store 通知驱动；ADR-0036）。
 _唯一实现_: `src/client/ui/top-layer.ts`。
 _Avoid_: 弹窗（太泛；这里专指名单上那两类与「最上层」判据）。
 
+**场景（client scene）**:
+浏览器半**跨槽位现场**的一份可实例化集合（回收站 / 归档修订台、首帧快照与详情账本、撤销通知台、主视图记忆、宿主行登记、批量选中集、两个确认框请求现场）。生产注册面安装一份（默认场景已懒建时沿用）、各贡献经 Provider 读同一实例（槽位是独立 React 树，共享靠实例本身，不靠共同父级）；没有 Provider 的测试回退默认场景，`resetClientState()` 只清默认那一份。一份实例 = 一套互不共享的现场。
+_唯一实现_: `src/client/scene.ts` 的 `ClientScene` / `createClientScene` / `ClientSceneProvider` / `useClientScene` / `installClientScene` / `resetDefaultClientScene`；九份现场的工厂各住原 module（`src/client/trash-store.ts` 的 `createTrashRevisionScene` 等）。
+_Avoid_: store（单个 store 只是现场里的一格）；全局状态（生产仍是一份，但测试可以各造各的）。
+
 **清单状态（trash list state）**:
 `useTrashQuery` 交出的唯一清单真相：`loading`（还没读到）/ `ready(rows)`（已读到，行集可以为空——空态是 `ready([])`）/ `unknown(failure)`（读不到）。`unknown` 不向下游交出任何行。另交 `refreshing`：清单已有行、重读还在飞；它不是第四态，重读失败仍落 `unknown` 并丢掉快照。
 _唯一实现_: `src/client/use-trash-query.ts` 的 `useTrashQuery`。
@@ -242,7 +252,7 @@ _唯一实现_: `src/client/trash-snapshot.ts` 的 `reloadSucceeded` / `reloadFa
 _Avoid_: 事件名、动作名（这两个词在本仓另有含义）。
 
 **详情账本（detail ledger）**:
-按行身份记下的**已成功读到的详情**，两档各持一份、互不读写：回收站那本键 = 条目 id、模块级、与首帧快照同一模块；归档那本键 = 会话 id、只活在挂载内、不进首帧快照。读取失败不记账，选中该行时重读；容量与淘汰两档同一条口径。
+按行身份记下的**已成功读到的详情**，两档各持一份、互不读写：回收站那本键 = 条目 id、挂在场景实例里、与首帧快照同一模块；归档那本键 = 会话 id、只活在挂载内、不进首帧快照。读取失败不记账，选中该行时重读；容量与淘汰两档同一条口径。
 _唯一实现_: 容量与淘汰住 `src/client/detail-ledger.ts` 的 `DETAIL_LEDGER_LIMIT` / `writeDetail`；回收站那本的读写住 `src/client/trash-snapshot.ts` 的 `readCachedTrashDetail` / `writeTrashDetail`，归档那本住 `src/client/use-archive-detail-reader.ts` 的挂载内 Map。
 _Avoid_: 详情缓存（「缓存」在本仓专指宿主 `cache/attachments` 那类派生请求缓存；这里记的是已读事实）、旧详情（那是详情保持）。
 
@@ -250,6 +260,11 @@ _Avoid_: 详情缓存（「缓存」在本仓专指宿主 `cache/attachments` �
 换到一条还没读过的条目时，详情先继续画上一条已就绪的那一帧（正文 `inert` + `aria-busy`，右缘提问轨跟着顶住但整条禁用，超过静默窗口才在标题排出「正在读这条会话…」），新详情到了整帧换掉、失败换该条失败块；孩子视图不保持。保持期的导航 / 跳转守卫只问 `canNavigate`。
 _唯一实现_: `src/client/use-detail-reader.ts` 的 `DetailState`（`holding` 那一支，两档共用）；回收站实例对外的别名是 `src/client/trash-detail.tsx` 的 `TrashDetailState`。
 _Avoid_: 旧详情缓存（它不是缓存，是当前画着的那一帧）、骨架（保持期不出骨架）。
+
+**详情帧（detail frame）**:
+一档详情在视图上的**接线对象**：读路状态（`DetailState`）、保持期导航判据、分页读面（在飞 / 失败 / 翻页 / 滚动容器）与提问轨合成一格；面板每档接一次，壳与两档投影只消费它。机制判据仍住读路 / 分页 / 轨三个 module——它只拥有「谁接给谁」，不拥有任何判据。
+_唯一实现_: `src/client/use-detail-frame.ts` 的 `useDetailFrame` / `useDetailFramePager` / `DetailFrame` / `DetailPager`。
+_Avoid_: 详情组件（壳是 `src/client/session-detail.tsx` 的 `SessionDetail`）；详情缓存（那是详情账本）。
 
 **意图预取（intent prefetch）**:
 清单行与父详情里的子会话行在 hover / focus 停留一段预设延时（`PREFETCH_DELAY_MS`）后，先把该条详情读进账本；划过不读、连续划过只认最后一次。它不改选中、不占详情上屏槽，也不把当前画面打成 loading。它只碰账本与在飞登记：成功不清已上屏的失败块，失败不记账本、也不上屏（唯一例外：预取在飞时这一条被选中，选中的读路借的是那次请求，那次的失败就是它的失败块，ADR-0051）。

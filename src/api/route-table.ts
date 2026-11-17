@@ -12,6 +12,7 @@
  * body 由 `defineRoute` 从段名表那一格派生、不写第二份字面量；字段组描述 `BODY_GROUPS` 由本表的
  * 通用解析手消费）；这张表只回答“怎么处理”。
  */
+import { APPLY_ACTION_INDEX } from '../shared/apply-actions.js'
 import { BODY_GROUPS, PARAMS, ROUTES, type ApplyAction, type BodyFieldKind, type BodyGroup, type ParsedBody, type RouteBody, type RouteName } from '../shared/wire.js'
 import type { ConfigEditorLike, CoreDeps, DeleteDeps, RemovalDeps } from '../deps.js'
 import type { AttachmentsPort } from '../ports/attachments-port.js'
@@ -214,14 +215,18 @@ function createRouteTable(rows: { readonly [K in RouteKey]: RouteEntry<K> }): Re
  * `/apply` 的六个动作与各自的**静态纯度**。一张表三个用途：动作名单由键派生，纯度从同一格读，
  * 唯一识别器（`actionOf`）也只认这些键——新增动作必须同时给出纯度，漏了编译不过；
  * 新加一个纯读动作也不会再静默落进 `chained`。
+ *
+ * 纯度的事实源是 `src/shared/apply-actions.ts` 的动作索引（浏览器半的超时分档投影同一份），
+ * 这里只把它投影成路由表按动作查的格子：键序 = 索引序，值与索引逐格一致。
+ * `satisfies` 仍是编译闸：索引多一个动作而这里没补，编译不过。
  */
 export const APPLY_ACTION_TABLE = {
-  delete: 'chained',
-  restore: 'chained',
-  purge: 'chained',
-  count: 'pure',
-  'orphan-clean': 'chained',
-  unarchive: 'chained',
+  delete: APPLY_ACTION_INDEX.delete.purity,
+  restore: APPLY_ACTION_INDEX.restore.purity,
+  purge: APPLY_ACTION_INDEX.purge.purity,
+  count: APPLY_ACTION_INDEX.count.purity,
+  'orphan-clean': APPLY_ACTION_INDEX['orphan-clean'].purity,
+  unarchive: APPLY_ACTION_INDEX.unarchive.purity,
 } satisfies Record<ApplyAction, 'pure' | 'chained'>
 
 export const APPLY_ACTIONS = Object.keys(APPLY_ACTION_TABLE) as readonly ApplyAction[]
