@@ -1,10 +1,7 @@
 /**
- * 归档详情读路：通用机制（`use-detail-reader.ts`）的薄实例——
- * 账本是**挂载内 Map**（键 = sessionId，容量与淘汰口径住 `detail-ledger.ts`），卸载即丢、
- * **不进 `trash-snapshot`**（归档档的清单/选中/详情都不进首帧快照；键域是会话 id，与回收站的
- * 条目 id 两不相干——混一台账本会让 `reloadSucceeded` 永远裁不到归档详情、还会挤掉回收站详情）。
- * 归档档的顶层行与「离清单的孩子视图」共用这一本；孩子视图交 `topLevel: false`（不保持上一条），
- * 读孩子时由 `rootOf` 带上那条已归档父会话，供 `/archive-detail` 做闭包校验。
+ * 归档详情读路：通用机制（`use-detail-reader.ts`）的薄实例。账本是挂载内 Map（键 = sessionId），
+ * 卸载即丢、不进 `trash-snapshot`（键域是会话 id，与回收站条目 id 不混）；孩子视图交 `topLevel: false`，
+ * 读孩子时由 `rootOf` 带上已归档父会话供 `/archive-detail` 闭包校验。
  */
 import { useCallback, useRef } from 'react'
 import type { ArchiveSubagentWire } from '../shared/wire.js'
@@ -26,12 +23,10 @@ export interface ArchiveDetailSubject {
   readonly sizeBytes?: number
 }
 
-/** 模块级取键函数：身份恒稳（归档主体的身份是会话 id）。 */
 const sessionIdOf = (row: ArchiveDetailSubject): string => row.sessionId
 
-/** 孩子视图的主体：只带详情投影真正消费的格；时间读数缺席就不造 0。
- *  归档态不在主体上：状态行只认这一读的 `ArchiveDetailWire.archived`（ADR-0061 决定 4），
- *  主体的旧快照或导航道都不能替它。 */
+/** 孩子视图的主体：只带详情投影消费的格，时间读数缺席不造 0。归档态不在主体上——
+ *  状态行只认这一读的 `ArchiveDetailWire.archived`（ADR-0061 决定 4）。 */
 export function childSubjectOf(child: ArchiveSubagentWire): ArchiveDetailSubject {
   return {
     sessionId: child.sessionId,
@@ -81,14 +76,9 @@ export function useArchiveDetailReader(input: {
     present: input.present,
   })
 
-  // 归档集变了 ⇒ 账本里每条的 `subagents[].archived` 与主体的 `archived`（wire）都可能过期：
-  // 整本作废并重读当前主体；其余条目等重新选中时自然重读。`useArchiveRevision` 只在本档自己的
-  // 旁路观察 / 自救动作 / 恢复删除后递增（ADR-0060 决定第 4 条），不做轮询。
-  // 节奏（档位门 / dirty / 单飞 / 合并窗）归共用生命周期。**作废落在 refresh 里、不落 revision 当场**：
-  // `clearAll` 会把账本与在飞登记一起清掉，而通用读者在「主体在场、账本为空、没在读」时会由兜底
-  // effect 立刻补读——当场作废等于给每一发修订开一条绕过窗口与单飞的读。放进 refresh：窗口到点先
-  // 整本作废、同一拍立刻 ensure，兜底那一拍看到的已经是「在读」，不会抢跑；风暴里的多发修订只在
-  // 结算后补一轮。代价是旧归档态最多多留一个合并窗（120ms），但读只发一次。
+  // 归档集变了 ⇒ 账本里每条的 `archived` 都可能过期：整本作废并重读当前主体。作废落在 refresh 里、
+  // 不落 revision 当场——`clearAll` 会清账本与在飞登记，当场作废等于给每一发修订开一条绕过窗口与
+  // 单飞的读；放进 refresh 先作废、同一拍立刻 ensure，兜底那拍看到的已是「在读」。
   const archiveRevision = useArchiveRevision()
   const current = useLatest({ subject: input.subject, ensure: reader.ensure, clearAll: reader.clearAll })
   useGatedRefresh({

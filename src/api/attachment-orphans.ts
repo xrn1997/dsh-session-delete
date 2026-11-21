@@ -1,12 +1,6 @@
-/**
- * 孤儿附件的报告段：`GET /attachment-orphans`。
- *
- * 报告把扫描计划折成数量/字节 + 对象清单（`id`/`bytes`，供设置页预览缩略图；最多
- * `src/config.ts` 的 `orphanPreviewLimit`（默认 200，ADR-0037），清理不受预览条数限制）。
- * 扫描跳过（引用源或对象列表读不出）时**报告必须失败**——回一份 0 会让界面说"没有孤儿"，
- * 而这类失败恰恰是"不知道"，不是"没有"。
- * 清理是 `POST /attachment-clean`，由路由直接接到 `cleanOrphanImageAttachments`。
- */
+/** 孤儿附件的报告段（`GET /attachment-orphans`）：数量/字节 + 预览对象清单（条数由 `orphanPreviewLimit` 限）。
+ *  扫描跳过时**报告必须失败**——回 0 会让界面说「没有孤儿」，而这类失败是「不知道」。
+ *  清理走 `POST /attachment-clean`，路由直接接 `cleanOrphanImageAttachments`。 */
 import { scanOrphanImageAttachments, type AttachmentReadDeps } from '../trash/attachments.js'
 import type { SessionDeleteConfig } from '../config.js'
 import type { AttachmentOrphanReportWire } from '../shared/wire.js'

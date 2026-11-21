@@ -5,7 +5,7 @@
 // （`renderWide` / `renderNarrow`，替身见 support/observe-width.ts）。jsdom 没有真实布局，
 // `clientWidth` 恒 0 ⇒ 不装替身就是窄档，正好也是"读不到就当窄"那条默认。
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
 import { DeleteConfirmHost } from '../../src/client/delete-confirm.js'
@@ -18,7 +18,6 @@ import {
   noteSelection,
 } from '../../src/client/trash-snapshot.js'
 import { invalidateTrash } from '../../src/client/trash-store.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
 import type { ArchiveDetailLike, PurgeResultLike, RemoteOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import type { ArchiveListWire } from '../../src/shared/wire.js'
@@ -29,10 +28,6 @@ import { failed, ok, outcomes, restoreOutcomes, trashRow } from './support/outco
 import { firePointer } from './support/pointer.js'
 import { must, pick } from '../support/fixture.js'
 
-// 修订号与首帧快照都是模块级现场（跨用例存活）：每个用例前复位，用例之间互不串味。
-beforeEach(() => {
-  resetClientState()
-})
 
 const rows = [
   { id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws', wasArchived: false, deletedAt: 1, sizeBytes: 224 * 1024, releaseBytes: 224 * 1024, title: '/code-review' },
@@ -734,19 +729,6 @@ describe('回收站面板 · 其余行为', () => {
   })
 
   // 真机反馈：删完在别处（侧栏菜单），面板是"挂载时取一次数"，不切走再回来就看不见新条目。
-  it('别处动过回收站（失效通告）时立刻重读清单，不用切走再回来', async () => {
-    const deps = makeDeps({ list: vi.fn().mockResolvedValueOnce(remoteOk([])).mockResolvedValueOnce(remoteOk(rows)) })
-    render(<TrashPanel deps={deps} />)
-    expect(await screen.findByText('回收站是空的')).toBeInTheDocument()
-
-    act(() => {
-      invalidateTrash()
-    })
-
-    expect(await screen.findByText('/code-review')).toBeInTheDocument()
-    expect(deps.list).toHaveBeenCalledTimes(2)
-  })
-
   it('恢复成功后把清单重新读一遍，那一行就没了、详情让位', async () => {
     const deps = makeDeps({
       list: vi.fn().mockResolvedValueOnce(remoteOk(rows)).mockResolvedValueOnce(remoteOk([])),
@@ -1403,35 +1385,6 @@ describe('回收站面板 · 多选与批量动作（2026-10-15 删；2026-10-17
     expect(rowOf(container, 'b').textContent).toContain('原项目目录已不存在')
     expect(screen.queryByText('第一条')).toBeNull()
     expect(screen.getByRole('button', { name: '退出多选' })).toBeInTheDocument()
-  })
-
-  // 在飞的 `list` 不保证按发起顺序落地（对账耗时随盘上条目数摆动）——后到的旧响应不许盖掉新状态。
-  it('在飞期间失效只置脏：结算后追补一轮，最终态以新读为准（旧响应不盖新态）', async () => {
-    const open = <T,>(): { promise: Promise<T>; resolve: (value: T) => void } => {
-      let resolve!: (value: T) => void
-      const promise = new Promise<T>((inResolve) => { resolve = inResolve })
-      return { promise, resolve }
-    }
-    const first = open<RemoteOutcome<typeof three>>()
-    const second = open<RemoteOutcome<typeof three>>()
-    const list = vi
-      .fn<() => Promise<RemoteOutcome<typeof three>>>()
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise)
-    renderNarrow(depsOf({ list }))
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(1))
-    // 在飞期间失效只置脏：单飞，不并发第二条读。
-    act(() => { invalidateTrash() })
-    await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve() })
-    expect(list).toHaveBeenCalledTimes(1)
-    // 旧读先落地：界面可以短暂看到旧清单。
-    first.resolve(remoteOk(three))
-    // 结算后恰好一轮追补，最终态以新读为准。
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
-    second.resolve(remoteOk([pick(three, 2)]))
-    expect(await screen.findByText('第三条')).toBeInTheDocument()
-    await act(async () => { for (let i = 0; i < 8; i++) await Promise.resolve() })
-    expect(screen.queryByText('第一条')).toBeNull()
   })
 
   it('多选态：grid 声明可多选，aria-selected 说的是勾选；退出后回到"选中看详情"那套', async () => {

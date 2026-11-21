@@ -10,26 +10,21 @@ import {
 /** 五个码的家同样在 `shared/wire.ts`（`io` 是唯一兜底）——这里只是取来用，不再抄第二份。 */
 type Code = VerbCode
 
-/** 宿主两条类型化错误 → 我们的码（本文件的两行映射）。
- *  类不可 import（跨插件值 import 是红线；且宿主包与运行中的宿主不同代）⇒ 按官方构造器写死的 `this.name` 认。
- *  证据：asar `dsh/node_modules/@deepseek-ai/dsh-workspace/lib/index.js` 原文
- *  `var WorkspaceUnknownSessionError = class extends Error { …; this.name = "WorkspaceUnknownSessionError"; }`
- *  `var WorkspaceActiveSessionError  = class extends Error { …; this.name = "WorkspaceActiveSessionError"; }`。 */
+/** 宿主两条类型化错误 → 我们的码。类不可 import（跨插件值 import 是红线；且宿主包与运行中的宿主不同代）
+ *  ⇒ 按官方构造器写死的 `this.name` 认。证据：asar `dsh/node_modules/@deepseek-ai/dsh-workspace/lib/index.js` 里
+ *  `WorkspaceUnknownSessionError` / `WorkspaceActiveSessionError` 两个类各自的 `this.name = "<类名>"` 赋值。 */
 const HOST_ERROR_CODE: Record<string, Code> = {
   WorkspaceUnknownSessionError: 'not-found',
   WorkspaceActiveSessionError: 'live',
 }
 
-/** cause 链上第一个**宿主类型化错误**本身（不只它的名字）——它自己身上的字段还要当 `details` 用；
- *  码在 hasOwn 证明的同一处取回（表值恒在，编译器只认贴着取的这一份）。
- *  深度有界（链坏掉不递归下去）；查表必须 `hasOwn`：`in` 会命中 `Object.prototype` 的键。 */
+/** cause 链上第一个宿主类型化错误本身（字段当 `details` 用）；深度有界，查表必须 `hasOwn`。 */
 function hostErrorOf(error: unknown): { host: Error & { name: string }; code: Code } | undefined {
   let current: unknown = error
   for (let depth = 0; depth < 8; depth++) {
     if (current === null || typeof current !== 'object') return undefined
     const name = (current as { name?: unknown }).name
-    // 必须 `hasOwn`：`'constructor' in {...}` 是 true（原型链），抛出的东西只要 `name` 叫 `constructor`
-    // 或 `toString` 就会拿回一个**函数**当码（`sessiondelete/function Object(){…}`）。
+    // 必须 `hasOwn`：`in` 会命中 `Object.prototype`，抛出的东西叫 `constructor` 就会拿回一个函数当码。
     if (typeof name === 'string' && Object.hasOwn(HOST_ERROR_CODE, name)) {
       const code = HOST_ERROR_CODE[name]
       if (code !== undefined) return { host: current as Error & { name: string }, code }
@@ -39,8 +34,7 @@ function hostErrorOf(error: unknown): { host: Error & { name: string }; code: Co
   return undefined
 }
 
-/** 上屏原文：`Error` 取 `.message`；**带 `message` 字符串的非 Error 抛出物也照取**（否则会退化成
- *  `[object Object]`，把 src/shared/wire.ts「`message` 是上屏的原文」这条许诺落空）；其余一律 `String()`。 */
+/** 上屏原文：`Error` 与非 Error 的 `message` 字符串都照取，其余 `String()`。 */
 function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'object' && error !== null) {
@@ -53,11 +47,8 @@ function messageOf(error: unknown): string {
 /** 官方 `<域>/<名>` 形状的 code。动词码也是这个形状，所以调用方另要**排除本域**才作数。 */
 const OFFICIAL_CODE = /^[a-z][a-z0-9-]*\/[a-z][a-z0-9-]*$/
 
-/** 抛出物**自己身上**挂的结构化字段（rc.2：`WorkspaceActiveSessionError` 带 `sessionId` / `activity`，
- *  `WorkspaceUnknownSessionError` 带 `sessionId`；控制器把它们折进 `RemoteError.details` 才上客户端）。
- *  `activity` 过一遍 JSON 往返再交回：既保住它的结构（官方 schema 是 `Record<string, unknown>`），
- *  也保证信封那一侧 `JSON.stringify` 不会撞上循环引用。
- *  一件都没有 ⇒ `undefined`（不硬造一个空表冒充"带过 details"）。 */
+/** 抛出物自己身上挂的结构化字段（`sessionId` / `workspaceId` / `path` / `activity`）；一件都没有就 `undefined`。
+ *  `activity` 过一遍 JSON 往返，既保结构也避开循环引用。 */
 function ownDetailsOf(error: unknown): Record<string, unknown> | undefined {
   if (error === null || typeof error !== 'object') return undefined
   const out: Record<string, unknown> = {}
@@ -85,23 +76,10 @@ function detailsOf(error: unknown): Record<string, unknown> | undefined {
   return ownDetailsOf(error)
 }
 
-/**
- * 把任意抛出物折成失败信封里的**那三件**（本文件唯一那张映射表）。
- *
- * - 已经是远程失败（`isDSHRemoteError` 认得的结构标记）⇒ 原样带出它自己的 `code` / `message`，
- *   挂着的 `details` 一起过桥，不再包一层。
- * - **带官方形状 code 的抛出物**（`workspace/session-active`、`session/not-found`…）⇒ **原样过桥**。
- *   把它们折成 `sessiondelete/io` 就是把宿主的判断抹成我们的，客户端拿到的 code 从此不能说真话。
- * - 宿主类型化错误（自身或 `cause` 链上，见 {@link hostErrorOf}）⇒ 映射成 `live` / `not-found`，
- *   并把它自己身上的结构化字段带成 `details`。这一条排在动词码之前：动词会把宿主错误包成笼统的 `io`
- *   并把原错误挂在 cause 上（`verbError('io', …, cause)`），不看进 cause 链，本文件那两行映射永远到不了客户端。
- * - 动词的 `sessiondelete/<五个码>` ⇒ 原样过桥（`details` 同样带着）。
- * - 其余（别域的怪 code、前缀外的因、非 Error 抛出物）⇒ `io`，message 保留原文。
- *
- * **返回的是线上形状、不是 `Error`**：这份东西唯一的去处是 `src/api/dispatch.ts` 的失败信封
- * （以及 `verbs/batch.ts` 的逐条 `error`），而本仓的跨插件 import 红线也不许为此去引宿主的
- * `RemoteError` 类（实例也上不了线：信封只走这三件）。
- */
+/** 把任意抛出物折成失败信封里的三件（本文件唯一那张映射表）。
+ *  已经是远程失败 / 带官方形状 code / 我们的动词码 ⇒ 原样过桥，details 一起带；
+ *  宿主类型化错误（自身或 cause 链上）⇒ 映射成 `live` / `not-found`；动词把它包成 `io` 时只挂在 cause 上。
+ *  其余 ⇒ `io`，message 保留原文。返回线上形状，不是 `Error`。 */
 export function toRemoteFailure(error: unknown): RemoteFailure {
   if (isDSHRemoteError(error)) {
     const carried = (error as { details?: unknown }).details

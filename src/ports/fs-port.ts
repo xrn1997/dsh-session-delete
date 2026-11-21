@@ -2,11 +2,8 @@ import { mkdir, open, readdir, readFile, realpath, rename, rm, stat } from 'node
 import { join } from 'node:path'
 
 /**
- * **缺席**只认 ENOENT 与 ENOTDIR（"路径中间有一截不是目录"与"不存在"是同一种回答）。
- *
- * EACCES / EIO / ELOOP / 断挂载**不是缺席**：这些读数说明"我们看不见"，不是"那里没有"。
- * 破坏性动作（删目录、删附件对象、按"没有引用"清共享图）据此做决定，把读不出折成没有
- * 就是数据消失；ADR-0039 是这条判据的裁决。
+ * **缺席**只认 ENOENT 与 ENOTDIR（"路径中间有一截不是目录"与"不存在"同一种回答）。EACCES / EIO / ELOOP / 断挂载**不是缺席**——
+ * 这些读数说明"我们看不见"，不是"那里没有"；破坏性动作据此做决定，把读不出折成没有就是数据消失（ADR-0039）。
  */
 export function isAbsentPath(error: unknown): boolean {
   const code = (error as { code?: unknown } | null | undefined)?.code
@@ -14,34 +11,28 @@ export function isAbsentPath(error: unknown): boolean {
 }
 
 export interface FsPort {
-  /** 全部成员写成属性声明：端口方法会被**解构出来单独调**（`const { sizeOfDir } = port`，见下方
-   *  模块级递归的注释），实现体一律不读 `this`。方法简写的隐式 `this: FsPort` 会让
-   *  `unbound-method` 把这种正常用法报成可疑；契约（返回的 Promise 形状）一字未动。 */
-  /** 路径在不在。**只有 ENOENT / ENOTDIR 回 `false`**；权限、盘挂、I/O 等读错误照抛——
-   *  调用方拿它当"缺席"判据时，读不出必须是失败，不是"没有"（ADR-0039）。 */
+  /** 全部成员写成属性声明：端口方法会被**解构出来单独调**（见下方模块级递归的注释），实现体一律不读 `this`；
+   *  方法简写的隐式 `this: FsPort` 会让 `unbound-method` 把这种正常用法报成可疑。 */
+  /** 路径在不在。**只有 ENOENT / ENOTDIR 回 `false`**；其余读错误照抛——读不出必须是失败，不是"没有"（ADR-0039）。 */
   exists: (p: string) => Promise<boolean>
   /** 建目录（含中间层）。首删时 `~/.dsh/session-trash/` 还不存在，而 `rename` 不建父目录。 */
   ensureDir: (p: string) => Promise<void>
-  /** 搬目录：**目标已存在一律失败**，跨卷（EXDEV）也失败并说清楚——不替换、也不偷偷改成复制。
-   *  Linux 的 `rename` 会静默替代空目录而 Windows 不会，这个差别不能交给操作系统决定。 */
+  /** 搬目录：**目标已存在一律失败**，跨卷（EXDEV）也失败并说清楚——不替换、也不偷偷改成复制
+   *  （Linux 会静默替代空目录而 Windows 不会，这个差别不能交给操作系统决定）。 */
   rename: (from: string, to: string) => Promise<void>
   removeDir: (p: string) => Promise<void>
   sizeOfDir: (p: string) => Promise<number>
   /** 目录下的条目名（**不递归**）。回收站详情要用它在那条目录里挑 `*.jsonl.zstd`。 */
   listFiles: (p: string) => Promise<string[]>
-  /** 目录下的**子目录**名（不递归；**跟随软链**）。回收站对账用它找出"清单里还没有行"的条目目录——
+  /** 目录下的**子目录**名（不递归；**跟随软链**）：对账用它找出"清单里还没有行"的条目目录——
    *  与 `listFiles` 分开是为了让"拒收文件"发生在挑选阶段（回收站根里落进来的杂散文件当外人）。 */
   listDirs: (p: string) => Promise<string[]>
   /** 解析符号链接后的真实路径。递归走目录时防环用：跟随软链之后，目录图不再是树。 */
   realpath: (p: string) => Promise<string>
-  /** 整个文件读进内存。实测本机回收站里最大单文件 4.66 MB；**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`），
-   *  本方法不做任何上限判断：会话日志的整本读取走 `readWholeSessionLog`（stat → 上限 → read 的顺序住那里）。 */
+  /** 整个文件读进内存。**内存口径由逐帧解压把住**（见 `src/log/session-log.ts`）；本方法不做任何上限判断，整本读取走 `readWholeSessionLog`。 */
   readFile: (p: string) => Promise<Buffer>
-  /** **有界头读**：只读文件开头至多 `maxBytes` 字节（文件更短就整份交回）。
-   *  对账只为读日志 header，却不必把整本日志读进内存——这是"整本读"之外的另一条读取口径，
-   *  不改变 `readFile` 的语义（它仍读整本，整本上限由 `src/log/session-log.ts` 的 `readWholeSessionLog` 判）。
-   *  只做字节切取，不保证落在帧边界：前缀的尾巴可以切在帧中间，需要解 zstd 的调用方按自己的
-   *  容忍度判（对账走 `readSessionHeader` 的前缀容忍口径，丢掉最后那个不完整帧，见 `src/trash/reconcile.ts`）。 */
+  /** **有界头读**：只读文件开头至多 `maxBytes` 字节。对账只为读日志 header，不必为一行付整本内存；只做字节切取，
+   *  不保证落在帧边界——需要的调用方按自己的容忍度判（对账丢掉最后那个不完整帧，见 `src/trash/reconcile.ts`）。 */
   readFileHead: (p: string, maxBytes: number) => Promise<Buffer>
   /** 只读的单文件读数：附件渲染与独占计划都用它（不递归、不跟随目录）。 */
   statFile: (p: string) => Promise<{ size: number }>
@@ -49,9 +40,8 @@ export interface FsPort {
   removeFile: (p: string) => Promise<void>
 }
 
-/** 动词的基础面：读与搬移都有，**不拿删除**。删目录与删单文件只挂在 `RemovalDeps` 上（ADR-0027）。
- *  名单是运行期收窄的**唯一依据**（ADR-0032）：`src/api/dispatch.ts` 的 `coreDepsOf` 按它挑方法，
- *  所以「基础面不含删除」既在类型上、也在运行期成立。 */
+/** 动词的基础面：读与搬移都有，**不拿删除**。名单是运行期收窄的**唯一依据**（ADR-0032）：`src/api/dispatch.ts` 的
+ *  `coreDepsOf` 按它挑方法，所以「基础面不含删除」既在类型上、也在运行期成立。 */
 export const FS_CORE_METHODS = [
   'exists',
   'ensureDir',
@@ -73,11 +63,9 @@ export const FS_ATTACHMENT_METHODS = ['statFile', 'readFile'] as const
 /** 详情读取：目录在不在、挑日志文件、读日志（整本读取经 `readWholeSessionLog`，stat / 上限的顺序不在这里判）。 */
 export const FS_DETAIL_METHODS = ['exists', 'listFiles', 'readFile', 'statFile'] as const
 
-/** 对账：目录存在性、枚举（条目目录 / 目录里的文件）、有界头读、量尺寸。**不读整本日志**——
- *  对账只要 header，`readFileHead` 就是为它长出来的那条口径。 */
+/** 对账：目录存在性、枚举、有界头读、量尺寸。**不读整本日志**——只要 header，`readFileHead` 就是为它长出来的口径。 */
 export const FS_RECONCILE_METHODS = ['exists', 'listDirs', 'listFiles', 'readFileHead', 'sizeOfDir'] as const
 
-/** 附件引用扫描（读侧）。 */
 export const FS_REFERENCE_SCAN_METHODS = [
   'exists',
   'listFiles',
@@ -87,7 +75,6 @@ export const FS_REFERENCE_SCAN_METHODS = [
   'realpath',
 ] as const
 
-/** 附件引用扫描 + 清孤儿图片（聚合写）。 */
 export const FS_REFERENCE_SCAN_REMOVAL_METHODS = [
   ...FS_REFERENCE_SCAN_METHODS,
   'removeFile',
@@ -101,22 +88,19 @@ export type FsReconcilePort = Pick<FsPort, (typeof FS_RECONCILE_METHODS)[number]
 export type FsReferenceScanPort = Pick<FsPort, (typeof FS_REFERENCE_SCAN_METHODS)[number]>
 export type FsReferenceScanRemovalPort = Pick<FsPort, (typeof FS_REFERENCE_SCAN_REMOVAL_METHODS)[number]>
 
-/** 按名单从全量端口切一片（复制方法引用；端口方法都是属性、不读 `this`）。
- *  **运行期真的只带这些方法**：ADR-0032 的收窄不是类型投影。入参按 **K 的键集**收窄（不是整份
- *  `FsPort`）：本函数只会读名单里的那几个键，而 `RemovalDeps` 那样已经切过一片的面（`RemovalFsPort`）
- *  不必先长回全量面才能再切。 */
+/** 按名单从全量端口切一片（复制方法引用；端口方法都是属性、不读 `this`）。**运行期真的只带这些方法**（ADR-0032 的收窄
+ *  不是类型投影）；入参按 **K 的键集**收窄，`RemovalDeps` 那样已切过一片的面不必先长回全量面才能再切。 */
 export function fsSlice<const K extends readonly (keyof FsPort)[]>(
   port: Pick<FsPort, K[number]>,
   keys: K,
 ): Pick<FsPort, K[number]> {
-  // 入参只是 K 的投影（`RemovalDeps` 那样已经被切过一片的面也收）：按 `Partial<FsPort>` 取键，
-  // 名单里的键由 K 约束、由调用方保证存在。
+  // 入参只是 K 的投影：按 `Partial<FsPort>` 取键，名单里的键由 K 约束、由调用方保证存在。
   const source: Partial<FsPort> = port
   return Object.fromEntries(keys.map((key) => [key, source[key]])) as Pick<FsPort, K[number]>
 }
 
-/** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的
- *  `this` 变成 undefined）。所以端口只做转发，递归在模块作用域里自调。 */
+/** 模块级递归：端口方法**解构出来单独调**也不能靠 `this`（`{ sizeOfDir } = port` 会让方法体的 `this` 变成 undefined）；
+ *  所以端口只做转发，递归在模块作用域里自调。 */
 async function sizeOfDir(p: string): Promise<number> {
   let total = 0
   for (const e of await readdir(p, { withFileTypes: true })) {
@@ -142,17 +126,15 @@ export function createFsPort(): FsPort {
     exists: pathPresent,
     async ensureDir(p) { await mkdir(p, { recursive: true }) },
     async rename(from, to) {
-      // 目标已存在一律失败：Linux 的 rename 会静默替代**空目录**，Windows 不会——"搬进回收站/放回
-      // 会话目录"是这里唯一的目录搬迁动作，被替代 = 数据消失。把两个平台的语义钉成同一个。
-      // 检查与 rename 之间仍有一个窗口（Linux 上恰好此时长出空目录会被覆盖）；本机可信部署
-      // 接受这一残余竞态，不加锁——加锁会把一次本地搬移变成跨进程协议。
-      // 目标**读不出**也不搬：读不出不是"没有"（ADR-0039），抛错比冒险覆盖安全。
+      // 目标已存在一律失败：Linux 的 rename 会静默替代**空目录**，Windows 不会——被替代 = 数据消失，把两个平台钉成同一个。
+      // 检查与 rename 之间仍有一个窗口（Linux 上恰好此时长出空目录会被覆盖）；本机可信部署接受这一残余竞态，不加锁
+      // ——加锁会把一次本地搬移变成跨进程协议。目标**读不出**也不搬：读不出不是"没有"（ADR-0039），抛错比冒险覆盖安全。
       if (await pathPresent(to)) throw new Error(`目标已存在，拒绝覆盖：${to}`)
       try {
         await rename(from, to)
       } catch (error) {
-        // 跨卷（sessions 与 session-trash 被挂到不同挂载点）：不在这里改成"复制 + 删源"——那会把
-        // 一次原子搬移换成一次可能半途而废的复制；明说，让调用方按 journal 回滚。
+        // 跨卷（sessions 与 session-trash 被挂到不同挂载点）：不在这里改成"复制 + 删源"——那会把一次原子搬移
+        // 换成一次可能半途而废的复制；明说，让调用方按 journal 回滚。
         if ((error as NodeJS.ErrnoException).code === 'EXDEV') {
           throw new Error(`跨文件系统搬不动（sessions 与 session-trash 需在同一卷）：${from} → ${to}`, { cause: error })
         }
@@ -178,9 +160,8 @@ export function createFsPort(): FsPort {
     },
     async realpath(p) { return realpath(p) },
     async readFile(p) { return readFile(p) },
-    /** 有界头读：开一次句柄、只读开头 `maxBytes` 字节（文件更短时 `read` 自己少给）。
-     *  `maxBytes` 非正数按 0 处理——"读 0 字节"是合法请求，不是参数错误；路径不在时 `open` 照
-     *  ENOENT 抛（缺席与读错误的判据仍归调用方 / `exists`，ADR-0039）。 */
+    /** 有界头读：开一次句柄、只读开头 `maxBytes` 字节（文件更短时 `read` 自己少给）。`maxBytes` 非正数按 0 处理——
+     *  "读 0 字节"是合法请求，不是参数错误；路径不在时 `open` 照 ENOENT 抛（缺席与读错误的判据仍归调用方 / `exists`）。 */
     async readFileHead(p, maxBytes) {
       const handle = await open(p, 'r')
       try {

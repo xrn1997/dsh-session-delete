@@ -1,26 +1,14 @@
 /**
- * 一批会话的**行读数装配**（Node 半），三层拆开：
- * **批量面**（{@link readRowSurfaces}：标题 / 最后活动 / 大小三个读面各预读一次）、
- * **逐行面**（{@link projectRowFacts}：旧宿主标题回退与 label 两种逐行读，共用一份有界并发预算、
- * 只服务输出行）、**合计**（{@link sizeTotalsForIds} 按 id 集合算，{@link sizeTotals} 按已投影
- * facts 算）。归档清单（`api/archive-rows.ts`）与归档详情的子会话段（`trash/archive-detail.ts`）
- * 共用这一份：两处的行形状读同一套缺席口径。
+ * 一批会话的**行读数装配**（Node 半），三层拆开：**批量面**（{@link readRowSurfaces}：标题 / 最后活动 / 大小三个读面各预读一次）、
+ * **逐行面**（{@link projectRowFacts}：旧宿主标题回退与 label 两种逐行读，共用一份有界并发预算）、**合计**（{@link sizeTotalsForIds} /
+ * {@link sizeTotals}）。归档清单（`api/archive-rows.ts`）与归档详情的子会话段（`trash/archive-detail.ts`）共用这一份。
  *
- * 为什么逐行读要有界：孩子段一屏两百行、清单一档上千行，无界地把整批逐行读同时挂起是拿宿主的
- * 并发换自己的省事——`ROW_READ_CONCURRENCY` 是这份预算的唯一旋钮。为什么按输出计划读：归档详情
- * 只画前 N 条，显示外的孩子一条逐行读都不该付；摘要条的合计另按全量 id 算（报的是全部孩子的和）。
+ * 为什么逐行读要有界：孩子段一屏两百行、清单一档上千行，无界地把整批同时挂起是拿宿主的并发换自己的省事——`ROW_READ_CONCURRENCY` 是唯一旋钮。
+ * 为什么按输出计划读：归档详情只画前 N 条，显示外的孩子一条逐行读都不该付；摘要条的合计另按全量 id 算（报的是全部孩子的和）。
  *
- * 四条口径住这里，且只住这里：
- * - **标题**：批量读面缺席（旧宿主没有 `titleSnapshots`）⇒ 逐条回退 `titleOf` 的投影标题；
- *   批量在场 ⇒ map 里没有就是空串。`titleOf` / `labelOf` 按端口契约**不抛**（取不到给空串），
- *   所以标题这一格永不失败整档。
- * - **最后活动**：只有 `sessionActivity` 那一份读数，回落什么由调用方决定——`RowTarget.createdAt`
- *   给了才回落（归档清单每行都带着身份记录的创建时间），不给就整格缺席（子会话段没有创建时间）。
- * - **大小**：`persistedSizes` 的**服务缺席** ⇒ 逐行缺大小（显示「—」、合计只加已知）；**抛错**怎么办
- *   是调用方的策略（`sizeFailure`）：清单要整档 `io`（不拿 0 冒充没有大小），详情那一段不许拖垮正文，
- *   只能逐行缺。
- * - **label**：一次宿主投影读，只为要画这一格的行付钱（`RowTarget.wantsLabel`）；空串 = 没有 ⇒ 键不落。
- *
+ * 四条口径住这里，且只住这里：**标题**（批量面缺席 ⇒ 逐条回退 `titleOf`；批量在场 ⇒ map 里没有就是空串；这一格永不失败整档）；
+ * **最后活动**（只有 `sessionActivity` 一份读数，`RowTarget.createdAt` 给了才回落，不给就整格缺席）；**大小**（服务缺席 ⇒ 逐行缺大小；
+ * 抛错怎么办是调用方的 `sizeFailure`：清单整档 `io`，详情只逐行缺）；**label**（一次投影读，只为 `wantsLabel` 的行付钱；空串 = 没有 ⇒ 键不落）。
  * 输出与 `targets` **同序同长**：调用方按 index 或 `sessionId` 对齐都行，不另建一份身份表。
  */
 import type { CoreDeps } from '../deps.js'
@@ -48,8 +36,7 @@ export interface RowReadPolicy {
   readonly sizeFailure: 'throw' | 'absent'
 }
 
-/** 逐行读的并发预算：label 与旧宿主标题回退共用这一份——「逐行读」是一个概念，
- *  不是一种读法一扇窗。 */
+/** 逐行读的并发预算：label 与旧宿主标题回退共用这一份——「逐行读」是一个概念，不是一种读法一扇窗。 */
 export const ROW_READ_CONCURRENCY = 8
 
 /** 批量面的一次预读快照（{@link readRowSurfaces} 的结果）：逐行面只消费它，不再发批量读。 */
@@ -60,8 +47,7 @@ export interface RowSurfaces {
   readonly sizes: CorpusRead<ReadonlyMap<string, number | undefined>> | null
 }
 
-/** 批量面：三个读面各读一次、零逐行读。`ids` 是调用方要显示的那批行；大小读面抛错按策略
- *  折成整档缺席（null）或原样上抛（见 {@link RowReadPolicy}）。 */
+/** 批量面：三个读面各读一次、零逐行读；大小读面抛错按策略折成整档缺席（null）或原样上抛。 */
 export async function readRowSurfaces(
   deps: CoreDeps,
   ids: readonly string[],
@@ -73,16 +59,14 @@ export async function readRowSurfaces(
   return { titles, activity, sizes }
 }
 
-/** 逐行面：旧宿主标题回退与 label 共用同一份有界并发（{@link ROW_READ_CONCURRENCY}），
- *  顺序与 `targets` 对齐、输出同序同长，缺席的格不落键。 */
+/** 逐行面：旧宿主标题回退与 label 共用同一份有界并发，顺序与 `targets` 对齐、输出同序同长，缺席的格不落键。 */
 export async function projectRowFacts(
   deps: CoreDeps,
   surfaces: RowSurfaces,
   targets: readonly RowTarget[],
 ): Promise<SessionRowFact[]> {
   // 标题的批量面缺席 ⇒ 逐条回退 `titleOf`（旧宿主没有 `titleSnapshots`，不是这一条读不出）。
-  // 降级口径：旧宿主的 `titleOf` 对子会话可能回 label 优先的显示名，与线上 `title` 的「日志标题」
-  // 语义差一格——显示名本就不看 title，用户无感；wire 文档已把这条降级写明。
+  // 降级口径：旧宿主 `titleOf` 对子会话可能回 label 优先的显示名，与线上 `title` 的「日志标题」语义差一格——显示名本就不看 title，用户无感。
   const cells = await mapLimit(targets, ROW_READ_CONCURRENCY, async (target) => {
     const title = surfaces.titles.available
       ? surfaces.titles.value.get(target.sessionId) ?? ''
@@ -118,8 +102,7 @@ export async function projectSessionRows(
   return projectRowFacts(deps, surfaces, targets)
 }
 
-/** 合计按 id 集合算（输出计划外的行也进合计）：缺席按**传入的每个 id** 计数——读面缺席、
- *  或某 id 在表里没有值，都算缺。摘要条报的是全部孩子的和，不是已列前 N 条的。 */
+/** 合计按 id 集合算（输出计划外的行也进合计）：缺席按**传入的每个 id** 计数——读面缺席、或某 id 在表里没有值，都算缺。 */
 export function sizeTotalsForIds(
   ids: readonly string[],
   sizes: RowSurfaces['sizes'],
@@ -158,13 +141,9 @@ async function sizesOf(
   }
 }
 
-/** 有界并发的逐条执行器：结果与 `items` **同序同长**、同时挂起的 `fn` 不超过 `limit`、首个失败
- *  原样抛出（失败后不再起新活，已挂起的跑完即弃）。为什么不直接 `Promise.all`：它无界放飞，
- *  而各条自己 settle 的失败还会留下没人收的 rejection。
- *
- *  **导出面**：逐行读数用它（{@link ROW_READ_CONCURRENCY}），`/list` 的盘上测量也用它
- *  （`src/verbs/permanent-removal.ts` 的组与 kids 两级）——"有界并发"只该有这一份实现。
- *  预算由调用方给：两个调用点的窗口大小不是同一个语义。 */
+/** 有界并发的逐条执行器：结果与 `items` **同序同长**、同时挂起的 `fn` 不超过 `limit`、首个失败原样抛出（失败后不再起新活）。
+ *  为什么不直接 `Promise.all`：它无界放飞，而各条自己 settle 的失败还会留下没人收的 rejection。**导出面**：逐行读数与 `/list` 的盘上测量共用——
+ *  "有界并发"只该有这一份实现；预算由调用方给（两个调用点的窗口大小不是同一个语义）。 */
 export async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,

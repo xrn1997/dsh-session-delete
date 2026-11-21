@@ -1,14 +1,8 @@
 /**
- * 插件设置页的「可调项」卡：三只数字输入 + 保存（ADR-0043；ADR-0037 留下的「自绘表单」那条路）。
- *
- * 为什么自绘而不是等宿主投影：`Config` 是手写 Standard Schema，宿主的字段投影只认 native
- * Schemastery（ADR-0037 的实测）；把宿主 schema 库值 import 进本插件会破「跨插件一律 import type」。
- * 所以这里画三个输入，保存走 `/config` 的写支（`configEditor.edit`）。写会让 **Node 半**
- * 这一行重启；浏览器半不随之卸载，卡片用保存回执回填，重开插件页 / 刷新页面才会重新读一次。
- * `config.saved` 只说明"这一轮已经交出去"，不是"页面完成了一次重新读取"。
- *
- * 表单只做本地校验（`CONFIG_LIMITS` 与 Node 半归一同一格）；服务端的 400 / io 原文在状态行上屏，
- * 不吞、不改写。读与写都只在用户动作或挂载时发生，没有定时器。
+ * 插件设置页的「可调项」卡：三只数字输入 + 保存（ADR-0043；ADR-0037 的自绘表单路）。
+ * `Config` 是手写 Standard Schema，宿主字段投影只认 native Schemastery（ADR-0037），所以自绘。
+ * 保存走 `/config` 写支（`configEditor.edit`）会让 **Node 半**重启；`config.saved` 只说明这一轮已交出去。
+ * 表单只做本地校验（`CONFIG_LIMITS` 与 Node 半归一同一格）；服务端 400 / io 原文原样上屏，不吞、不改写。
  */
 import { useEffect, useId, useState } from 'react'
 import type { ReactElement } from 'react'
@@ -18,7 +12,6 @@ import type { ConfigDeps } from './remote.js'
 import { settingsCardShell } from './settings-view.js'
 import { Button } from './ui/Button.js'
 
-/** 卡片外壳：与「维护」卡同款，只差本卡的内容节奏。 */
 const CARD_SHELL = settingsCardShell(14)
 
 type FieldKey = keyof SessionDeleteConfigWire
@@ -95,8 +88,7 @@ function ConfigCard({ config, saveConfig, t }: ConfigCardProps): ReactElement {
   const dirty = current !== null && parsed.ok && FIELDS.some(({ key }) => parsed.value[key] !== current[key])
 
   const submit = (): void => {
-    // 表单回车绕得过禁用按钮：在飞时再提交一次是同一组值写两遍，没改动时提交也会白重启
-    // 这一行；两种都先挡住。
+    // 表单回车绕得过禁用按钮：在飞重复提交是同一组值写两遍，未改动也会白重启这一行；两种都先挡住。
     if (saving || !parsed.ok || !dirty) return
     setSaving(true)
     setFailure(null)
@@ -202,8 +194,7 @@ export interface ConfigSettingsProps {
 }
 
 /**
- * 卡片入口：两个方法都在才渲染。`useMaintenance` 与 `MaintenanceSettings` 的测试替身只造维护六件，
- * 所以在那些用例里本卡整体缺席——不让"没给配置 deps"变成一次假渲染。
+ * 卡片入口：两个方法都在才渲染——测试替身只造维护六件，本卡整体缺席，不让「没给配置 deps」变成假渲染。
  */
 export function ConfigSettings({ deps, t = zhTranslate }: ConfigSettingsProps): ReactElement | null {
   const config = deps.config

@@ -5,7 +5,7 @@
  * `write-seats.test.ts` 与 `use-archive-query.test.tsx` 的用例。
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { useArchivePanelController } from '../../src/client/use-archive-panel-controller.js'
 import { invalidateArchive, useArchiveRevision } from '../../src/client/archive-store.js'
 import { useDeleteRequest } from '../../src/client/delete-confirm.js'
@@ -19,13 +19,9 @@ import type { ArchiveQuery } from '../../src/client/use-archive-query.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
 import type { ArchiveDetailLike, RemoteOutcome, SessionDeleteRemote } from '../../src/client/remote.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import { remoteOk } from './support/fake-remote.js'
 import { failed, ok } from './support/outcomes.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
 const row = (sessionId: string, over: Partial<ArchiveRowWire> = {}): ArchiveRowWire => ({
   sessionId, projectDir: '--p--', title: `${sessionId}-标题`, updatedAt: 1, updatedAtSource: 'prompt', subagent: false, ...over,

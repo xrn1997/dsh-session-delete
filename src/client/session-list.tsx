@@ -1,20 +1,8 @@
 /**
- * 清单的**分组列**（通用；回收站档与归档档各交一份行视图）：grid 容器与它的 ARIA、项目组的
- * 组头、一行的壳与三格，外加非就绪那一档的三张卡（加载 / 打断块 / 空态）。DOM 只在这里拼一次。
+ * 清单的分组列（回收站/归档共用，各交一份行视图）：grid 容器与 ARIA、组头、行壳与三格、非就绪的三张卡。
  *
- * 三条规矩：
- * - **只有真有行才挂 grid 与它的 aria**（ADR-0028）：失败 / 加载 / 空是一块普通内容，不是
- *   「空的 grid」；`aria-busy` 住在容器上（刷新中不是第四态，ADR-0048）。
- * - **底色与 `aria-selected` 不是同一判据**：底色说的是「详情正画着这一条」，多选态只把
- *   `aria-selected` 让给勾选集，底色不退场（一次只给一种动作语义，但两者不许互相冒充）。
- * - **行的 DOM id 在 DOM 这一侧编码**：id 里可能带空白/引号，直接拼进 HTML id 是非法值、
- *   `aria-activedescendant` 也会失配（issue #8 第 7 条）；原始身份留在 `dom.idAttr`，焦点交还
- *   按属性值比对（`useRowFocus`）。
- *
- * 视觉配方走 `trash-view.ts` 那三份（`CARD` / `ROW` / `ROW_SELECTED`）；行与组的悬停、动作列
- * 提亮、焦点环住在 `ui/layout.css` 的 `.sd-session-row` / `.sd-session-group-row` 上——两档吃同一份
- * 类名。`data-dsh-session-delete` 上的档位名（`trash-*` / `archive-*`）是「这一行属于哪一档」的
- * 身份，测试与 `useRowFocus` 靠它分辨在屏上的是哪一列。
+ * 只有真有行才挂 grid 与它的 aria（ADR-0028）：失败/加载/空是一块普通内容；`aria-busy` 在容器上（刷新不是第四态，ADR-0048）。
+ * 底色（详情正画这一条）与 `aria-selected`（勾选集）是两套判据，互不冒充；行 id 在这侧编码，原始身份留 `dom.idAttr`。
  */
 import { useCallback, type CSSProperties, type ReactNode, type RefObject } from 'react'
 import { CARD, ROW, ROW_SELECTED, type ProjectGroup } from './trash-view.js'
@@ -66,24 +54,18 @@ const ROW_FAILURE: CSSProperties = {
   color: 'var(--dsw-alias-state-error-primary)',
 }
 
-/** 清单 grid 的列数：行恒为两格（常态：内容 + 动作；多选态：勾选框占内容前的一格、动作列退场）；
- *  组头只有一格，用 colspan 横跨整行——各行列数一致是 grid 的播报契约（ADR-0028）。两档同值。 */
+/** 清单 grid 的列数：行恒为两格，组头用 colspan 横跨；各行列数一致是 grid 的播报契约（ADR-0028）。 */
 const COLUMN_COUNT = 2
 
-/** 一档清单进 DOM 的身份：档位名与行身份属性总是成对出现，两档各给一份常量（`useRowFocus` 也读它）。 */
+/** 一档清单进 DOM 的身份：档位名与行身份属性成对出现（`useRowFocus` 也读它）。 */
 export interface ListDom {
-  /** 档位名前缀：拼出容器与行、组头的 `data-dsh-session-delete` 值，以及 DOM id 的前缀
-   *  （`sd-trash-` / `sd-archive-`）。 */
+  /** 档位名前缀：拼容器/行/组头的 `data-dsh-session-delete` 与 DOM id（`sd-trash-` / `sd-archive-`）。 */
   readonly kind: 'trash' | 'archive'
-  /** 行的原始身份写进哪个 DOM 属性（回收站 = `data-entry-id`，归档 = `data-session-id`）：
-   *  两档的身份本来就是两种东西（条目 id / 会话 id），不混成一个名字。 */
+  /** 行原始身份写进哪个属性（条目 id / 会话 id 本是两种东西，不混名）。 */
   readonly idAttr: string
 }
 
-/**
- * 把焦点交还给清单里的某一行（导航只拿这个动作，不认行选择器）。**按属性值自己比**，不把行 id
- * 拼进选择器：id 只挡路径分隔符（`trash/entry.ts`），另一半是宿主给的目录名，带引号时选择器直接抛。
- */
+/** 把焦点交还清单某一行：按属性值自己比，不把行 id 拼进选择器——宿主目录名带引号时选择器直接抛。 */
 export function useRowFocus(
   listRef: RefObject<HTMLDivElement | null>,
   idAttr: string,
@@ -100,24 +82,17 @@ export function useRowFocus(
   }, [listRef, idAttr])
 }
 
-/**
- * 一行的可见读数：调用方只交文案、数字与那一排动作，格子、ARIA、底色与指针接线由这里拼。
- * 「勾上了没有」「是不是活动行」「tab 落点」不在这一份里——那是清单态，由本模块自己算。
- */
+/** 一行的可见读数；勾选 / 活动行 / tab 落点是清单态，由本模块自己算。 */
 export interface SessionRowView {
   /** 行的原始身份（回收站 = 条目 id，归档 = 会话 id）：DOM 属性、`aria-selected` 判定都走它。 */
   readonly id: string
   readonly title: string
   /** 标题悬停的全文；`null` ⇒ 不挂 `title`（未命名行没有可展开的原文）。 */
   readonly titleTip: string | null
-  /** 第二行那句读数（时间 · 大小 · 计数），已按档拼好。 */
   readonly meta: string
   readonly metaTip: string
-  /** 多选态那颗勾选框的无障碍名（两档语序不同，各自给）。 */
   readonly checkLabel: string
-  /** 这一行动作的失败原文；没有就传 `null`。 */
   readonly failure: string | null
-  /** 行右那一排动作（多选态整排退场由本模块决定，调用方只管给）。 */
   readonly actions: ReactNode
   /** 点行 = 选中看详情；多选态由本模块先拦成「勾 / 取消这一条」。 */
   readonly onSelect: () => void
@@ -125,9 +100,7 @@ export interface SessionRowView {
 
 export interface SessionListProps<R> {
   listRef: RefObject<HTMLDivElement>
-  /** 这一档进 DOM 的身份：档位名 + 行身份写进哪个属性（两档各给一份常量）。 */
   dom: ListDom
-  /** 就绪时 grid 的可访问名（`detail.list.label` / `archive.tab`）。 */
   gridLabel: string
   /** 重读在飞 ⇒ 容器 `aria-busy`（不是第四态，ADR-0048）。 */
   refreshing: boolean
@@ -135,7 +108,6 @@ export interface SessionListProps<R> {
   notice: ReactNode
   groups: readonly ProjectGroup<R>[]
   selection: ListSelection<R>
-  /** 键盘契约与焦点意图（导航状态住面板）。 */
   nav: TrashNav
   /** hover / focus 的延时预取：四件事的接线只在这一处。 */
   prefetch: DelayedPrefetch<R>
@@ -145,10 +117,7 @@ export interface SessionListProps<R> {
   t: Translate
 }
 
-/**
- * 分组列本体。`notice` 在场时容器仍渲染（`useRowFocus` 与滚动容器都要它），但 grid 的 role 与
- * 那一串 aria 一律不挂。
- */
+/** 分组列本体：`notice` 在场时容器仍渲染（焦点与滚动要它），但 grid 的 role 与 aria 不挂。 */
 export function SessionList<R>({
   listRef,
   dom,
@@ -163,8 +132,7 @@ export function SessionList<R>({
   rowOf,
   t,
 }: SessionListProps<R>) {
-  // 档位名进 DOM 而不是进选择器字符串：行 id 里可能带空白/引号，拼进 `querySelector` 直接抛。
-  // entry id 本身不许改形——它是回收站目录名，恢复要按它反推原目录名放回（`trash/entry.ts` 的往返契约）。
+  // 档位名进 DOM、行 id 只编码——原始 entry id 是回收站目录名，不许改形（`trash/entry.ts` 往返契约）。
   const domIdOf = (id: string): string => `sd-${dom.kind}-${encodeURIComponent(id)}`
   const gridActive = notice === null && groups.length > 0
   return (
@@ -193,8 +161,7 @@ export function SessionList<R>({
               role="rowgroup"
               data-dsh-session-delete={`${dom.kind}-group`}
               aria-label={group.label}
-              // 行与行之间不再留缝：无边框的行靠自己的 padding 撑节奏，组头与首行那 4px 挂在
-              // 组头行的 `marginBottom` 上，所以这里的 gap 只管行。
+              // 行之间不留缝：无边框行靠 padding 撑节奏，组头与首行的 4px 挂在组头行上，这里的 gap 只管行。
               style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}
             >
               <div
@@ -203,8 +170,7 @@ export function SessionList<R>({
                 className="sd-session-group-row"
                 style={GROUP_ROW}
               >
-                {/* 组头一格收下勾选框与折叠钮：row 的直接子代必须是 cell（rowgroup > row > gridcell），
-                    这一格 colspan 横跨整行，与条目行的格数对齐。 */}
+                {/* 组头一格收勾选框与折叠钮：row 的直接子代必须是 cell，colspan 与条目行对齐。 */}
                 <div role="gridcell" aria-colspan={COLUMN_COUNT} style={GROUP_CELL}>
                   {selection.selectMode ? (
                     <Checkbox
@@ -214,12 +180,8 @@ export function SessionList<R>({
                       onChange={() => { selection.toggleGroupCheck(group) }}
                     />
                   ) : null}
-                  {/* 折叠头抄宿主的 `DisclosureRow`：前导是官方文件夹图标（展开=开盖、收起=闭盒），
-                      悬停时换成旋转的实心三角（条件住 `layout.css`）。组头本身不跟着收掉——收掉就没有
-                      再点开的地方；计数留在组头上，折叠后「这个项目还有几条」仍然看得见。
-                      两处与宿主那份的必要差别：① 可点部分是 `<button>`，UA 的 `text-align:center`
-                      会渗进文字，显式压成 `start`；② 多选态的勾选框住在按钮**外面**（`<input>` 是
-                      交互内容，不能嵌进 `<button>`）。 */}
+                  {/* 折叠头抄宿主 `DisclosureRow`（文件夹图标 + 悬停三角，条件住 `layout.css`）：差异① 可点部分是 `<button>`，显式 `text-align:start`；
+                      ② 多选勾选框住在按钮外（`<input>` 不能嵌进 `<button>`）。组头不跟着收掉，计数仍可见。 */}
                   <button
                     type="button"
                     className="sd-disclosure-row"
@@ -262,8 +224,7 @@ export function SessionList<R>({
                     style={selected ? ROW_SELECTED : ROW}
                     {...intentPrefetchHandlers(prefetch, row)}
                     onClick={() => {
-                      // 多选态下点行说的是「勾上/取消这一条」，不再切换详情：两套语义同时活在一次点击里
-                      // 一定有一套是错的（`docs/ui-spec.md` §2 ④）。
+                      // 多选态下点行是「勾上/取消这一条」，不再切详情（`docs/ui-spec.md` §2 ④）。
                       if (selection.selectMode) {
                         selection.toggleCheck(view.id)
                         return
@@ -293,8 +254,7 @@ export function SessionList<R>({
                         </div>
                       )}
                     </div>
-                    {/* 两颗动作住在行右侧自己的格子里：常驻但默认低强调，悬停/聚焦/选中时提亮，
-                        窄档常亮（触屏没有 hover）。多选态整排退场。 */}
+                    {/* 动作住右侧自己的格子：常驻低强调，悬停/聚焦/选中提亮，窄档常亮；多选态整排退场。 */}
                     {selection.selectMode ? null : (
                       <div role="gridcell" style={ACTION_CELL}>
                         {view.actions}
@@ -317,7 +277,6 @@ export function ListLoading({ label }: { label: string }) {
 }
 
 export interface ListNoticeProps {
-  /** 那句标题（`archive.readFailed` / `archive.corpusMissing.title` / `trash.readFailed`）。 */
   title: string
   /** 标题下面那句：失败原文或语料缺席的提示。 */
   detail: string
@@ -327,10 +286,7 @@ export interface ListNoticeProps {
   retryLabel: string
 }
 
-/**
- * 打断块：图标 + 一句标题 + 原文/提示 + 重试。`CARD` 那一族是「要打断你视线的一块」，
- * 带底色与边框才对，与清单行不是一套长相。
- */
+/** 打断块：图标 + 标题 + 原文/提示 + 重试；`CARD` 那一族带底色边框，与清单行不是一套长相。 */
 export function ListNotice({ title, detail, tone, onRetry, retryLabel }: ListNoticeProps) {
   return (
     <div role="status" style={{ ...CARD, alignItems: 'flex-start', gap: 12, padding: '14px' }}>

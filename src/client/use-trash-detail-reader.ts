@@ -1,8 +1,6 @@
 /**
- * 回收站的详情读路：通用机制（`use-detail-reader.ts`）的**薄实例**——
- * 账本 = `trash-snapshot.ts` 的跨挂载账本（挂在场景实例里，键 = 条目 id），fetch = `deps.detail`。
- * 对外形状就是通用 `DetailState`（主体键 `subject`）：视图与控制器的语义住
- * `trash-detail.tsx` / `use-trash-panel-controller.ts`，机制只住通用层一份。
+ * 回收站的详情读路：通用机制（`use-detail-reader.ts`）的薄实例——账本 = `trash-snapshot.ts` 的跨挂载账本
+ * （键 = 条目 id），fetch = `deps.detail`；机制只住通用层一份。
  */
 import type { TrashEntryWire } from '../shared/wire.js'
 import type { SessionDeleteRemote, TrashDetailLike } from './remote.js'
@@ -22,15 +20,10 @@ type DetailDeps = Pick<SessionDeleteRemote, 'detail'>
 
 export interface TrashDetailReaderInput {
   readonly deps: DetailDeps
-  /** 当前详情主体（孩子视图 / 清单选中）；null = 没有主体。 */
   readonly subject: TrashEntryWire | null
-  /** 主体是清单里的顶层行：孩子视图不保持上一条（它的返回键语义在 `childView` 上，会串）。 */
   readonly topLevel: boolean
-  /** 上一条已就绪的详情是否仍在清单里：被清单换版收走就不再顶住画面。 */
   readonly present: (entryId: string) => boolean
-  /** 主体换成「还没读过」的那一条时要不要自动补读。窄档（详情栏不在眼前）给 false：
-   *  方向键只移选中，不切详情状态；点行 / 下钻 / 重试这些显式读照常（焦点停留 ≥150ms 的意图预取
-   *  另算一条口径，见 `src/client/use-prefetch.ts`）。 */
+  /** 主体换成还没读过的那一条时要不要自动补读；窄档给 false（方向键只移选中），显式读与意图预取另算。 */
   readonly autoRead?: boolean
 }
 
@@ -46,7 +39,6 @@ const TRASH_LEDGER: DetailLedger<TrashDetailLike> = {
   clear: emptiedTrash,
 }
 
-/** 模块级取键函数：身份恒稳，不随渲染换引用（通用层把它放进 memo/effect 的依赖）。 */
 const entryIdOf = (entry: TrashEntryWire): string => entry.id
 
 export function useTrashDetailReader(input: TrashDetailReaderInput): TrashDetailReader {

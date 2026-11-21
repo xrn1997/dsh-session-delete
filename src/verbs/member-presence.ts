@@ -1,26 +1,17 @@
 /**
- * 成员离场 / 归位的通告协议：摘活体、三态判断、成对事件只在这里做。
- *
- * 调用方包括 delete、restore 回滚、purge、orphan-clean；协议说错一次就是客户端留假行或删真行。
- *
- * 边界：
- * - 批量恢复的编排归 `verbs/batch.ts`（ADR-0002）；本模块只实现 `announceRestored(ids)`（ADR-0019）。
- * - 哪个键算归位由动词在 `tail.onUndone` 里读成事实再交进来，真值表住这里；
- *   `run`/`undo` 之后补通告的形状由 {@link withPresenceTail} 拥有。
- * - `evictLive`/`announce*` 按契约不抛，这里不再叠 catch。
+ * 成员离场 / 归位的通告协议：摘活体、三态判断、成对事件只在这里做；协议说错一次就是客户端留假行或删真行。
+ * 批量恢复的编排归 `verbs/batch.ts`（ADR-0002）；哪个键算归位由动词在 `tail.onUndone` 里读成事实再交进来（ADR-0019）。
+ * `evictLive`/`announce*` 按宿主契约不抛，这里不再叠 catch。
  */
 import type { EvictionOutcome, HostPresencePort } from '../ports/host-port.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
 import type { Journal, JournalUndo } from './member-journal.js'
 
-/** 本模块实际用到的三条宿主能力。`Pick` 此刻覆盖 `HostPresencePort` 的三条方法，仍留着它当闸：
- *  将来端口多出第四条时，这里不会被动跟着变宽——能力面只暴露这三条，批量通告的编排归 `verbs/batch.ts`。 */
+/** 本模块实际用到的三条宿主能力；`Pick` 是闸：端口多出第四条时这里不会被动跟着变宽。 */
 export type MemberPresenceHost = Pick<HostPresencePort, 'evictLive' | 'announceRemoved' | 'announceRestored'>
 
-/** 本仓的在场能力实现，也是**全仓唯一的盖章处**：端口形状住 `src/ports/presence-port.ts`，这里只做
- *  三态与真值表。品牌字段是类型层的（unique symbol 不导出、没有运行时值），所以只有这一处显式断言
- *  能把三件方法盖成 `PresenceCapability`——手拼同样的三件满足不了那个面（`tests/deps.test.ts` 钉住）。
- *  `announceRestored` 直接交宿主那一手：能力面与宿主面同名同签名，再包一层只会多一个转调。 */
+/** 本仓**唯一**盖 `PresenceCapability` 品牌的地方：品牌是类型层的（unique symbol 不导出），手拼同样三件满足不了那个面
+ *  （`tests/deps.test.ts` 钉住）；`announceRestored` 直接交宿主那一手，不再包转调。 */
 export function createMemberPresence(host: MemberPresenceHost): PresenceCapability {
   const impl: Pick<PresenceCapability, 'memberGone' | 'memberBack' | 'announceRestored'> = {
     async memberGone(sessionId, facts = { backInTrash: true }) {
@@ -54,9 +45,7 @@ export interface PresenceTail {
 
 /**
  * 给一次成员移动的 journal 补上「在场那条尾巴」：run 完全成功之后离场，undo 之后按事实归位或离场。
- *
- * 边界：`memberGone` 的 `backInTrash:false` 早退与 `memberBack` 的两件齐备真值表归 `createMemberPresence`；
- * 这里只把事实原样递过去。
+ * `memberGone` 的早退与 `memberBack` 的两件齐备真值表归 `createMemberPresence`；这里只把事实原样递过去。
  */
 export function withPresenceTail(presence: PresenceCapability, journal: Journal, tail: PresenceTail): Journal {
   const announce = async (undo: JournalUndo): Promise<void> => {

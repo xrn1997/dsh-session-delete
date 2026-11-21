@@ -4,7 +4,7 @@
 // addPicks 只追加未见、shrink 只留失败。**没变就不发通告**——快照引用不变就是"没变"
 // （`createStore.update` 回同一引用时不通知）。
 import { act, renderHook } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   addPicks,
   clearPicks,
@@ -18,15 +18,8 @@ import {
   togglePick,
   useSelection,
 } from '../../src/client/batch-selection-store.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
-afterEach(() => {
-  resetClientState()
-})
 
 const ids = (): string[] => getPicks().map((item) => item.sessionId)
 

@@ -1,12 +1,6 @@
 /**
- * 归档详情投影（`session-detail.tsx` 的归档档入口）：信息表**恰五行**
- * （项目 / 日志末条 / 会话 id / 大小 / 状态），无「回收站目录」「原本归档」；
- * 子会话段与回收站共用同一套呈现（数据来自宿主闭包，见 `src/trash/archive-detail.ts`）。
- *
- * 标题与大小与**选中行**配对：显示名走 `displayNameOf`（label 优先），大小只摆信息表那一行
- * （行的 `sizeBytes`，缺席显式「—」；计量行不重复）——详情只给正文与日志读数，不重算这两格。
- * 状态行认**主体自己的归档态**（不认导航道）：已归档主体（清单行、以及清单不可见时被打开的
- * 已归档孩子）说「已归档」；未归档孩子说「随归档父会话查看」。
+ * 归档详情投影：信息表恰五行（项目 / 日志末条 / 会话 id / 大小 / 状态），无「回收站目录」「原本归档」；
+ * 状态行认主体自己的归档态（wire 的 `archived`），不认导航道或旧快照。
  */
 import type { Translate } from './copy.js'
 import type { ArchiveDetailLike } from './remote.js'
@@ -23,11 +17,9 @@ import type { DetailFrame } from './use-detail-frame.js'
 import { useSubagentSection } from './subagent-section.js'
 
 export interface ArchiveDetailProps {
-  /** 详情帧（`use-detail-frame.ts`）：归档档的读路来源 + 分页读面 + 提问轨，面板拼一次、这里原样转交。 */
   frame: DetailFrame<ArchiveDetailSubject, ArchiveDetailLike>
   busy: boolean
   wide: boolean
-  /** 与回收站档同一面导航（按会话 id 交接，`DetailNav`）；孩子视图由 `parentContext` 在场判定。 */
   detailNav: DetailNav
   onRetry: () => void
   onBack: () => void
@@ -56,8 +48,6 @@ export function ArchiveDetail({
     { label: t('detail.field.size'), value: sizeText ?? t('archive.size.absent') },
     {
       label: t('archive.detail.statusLabel'),
-      // 状态行认**这一读**的主体归档态（wire 的 `archived`），不认主体快照或 `parentContext`：
-      // 宿主侧解除归档后，旧快照会照错说「已归档」；导航道也会串（清单不可见时已归档孩子走孩子视图）。
       value: detail.archived ? t('archive.detail.status') : t('archive.detail.statusChild'),
     },
   ]
@@ -73,8 +63,7 @@ export function ArchiveDetail({
     })),
     total: detail?.subagentsTotal,
     totalSizeBytes: detail?.subagentsSizeBytes,
-    // 归档行的大小可以整批读不出（`sessionPersistence` 缺席或该行没给读数）：这一格与清单行走
-    // 同一个键 `archive.size.absent`，缺席就是缺席，不拿 0 冒充。
+    // 大小可整批读不出：与清单行同用 `archive.size.absent`，缺席就是缺席，不拿 0 冒充。
     sizeAbsentText: t('archive.size.absent'),
     note: t('archive.subagents.note'),
     ...(detailNav.onOpenChild === undefined ? {} : { onOpenChild: detailNav.onOpenChild }),

@@ -1,17 +1,7 @@
 /**
  * 「档」这个 module：面板里**一档**的整条装配线——清单读数 → 分组 → 选择面 → 控制器 → 键盘导航 →
- * 意图预取 → 详情帧。
- *
- * 之前这条线在 `trash-panel.tsx` 里写了两遍（回收站档与归档档各一遍），两档控制器另有 16 个
- * 同名成员各转一遍；同一件事写两遍，一边补了「窄档方向键只移选中」、另一边忘了是不可能的漂移。
- * 收进来之后：**装配只写一份**，两档的差异全部由 {@link PanelTabAdapter} 表达（行身份 / 行读数 /
- * 分组键 / 两个 hook / 导航三格 / 预取参数域 / 详情挂载判据），状态仍各一份
- * （两个 `usePanelTab` 实例互不读写，ADR-0060 决定第 4 条不翻）。
- *
- * 判据归属不变：
- * - 「什么时候重读」仍住 `use-gated-refresh.ts`（回收站由控制器接线、归档由查询接线）；
- * - 选中面/选择面/详情读路/详情帧/键盘契约/预取延时各住原 module，这里只回答「谁接给谁」；
- * - 布局事实（宽窄、分栏）由面板算好交进来：本 hook 只按 `wide` + 行数派生 `split`，不认断点常量。
+ * 意图预取 → 详情帧。装配只写一份，两档差异全由 {@link PanelTabAdapter} 表达；状态仍各一份
+ * （两个 `usePanelTab` 实例互不读写，ADR-0060 决定第 4 条）；布局事实由面板算好交进来。
  */
 import { useCallback, useMemo, useRef, type RefObject } from 'react'
 import type { BusyGate } from './busy-gate.js'
@@ -27,28 +17,19 @@ import type { RailDetailLike } from './use-detail-rail.js'
 import { useDelayedPrefetch, type DelayedPrefetch } from './use-prefetch.js'
 import { useListSelection, type ListSelection } from './use-list-selection.js'
 
-/**
- * 一档的依赖面：面板的两条读 + 一段 `/apply` + 清空。两档结构相同（各自只取自己用得到的几格），
- * 控制器/查询的输入类型是它的窄切片，宽依赖面在编译期收窄。
- */
+/** 一档的依赖面：面板的两条读 + 一段 `/apply` + 清空；控制器/查询的输入是它的窄切片。 */
 export type PanelTabDeps = Pick<
   SessionDeleteRemote,
   'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'archiveList' | 'archiveDetail'
 >
 
-/** 清单读数对视图的**共用五格**：两档各把自己的状态机折成它（三态/四态映射住 adapter）。 */
+/** 清单读数对视图的**共用两格**：行与「重读在飞」。空/缺/失败由各档视图按自己的状态选卡片。 */
 export interface PanelTabListView<R> {
   readonly rows: readonly R[] | null
   readonly refreshing: boolean
-  readonly failure: string | null
-  readonly loading: boolean
-  readonly empty: boolean
 }
 
-/**
- * 一档控制器的**共有面**：详情主体（选中/孩子视图/账本/详情帧）+ 写闸 + 行失败落点。
- * 两档控制器的本档差异（待确认动作、解除归档、光标、下钻位）不进这里。
- */
+/** 一档控制器的**共有面**：详情主体 + 写闸 + 行失败落点；本档差异不进这里。 */
 export interface PanelTabController<R, S, D extends RailDetailLike> {
   readonly busy: boolean
   readonly selected: R | null
@@ -90,22 +71,15 @@ export interface PanelTabControllerContext<Q, R> extends PanelTabContext {
   readonly split: boolean
 }
 
-/**
- * 一档的 adapter：两档差异的**唯一落点**。每条都只回答本档与另一档不同的那一点，
- * 装配线（`usePanelTab`）本身不认识任何一档的具体形状。
- */
+/** 一档的 adapter：两档差异的**唯一落点**；装配线本身不认识任何一档的具体形状。 */
 export interface PanelTabAdapter<Q, R, S, D extends RailDetailLike, C extends PanelTabController<R, S, D>> {
   /** 这一档进 DOM 的身份（行身份属性；两档本来就不是同一种 id）。 */
   readonly dom: ListDom
-  /** 行身份（回收站 = 条目 id，归档 = 会话 id）：模块级稳定函数。 */
   readonly idOf: (row: R) => string
-  /** 本档状态机 → 共用五格视图。 */
   readonly viewOf: (query: Q) => PanelTabListView<R>
   /** 本档的分组键（回收站带「未分组」、归档不带）。 */
   readonly groupsOf: (rows: readonly R[], t: Translate) => readonly ProjectGroup<R>[]
-  /** 本档的清单读 hook（回收站 `/list` + 首帧快照；归档 `/archive-list` + 惰性计数）。 */
   readonly useQuery: (ctx: PanelTabContext) => Q
-  /** 本档的控制器 hook（回收站带待确认动作与光标下钻；归档带光标与解除归档）。 */
   readonly useController: (ctx: PanelTabControllerContext<Q, R>) => C
   /** 「详情正画着哪一条」的行 id：回收站 = 选中 id；归档 = 选中优先、窄档回退光标。 */
   readonly activeRowId: (controller: C) => string | null
@@ -227,8 +201,7 @@ export function usePanelTab<Q, R, S, D extends RailDetailLike, C extends PanelTa
 
 /**
  * 详情**导航面**（`DetailNav`，ADR-0055 单级判据）的唯一装配：孩子视图开着就只交「返回父」，
- * 关着就只交「开孩子 / 预取孩子」；父行的标题由本档给（回收站读选中行原文，归档读显示名）——
- * 两档原先各写一遍这个三支判断，第二份迟早与第一份走散。
+ * 关着就只交「开孩子 / 预取孩子」；父行标题由本档给。
  */
 export interface PanelDetailNavInput<R> {
   readonly childViewOpen: boolean
@@ -248,15 +221,14 @@ export function panelDetailNav<R>(input: PanelDetailNavInput<R>): DetailNav {
       onPrefetchChild: (childId: string): void => { input.prefetchChild(childId) },
     }
   }
-  // `selected` 为 null（清单换版把父行收走的那一帧，清场随后也收孩子视图）⇒ 不交返回键：
-  // 不能指着一个不存在的父。
+  // `selected` 为 null（父行刚被收走的那一帧）⇒ 不交返回键：不能指着一个不存在的父。
   if (input.selected === null) return {}
   return { parentContext: { title: input.parentTitle(input.selected), onBack: input.closeChild } }
 }
 
 /**
  * 「更早一页」的守卫（ADR-0049）：保持期那一帧画的是上一条的正文，翻页会把它的游标读进新主体——
- * 判据只问 `canNavigate`（`use-detail-reader` 的唯一出口）。两档原先各写一遍，收在这里。
+ * 判据只问 `canNavigate`（`use-detail-reader` 的唯一出口）。
  */
 export function useGuardedLoadOlder(
   canNavigate: boolean,

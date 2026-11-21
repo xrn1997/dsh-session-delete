@@ -1,25 +1,14 @@
 /**
- * 归档**单条详情**（`POST /archive-detail`）：正文走 `sessionQuery.readSession` 的整本事件流
- * + 合成 `session` 头，喂 `DetailFold`（块/分页/计数与回收站详情同一份折叠，`src/trash/detail.ts`）。
+ * 归档**单条详情**（`POST /archive-detail`）：正文走 `sessionQuery.readSession` 的整本事件流 + 合成 `session` 头，喂 `DetailFold`
+ * （块/分页/计数与回收站详情同一份折叠，`src/trash/detail.ts`）。三条硬口径（ADR-0060 决定第 2–3 条、ADR-0061）：
+ * ① **寻址只认 id**：客户端只传 `sessionId`（与可选 `rootSessionId`），路径字段不过线。目标自己已归档，或 `rootSessionId` 已归档且目标在该根的
+ *    subagent 闭包里 ⇒ 可读；其余 ⇒ `not-found`——否则这就是一条可读任意会话的通用正文通道。路径形字符串只是「不满足闭包条件的 id」。
+ * ② **header 合成**：`readSession` 的 `events` **不含** raw JSONL 里那条 `{"type":"session", …}` 头记录——把 `snapshot.session` 的
+ *    `cwd` / `createdAt` / `parentSession` 拼成同形的那一条先喂折叠，项目名、创建时间与 fork 子会话的 label 兜底才不丢。
+ * ③ **失败折码**：`SESSION_QUERY_SESSION_NOT_FOUND` ⇒ `sessiondelete/not-found`（不折就分不出「这条没了」与「读失败」）；方法缺席 / 读失败 ⇒ `io`。
  *
- * 三条硬口径（ADR-0060 决定第 2–3 条、ADR-0061）：
- * ① **寻址只认 id**：客户端只传 `sessionId`（与可选的 `rootSessionId`），路径字段不过线。
- *    目标自己已归档 ⇒ 可读；否则要求 `rootSessionId` 已归档且目标在该根的 subagent 闭包里
- *    ⇒ 也可读（归档父会话的子会话只读查看）。其余 id ⇒ `not-found`——否则这就是一条
- *    可读任意会话的通用正文通道。路径形字符串只是一个「不满足闭包条件的 id」。
- * ② **header 合成**：`readSession` 的 `events` **不含** raw JSONL 里那条 `{"type":"session", …}`
- *    头记录——把 `snapshot.session` 的 `cwd` / `createdAt` / `parentSession` 拼成同形的那一条先喂
- *    折叠，项目名、创建时间与 fork 子会话的 label 兜底才不丢。
- * ③ **失败折码**：`SESSION_QUERY_SESSION_NOT_FOUND` ⇒ `sessiondelete/not-found`（不折就分不出
- *    「这条没了」与「读失败」）；方法缺席 / 读失败 ⇒ `io`（不静默空正文）。
- *
- * 子会话段是**只读投影**：宿主 `subagentMembersOf` 给出闭包，行读数（标题 / 最后活动 / 大小 /
- * label）走 `src/trash/session-rows.ts` 那一份——与归档清单同一套缺席口径，只把大小读失败折成
- * 逐行缺（这一段不许拖垮正文）。归档仍是**单会话粒度**（`archiveSession` 不级联），这里只展示
- * 孩子，不做随父归档/恢复。孩子的正文也只走 `archive-detail` 的这条只读栅栏；v1 每次翻页重走
- * 整本 `readSession`（与 `/detail` 每次重读整条日志同量级），慢的话另立缓存裁决。
- * **仅凭根放行的读不装配这一段**：孩子视图单级、客户端对这种主体也不画它（无 `onOpenChild`），
- * 不为此付第二次闭包 BFS 与逐孩子行读数——这一趟只付寻址校验本身那一次（ADR-0061 边界）。
+ * 子会话段是**只读投影**（行读数走 `session-rows.ts` 那一份，只把大小读失败折成逐行缺）；归档仍是**单会话粒度**，这里只展示孩子、不做随父归档/恢复。
+ * **仅凭根放行的读不装配这一段**：孩子视图单级、客户端对这种主体也不画它，不为此付第二次闭包 BFS 与逐孩子行读数（ADR-0061 边界）。
  */
 import type { CoreDeps } from '../deps.js'
 import type { ArchiveDetailWire, ArchiveSubagentWire } from '../shared/wire.js'
@@ -93,9 +82,8 @@ export function readArchiveDetail(deps: CoreDeps, limits?: DetailLimits) {
   }
 }
 
-/** 归档详情读的寻址边界：目标自己已归档回 `true`（主体，子会话段照常装配）；仅凭
- *  `rootSessionId` 那条已归档根的闭包成员放行回 `false`（只读视图，不装配那一段）。
- *  其余一律 not-found。闭包读不出时失败关闭（`io`），不把「证明不了」当成「可以读」。 */
+/** 归档详情读的寻址边界：自己已归档回 `true`（主体，装配子会话段）；仅凭 `rootSessionId` 的已归档根闭包成员放行回 `false`（只读视图，不装配）。
+ *  其余一律 not-found；闭包读不出时失败关闭（`io`），不把「证明不了」当成「可以读」。 */
 async function assertArchiveReadable(
   deps: CoreDeps,
   sessionId: string,
@@ -124,8 +112,7 @@ async function assertArchiveReadable(
   return false
 }
 
-/** 归档详情的子会话只读投影：宿主闭包 + `session-rows.ts` 那一份行读数——按输出计划只装配
- *  显示的那几行，摘要条的合计覆盖全部孩子。 */
+/** 归档详情的子会话只读投影：宿主闭包 + `session-rows.ts` 的行读数——按输出计划只装配显示的那几行，摘要条的合计覆盖全部孩子。 */
 async function readArchiveSubagents(
   deps: CoreDeps,
   sessionId: string,
@@ -136,19 +123,16 @@ async function readArchiveSubagents(
   const kids = members.value[sessionId] ?? []
   if (kids.length === 0) return undefined
 
-  // 条数闸先落：只对**显示的**孩子付逐行读与归档态读，显示外的一条逐行读都不发（输出计划；
-  // 条数闸的判据住 `subagent-summary.ts`）。
+  // 条数闸先落：只对**显示的**孩子付逐行读与归档态读，显示外的一条逐行读都不发（条数闸判据住 `subagent-summary.ts`）。
   const displayed = kids.slice(0, displayedSubagentCount(kids.length, limits?.subagents))
-  // 与归档清单同一份读面，只换两条策略：大小读失败**不许**坏正文（`absent` ⇒ 逐行缺大小），
-  // 子会话没有「创建时间」这一格可回落 ⇒ 读不到提问时间就整格缺席。
+  // 与归档清单同一份读面，只换两条策略：大小读失败**不许**坏正文（`absent` ⇒ 逐行缺大小）；子会话没有创建时间可回落 ⇒ 读不到提问时间就整格缺席。
   const surfaces = await readRowSurfaces(deps, displayed.map((kid) => kid.sessionId), { sizeFailure: 'absent' })
   const facts = await projectRowFacts(deps, surfaces, displayed.map((kid) => ({
     sessionId: kid.sessionId,
     wantsLabel: true,
   })))
-  // 孩子自己的归档态：**不**拿「在不在归档清单里」推（清单是交集投影、会缺席）——认宿主
-  // 归档集这条权威判据（`isArchived`，id 原样）。这一格读不出就整段不画（与闭包同一条
-  // 「读不出不画」策略），不拿 false 冒充「未归档」。
+  // 孩子自己的归档态：**不**拿「在不在归档清单里」推（清单是交集投影、会缺席）——认宿主归档集这条权威判据（`isArchived`，id 原样）。
+  // 这一格读不出就整段不画（与闭包同一条「读不出不画」策略），不拿 false 冒充「未归档」。
   const archived = await Promise.all(displayed.map((kid) => deps.host.isArchived(kid.sessionId)))
   // 摘要条报的是**全部**孩子的合计，不是已列前 N 条的和（ADR-0055）；超闸只报总数，不静默截断。
   // 这三条判据（显示条数之外）归 `subagent-summary.ts`：这里只交合计 / 缺席计数。

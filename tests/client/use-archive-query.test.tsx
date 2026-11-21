@@ -7,12 +7,11 @@
  * active=false 只置脏不读（默认档是回收站，不为可能不打开的档付全语料读）。
  */
 import { act, renderHook } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { useArchiveQuery } from '../../src/client/use-archive-query.js'
 import { invalidateArchive } from '../../src/client/archive-store.js'
 import { invalidateTrash } from '../../src/client/trash-store.js'
 import { readTrashSnapshot } from '../../src/client/trash-snapshot.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import type { ArchiveListWire, ArchiveRowWire } from '../../src/shared/wire.js'
 import type { RemoteOutcome, SessionDeleteRemote } from '../../src/client/remote.js'
 
@@ -48,7 +47,6 @@ const flush = async (): Promise<void> => {
 }
 
 describe('归档清单查询（use-archive-query）', () => {
-  beforeEach(() => { resetClientState() })
 
   it('active=false 只置脏不读；切到 active 那一拍才读', async () => {
     const archiveList = vi.fn(async () => ready([]))

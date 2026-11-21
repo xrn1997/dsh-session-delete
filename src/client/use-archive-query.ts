@@ -1,26 +1,9 @@
 /**
- * 归档清单的取数编排：**四态** + 唯一重读入口 `reload`。
- *
- * 「一次读怎么落地」（票 / 挂载归属 / `refreshing` / 失败上屏）已收进
- * `src/client/use-panel-list-read.ts` 的两档共用实现；这一层只留归档自己的数据语义：四态映射
- * （含 `corpus-missing`）、惰性计数，以及「失效 → 重读」的接线。
- *
- * 四态：`loading` / `ready`（行 + 合计 + 大小缺席数）/ `failure`（读失败：错误上屏 + 重试）/
- * `corpus-missing`（`{available:false}`：「语料不可见」的独立显式态，**不是**空清单、也不是
- * 通用失败——ADR-0060 决定第 4 条的显式缺席语义：看不见 ≠ 没有）。
- *
- * 失效链（ADR-0060 决定第 4 条）：
- * - 三个来源都只戳修订台：旁路观察与自救动作戳 `archive-store`，插件自己的回收站动作戳 `trash-store`
- *   （恢复/撤销会让已归档会话重新可见、删除会让它消失——都不改 `archivedSessionIds`，旁路观察看不到）。
- *   查询自己订阅**两台**修订号，effect 依赖 `[active, 两台修订]`。
- * - **active 门**：归档档不活动时只置脏（修订号已记着"变过"）、不读；切到 active 那一拍才读——
- *   默认档是回收站，不为一个可能不打开的档在挂载时付一次全语料读。
- * - **同一拍多次失效合并到一次读**（React 批处理 + `reload` 发起前的微任务合并，共用 hook 的
- *   `coalesceMicrotask`）。
- * - **latest-wins**：每次读一张票，旧响应不许盖新态；在飞期间的新失效只置脏、结算后追补一轮
- *   （单飞由共用生命周期保证；旧票由 `createLatestWins` 作废，ADR-0060 决定第 4 条）。没有轮询。
- * - **快照隔离**：清单/选中/详情都不进 `trash-snapshot`——同一次挂载内缓存（本 hook 常驻挂载，
- *   切档保留已读），卸载即丢。
+ * 归档清单的取数编排：**四态** + 唯一重读入口 `reload`。一次读的落地（票 / 挂载归属 / refreshing /
+ * 失败上屏）住 `use-panel-list-read.ts`；这一层只留归档数据语义：四态映射（`corpus-missing` 是显式
+ * 缺席，不是空清单也不是失败，ADR-0060 决定第 4 条）、惰性计数与失效接线。
+ * 失效链：三来源只戳修订台（旁路观察与自救戳 `archive-store`，回收站动作戳 `trash-store`），查询订阅
+ * 两台；**active 门**不活动只置脏不读；同拍多次失效合并成一次读；latest-wins 旧响应不许盖新态。
  */
 import { useState } from 'react'
 import type { ArchiveRowWire } from '../shared/wire.js'
@@ -40,6 +23,11 @@ export type ArchiveListState =
 interface ArchiveListMeta {
   readonly totalBytes: number
   readonly missingSizeCount: number
+}
+
+/** 归档清单状态对视图行的唯一解读：只有 `ready` 交出行；缺席与失败都不折成空清单。 */
+export function archiveRowsOf(list: ArchiveListState): readonly ArchiveRowWire[] | null {
+  return list.status === 'ready' ? list.rows : null
 }
 
 export interface ArchiveQuery {
@@ -110,7 +98,6 @@ export function useArchiveQuery({
     policy: { initialDirty: true, refreshOnActivate: true },
   })
 
-  // `read.reload` 的身份由 `usePanelListRead` 的 `useCallback` 保证恒稳；不要再包一层
-  // `useCallback`——`read` 对象每渲染换新，包了反而让身份逐渲染变。
+  // `read.reload` 的身份由 `usePanelListRead` 的 `useCallback` 保证恒稳；不要再包一层（`read` 每渲染换新）。
   return { list, refreshing: read.refreshing, count, reload: read.reload }
 }

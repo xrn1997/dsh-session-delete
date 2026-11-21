@@ -4,7 +4,7 @@
  * 它不是「清单状态」的第四态，也不是持久化：只有读一次、不订阅、写失败就整份丢掉。
  * 这一份只钉 store 的读写与修剪；首帧怎么用归 `use-trash-query.test.tsx` 与面板用例。
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   emptiedTrash,
   reloadFailed,
@@ -16,7 +16,6 @@ import {
   noteSelection,
 } from '../../src/client/trash-snapshot.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
 const A: TrashEntryLike = {
   id: 'a', sessionId: 'session-a', projectDir: '--p--', workspaceId: 'ws',
@@ -32,7 +31,6 @@ function detailOf(entryId: string): TrashDetailLike {
   }
 }
 
-beforeEach(() => { resetClientState() })
 
 describe('首帧快照', () => {
   it('没有写过 ⇒ null', () => {

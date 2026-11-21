@@ -22,7 +22,6 @@ import { apply, inject } from '../../src/client/index.js'
 import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
 import type { TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import { enterSelection } from '../../src/client/batch-selection-store.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import { DEFAULT_CONFIG } from '../../src/config.js'
 import {
   ROUTES,
@@ -35,17 +34,12 @@ import {
   type SessionDeleteConfigWire,
 } from '../../src/shared/wire.js'
 
-// 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
 beforeEach(() => {
-  resetClientState()
   // 归档旁路观察的可选服务缺席在激活期会 `console.info` 留因（安静降级）；这组用例只看入口注册，
   // 不把降级提示刷进测试输出。
   vi.spyOn(console, 'info').mockImplementation(() => undefined)
 })
 
-afterEach(() => {
-  resetClientState()
-})
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
 /** 会话行首 16px 格（状态点缺席时归第三方装饰）；批量删除的主勾选框住这里。 */
@@ -679,7 +673,7 @@ describe('apply 的装配面', () => {
 
   // 真机反馈：删完在侧栏菜单里，中央的回收站面板**不切走再回来就不更新**（面板是挂载时取一次数）。
   // 这条端到端钉住"删除成功后清单立刻把它读出来"——两侧都是真的：真 apply 注册出来的组件 +
-  // 真的模块级现场与失效通告台。
+  // 真的场景实例与失效通告台。
   it('删除成功后回收站面板立刻刷新出那一条（不用切走再回来）', async () => {
     let rows: TrashEntryLike[] = []
     const list = vi.fn(async () => ({ ok: true, value: rows }) as const)

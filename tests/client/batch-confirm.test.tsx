@@ -1,7 +1,7 @@
 // 批量删除确认框（2026-10-17）：数说清自己的、失败原文落行、重试只发失败 id。
-// 假 adapter 驱动真组件（与 delete-menu-item.test.tsx 同款）：现场是模块级的，每个用例前清一次。
+// 假 adapter 驱动真组件（与 delete-menu-item.test.tsx 同款）：请求现场在场景里，setup 每例换新。
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BatchConfirmHost,
   clearDeleteBatchRequest,
@@ -11,21 +11,14 @@ import {
 import { getPicks, shrinkPicksToFailures, togglePick } from '../../src/client/batch-selection-store.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import type { RemoteOutcome } from '../../src/client/remote.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
 import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
-afterEach(() => {
-  resetClientState()
-})
 
-describe('模块级现场', () => {
+describe('请求现场', () => {
   it('每发一批请求 seq 递增（确认框靠它重挂载）；空名单不发框也不占 seq', () => {
     const { result } = renderHook(() => useDeleteBatchRequest())
     requestDeleteBatch([])

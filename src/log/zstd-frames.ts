@@ -1,27 +1,10 @@
 /**
- * 多帧 zstd 流的帧边界。
+ * 多帧 zstd 流的帧边界。会话日志是 append 出来的帧序列，而 Node 的 `zstdDecompressSync` 与流式 API 都只给第一帧（实测），
+ * 所以必须自己切帧：`magic(4) + 描述符(1) + [Window] + [DID] + [FCS] + 块 + [4B 校验]`。
  *
- * 为什么要有这个文件：会话日志是一次次 append 出来的**帧序列**，而 Node 的 `zstdDecompressSync`
- * **与** `createZstdDecompress()` 流式**都只给第一帧**（实测：本机一个 3.8 MB 的文件，两个 API 都只回
- * 209 字节 = header 那一行）。要拿到全部记录就必须自己把帧切开。
- *
- * 帧 = `magic(4) + Frame_Header_Descriptor(1) + [Window 1B 若 !single] + [DID 0/1/2/4] + [FCS]
- *       + 若干块（3B 块头 + 块体）+ [4B 尾巴]`。
- *
- * **真实产物的形态是量出来的**（本机 125 个文件 / 36 904 帧）：descriptor **恒 `0x04`**，按 RFC 8878
- * 表 3 读作「非单段（带 1 字节 Window）+ 无 FCS + 无字典 + **校验位置位**」⇒ 帧头 6 字节，帧尾那 4 字节
- * 就是声明好的 XXH32 Content_Checksum（实测：动它一个位，对面解不通过）。块类型只有
- * `Compressed`(36 630) 与 `Raw`(620)，每帧 **1～120 块**（多数 1 块）——所以多块循环与 Raw 两条路都在
- * 生产上跑着，不是纸面分支。
- * 类型 3 是规范的 Reserved 位（不是"未压缩块"）：产物里没出现过，Node 也当场拒解 ⇒ 遇到就抛。
- *
- * **位段必须照表 3 取**（1-0 字典 / 2 校验 / 5 单段 / 7-6 FCS 尺寸）：Descriptor 的 64 个合法取值里，
- * 取错位段会算错头长的有 48 个，剩下 16 个凑对纯属巧合——在产的 `0x04` 就在其中。换个宿主、换个写帧
- * 的 zstd 版本（明文一大、FCS 上到 4 字节的 `0xa0` 就会算错），帧就切歪，会话日志直接读不出来。
- *
- * **尾巴那 4 字节按实测判据收，不按 descriptor 的 bit2**：规则是「跳过去必须正好撞上下一帧的 magic
- * 或到 EOF」——猜错不会静默切歪：末尾的自证与块界护栏会抛（护栏是必需的：块头可能被文件截断，
- * 不抛的话块循环每圈只 +3 字节却永不 break，整个进程会卡死；用例覆盖这一条）。
+ * **位段必须照 RFC 8878 表 3 取**：取错位段会算错头长；在产的 descriptor 是 `0x04`（非单段 + 无 FCS + 校验位），
+ * 换宿主或写帧版本就可能变。尾巴 4 字节按实测判据收：跳过去必须正好撞上下一帧 magic 或 EOF，猜错由末尾自证与块界护栏抛。
+ * 块头可能被文件截断，护栏不可省：不抛的话块循环每圈只 +3 字节却永不 break，整个进程会卡死。
  */
 
 export interface FrameRange {
@@ -75,13 +58,8 @@ function withFrameTail(raw: Buffer, at: number): number {
 
 /**
  * 把 `raw` 切成帧区间。
- * @throws 起始处不是 magic、或某帧算到的末位既不是下一帧帧头也不是 EOF——**一律抛**，
- *   绝不"尽力往下解"：切错帧的后果是把半截压缩体当解压输入，那时解出来的东西不可信。
- *
- * `tolerateTruncatedTail` 只给**前缀读**（`readFileHead` 的有界头读）：输入是某个合法日志的开头
- * 一段，尾巴必然可能切在帧中间，这时"少最后一帧"不叫损坏。解析到切坏的尾巴就停，返回已经切出的
- * 完整帧；中间的损坏也会让它提前停——但头读只需要最前面那几帧（header 在第一帧），够用。
- * **默认仍是严格**：读整本的调用方拿到截断文件必须抛，不能把半份日志当完整日志。
+ * @throws 起始处不是 magic、或某帧算到的末位既不是下一帧帧头也不是 EOF——**一律抛**，绝不"尽力往下解"（半截压缩体解出的东西不可信）。
+ * `tolerateTruncatedTail` 只给**前缀读**：尾巴切在帧中间不算损坏，返回已切出的完整帧；默认仍严格，读整本时截断必须抛。
  */
 export function frameRanges(raw: Buffer, options: { readonly tolerateTruncatedTail?: boolean } = {}): FrameRange[] {
   const ranges: FrameRange[] = []
@@ -105,15 +83,13 @@ export function frameRanges(raw: Buffer, options: { readonly tolerateTruncatedTa
       for (;;) {
         const blockHeader = readUint24LE(raw, cursor)
         cursor += BLOCK_HEADER_BYTES
-        // 截断必须在这里响亮失败，不能继续走：读回 miss 与越界是同一判据的两副面孔（缺一字节 ⇔
-        // 头三个字节落不出文件），少了这道护栏块循环每圈只推进头长却永远不 break，整个进程会卡死。
+        // 截断必须在这里响亮失败：少了这道护栏，块循环每圈只推进头长却永不 break，整个进程会卡死。
         if (blockHeader === undefined || cursor > raw.length) {
           throw new Error(`zstd 块头越界：帧起于 ${at}，读到偏移 ${cursor}（文件长 ${raw.length}）`)
         }
         const blockType = (blockHeader >> BLOCK_TYPE_SHIFT) & 0x3
         const blockSize = (blockHeader >> BLOCK_SIZE_SHIFT) & BLOCK_SIZE_MASK
-        // 3 是规范的 Reserved 位：真产物 36 904 帧里一次没出现过，而 Node 的解压端当场拒
-        // （"Data corruption detected"）⇒ 不照 Raw 那样吞掉块体，直接抛。
+        // 3 是规范的 Reserved：真产物里没出现过，Node 也当场拒解 ⇒ 直接抛，不照 Raw 那样吞块体。
         if (blockType === BLOCK_RESERVED) {
           throw new Error(`zstd 保留块类型：帧起于 ${at}，偏移 ${cursor - BLOCK_HEADER_BYTES} 的块头 type=3（规范 Reserved，对面解不开）`)
         }

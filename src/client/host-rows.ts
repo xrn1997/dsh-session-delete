@@ -1,18 +1,7 @@
 /**
- * 宿主会话行的适配：**可见行由槽位组件登记**；选择动作与模式内整行点击守卫住 `batch-pick.ts`。
- *
- * 选中集（模式 + 名单）只住 `batch-selection-store.ts`；本文件只回答页面上的「当前有哪些可勾选的
- * 会话行」：行槽位开关的挂载登记、渲染快照与按 id 的行查找。「这一行可不可勾」的 live 判据
- * 也只住这里（`pickableRowOf` / `readVisibleSelectableRows`）。DOM 只用于守卫认行，且那处 DOM
- * 读取随守卫住在 `batch-pick.ts`（ADR-0034 记下的受约束偏离）。
- *
- * 为什么不再扫 DOM：宿主的行槽位只在行可见时挂载，行首/行尾两颗开关（`BatchPickCheckbox` /
- * `BatchPickButton`）都会登记 `{title, live}`；挂载/卸载就是「这一行在不在可见集合」的契约，
- * 不需要 MutationObserver。
- *
- * 形状：**可实例化的现场**（`createHostRowsScene`）——登记表与懒读快照都在实例里，由
- * `scene.ts` 的 `ClientScene` 聚合；自由函数委托默认场景（兼容旧调用点与测试），两个 hook 走
- * `useClientScene()`（生产 Provider 实例；测试无 Provider 回退默认）。
+ * 宿主会话行的适配：**可见行由行槽位开关登记**——挂载/卸载就是「这一行在不在可见集合」的契约，不扫 DOM；
+ * 选择动作与模式内整行点击守卫住 `batch-pick.ts`，选中集住 `batch-selection-store.ts`。现场可实例化
+ * （`createHostRowsScene`），自由函数委托默认场景（兼容旧调用点与测试）。
  */
 import { useEffect, useSyncExternalStore } from 'react'
 import type { PickItem } from './batch-selection-store.js'
@@ -20,13 +9,13 @@ import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createLazyStore } from './store.js'
 
 export interface HostRowInfo {
-  /** 槽位宿主投影的标题（`PickLeadingRow` / `PickRow` 从 root hook 读）；守卫只读登记，不读 DOM 文本。 */
+  /** 槽位宿主投影的标题；守卫只读登记，不读 DOM 文本。 */
   readonly title: string
   /** 在跑的行点整行也不选：与置灰的勾选框同口径（级联遇在跑成员整组拒绝）。 */
   readonly live: boolean
 }
 
-/** 一条登记：它是什么 + 此刻有几颗行槽位开关在用它；标题/运行态变化就地更新，不重排。 */
+/** 一条登记：它是什么 + 此刻有几颗行槽位开关在用它。 */
 interface HostRowRegistration {
   info: HostRowInfo
   owners: number
@@ -55,7 +44,6 @@ export interface HostRowsScene {
   useVisible(enabled: boolean): readonly PickItem[]
   /** 槽位组件共用的登记生命周期：挂载登记、卸载注销；标题/运行态变化只走更新口。 */
   useRegistration(sessionId: string, info: HostRowInfo): void
-  /** 场景收场：登记表清空并标脏。 */
   reset(): void
 }
 
@@ -161,7 +149,7 @@ export function createHostRowsScene(): HostRowsScene {
   return scene
 }
 
-/* ── 兼容自由函数（旧调用点与测试）：委托默认场景的实例 ────────────────────────── */
+/* ── 兼容自由函数：委托默认场景的实例 ────────────────────────── */
 
 export function registerHostRowInfo(sessionId: string, info?: HostRowInfo): void {
   getDefaultClientScene().hostRows.register(sessionId, info)

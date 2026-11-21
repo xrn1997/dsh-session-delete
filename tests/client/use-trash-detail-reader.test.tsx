@@ -1,22 +1,19 @@
 /**
  * `useTrashDetailReader` —— 详情读路 module 自己的 interface。
  *
- * 这一份直接打 module（不经过控制器），钉的是它从控制器收过来的五条承重判据：
- * 账本命中不重读、在飞去重、失败不记账且重试会重读、保持（holding）只在顶层且上一条仍可见时成立、
- * 更早一页的合并/晚到丢弃/失败只坏分页。
+ * 这一份直接打 module（不经过控制器），钉的是它从控制器收过来的承重判据：
+ * 账本命中不重读、失败不记账且重试会重读、保持（holding）只在顶层且上一条仍可见时成立（两个反例）、
+ * 更早一页的合并/晚到丢弃/失败只坏分页。机制层的在飞去重与 holding 正例钉在
+ * `use-detail-reader.test.tsx`（薄实例不重复钉）。
  */
 import { act, renderHook } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { RemoteOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import type { TrashDetailBlockWire, TrashEntryWire } from '../../src/shared/wire.js'
 import { readCachedTrashDetail, writeTrashDetail } from '../../src/client/trash-snapshot.js'
 import { useTrashDetailReader, type TrashDetailReaderInput } from '../../src/client/use-trash-detail-reader.js'
 import { createFakeRemote, remoteFail, remoteOk, type FakeRemote } from './support/fake-remote.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
 const entry = (id: string): TrashEntryWire => ({
   id,
@@ -95,21 +92,6 @@ describe('详情读路 · 账本与在飞', () => {
     expect(m2.detail).toHaveBeenCalledWith('b')
     expect(readCachedTrashDetail('b')?.entryId).toBe('b')
     expect(m2.result.current.detail.kind).toBe('ready')
-  })
-
-  it('同一条在飞只发一次；loading 先摆到这一条', async () => {
-    const pending = deferred<RemoteOutcome<TrashDetailLike>>()
-    const detail = vi.fn(async () => pending.promise)
-    const m = mount({ subject: A, detail })
-    let first!: Promise<void>
-    act(() => { first = m.result.current.ensure('a') })
-    let second!: Promise<void>
-    act(() => { second = m.result.current.ensure('a') })
-    expect(detail).toHaveBeenCalledTimes(1)
-    expect(m.result.current.detail).toEqual({ kind: 'loading', subject: A })
-
-    await act(async () => { pending.resolve(remoteOk(detailOf('a'))); await first; await second })
-    expect(m.result.current.detail.kind).toBe('ready')
   })
 
   it('失败不记账本；重试会重读', async () => {
@@ -238,23 +220,6 @@ describe('详情读路 · 账本与在飞', () => {
 })
 
 describe('详情读路 · 保持（holding）', () => {
-  it('顶层换到没读过的条目：上一条仍在清单里 ⇒ holding；读回来整帧换掉', async () => {
-    writeTrashDetail('a', detailOf('a'))
-    const pending = deferred<RemoteOutcome<TrashDetailLike>>()
-    const detail = vi.fn(async (id: string) => (id === 'b' ? pending.promise : remoteOk(detailOf(id))))
-    const m = mount({ subject: A, detail })
-    expect(m.result.current.detail.kind).toBe('ready')
-
-    m.rerender({ deps: m.deps, subject: B, topLevel: true, present: () => true })
-    act(() => { void m.result.current.ensure('b') })
-    expect(m.result.current.detail).toEqual({
-      kind: 'holding', subject: A, detail: detailOf('a'),
-    })
-
-    await act(async () => { pending.resolve(remoteOk(detailOf('b'))) })
-    expect(m.result.current.detail).toEqual({ kind: 'ready', subject: B, detail: detailOf('b') })
-  })
-
   it('上一条已不在清单里 ⇒ 不 holding，走 loading', () => {
     writeTrashDetail('a', detailOf('a'))
     const pending = deferred<RemoteOutcome<TrashDetailLike>>()

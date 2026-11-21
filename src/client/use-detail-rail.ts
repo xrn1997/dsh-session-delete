@@ -1,16 +1,8 @@
 /**
- * 详情栏的**提问轨接线**（两档共用）：从一台详情读路的状态算出轨要画的三份读数
- * （整条索引、已加载的块 id、有没有轨）加上 `usePromptRail` 的那一面（当前句 / 在补的那句 / 跳转）。
- *
- * 三条判据（两档共用一份，差别只许在主体与挂载判据上）：
- * - **没有正文就没有轨**：读数中 / 失败那一帧没有 `detail`，那一拍轨不画（画了就是一个指向
- *   不存在正文的刻度）。
- * - **保持期顶住**：那一帧画的是上一条的正文，轨跟着上一条给刻度但整条禁用——跳转会把别人的
- *   游标补进这一页（ADR-0049）。禁用判据**问 `canNavigate`**（保持判据的唯一出口，住
- *   `use-detail-reader`），这里不再自己重推 holding。
- * - **挂载判据要显式传**：窄档下钻之后详情栏才进 DOM，`scrollRef.current` 是那时才补上的，
- *   而 `prompts` / `blocks` 一个都没变；只靠 ref 会把滚动监听漏挂，当前那句从此不跟滚动走
- *   （ADR-0057）。
+ * 详情栏的提问轨接线（两档共用）：从一台详情读路算出轨要画的三份读数加上 `usePromptRail` 那一面。
+ * 三条判据：**没有正文就没有轨**（读数中/失败那一帧不画指向不存在正文的刻度）；**保持期顶住**
+ * （跳转会把别人的游标补进这一页，禁用判据问 `canNavigate`，ADR-0049）；**挂载判据要显式传**
+ * （窄档下钻后 ref 才补上，只靠 ref 会漏挂滚动监听，ADR-0057）。
  */
 import { useMemo, type RefObject } from 'react'
 import type { TrashDetailBlockWire, TrashDetailPromptWire } from '../shared/wire.js'
@@ -30,8 +22,7 @@ export interface RailDetailLike {
 export interface DetailRailInput<S, D extends RailDetailLike> {
   /** 这一档的详情读路状态（回收站档与归档档各一台实例）。 */
   readonly state: DetailState<S, D>
-  /** 「保持期拒绝导航/跳转」判据（`use-detail-reader` 的唯一出口）：`disabled` 直接取它的反，
-   *  不在这里重推保持。 */
+  /** 「保持期拒绝导航/跳转」判据（`use-detail-reader` 的唯一出口）：`disabled` 直接取反，不在这里重推保持。 */
   readonly canNavigate: boolean
   readonly loadingOlder: boolean
   readonly olderFailure: string | null
@@ -55,8 +46,7 @@ export interface DetailRail {
 export function useDetailRail<S, D extends RailDetailLike>({
   state, canNavigate, loadingOlder, olderFailure, loadOlder, scrollRef, paneMounted,
 }: DetailRailInput<S, D>): DetailRail {
-  // 只有带正文的状态才画轨刻度（读数中 / 失败那一帧没有正文 ⇒ 那一拍没有轨）。正文的取用
-  // 按「有没有 body」认，不再点名状态判别式（保持判据归 `canNavigate`）。
+  // 读数中/失败那一帧没有正文 ⇒ 那一拍没有轨；正文按「有没有 body」认（保持判据归 `canNavigate`）。
   const detail = 'detail' in state ? state.detail : null
   const prompts = detail?.prompts ?? NO_PROMPTS
   const blocks = detail?.blocks ?? NO_BLOCKS

@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { afterDelete, bindMainView } from '../../src/client/main-view.js'
 import type { RemoteOutcome } from '../../src/client/remote.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
@@ -17,15 +17,8 @@ import {
   useUndoNotice,
 } from '../../src/client/undo-notices.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
-afterEach(() => {
-  resetClientState()
-})
 
 function restoreOutcomes(ids: readonly string[]): ApplyOutcome[] {
   return ids.map(

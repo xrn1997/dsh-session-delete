@@ -1,11 +1,5 @@
-/**
- * 会话闭包（session closure）的唯一实现：`session-` 前缀归一 + 传递闭包 + 首见去重。
- *
- * 为什么是零依赖纯部件：这三件事在仓里曾有两份闭包实现（端口的分层 BFS、无主子会话的整表 BFS）
- * 与三处手写去重，同一口径靠注释担保——注释不会替代码挡漂移，所以把口径收进这里，一份实现；
- * 端口与动词只做接线（逐层问宿主、SessionIdentity 映射留在各自那层，见各自的头注）。
- * 不碰盘、不碰端口类型：本文件一个 import 都不许有。
- */
+/** 会话闭包（session closure）的唯一实现：`session-` 前缀归一 + 传递闭包 + 首见去重。
+ *  零依赖纯部件：不碰盘、不碰端口类型，一个 import 都不许有。 */
 
 /** 闭包里的一个节点：本部件只认这两个字段；端口的后代记录与语料的 SessionIdentity 都满足它。 */
 export interface ClosureNode {
@@ -13,22 +7,19 @@ export interface ClosureNode {
   readonly projectDir: string
 }
 
-/** 会话 id 去掉 `session-` 前缀后的形状：同一个会话在两代宿主里写法不同（v3 代 id 不带前缀、
- *  现行代带），归堆、成组、去重一律按这个形状比——两边都归一，不赌调用方传的是哪一代写法。 */
+/** 会话 id 去掉 `session-` 前缀后的形状：两代宿主写法不同，归堆 / 去重一律按它比。 */
 export function bareSessionId(id: string): string {
   return id.startsWith('session-') ? id.slice('session-'.length) : id
 }
 
-/** 一个 id 的全部可能写法，原写法在前：`session-x` → `[session-x, x]`；`x` → `[x, session-x]`。
- *  逐层问宿主时按这些写法问：宿主那支按 `header.parentSession` 原文比，不替我们归一。 */
+/** 一个 id 的全部可能写法，原写法在前：逐层问宿主时按这些写法问，宿主不替我们归一。 */
 export function sessionIdShapes(id: string): string[] {
   const bare = bareSessionId(id)
   return [...new Set([id, bare, `session-${bare}`])]
 }
 
-/** parent(bare) 到 children 索引上的传递闭包：深度不设上限、防环、首见去重（都按 bare 归一后比）。
- *  根的两种写法都认（内部归一次）；结果不含根自己。数据里真出现环时代价是「少数一条」，
- *  不是把清单读挂死——环本来不该出现（parentSession 是一条有向边），出现就是手工改过日志或宿主 bug。 */
+/** parent(bare) 的传递闭包：深度不限、防环、首见去重（都按 bare 比）；结果不含根自己。
+ *  真出现环时代价是「少数一条」，不是把清单读挂死。 */
 export function closureOf<N extends ClosureNode>(
   children: ReadonlyMap<string, readonly N[]>,
   root: string,
@@ -52,8 +43,7 @@ export function closureOf<N extends ClosureNode>(
   return out
 }
 
-/** 同一条记录两代写法只认第一次出现（保原序）。全局去重只有这一处实现：谁要按 bare 去重，
- *  交一条列表进来，别在调用点再手写一个 seen 集合。 */
+/** 同一条记录两代写法只认第一次出现（保原序）；全局去重只有这一处实现。 */
 export function firstByBare<N extends ClosureNode>(members: readonly N[]): N[] {
   const seen = new Set<string>()
   const out: N[] = []
@@ -66,19 +56,10 @@ export function firstByBare<N extends ClosureNode>(members: readonly N[]): N[] {
   return out
 }
 
-/**
- * 整表语料 → 根闭包组：`parentSessionId` 不在 `known` 里的那些 subagent 各自成一组。`known` 两侧都
- * 归一后再比（传原始 id 即可）。「已知父为什么排除在外」是调用方的领域判据（住
- * `src/verbs/orphan-subagents.ts` 与 `CONTEXT.md` 的「无主子会话」），这一层不替它复述。
- *
- * 组内的后代仍走 `closureOf` 那一份闭包，只是多一条跨组的 `claimed`：一条记录只归第一个认领它的根。
- * 已被前一组收走的那条，连同它整支子树都不再出现在这一组里——后代在那一组已被全部认领，所以
- * 「丢掉已认领的」与「不走进已认领的那支」交回的是同一个集合。环上的代价是「少数一条」，
- * 不是把一次扫描挂死。组序与成员序都按语料原序。
- *
- * 后代也必须是 subagent 起源：普通 fork 的 `parentSession` 只是来源记录，它不进组、也不穿过它收孩子
- * （否则从 subagent 分出去的分支会被当成孤儿永久删掉）。
- */
+/** 整表语料 → 根闭包组：`parentSessionId` 不在 `known` 里的 subagent 各自成一组。
+ *  组内后代走 `closureOf`，`claimed` 让一条记录只归第一个认领它的根。
+ *  后代也必须是 subagent 起源：普通 fork 的 `parentSession` 只是来源记录，不穿过它收孩子（否则会误删分支）。
+ *  组序与成员序按语料原序；「已知父为什么排除」住 `verbs/orphan-subagents.ts`。 */
 export function orphanRootsOf<N extends ClosureNode & { readonly parentSessionId?: string; readonly subagent: boolean }>(
   corpus: readonly N[],
   known: Iterable<string>,

@@ -1,15 +1,6 @@
 /**
- * 回收站清单的**失效通告台**：动过回收站的动作戳一下，清单面板据此重新取数。
- *
- * 为什么需要它（真机反馈）：回收站面板是「挂载时取一次数」（`useEffect(reload)`），而删除发生在
- * **侧栏菜单**那边（`delete-confirm.tsx` 的常驻宿主），两者没有共同的父组件——删完之后中央那个
- * 面板（如果正开着）不会自己重读，用户得切走再切回来（= 重新挂载）才看得见新条目。撤销（`undo-notices.ts`）
- * 同理。
- *
- * 形状：**可实例化的现场**（`createTrashRevisionScene`）——语义只有"变过"这一件事：一个递增的修订号。
- * 订阅/通告那套骨架仍只住 `store.ts` 的 `createStore` 里。跨槽位无共同父级 ⇒ 实例由注册面创建
- * （`scene.ts` 的 `ClientScene`）并同时装成默认实例，自由函数委托它；测试可 `createClientScene()`
- * 各造一份互不串味（见 `tests/client/scene.test.ts`）。
+ * 回收站清单的失效通告台：动过回收站的动作戳一下，挂载时取一次数的面板据此重读（删除住在侧栏菜单，
+ * 两者无共同父级）。语义只有"变过"——一个递增修订号；实例由 `scene.ts` 创建并装成默认实例。
  */
 import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'

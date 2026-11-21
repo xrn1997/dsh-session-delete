@@ -96,7 +96,7 @@ describe('CONTEXT.md 的词条与锚点', () => {
         bad.push(...clauseOwnershipProblems(line.replace(IMPL_LINE, '')).map((problem) => `${term.name} → ${problem}`))
       }
     }
-    // 非空 guard：判据接线退化成恒真/恒空时这里先红。
+    // 非空 guard：判据接线退化成恒真/恒空时这里先红。词表已按领域词收过一轮（机制词归 `docs/architecture.md` §4）。
     expect(clausesWithSymbols, '词条实现声明数量异常（判据可能没在查）').toBeGreaterThan(40)
     expect(bad, `实现声明与它的 owner 不一致（消费者叙述移进定义句，别塞进 \`_唯一实现_\`）：\n${bad.join('\n')}`).toEqual([])
   })

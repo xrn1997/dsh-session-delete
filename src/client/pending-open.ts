@@ -1,18 +1,12 @@
 /**
- * 重开等待的唯一生命周期：一张票、一条订阅、一个放弃 timer、一次 settle/cleanup。
- *
- * ADR-0036 的语义不变：**订阅优先、出现即开、最多等一个放弃边界、不轮询**。这里把这段状态机
- * 收成一个可取消句柄：调用方 `schedule` 一次、`cancel` 一次；票、订阅、timer 与 settle 标志
- * 都关在 implementation 里，不再由 main-view 在四个调用点成对手工清理。
- *
- * 依赖（store 的 subscribe、是否已出现、是否还能抢焦点、怎么打开）由调用方交进来——本模块不认宿主。
+ * 重开等待的唯一生命周期：一张票、一条订阅、一个放弃 timer、一次 settle/cleanup（ADR-0036：订阅优先、
+ * 出现即开、最多等一个放弃边界、不轮询）。调用方 `schedule` / `cancel` 各一次，依赖由调用方交进来。
  */
 import { createLatestWins } from './store.js'
 
 export interface PendingOpenInput {
   /** 订阅「清单变了」；返回退订。旧 store 可能没有——那时只有"已经出现"这一支能开。 */
   readonly subscribe?: ((listener: () => void) => () => void) | undefined
-  /** 目标是否已经出现在清单里。 */
   readonly isReady: () => boolean
   /** 出现的这一拍还该不该抢焦点（用户可能已经选了别的会话）。 */
   readonly canOpen: () => boolean

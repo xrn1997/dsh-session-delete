@@ -1,6 +1,6 @@
 # ADR-0003 — 线上形状的家是 `src/shared/wire.ts`，投影显式写一遍
 
-Status: accepted
+Status: superseded by 0068
 
 ## 背景
 

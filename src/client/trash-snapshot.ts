@@ -1,31 +1,11 @@
 /**
  * 回收站面板的**首帧快照**与**详情账本**：上一次成功读到的清单、选中与详情，跨面板挂载留一份。
- *
- * 为什么需要它：面板是宿主 `main` 的 keyed 占用者，切到会话时整棵卸载、回来整棵挂载；
- * 如果状态只活在组件里，回来第一帧只能从 `loading` 起画，于是「正在读回收站…」→ 两栏 →
- * 详情骨架在百来毫秒里轮换。宿主对同类问题的做法是「面板卸载、状态不丢」（插件管理页把
- * controller / slot store 放在组件之外），这里把它收成可实例化的场景（`createTrashSnapshotScene`），
- * 由 `scene.ts` 的 `ClientScene` 聚合；读一次、不订阅。
- *
- * 详情账本独立于清单快照存在：组件挂载先于清单成功读数时，详情读路仍要能落账；下一次成功
- * 清单读数按行修剪它。它不是「清单状态」的第四态（三态仍住 `use-trash-query.ts`），
- * 也不是持久化：进程重启就没了。**失败时整份丢掉**——读不到就不许再拿旧行冒充此刻的回收站
- * （`unknown` 的老判据）。也不记折叠集、列宽、孩子视图：那些是视图状态，跨挂载记住与
- * ADR-0050 的版面稳定口径冲突（`docs/ui-spec.md` §3 也不把视图状态记进来）。
- *
- * **何时丢什么**（判据收进意图名，调用方只挑意图——ADR-0048 的可观察规则）：
- * - `reloadSucceeded(rows)`：清单重读**成功**支专用——按新一份清单修剪详情账本（只剪上一份
- *   清单里出现过、这一份不见了的条目）与失效的选中；失败支不许调它（名字即判据）。
- * - `reloadFailed()`：清单读失败 / 清空失败——快照与详情账本**整份丢**（旧行不许续命成此刻的
- *   回收站）；测试与 HMR 复位同走这一条。
- * - `emptiedTrash()`：清空回收站**成功**后——只丢详情账本，**保空清单快照**（重读刚写下的那份）；
- *   孩子详情不随清单修剪，只能在这里整本作废。
- * - `noteSelection(entryId)`：记下选中行；没有快照时无处可挂，忽略。
- * - `rowGone(entryId)`：那一行不在了（被清单收走 / 读数作废）——只丢它那一条详情。
- * - `writeSucceeded(entryIds)`：写动作成功收尾——按落地名单丢详情，不等清单重读（面板未挂载
- *   时这一趟也要丢）。
- * 读面三口不丢东西：`read` / `readDetail` / `writeDetail`。
- * 「请求归属发起它的那次挂载」是调用方的门（`use-trash-query` 的 alive）：晚到的读数进不到这里。
+ * 面板是宿主 `main` 的 keyed 占用者，卸载再挂载；状态只活组件里就会在 loading → 两栏 → 骨架之间轮换。
+ * 收成可实例化场景（`createTrashSnapshotScene`），由 `scene.ts` 的 `ClientScene` 聚合；读一次、不订阅。
+ * 详情账本独立于清单快照存在；它不是清单状态第四态，也不是持久化。**失败时整份丢掉**——读不到就不许
+ * 拿旧行冒充此刻的回收站。也不记折叠集、列宽、孩子视图（视图状态，跨挂载记住与 ADR-0050 冲突）。
+ * **何时丢什么**收进意图名（ADR-0048 的可观察规则）：`reloadSucceeded` 只管成功；`reloadFailed` /
+ * `emptiedTrash` 见各自方法注；`writeSucceeded` 按落地名单丢详情，不等清单重读。
  */
 import { writeDetail } from './detail-ledger.js'
 import type { TrashDetailLike, TrashEntryLike } from './remote.js'
@@ -121,7 +101,6 @@ export function createTrashSnapshotScene(): TrashSnapshotScene {
 
 /* ── 兼容自由函数（旧调用点与测试）：委托默认场景的实例 ────────────────────────── */
 
-/** 读当前快照（默认场景）。 */
 export function readTrashSnapshot(): TrashSnapshot | null {
   return getDefaultClientScene().snapshot.read()
 }
@@ -132,37 +111,31 @@ export function readCachedTrashDetail(entryId: string): TrashDetailLike | undefi
   return getDefaultClientScene().snapshot.readDetail(entryId)
 }
 
-/** 写回一份成功读数（默认场景）：调用方是 `use-trash-query` 的 `reload` 成功支；失败支不许调。 */
+/** 写回成功读数：失败支不许调（默认场景）。 */
 export function reloadSucceeded(rows: readonly TrashEntryLike[]): void {
   getDefaultClientScene().snapshot.reloadSucceeded(rows)
 }
 
-/** 记下选中行（默认场景）。 */
 export function noteSelection(entryId: string | null): void {
   getDefaultClientScene().snapshot.noteSelection(entryId)
 }
 
-/** 记下一条成功读到的详情（默认场景）。 */
 export function writeTrashDetail(entryId: string, detail: TrashDetailLike): void {
   getDefaultClientScene().snapshot.writeDetail(entryId, detail)
 }
 
-/** 丢掉一条详情（默认场景）。 */
 export function rowGone(entryId: string): void {
   getDefaultClientScene().snapshot.rowGone(entryId)
 }
 
-/** 按写动作的成功名单丢一组详情（默认场景）。 */
 export function writeSucceeded(entryIds: readonly string[]): void {
   getDefaultClientScene().snapshot.writeSucceeded(entryIds)
 }
 
-/** 丢掉整份快照与详情账本（默认场景；测试收场也走它）。 */
 export function reloadFailed(): void {
   getDefaultClientScene().snapshot.reloadFailed()
 }
 
-/** 只丢详情账本、保空清单快照（默认场景）。 */
 export function emptiedTrash(): void {
   getDefaultClientScene().snapshot.emptiedTrash()
 }

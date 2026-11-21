@@ -1,27 +1,18 @@
 /**
- * 一次成员移动 = 一串自带反向动作的步骤（ADR-0002）。
- *
- * 这里独占四件事，动词只声明“这次要做哪几步、每步怎么退”：
- * - 相反顺序退化；
- * - 一步失败时把已做成的那些退回去；
- * - 失败收集：回滚不干净时不让原错误独走（details.rollbackFailures）；
- * - 非原子步骤：undoOnFailure 让“这一步自己失败”也跑反向动作。
- *
- * 边界：只服务成员在 sessions/ 与 session-trash/ 之间搬；不做通用撤销框架。
+ * 一次成员移动 = 一串自带反向动作的步骤（ADR-0002）。这里独占四件事：相反顺序退化、一步失败时退回已做成的、
+ * 失败收集（回滚不干净时不让原错误独走，进 `details.rollbackFailures`）、非原子步骤（`undoOnFailure`）。
+ * 只服务成员在 sessions/ 与 session-trash/ 之间搬，不做通用撤销框架。
  */
 import { isSessionDeleteCodeError } from '../shared/wire.js'
 import { rollbackReason, verbError, withRollbackFailures, type VerbError } from '../errors.js'
 
-/** 一步反向动作的结果：这一 step 的领域键（`key`）是否回到原样 + 没能退干净的原因。
- *  `restored` 只回答键所指的那件写；同一步里的附属写失败仍进 `failures`
- *  （例如删除的目录回来了、清册行没摘掉：客户端仍要收到 added，失败只算回滚不完整）。 */
+/** 一步反向动作的结果：`restored` 只回答 `key` 所指那件写是否回到原样；同一步里的附属写失败仍进 `failures`。 */
 export interface StepUndo {
   readonly restored: boolean
   readonly failures: readonly string[]
 }
 
-/** 一步的领域键（`read` / `workspace` / `dir` / `archive` / `manifest`）。`restored(key)` 用它点名
- *  要核的那件写；收成联合，动词手滑写错键在编译期就报。 */
+/** 一步的领域键。`restored(key)` 用它点名要核的那件写；收成联合，手滑写错键在编译期就报。 */
 export type JournalStepKey = 'read' | 'workspace' | 'dir' | 'archive' | 'manifest'
 
 /** 一次 undo 的汇总：失败串仍按原样合并；`restored(key)` 给动词判「成员归位 / 已移除」用。 */
@@ -108,8 +99,7 @@ export async function stepUndo(label: string, run: () => Promise<unknown>): Prom
 
 /**
  * **组级回滚**：把已经做成的成员按相反顺序退回；某一步退不干净时把失败并进原错误的
- * `details.rollbackFailures`，绝不让原错误独走。那些失败句子的合并与措辞住 `src/errors.ts`；
- * 删除与恢复两个按组走的动词共用这一处。
+ * `details.rollbackFailures`，绝不让原错误独走。删除与恢复两个按组走的动词共用这一处。
  */
 export async function rollbackJournals(journals: readonly Journal[], error: unknown): Promise<never> {
   const failures: string[] = []
@@ -123,8 +113,7 @@ export async function rollbackJournals(journals: readonly Journal[], error: unkn
 
 /**
  * 这一步的失败形状：已经是动词码（`verbError` 的输出）就原样带，否则折成 `sessiondelete/io`。
- * 原文用 `String(error)` 而不是 `.message`——那 22 处既有措辞就是这么拼的（`Error: boom` 也在里面），
- * 换一种拼法会让上屏原文跟着变。
+ * 原文用 `String(error)` 而不是 `.message`——既有措辞就是这么拼的，换一种拼法上屏原文会跟着变。
  */
 function journalFailure(step: JournalStep, error: unknown): VerbError {
   if (isSessionDeleteCodeError(error)) return error as VerbError

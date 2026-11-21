@@ -1,36 +1,26 @@
 /**
- * 宿主归档集的**旁路观察**——浏览器半可选读宿主客户端服务
- * `ctx.get('workspaces').list`（`getSnapshot().archivedSessionIds` / `subscribe`），
- * 归档集一变就 `invalidateArchive()`。零新增宿主↔Node 面（ADR-0036「订阅不轮询」的路子）。
- *
- * 纪律（AGENTS 红线 + ADR-0060 决定第 4 条）：
- * - 窄镜像**只声明这两格**、按方法面判形；不 import 宿主包、不做 `declare module`。
- * - 可选服务走 `ctx.get`，**不进条目 `inject`**（写进去 = 这一代没有它就整条 pending）。
- * - 服务**可能迟到**：`dsh-api-workspace-controller` 自己 inject `remote` / `remote.workspace`，
- *   而本条目只 inject `slots`，可以在它之前激活。所以 `get` 落空时按 AGENTS 的规矩用
- *   `ctx.inject(['workspaces'], child => …)` 的 **scoped 等待**切过去；等待装在 child 上，
- *   服务就绪才回调、条目卸载时随 child 一起收。
- * - 服务缺席 / 形状不符 / 安装期读面抛错 ⇒ **安静降级**（console.info 一句留因，不抛、不戳）：
- *   旁路观察不可用时归档档退化为"打开时重取 + 自己动作后重取"（`useArchiveQuery` 本来就有这两条腿）。
- * - 只在**归档集数组内容**变化时戳（逐元素比较）：无关的 workspace 变更不许把归档档拉起来重读。
+ * 宿主归档集的**旁路观察**：可选读 `ctx.get('workspaces').list`（`getSnapshot().archivedSessionIds` /
+ * `subscribe`），归档集一变就 `invalidateArchive()`（零新增宿主↔Node 面，ADR-0036「订阅不轮询」）。
+ * 可选服务走 `ctx.get`、不进条目 `inject`；服务可能迟到 ⇒ `ctx.inject(['workspaces'], child => …)`
+ * 的 scoped 等待；缺席 / 形状不符 / 读面抛错一律安静降级。只在归档集数组内容变化时戳，无关变更不重读。
  */
 import type { ClientContextLike } from './context.js'
 import { invalidateArchive } from './archive-store.js'
 
-/** `ctx.get('workspaces')` 的最小面：只声明 `list` 的两格（按方法面判形，不保运行时必有）。 */
+/** `ctx.get('workspaces')` 的最小面：只声明 `list` 的两格，按方法面判形，不保运行时必有。 */
 interface WorkspacesListLike {
   getSnapshot(): unknown
   subscribe(listener: () => void): () => void
 }
 
-/** 读面探测的三态：`ok` 拿到形状对得上的 list；`absent` 服务还没到（可以 scoped 等）；`bad` 到了但形状不对。 */
+/** 读面探测三态：`ok` 形状对得上；`absent` 服务还没到（可 scoped 等）；`bad` 到了但形状不对。 */
 type WorkspacesProbe =
   | { readonly kind: 'ok'; readonly list: WorkspacesListLike }
   | { readonly kind: 'absent' }
   | { readonly kind: 'bad' }
 
-/** `getSnapshot()` 回的那格：`archivedSessionIds` 是字符串数组才算数；交回**副本**（宿主快照
- *  可能回活数组，拿引用比较会"自己跟自己相等"永远不戳）。 */
+/** `getSnapshot()` 那格：`archivedSessionIds` 是字符串数组才算数；交回**副本**——宿主可能回活数组，
+ *  拿引用比较会永远相等、永不戳。 */
 function archivedIdsOf(snapshot: unknown): string[] | undefined {
   if (typeof snapshot !== 'object' || snapshot === null) return undefined
   const ids = (snapshot as { archivedSessionIds?: unknown }).archivedSessionIds
@@ -45,7 +35,7 @@ function archivedIdsOf(snapshot: unknown): string[] | undefined {
 
 function probeWorkspaces(client: ClientContextLike): WorkspacesProbe {
   try {
-    // `ctx.get` 抛错按服务缺席处理（`index.test.tsx` 的既有前提）：可选服务的读面不许拖垮激活。
+    // `ctx.get` 抛错按服务缺席处理：可选服务的读面不许拖垮激活。
     const service = client.get?.('workspaces') as { readonly list?: unknown } | null | undefined
     if (service === undefined || service === null || typeof service !== 'object') return { kind: 'absent' }
     const list = service.list as { getSnapshot?: unknown; subscribe?: unknown } | null | undefined
@@ -57,12 +47,8 @@ function probeWorkspaces(client: ClientContextLike): WorkspacesProbe {
   }
 }
 
-/**
- * 观察一个已经拿到手的 list：返回 disposer（交给 `client.effect` 的工厂收尾）。
- *
- * 退订函数缺席（宿主违约）时订阅已留在宿主的监听者表里、摘不掉——这一支**置失效标记**：
- * 之后宿主再派发也不戳已卸载的现场，并在 console.info 留因。
- */
+/** 观察 list，返回 disposer；退订函数缺席（宿主违约）时订阅摘不掉 ⇒ **置失效标记**：之后宿主再派发
+ *  也不戳已卸载的现场，并 console.info 留因。 */
 function watchList(list: WorkspacesListLike): () => void {
   let active = true
   let unsubscribe: (() => void) | undefined
@@ -98,10 +84,7 @@ function watchList(list: WorkspacesListLike): () => void {
   }
 }
 
-/**
- * 服务迟到时的 scoped 等待：装在 child ctx 上，服务就绪才安装观察；条目卸载时 child 一起收，
- * 观察的 disposer 随 child.effect 撤销。`inject` 返回的摘除函数是第二道保险（宿主给了就交回去）。
- */
+/** 服务迟到时的 scoped 等待：装在 child 上，服务就绪才安装观察；条目卸载时随 child 一起收。 */
 function waitForWorkspaces(client: ClientContextLike): (() => void) | undefined {
   if (typeof client.inject !== 'function') return undefined
   let off: unknown
@@ -141,10 +124,7 @@ function watchFor(client: ClientContextLike, allowWait: boolean): () => void {
   return () => {}
 }
 
-/**
- * 安装观察：返回 disposer（交给 `client.effect` 的工厂收尾）。服务缺席/形状不符时安静降级；
- * 服务可能迟到的那一支走 `ctx.inject` 的 scoped 等待（见文件头注）。
- */
+/** 安装观察，返回 disposer；服务缺席/形状不符安静降级，迟到那支走 scoped 等待（见文件头注）。 */
 export function installArchiveHostWatch(client: ClientContextLike): () => void {
   return watchFor(client, true)
 }

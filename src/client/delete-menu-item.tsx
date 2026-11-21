@@ -1,31 +1,12 @@
 /**
- * 会话条目「…」菜单里的「删除」行（`docs/ui-spec.md` §2 ①）。
- *
- * 这一行**只做两件事**：把「要删这个会话」写进 `delete-confirm.tsx` 的模块级现场，然后让菜单
- * owner 把菜单收起来（确认框不许叠在收起的菜单上——`docs/ui-spec.md` §2 ② 说的就是菜单已经收起之后
- * 的画面）。**确认框不在这棵子树里**——
- * 原因见 `delete-confirm.tsx` 的头注：宿主的菜单行随菜单一起卸载（真产物 `Menu` 是
- * `open && jsxs(MenuSurface, { … children: [items.map(renderEntry), children] })`，`open === false`
- * 时槽位行根本不渲染），住在行里的确认框会被这次的卸载连坐带走，真机上「移入回收站」永远点不到。
- * 所以"请求"与"确认"分居两处：请求走模块级现场，确认框住在 `shell.overlay` 上。
- *
- * 另外两件事说清：
- *
- * 1. **不自建菜单壳**。菜单行由宿主既有菜单容器渲染，我们只贡献一行 `MenuItemButton`
- *    （`ui/MenuItemButton.tsx`，照官方同名组件抄的）。这是 **legacy 槽位行**：0.2.2+ 的删除行是
- *    `context-menu-actions.tsx` 的 `createSessionMenuContribution` 数据动作；只有 `contextMenus`
- *    缺席的旧宿主才注册本组件，注册点归同文件的 `installSessionMenus`（槽位
- *    `sidebar.workspaces.session.menu.item` 只投影 `sessionId` / `displayTitle` 两个数据
- *    加 `menuOpenState` / `shortcuts` 两个 hook，见 asar @46391872 的槽位声明原文）。
- *    菜单的**开合归 owner**：槽位把 `useMenuOpenState` 交给这一行（`context-menu-actions.tsx` 的
- *    `DeleteRow` 接住后当 `dismissMenu` 传下来），按下时先发请求、再收菜单——与官方 README 的示例同序
- *    （`onSelect={() => { setMenuOpen(false); … }}`）。
- * 2. **运行中置灰**（`docs/ui-spec.md` §2 ①）。置灰用**原生 `disabled`**：本平台的菜单行组件
- *    `MenuItemButton` 只把 `disabled` 落在原生按钮属性上（真产物原文 `<button type="button"
- *    role="menuitem" … disabled={disabled}>`），jest-dom 的 `toBeDisabled()` 也只认这个属性；
- *    `aria-disabled` 在这条链上既渲染不出来也不算数。原因文案用 `ui/Tooltip.tsx`（照官方 Tooltip 抄的，
- *    行为同款：hover / 键盘 focus 才出）挂在行上
- *    （anchor 用一层 `<span>`：`MenuItemButton` 是普通函数组件、接不住 `Tooltip` 注入的 ref）。
+ * 会话条目「…」菜单里的「删除」行（`docs/ui-spec.md` §2 ①）。**确认框不在这棵子树里**：宿主菜单行
+ * 随菜单关闭而卸载，住在行里的确认框会被连坐带走（真机上「移入回收站」永远点不到）——请求走
+ * `delete-confirm.tsx` 的现场，确认框住 `shell.overlay`。菜单的开合归 owner；只贡献一行 `MenuItemButton`。
+ * 这一行挂在 legacy 槽位 `sidebar.workspaces.session.menu.item`（出处 asar @46391872，槽位把
+ * `menuOpenState` / `shortcuts` 两个 hook 交给行）上；`contextMenus` 在场的宿主改走数据动作。
+ * 运行中置灰用**原生 `disabled`**：本平台的菜单行组件 `MenuItemButton` 只把 `disabled` 落在原生按钮属性上
+ * （真产物原文 `<button type="button" role="menuitem" … disabled={disabled}>`），`aria-disabled` 在这条链上
+ * 既渲染不出来也不算数。
  */
 import { requestDelete } from './delete-confirm.js'
 import { zhTranslate, type Translate } from './copy.js'
@@ -34,21 +15,17 @@ import { MenuItemButton } from './ui/MenuItemButton.js'
 import { Tooltip } from './ui/Tooltip.js'
 
 export interface DeleteMenuItemProps {
-  /** 宿主菜单槽投影的会话 id，原样透给删除写入（`apply` 的 `delete` 动作；段名与动作住 `shared/wire.ts`，浏览器半不自己拼 id）。 */
+  /** 槽位投影的会话 id，原样透给删除写入（段名与动作住 `shared/wire.ts`）。 */
   sessionId: string
-  /** 宿主菜单槽投影的 `displayTitle`：只用于确认框与提示文案，不参与任何请求。 */
+  /** 槽位投影的 `displayTitle`：只用于确认框与提示文案，不参与任何请求。 */
   title: string
   /** 会话在跑：这一行置灰，并把原因摆在行上。 */
   live?: boolean
-  /** 上方那条发丝线；缺省 true。多选入口排在删除前面时由它带线，删除行改成 false（`context-menu-actions.tsx`）。 */
+  /** 上方那条发丝线；缺省 true。多选入口排在删除前面时由它带线。 */
   separatorBefore?: boolean
-  /**
-   * 菜单 owner 交下来的「收起菜单」——槽位注入的 `useMenuOpenState`（`context-menu-actions.tsx` 的 `DeleteRow` 接住）。
-   * 「关不关菜单是 owner 的决定」是官方对该槽位的契约；按下这一行时**先发请求、再收菜单**。
-   * 缺省不动，方便单独测这一行。
-   */
+  /** 菜单 owner 交下来的「收起菜单」（槽位契约：开合归 owner）。按下时**先发请求、再收菜单**；缺省不动。 */
   dismissMenu?: () => void
-  /** 文案（缺省 = 内置 zh，见 `copy.ts`：这不是"忘了传"，而是"这次没有 locale 服务"）。 */
+  /** 文案（缺省 = 内置 zh：不是"忘了传"，而是"这次没有 locale 服务"）。 */
   t?: Translate
 }
 
@@ -61,8 +38,7 @@ export function DeleteMenuItem({
   t = zhTranslate,
 }: DeleteMenuItemProps) {
   const select = (): void => {
-    // 先把请求写进现场（确认框住在 overlay 上、不随这一行的卸载消失），再让 owner 收菜单——
-    // 即使 owner 收菜单的动作把这一行卸了，请求也已经发出去了。
+    // 先把请求写进现场（确认框在 overlay 上、不随这一行卸载），再让 owner 收菜单——即使收菜单把这一行卸了，请求也已发出。
     requestDelete({ sessionId, title })
     dismissMenu?.()
   }

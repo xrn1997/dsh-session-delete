@@ -1,19 +1,8 @@
 /**
- * 回收站详情与设置页维护卡预览里的一条附件：图片给缩略图 + 放大框，普通文件给下载 chip。
- *
- * 三条口径：
- * - **地址只由 `attachmentId` + `kind` 寻址**：`/attachment` 段以这两个参数找对象；媒体元数据
- *   （`mediaType` / `bytes` / `width` / `height`）只给宿主 `attachments` 服务做引用校验，`name` 只做
- *   下载名建议，均不参与路径推导（见 `src/api/attachment.ts`）。空串与缺席同义——空串不是一个名字，
- *   不写进查询串。
- * - **图裂了就换占位**：缩略图与放大框共用同一份 `failed` 集合，`onError` 之后这一格改成「附件不可用」，
- *   不把破图留在屏上（放大框里裂了也换）。普通文件走 `<a download>`，没有页面内失败面：服务端失败回
- *   200 + JSON 信封，浏览器可能把这份错误响应存成文件。
- * - **放大框复用 `Modal`**：Escape、焦点归位、蒙层点击三件事都在那里，不另造一层浮层。
- *
- * 附件是**消息的一部分**，不单开一等区块：调用面把 `AttachmentStrip` 摆在自己那一行的位置
- * （用户：气泡之上；助手：Markdown 之后），并用 `align` 说自己那一行朝哪边靠——用户行右对齐
- * （气泡那一侧），助手行左对齐（正文那一侧）。条本身不自认角色，对齐由调用面给。
+ * 一条附件：图片给缩略图 + 放大框，普通文件给下载 chip。地址只由 `attachmentId` + `kind` 寻址；
+ * 图裂了就换占位（不把破图留在屏上），放大框复用 `Modal` 的 Escape / 焦点归位 / 蒙层。
+ * 普通文件走 `<a download>`：没有页面内失败面，服务端失败回 200 + JSON 信封，浏览器可能把错误响应存成文件。
+ * 附件是消息的一部分：`align` 由调用面给，条本身不自认角色。
  */
 import { useState, type CSSProperties } from 'react'
 import { PARAMS, ROUTES, type TrashDetailAttachmentWire } from '../shared/wire.js'
@@ -24,10 +13,7 @@ import { Modal } from './ui/Modal.js'
 import { fileSizeText } from './ui/format.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 
-/**
- * 一张附件的取数地址。**只从校验过的 id 与 kind 派生**：不接受路径、不接受任意查询串，
- * 所以调用面把 URL 交给 `<img src>` / `<a href>` 时不存在"读任意文件"的入口。
- */
+/** 取数地址只从校验过的 id 与 kind 派生：不接受路径与任意查询串，故不存在「读任意文件」的入口。 */
 export function attachmentUrl(a: TrashDetailAttachmentWire): string {
   const query = new URLSearchParams({
     [PARAMS.attachmentId]: a.attachmentId,
@@ -63,7 +49,7 @@ const THUMB: CSSProperties = {
   display: 'block',
   maxWidth: '100%',
   maxHeight: 260,
-  // 缩略图框有上限，画面按 contain 收进去而不是被裁掉一角：缩略图用来认出这张图，不是裁切预览。
+  // 缩略图框有上限：按 contain 收进去而不是被裁掉一角（缩略图用来认出这张图，不是裁切预览）。
   objectFit: 'contain',
   borderRadius: 'var(--sd-radius-lg)',
   background: 'var(--dsw-alias-bg-layer-2)',
@@ -87,10 +73,7 @@ const UNAVAILABLE: CSSProperties = {
   color: 'var(--sd-label-tertiary)',
 }
 
-/**
- * 图裂之后的占位。**仍然说清是哪一件**：名字（没有就用「附件图片」/「文件」）+ 体量 + 「附件不可用」。
- * 只剩一句「附件不可用」等于把"哪张图没了"也一起丢了。
- */
+/** 图裂之后的占位仍要说清是哪一件（名字 + 体量 + 「附件不可用」）：只剩一句「不可用」就把「哪张没了」也丢了。 */
 function Unavailable({ attachment, t }: { attachment: TrashDetailAttachmentWire; t: Translate }) {
   const label =
     nameOf(attachment) ??
@@ -106,11 +89,8 @@ function Unavailable({ attachment, t }: { attachment: TrashDetailAttachmentWire;
 }
 
 /**
- * 一条消息的全部附件。顺序照日志，不重排：用户先发图后发文件，读起来应是他当时的顺序。
- *
- * `align` 是这一行的对齐（默认 `end`，与用户气泡同侧）：用户行靠右、助手行靠左，条跟着自己那条消息走。
- * `failed` 按 `attachmentId` 记：同一个内容哈希在一段会话里可能被引用多次，裂一次就都不再画破图。
- * 四个 `useState` 都在早退之前调用——附件从有到无时 hook 数量不变。
+ * 一条消息的全部附件，顺序照日志（用户先发图后发文件）。`align` 是这一行的对齐：用户行靠右、助手行靠左。
+ * `failed` 按 `attachmentId` 记：同一内容哈希可能被引用多次，裂一次就不再画破图。四个 `useState` 都在早退前调用。
  */
 export function AttachmentStrip({
   attachments,
@@ -119,7 +99,6 @@ export function AttachmentStrip({
 }: {
   attachments: readonly TrashDetailAttachmentWire[]
   t: Translate
-  /** `end`（默认）= 靠右，用户气泡那一侧；`start` = 靠左，助手正文那一侧。 */
   align?: 'start' | 'end'
 }) {
   const [preview, setPreview] = useState<TrashDetailAttachmentWire | null>(null)
@@ -139,17 +118,15 @@ export function AttachmentStrip({
     setSaving(false)
   }
   /**
-   * 另存为：先把字节取回来拿到真实 `Content-Type`，再用 blob URL + `download` 落盘。
-   * 不直接把 `<a download>` 指到 `/attachment`：图片响应是 inline，且仓库里没有原始扩展名，
-   * 直接下载会得到没有扩展名的哈希文件。这里按响应类型补 `.png/.jpg/.webp/.gif`。
+   * 另存为：先取字节拿到真实 `Content-Type`，再走 blob URL + `download`——图片响应是 inline、仓库里没有原始
+   * 扩展名，直接把 `<a download>` 指过去会得到没扩展名的哈希文件；这里按响应类型补扩展名。
    */
   const savePreview = async (attachment: TrashDetailAttachmentWire): Promise<void> => {
     setSaving(true)
     setSaveError(null)
     try {
       const response = await fetch(attachmentUrl(attachment))
-      // 只取媒体类型（分号前那一段）。`noUncheckedIndexedAccess` 下 `[0]` 是 `string | undefined`：
-      // 这里显式收窄，缺头时退回空串，与原来 `?? ''` 的读数一致。
+      // 只取媒体类型（分号前那一段）；缺头时退回空串。
       const mediaType = response.headers.get('content-type')?.split(';')[0]
       const contentType = mediaType === undefined ? '' : mediaType.trim()
       if (!response.ok || !contentType.startsWith('image/')) {
@@ -160,7 +137,7 @@ export function AttachmentStrip({
             const body = await response.json() as { error?: { message?: unknown } }
             if (typeof body.error?.message === 'string' && body.error.message !== '') message = body.error.message
           } catch {
-            // 不是信封：保留状态码。
+            // 保留状态码。
           }
         }
         throw new Error(message)

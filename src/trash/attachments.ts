@@ -1,14 +1,8 @@
 /**
- * 附件的**唯一域模块**：内容块提取、ID/路径闸、引用扫描、独占计划与执行。
- *
- * 两条红线：
- * ① 只删 `$DSH_HOME/attachments/v1/objects` 下的图片；普通文件、tmp、v2、cache 一律不碰；
- *    源文件（$DSH_HOME 之外）没有进入路径拼接的入口。
- * ② 只要剩余引用源读不出来，就整体跳过（fail closed）——宁可留孤儿，不许删共享。
- *    引用源"读不出来"包括：目录/文件读失败、目录非空却没有规范 zstd 日志（明文/陌生布局）、
- *    JSON 超出扫描上限、日志有坏行或尾巴被截断。
- *    宿主的内核写锁 `session.lock` 例外：它不是会话内容，恒为 0 字节时既不算读不懂、也不算
- *    "目录里有东西"；非空才回落到上面的 fail closed（判据见 `imageIdsOfDir`）。
+ * 附件的**唯一域模块**：内容块提取、ID/路径闸、引用扫描、独占计划与执行。两条红线：① 只删 `$DSH_HOME/attachments/v1/objects` 下的图片；
+ * 普通文件、tmp、v2、cache 一律不碰，源文件（$DSH_HOME 之外）没有进入路径拼接的入口。② 只要剩余引用源读不出来，就整体跳过（fail closed）——宁可留孤儿，不许删共享；
+ * "读不出来"包括：读失败、目录非空却没有规范 zstd 日志（明文/陌生布局）、JSON 超出扫描上限、日志有坏行或尾巴被截断。
+ * 宿主的内核写锁 `session.lock` 例外：恒为 0 字节时既不算读不懂、也不算"目录里有东西"；非空才回落到上面的 fail closed（判据见 `imageIdsOfDir`）。
  */
 import path from 'node:path'
 import { isAbsentPath } from '../ports/fs-port.js'
@@ -38,10 +32,8 @@ export type AttachmentRef = ImageRef | FileRef
 
 const ATTACHMENT_ID = /^sha256:[0-9a-f]{64}$/u
 
-/** 合法附件 ID：形状是 `sha256:` + 64 位小写十六进制。
- *  谓词必须收成**模板字面量形状**而不是 `string`：`attachmentPathOf` 里 `!isAttachmentId(id)` 的
- *  假支若按「是 string」取反会被 TS 收成 `never`（参数本来就是 string），插值就成了 never 读数。
- *  这里判的仍是同一条正则，谓词只是把「形状」写进类型面。 */
+/** 合法附件 ID：形状是 `sha256:` + 64 位小写十六进制。谓词必须收成**模板字面量形状**而不是 `string`：`attachmentPathOf` 里
+ *  `!isAttachmentId(id)` 的假支若按「是 string」取反会被 TS 收成 `never`（参数本来就是 string），插值就成了 never 读数。 */
 export function isAttachmentId(value: unknown): value is `sha256:${string}` {
   return typeof value === 'string' && ATTACHMENT_ID.test(value)
 }
@@ -54,9 +46,8 @@ function numberOf(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0
 }
 
-/** 路径缺席的判据只有一处：`src/ports/fs-port.ts` 的 `isAbsentPath`（ENOENT / ENOTDIR）。
- *  `statFile` / `readFile` / `sizeOfDir` 的读错误里，"不在"只认这两枚；权限、盘挂、I/O 错误
- *  都必须露成读不出（ADR-0039），别在这里另写一份只有 ENOENT 的抄本。 */
+/** 路径缺席的判据只有一处：`src/ports/fs-port.ts` 的 `isAbsentPath`（ENOENT / ENOTDIR）。`statFile` / `readFile` / `sizeOfDir` 的读错误里，
+ *  "不在"只认这两枚；权限、盘挂、I/O 错误都必须露成读不出（ADR-0039），别在这里另写只有 ENOENT 的抄本。 */
 export const isMissing = isAbsentPath
 
 /** 合法附件 ID → 宿主附件库里的绝对路径。`name` 不参与拼接。 */
@@ -66,8 +57,8 @@ export function attachmentPathOf(home: string, kind: 'image' | 'file', id: strin
   const root = kind === 'image' ? 'objects' : 'file-objects'
   const base = `${home}/attachments/v1/${root}`
   const file = `${base}/${hex.slice(0, 2)}/${hex}`
-  // 纵深防御：即便上面的正则将来被改宽，解析结果也必须仍在 store 根下。
-  // 按**目录包含关系**判（resolve + relative），不按字符串前缀——前缀判会被 `../` 之类骗过去。
+  // 纵深防御：即便上面的正则将来被改宽，解析结果也必须仍在 store 根下。按**目录包含关系**判（resolve + relative），
+  // 不按字符串前缀——前缀判会被 `../` 之类骗过去。
   const rel = path.relative(path.resolve(base), path.resolve(file))
   if (rel === '' || rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
     throw new Error(`附件路径越界：${id}`)
@@ -125,8 +116,8 @@ interface LogImageIds {
 }
 
 /**
- * `walkSessionLog` 对坏行与截断尾巴是**跳过并计数**，不抛：引用扫描如果只看解析出来的记录，
- * 就会把"少读了一行"当成"那一行没有引用"。这里的 `.damaged` 有值 ⇒ 调用方必须按不可读处理。
+ * `walkSessionLog` 对坏行与截断尾巴是**跳过并计数**，不抛：引用扫描只看解析出来的记录，就会把"少读了一行"当成"那一行没有引用"。
+ * `.damaged` 有值 ⇒ 调用方必须按不可读处理。
  */
 function scanImageIdsInLog(raw: Buffer): LogImageIds {
   const ids = new Set<string>()
@@ -152,36 +143,26 @@ export interface AttachmentRemovalDeps extends AttachmentReadDeps {
 }
 
 /** 宿主写日志时的临时名：`session.vN.jsonl.zstd.<hash>.tmp`（内容写完后才 rename 成规范名）。
- *  出处：asar `dsh-session-persistence-jsonl/src/index.ts` 的 `writeSyncedTempFile`：
- *  `` `${finalPath}.${randomBytes(6).toString('hex')}.tmp` ``。 */
+ *  出处：asar `dsh-session-persistence-jsonl` 的 `writeSyncedTempFile`。 */
 const TEMP_LOG_NAME = /^session(?:\.v[1-9][0-9]*)?\.jsonl(?:\.zstd)?\.[0-9a-f]+\.tmp$/u
 
 /**
- * 宿主**格式迁移**的暂存名：`session.migration.<token>.jsonl[.zstd].tmp`。出处：asar
- * `dsh-session-persistence-jsonl/src/generation.ts` 的 `writeSyncedTemp`
- * （`` `session.migration.${internals.randomToken()}${suffix}.tmp` ``，`randomToken` 是十六进制；
- * `suffix` 是 `logSuffix(compression)` = `.jsonl.zstd` 或 `.jsonl`——**不是**裸 `.zstd`）。
- * 它是"把历史代迁移成当代、发布前先落盘"的那份暂存。
- *
- * 与普通临时日志的差别决定了它**可以**在有规范日志时被忽略：迁移暂存是**同一会话历史日志的完整拷贝**
- * （header + 全部事件），而它存在的前提是历史规范日志还在原处（宿主就是照着它迁移的）——那份可读的
- * 规范日志已经覆盖了它的全部引用。写盘临时日志（`TEMP_LOG_NAME`）相反：它可能装着还没进规范日志的
- * 新记录，非空就算不可读。**没有规范日志时它仍按不可读 fail closed**（`imageIdsOfDir` 的
- * "只有临时名"那条捷径只认 `TEMP_LOG_NAME`，迁移暂存不在其中）。 */
+ * 宿主**格式迁移**的暂存名：`session.migration.<token>.jsonl[.zstd].tmp`。出处：asar `dsh-session-persistence-jsonl` 的 `writeSyncedTemp`
+ * （`randomToken` 是十六进制；`suffix` 是 `.jsonl.zstd` 或 `.jsonl`——**不是**裸 `.zstd`）。与普通临时日志的差别决定它**可以**在有规范日志时被忽略：
+ * 迁移暂存是**同一会话历史日志的完整拷贝**（header + 全部事件），而它存在的前提是历史规范日志还在原处——那份可读日志已覆盖它的全部引用。
+ * 写盘临时日志（`TEMP_LOG_NAME`）相反：可能装着还没进规范日志的新记录，非空就算不可读。**没有规范日志时它仍按不可读 fail closed**。
+ */
 const MIGRATION_TEMP_LOG_NAME = /^session\.migration\.[0-9a-f]+\.jsonl(?:\.zstd)?\.tmp$/u
 
 /**
- * 宿主的内核写锁：宿主以写方式打开它即截断、**从不写入内容**、释放也从不删除（POSIX 上是
- * `flock(2)` 的目标，Windows 上没有这个文件）——所以每个已实体化的会话目录、以及跟着搬进
- * 回收站的条目里，它都与日志常态并存。锁只表达"谁在写"，不承载会话记录。
+ * 宿主的内核写锁：宿主以写方式打开它即截断、**从不写入内容**、释放也从不删除（POSIX 上是 `flock(2)` 的目标，Windows 上没有这个文件）——
+ * 每个已实体化的会话目录、以及跟着搬进回收站的条目里，它都与日志常态并存。锁只表达"谁在写"，不承载会话记录。
  */
 const LOCK_NAME = 'session.lock'
 
-/** 规范日志之外允许并存的几类文件：更老一代的规范日志（新代包含旧代）、0 字节临时日志（没有消息），
- *  以及宿主的**格式迁移暂存**（同一会话历史日志的完整拷贝，可读规范日志已覆盖它的引用——判据见
- *  {@link MIGRATION_TEMP_LOG_NAME}）。其余任何文件都可能是规范日志没覆盖到的引用（例如写入中的非空
- *  临时日志），一律按不可读处理。
- *  宿主的 `session.lock` 到不了这里——它在 `imageIdsOfDir` 挑名单时就按"不是会话内容"剥掉了。 */
+/** 规范日志之外允许并存的几类文件：更老一代的规范日志（新代包含旧代）、0 字节临时日志（没有消息），以及宿主的**格式迁移暂存**
+ *  （完整拷贝，可读规范日志已覆盖其引用——判据见 {@link MIGRATION_TEMP_LOG_NAME}）。其余任何文件都可能是规范日志没覆盖到的引用
+ *  （例如写入中的非空临时日志），一律按不可读处理。宿主的 `session.lock` 到不了这里——它在 `imageIdsOfDir` 挑名单时就按"不是会话内容"剥掉了。 */
 async function unreadableExtraFile(
   deps: AttachmentReadDeps,
   dir: string,
@@ -199,17 +180,11 @@ async function unreadableExtraFile(
 
 /** 一个会话目录里的图片引用；`unreadable` 有值 = 这一组不可知（调用方按"跳过它"处理）。
  *
- *  **没有规范 zstd 日志 ≠ 没有引用**：明文日志、别的版本/布局、以及子目录都可能藏着引用。
- *  **有规范日志但目录里还有子目录也不够**：日志只覆盖本目录，子目录里的引用读它看不见——
- *  同样按不可读处理（宁可留下对象等维护卡兜底，不冒"没引用"）。
- *  **规范日志旁的文件也要过关**：老一代规范日志可以并存（新代包含旧代）；0 字节临时日志是
- *  写盘未完成的空产物，也没有引用；格式迁移暂存是同一历史日志的完整拷贝，规范日志可读时忽略它。
- *  非空临时日志、明文日志或其他任何文件仍按不可读处理（fail closed）。
- *  **整本日志读取有上限**（`readWholeSessionLog`，值住 `MAX_SESSION_LOG_BYTES`）：超限与读错误都按不可读
- *  处理，不为一份读不完的引用源把整本字节压进内存，更不把它折成"没有引用"。
- *  **宿主的内核写锁不是会话内容**：0 字节的锁在判目录形状之前先剥掉——不然每个已实体化的会话目录
- *  （含搬进回收站的条目）都会被读成"读不懂"，整份引用扫描在真机上恒跳过；没有日志的锁目录因此与
- *  空目录同判。非空的锁说明我们对这个文件的理解失效（宿主不会往里写字节），仍按不可读处理。
+ *  **没有规范 zstd 日志 ≠ 没有引用**：明文日志、别的版本/布局、以及子目录都可能藏着引用。**有规范日志但还有子目录也不够**：日志只覆盖本目录。
+ *  **规范日志旁的文件也要过关**：老一代可并存；0 字节临时日志是空产物；迁移暂存是完整拷贝。非空临时日志、明文日志或其他文件仍 fail closed。
+ *  **整本日志读取有上限**（`readWholeSessionLog`，值住 `MAX_SESSION_LOG_BYTES`）：超限与读错误都按不可读处理，不为一份读不完的引用源把整本字节压进内存，更不折成"没有引用"。
+ *  **宿主的内核写锁不是会话内容**：0 字节的锁在判目录形状之前先剥掉——不然每个已实体化的会话目录都会被读成"读不懂"，整份引用扫描在真机上恒跳过；
+ *  非空的锁说明我们对这个文件的理解失效，仍按不可读处理。
  */
 export async function imageIdsOfDir(
   deps: AttachmentReadDeps,
@@ -265,8 +240,7 @@ export async function imageIdsOfDir(
     if (subdirs.length > 0) {
       return { ids: new Set(), unreadable: `${dir}: 目录里还有子目录，规范日志覆盖不到它们` }
     }
-    // 整本读取（含大小闸）归 `readWholeSessionLog`：超限与读错误都按不可读跳过（fail closed）——
-    // 上限是"读不出"的判据，不是截断阈值（截断读到的引用集合不可信）。
+    // 整本读取（含大小闸）归 `readWholeSessionLog`：超限与读错误都按不可读跳过（fail closed）——上限是"读不出"的判据，不是截断阈值。
     const logPath = `${dir}/${log}`
     const read = await readWholeSessionLog(deps.fs, logPath)
     if (!read.ok) {
@@ -363,9 +337,8 @@ async function collectRemainingImageRefs(
 }
 
 /**
- * 剩余引用扫描的 fail-closed 收口（独占计划 / 执行期复核 / 孤儿扫描三处共用同一形状）：扫描抛错或
- * 任一引用源读不出都回 `reason`，读得出才交引用集——「读不出」绝不折成「没有引用」（ADR-0020；
- * 缺席判据见 ADR-0039）。`reasonLabel` 只补"这次是为什么扫"的前半句，后半句是读数原文。
+ * 剩余引用扫描的 fail-closed 收口（独占计划 / 执行期复核 / 孤儿扫描三处共用同一形状）：扫描抛错或任一引用源读不出都回 `reason`，
+ * 读得出才交引用集——「读不出」绝不折成「没有引用」（ADR-0020；缺席判据见 ADR-0039）。`reasonLabel` 只补前半句，后半句是读数原文。
  */
 async function remainingRefsFailClosed(
   deps: AttachmentReadDeps,
@@ -394,8 +367,7 @@ export interface ImageRemovalPlan {
 }
 
 /**
- * 独占计划：候选 = 本次被删会话日志里的图片 id；剩余引用 = 活动会话 + 全部未删 `session-trash`
- * 目录 + storages/cache。
+ * 独占计划：候选 = 本次被删会话日志里的图片 id；剩余引用 = 活动会话 + 全部未删 `session-trash` 目录 + storages/cache。
  * 剩余引用源读不出 ⇒ 整体跳过；候选日志读不出 / 附件对象 stat 失败 ⇒ 只跳过那一部分，其余照常。
  */
 export async function planImageAttachmentRemoval(
@@ -435,8 +407,7 @@ export async function planImageAttachmentRemoval(
       entries.push({ id, path, bytes: stat.size })
       bytes += stat.size
     } catch (error) {
-      // 对象已经不在：没有可删的字节，也不算失败。别的 stat 失败（权限/盘挂）**不是"不在"**：
-      // 这一件这次没敢删，记进 `skipped`，但其余读得出的条目照常计划。
+      // 对象已经不在：没有可删的字节，也不算失败。别的 stat 失败（权限/盘挂）**不是"不在"**：这一件这次没敢删，记进 `skipped`，其余读得出的条目照常计划。
       if (!isMissing(error)) unreadableObjects += 1
     }
   }
@@ -445,13 +416,11 @@ export async function planImageAttachmentRemoval(
 }
 
 /**
- * 执行期复核：计划与真删对象之间隔着一整趟目录删除（秒级），这期间别的会话可能把同一张图
- * （内容寻址 ⇒ 同一个 sha256 id）再引用一次，或派生存储新写一条引用。计划是数据、会过期；
- * 删对象之前用同一套剩余引用扫描再判一次，**只删这一刻仍无引用的那些**（ADR-0041）。
+ * 执行期复核：计划与真删对象之间隔着一整趟目录删除（秒级），这期间别的会话可能把同一张图（内容寻址 ⇒ 同一个 sha256 id）再引用一次，
+ * 或派生存储新写一条引用。计划是数据、会过期：删对象之前用同一套剩余引用扫描再判一次，**只删这一刻仍无引用的那些**（ADR-0041）。
  *
- * 调用时机：会话 / 回收站目录已经删掉之后、`executeImageAttachmentRemoval` 之前——那时被删的
- * 引用源已经不在了，扫到的就是真正的"剩余"。读不出照旧 fail closed：回空计划 + `skipped`，
- * 宁可留下孤儿也不删共享。空计划直接返回（不为零删付一次全 home 扫描）。
+ * 调用时机：会话 / 回收站目录已经删掉之后、`executeImageAttachmentRemoval` 之前——扫到的就是真正的"剩余"。读不出照旧 fail closed：回空计划 + `skipped`。
+ * 空计划直接返回（不为零删付一次全 home 扫描）。
  */
 export async function recheckImageRemovalExclusivity(
   deps: AttachmentReadDeps,
@@ -460,8 +429,7 @@ export async function recheckImageRemovalExclusivity(
   if (plan.entries.length === 0) return plan
   const scanned = await remainingRefsFailClosed(deps, [], '读不到剩余引用源，无法复核独占')
   if (!scanned.ok) {
-    // 计划期的 `skipped` 不丢：两条原因说的不是同一件事（候选日志读不出 / 复核读不出），
-    // 上屏时二选一等于替用户藏掉一条（ADR-0041 决定 4）。
+    // 计划期的 `skipped` 不丢：两条原因说的不是同一件事（候选日志读不出 / 复核读不出），上屏时二选一等于替用户藏掉一条（ADR-0041 决定 4）。
     const skipped = plan.skipped === undefined ? scanned.reason : `${plan.skipped}；${scanned.reason}`
     return { entries: [], bytes: 0, skipped }
   }
@@ -476,10 +444,8 @@ export async function recheckImageRemovalExclusivity(
 }
 
 /**
- * 逐文件删；ENOENT 由端口的 `force` 吞掉；其他错误计数并继续。
- *
- * 删除动作只认「`home` + `id` 自己推导出来的那一条路径」：计划是数据，手搭的/被改过的条目
- * 只要路径与推导不一致就拒绝（计数为失败，不删），源文件因此没有删除入口。
+ * 逐文件删；ENOENT 由端口的 `force` 吞掉；其他错误计数并继续。删除动作只认「`home` + `id` 自己推导出来的那一条路径」：
+ * 计划是数据，手搭的/被改过的条目只要路径与推导不一致就拒绝（计数为失败，不删），源文件因此没有删除入口。
  */
 export async function executeImageAttachmentRemoval(
   deps: AttachmentRemovalDeps,
@@ -521,13 +487,9 @@ const OBJECT_PREFIX = /^[0-9a-f]{2}$/u
 const OBJECT_NAME = /^[0-9a-f]{64}$/u
 
 /**
- * 扫「当前没有任何引用源引用」的图片对象。
- *
- * 引用侧与删除计划共用同一条判据：活动会话 + 全部 `session-trash` 目录 + `storages/cache` JSON。
- * 任何一处读不出 ⇒ 整份报告跳过（fail closed），绝不把"读不出"折成"没有引用"。
- * 候选侧只认 `attachments/v1/objects` 下 `<2 hex>/<64 hex>` 这一种真实形状：`file-objects` /
- * `tmp` / `v2` / `cache` 与非规范名字一律不进候选——清理只处理 `.dsh` 内的图片副本。
- *
+ * 扫「当前没有任何引用源引用」的图片对象。引用侧与删除计划共用同一条判据（活动会话 + 全部 `session-trash` 目录 + `storages/cache` JSON）：
+ * 任何一处读不出 ⇒ 整份报告跳过（fail closed），绝不把"读不出"折成"没有引用"。候选侧只认 `attachments/v1/objects` 下 `<2 hex>/<64 hex>`
+ * 这一种真实形状：`file-objects` / `tmp` / `v2` / `cache` 与非规范名字一律不进候选——清理只处理 `.dsh` 内的图片副本。
  * 对象列表或 stat 读不出同样整份跳过：报告宁可失败，也不给一份"少算了一些"的清理计划。
  */
 export async function scanOrphanImageAttachments(deps: AttachmentReadDeps): Promise<ImageRemovalPlan> {

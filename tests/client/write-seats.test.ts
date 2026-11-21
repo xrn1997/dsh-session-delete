@@ -19,8 +19,7 @@ const mocks = vi.hoisted(() => {
     clearUndoNotice: vi.fn(),
   }
 })
-// 现场模块现在是场景实例的工厂：spread 真品拿到工厂与 reset（`resetClientState` 造默认场景要用），
-// 只把本用例断言的那几个动作换成调用记录。
+// 现场模块现在是场景实例的工厂：spread 真品拿到工厂，只把本用例断言的那几个动作换成调用记录。
 vi.mock('../../src/client/trash-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/client/trash-store.js')>()
   return { ...actual, invalidateTrash: mocks.invalidateTrash }
@@ -85,7 +84,6 @@ import {
 } from '../../src/client/undo-notices.js'
 import { outcomes, restoreOutcomes, trashRow } from './support/outcomes.js'
 import { applyDeps, remoteFail, remoteOk } from './support/fake-remote.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import {
   deleteSessionFromMenu, deleteSessionsFromBatch,
   purgeFromPanel, restoreFromPanel, restoreFromUndo, unarchiveFromArchiveTab,
@@ -107,10 +105,7 @@ const gate = (): BusyGate => {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // 通知台是模块级 store：不清零会把上一条横幅（含 seq）带进下一个用例。
-  // 模块级现场（跨用例存活）：一条复位口收全部。
-  resetClientState()
-  // 顺序载体也归零：上一条用例的收尾序列不许混进本条的断言。
+  // 顺序载体归零：上一条用例的收尾序列不许混进本条的断言。
   mocks.order.length = 0
 })
 

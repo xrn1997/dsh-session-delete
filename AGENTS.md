@@ -28,7 +28,7 @@ DSH 的「会话删除」插件。这份文件只回答三件事：先读哪份�
 
 ## 硬约束
 
-- **改通道先改契约**：段名 / 动作 / 方法 / 形状 / 失败码住 `src/shared/wire.ts`（段名表每项 `{ path, method, body }`，两半只投影）；纯度 / 读面 / body 预读 / 同源取数闸声明住 `src/api/route-table.ts`（`bodyOf` 只投影 wire 那一格）。加一个新段名两处一起改。请求本身不对用 4xx，操作失败回 200 + 信封；浏览器半把信封解析成唯一落地面 `RemoteOutcome`（ADR-0053）。通道只走宿主 `connection` 的 exact Fetch 路由（`/api/dsh-session-delete-api/*`，鉴权归宿主 `/api`）；支持面是 web UI 与桌面端，没有自建前缀 / fallback（ADR-0033）。
+- **改通道先改契约**：段名 / 动作 / 方法 / 请求形状 / 失败码 / 信封住 `src/shared/wire.ts`（段名表每项 `{ path, method, body }`，两半只投影）；`/apply` 成功值形状住 `src/shared/apply-values.ts`（schema 由 `src/shared/value-schema.ts` 的 DSL 声明，wire 只派生类型与判形）；纯度 / 读面 / body 预读 / 同源取数闸声明住 `src/api/route-table.ts`（`bodyOf` 只投影 wire 那一格）。加一个新段名两处一起改。请求本身不对用 4xx，操作失败回 200 + 信封；浏览器半把信封解析成唯一落地面 `RemoteOutcome`（ADR-0053）。通道只走宿主 `connection` 的 exact Fetch 路由（`/api/dsh-session-delete-api/*`，鉴权归宿主 `/api`）；支持面是 web UI 与桌面端，没有自建前缀 / fallback（ADR-0033）。
 - **删除 / 恢复不碰归档**：回收站与归档是两套状态；删除必须把 session 和它的 agent handle 一起摘掉，恢复走冷 resume（ADR-0008）。`unarchive` 是用户显式动作，不是删除 / 恢复的副作用（ADR-0060）。
 - **附件红线**：附件只随永久删除清 `.dsh` 内独占图片副本——不碰源文件、不碰普通文件、共享引用保留；剩余引用源读不出就跳过。判据住 `src/trash/attachments.ts`（ADR-0020）。孤儿会话、孤儿附件与孤儿投影缓存的检查/清理都是**手动**：只在插件设置页的维护卡里触发（ADR-0021 / ADR-0062）；永久删除逐条带走被删会话的缓存。
 - **浏览器半不许 import 任何宿主客户端包**（type-only 也不留）；跨插件一律 `import type`；宿主类型面用本地窄镜像，不装宿主类型包、不做 `declare module` 增强。

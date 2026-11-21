@@ -1,11 +1,7 @@
 /**
  * 宿主 `attachments` 服务的窄镜像（ADR-0035）：只声明本插件读取附件用到的两条。
- *
- * - 服务是**可选**的：`ctx.get('attachments')` 每次调用现查（服务可能晚于插件激活），
- *   `available()` 为假时调用方退回旧的直接 fs 路径。
- * - `readImage` 会按记录里的引用**校验字节**；`readFileStream` 校验并分块读出。
- *   两者都不在本文件里重写校验逻辑。
- * - 不 import 宿主 `attachments` 服务的类型包：形状按该服务的运行期契约抄成窄镜像。
+ * 服务是**可选**的：`ctx.get('attachments')` 每次调用现查（服务可能晚于插件激活），`available()` 为假时调用方退回旧的直接 fs 路径。
+ * `readImage` / `readFileStream` 按记录里的引用校验并分块读出，校验逻辑不在本文件重写；不 import 宿主 `attachments` 服务的类型包，形状按运行期契约抄成窄镜像。
  */
 import type { Context } from '@deepseek-ai/cordis'
 

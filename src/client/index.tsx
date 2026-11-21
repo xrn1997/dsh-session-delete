@@ -1,27 +1,13 @@
 /**
- * 浏览器半入口：注册全部槽位贡献，并在注册前探测取数通道。
- *
- * 槽位贡献的注册面见 docs/architecture.md §3，语义归属见 §4 的主人清单；
- * 本文件做注册与槽位接线：**一张贡献表 + 一个注册循环**（槽位 / 注册元数据 / 注入面 / 组件各一格），
- * 不再逐条手写 `slots.inject`。菜单两行有双轨协商（0.2.2+ 的 `ctx.contextMenus` 数据动作 /
- * 旧宿主的 legacy 槽位行 + 迟到切换），整段归 `context-menu-actions.tsx` 的 `installSessionMenus`。
- *
- * 槽位出处（宿主产物，不是猜的；换代先复核）：
- * - sidebar.workspaces.session.menu.item：声明 asar @46391872；数据面投影 @46271806；
- *   menuOpenState hook 工厂 @46195835；宿主官方菜单行 @46392466 起（pin/rename/fork/archive/session-id）。
- *   0.2.2 起内置动作改住 ctx.contextMenus，此槽位只剩 legacy React 扩展位；本插件把多选/删除
- *   迁到数据动作，见 `context-menu-actions.tsx`。
- * - shell.overlay：声明 asar @21206189。
- * - sidebar.panellist：声明 @44796980；行渲染 @44783481；label 解析 @44795361（thunk 随 locale）。
- * - main：渲染 @21185725；id 与 panellist 同字，selectPanel 只校验已注册 @21199710。
- * - plugins.bundle.config：插件详情页的 keyed 子槽位，宿主页面挂载时才声明（ADR-0021）。
- *
- * 硬约束：
- * - inject 只写宿主必给的 slots；可选服务走 ctx.get。理由与代价见 docs/architecture.md §3。
- * - apply 同步返回、绝不抛；先探 GET /ping，探测不过则不注册任何贡献（用入口不出现表达不可用）。
- *
- * 宿主 ctx 用本地窄镜像（AGENTS.md：只声明用到的成员 + 一次强转；不装宿主类型包、
- * 不做 declare module 增强）。
+ * 浏览器半入口：**一张贡献表 + 一个注册循环**注册全部槽位贡献，注册前先探取数通道。
+ * 槽位出处（宿主产物 asar 偏移，换代先复核）：菜单行 `sidebar.workspaces.session.menu.item` @46391872
+ * （数据面投影 @46271806；`menuOpenState` hook 工厂 @46195835；官方菜单行 @46392466 起；
+ * 0.2.2 起内置动作改住 `ctx.contextMenus`，此槽位只剩 legacy React 扩展位）；
+ * 浮层 `shell.overlay` @21206189（槽位说明原文 "a toast stack or a status pill all belong here"）；面板行 `sidebar.panellist` @44796980（`ctx.slots.subscribe` 叫醒 @44795361，
+ * 行渲染 @44783481）与 `main` @21185725（同字 key、成对注册，selectPanel 只校验已注册 @21199710）；
+ * 设置页 `plugins.bundle.config`（插件详情页的 keyed 子槽位，页面挂载时才声明）。
+ * 硬约束：inject 只写宿主必给的 `slots`，可选服务走 `ctx.get`（写错代价是进程死）；探测不过则不注册。
+ * 宿主 ctx 用本地窄镜像：只声明用到的成员 + 一次强转，不装宿主类型包、不做 declare module 增强。
  */
 import type { ComponentProps, ComponentType } from 'react'
 import { BatchBar } from './batch-bar.js'
@@ -39,24 +25,16 @@ import { createHttpRemote, probeChannel, type SessionDeleteRemote } from './remo
 import { SettingsCards } from './settings-cards.js'
 import { TrashPanelIcon } from './trash-entry.js'
 import { TrashPanel } from './trash-panel.js'
-import { createClientScene, installClientScene, type ClientScene } from './scene.js'
+import { installClientScene, type ClientScene } from './scene.js'
 import { withErrorBoundary } from './ui/ErrorBoundary.js'
 import { installPointerModality } from './ui/styles.js'
 import { UndoToast } from './undo-toast.js'
 
 export const name = '@xrn1997/dsh-session-delete/client'
 
-/**
- * 只列**宿主公开面保证存在**的成员：`slots` 是浏览器侧槽位注册表
- * （宿主外壳的冻结平台模块表里的静态键 `@deepseek-ai/dsh-client-ui-slots`），一定在。
- * 取数通道不在这里——理由见文件头注（它不是 inject 能表达的事，写错了代价是进程死）。
- * **`locale` 也不在这里**：宿主自己的 `ui-sidebar` 是硬注入它的，但那是"宿主知道自己那一代"的前提；
- * 本插件要跨代活着 ⇒ 走 `ctx.get('locale')` 可选读，缺席时降级到内置 zh 文案（见 `copy.ts` 头注）。
- * 写进 inject 就等于"这一代没有 locale 就不让整个客户端条目激活"，而那等于宿主进程死。
- * **`contextMenus` 同理**：0.2.2+ 用 `ctx.get('contextMenus')` 探测，服务比本条目晚到时按
- * `ctx.inject(['contextMenus'])` 的 scoped 等待切过去；旧宿主没有这个服务时回调不来，legacy 槽位留着。
- * 条目自己的 `inject` 仍然只有 `slots`——把可能迟到的服务写进去等于让整个客户端条目 pending。
- */
+/** 只列**宿主公开面保证存在**的成员（`slots` 是冻结平台模块表里的静态键）。取数通道、`locale`、
+ *  `contextMenus` 都不在这里：它们走 `ctx.get` 可选读，写进 `inject` 等于这一代缺它就不激活
+ *  ⇒ 宿主进程死。`contextMenus` 迟到时按 `ctx.inject` scoped 等待切过去，旧宿主没有就留 legacy 槽位。 */
 export const inject = ['slots']
 
 /** 会话行首 16px 格（无状态点时归第三方装饰）；批量删除的主勾选框落这里，多选模式内可见。 */
@@ -72,7 +50,7 @@ const SETTINGS_SLOT = 'plugins.bundle.config'
 /** 面板 id 与 `main` 的 key 同字：官方按 list id 去 `main` 里寻址同 id 的占用者。 */
 const PANEL_ID = `${PLUGIN_ID}.trash`
 
-/* ── 勾选框座位的适配：槽位投影 → 组件 props（live 读法归 session-live，菜单两行归 context-menu-actions） ─── */
+/* ── 勾选框座位的适配：槽位投影 → 组件 props ─── */
 /** 多选模式行首勾选框的宿主：槽位只投 `sessionId`，标题从 root hook 的 `byId[id].title` 读。 */
 function PickLeadingRow({
   sessionId,
@@ -106,14 +84,9 @@ function PickRow({
   return <BatchPickButton sessionId={sessionId} title={displayTitle} live={live} t={t} />
 }
 
-/* ── 槽位贡献表：一行 = 一个注册（槽位 / 注册元数据 / 注入面 / 组件） ─────────────
- * 十一次 `slots.inject` 曾经是十一段手写代码；现在这张表就是装配面，注册循环只写一遍。
- * 菜单两行与两个 icon 不在这里：它们有双轨协商，归 `context-menu-actions.tsx` 的
- * `installSessionMenus`。 */
+/* ── 槽位贡献表：一行 = 一个注册。菜单两行与两个 icon 有双轨协商，归 `context-menu-actions.tsx`。 ── */
 
-/** 每种注入面允许的组件 Props：组件放错组会在编译期报错。
- *  宿主还会额外派发 `view` / `sessionId` 这类我们只窄镜像、不拥有的字段；这里只钉组件自己的
- *  Props，不把宿主槽位契约抄成本地第二份。 */
+/** 每种注入面允许的组件 Props：组件放错组会在编译期报错；宿主额外派发的字段只窄镜像、不拥有。 */
 type TComponent =
   | ComponentType<ComponentProps<typeof PickLeadingRow>>
   | ComponentType<ComponentProps<typeof PickRow>>
@@ -153,15 +126,15 @@ function contributions(t: Translate): readonly SlotContribution[] {
       payload: 't',
       component: PickRow,
     },
-    // 撤销提示的常驻宿主（不在菜单里，理由见 §头注）
+    // 撤销提示的常驻宿主
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.undo-toast` }, payload: 'deps+t', component: UndoToast },
-    // 删除确认框的常驻宿主（必须脱离菜单子树的生命周期，见 delete-confirm.tsx）
+    // 删除确认框必须脱离菜单子树的生命周期（见 delete-confirm.tsx）
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-confirm` }, payload: 'deps+t', component: DeleteConfirmHost },
     // 批量浮条与确认框：浮条跟着勾选重绘，确认框必须脱离行子树的生命周期
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-bar` }, payload: 'deps+t', component: BatchBar },
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-confirm` }, payload: 'deps+t', component: BatchConfirmHost },
-    // 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们只出一个 glyph。
-    // 名字走 thunk：宿主 `resolveSlotLabel` 在每次重读时求值并在语言变化时重读。
+    // 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们只出一个 glyph；名字走 thunk（宿主每次重读时求值、
+    // 语言变化时重读）。
     {
       slot: PANEL_SLOT,
       spec: { name: PANEL_SLOT, id: PANEL_ID, order: 900, label: () => t('trash.title') },
@@ -187,8 +160,8 @@ function registerContributions(
       ? undefined
       : row.payload === 'deps+t' ? () => ({ deps, t }) : () => ({ t })
     // 每条贡献各自一颗错误边界：一条渲染崩了只收起它自己那一块（宿主那一格不许被连坐成空白）。
-    // Props 形状由宿主按座位派发、彼此不同，边界这一层只关心"包住它"，所以擦成 `never` 面再包。
-    // 场景实例随贡献表里每条槽位贡献进它的子树：宿主各槽位是独立 React 树，跨槽位共享靠同一个实例（不是树）。
+    // Props 形状由宿主按座位派发、彼此不同，边界这一层只关心"包住它"，所以擦成 `never` 面再包；
+    // 场景实例随贡献进子树：宿主各槽位是独立 React 树，跨槽位共享靠同一个实例（不是树）。
     const guard = withErrorBoundary(row.component as ComponentType<never>, t('common.renderFailed'), scene)
     client.slots.inject(row.slot, () => client.slots.register(
       inject === undefined ? row.spec : { ...row.spec, inject },
@@ -198,30 +171,17 @@ function registerContributions(
 }
 
 /**
- * **探测 → 注册**：取数通道在不在，只有真发一次请求才知道。
- *
- * - 探测不过（打不通 / 回的不是信封 / 401·403 表示没有宿主身份 / 失败信封）⇒ **早返回**：
- *   一个槽位贡献都不注册。页面上的表现是"本插件不存在"，而不是点下去必然失败的入口——半吊子 UI
- *   比没有 UI 更糟（docs/architecture.md §3「通道探测决定入口出现与否」）。
- * - 探测过（`ping` 回成功信封的 `pong`）⇒ 注册：那次往返证明路由在、依赖接上了、鉴权也过了。
- *
- * 支持面是 web UI 与桌面端，二者都从宿主 `/api` 取数（ADR-0033）；没有旧前缀可退回。
- *
- * 面板那两条是**一对座位**：行的 `selectPanel(id)` 要求 `main` 里有同字 key，缺了面板那一头，
- * 用户点一下就是宿主自己的 `layout.selectPanel: main panel "…" is not registered`。
- * 两条分属 `sidebar.panellist` / `main` 两个槽位，只能各注册一次、**成不了原子事务**：
- * 谁先谁后都一样（两个 `inject` 的回调各跑各的）。所以这里不假装能防住半个座位——
- * 漏一半的代价是**宿主那句响亮的抛错**，不是静默降级。
+ * **探测 → 注册**：探测不过（打不通 / 非信封 / 401·403 / 失败信封）⇒ **早返回**，一个槽位贡献都不注册——
+ * 半吊子 UI 比没有 UI 更糟（docs/architecture.md §3）。探测过才注册；支持面是 web UI 与桌面端（ADR-0033）。
+ * 面板行与 `main` 是**一对座位**、成不了原子事务：漏一半的代价是宿主那句响亮的抛错，不是静默降级。
  */
 async function activate(client: ClientContextLike): Promise<void> {
-  // 浏览器半的跨槽位现场收在一份场景里：注册面造一份、装成默认场景（旧自由函数与它同一份账）、
-  // 再由每个贡献的 Provider 带给组件（宿主槽位之间没有共同父级，共享靠实例本身）。
-  // 已有默认场景时沿用（测试常在 apply 前先摆现场；HMR 二次激活也不换新账）。
-  const scene = installClientScene(createClientScene())
+  // 跨槽位现场收在一份场景里：注册面装入进程（已装入则沿用：HMR 不丢现场；未装才现造），再由各贡献的
+  // Provider 带给组件（宿主槽位之间没有共同父级，共享靠实例本身）。
+  const scene = installClientScene()
   bindMainView(client)
-  // 探测是一次往返（有 5s 上限，但这道守卫不拿它当卸载信号）；期间宿主可能已经卸载本条目
-  // （HMR / 条目销毁）。卸载标记必须抢在探测之前登记，回来先看它——续拍再注册就是把贡献
-  // 写进一个已销毁的注册表。
+  // 探测是一次往返（有 5s 上限，但这道守卫不拿它当卸载信号）；期间宿主可能已经卸载本条目（HMR / 销毁）。
+  // 卸载标记必须抢在探测之前登记，回来先看它——续拍再注册就是把贡献写进一个已销毁的注册表。
   let disposed = false
   if (typeof client.effect === 'function') {
     client.effect(() => () => {
@@ -237,33 +197,24 @@ async function activate(client: ClientContextLike): Promise<void> {
 
   // 菜单两行有双轨协商（数据动作 / legacy + 迟到切换），归 context-menu-actions。
   installSessionMenus(client, t)
-  // 归档旁路观察：宿主归档集的可选服务（`workspaces`，窄镜像、缺席安静降级）——
-  // 归档档实时反映宿主侧归档/解除归档（不轮询；失效只戳 archive-store，重读归查询）。
+  // 归档旁路观察：可选服务 `workspaces`（窄镜像、缺席安静降级）——归档档实时反映宿主侧变化，不轮询。
   // `effect` 与 activation 守卫同一判据：老宿主没有这一格时不许把注册后面的一整串打掉。
   if (typeof client.effect === 'function') {
     client.effect(() => installArchiveHostWatch(client), 'session-delete: archive host watch')
   }
-  // 其余贡献是一张表、一个注册循环（槽位 / id / order / 注入面 / 组件各一格）。
   registerContributions(client, deps, t, scene)
 }
 
-/**
- * 入口：**同步返回、绝不抛**（见文件头注）。
- *
- * 注册挂在探测的续拍上，两条理由：① 前端启动自检只看 entry 声明的 `inject` 服务齐不齐（`slots`
- * 一定在），不看它注册了几行；② 槽位注册是注册表的一次 mutation，渲染层按微任务批量订阅
- * （`SlotCore` 的变更传播契约），晚一拍注册照常上屏——宿主侧栏对 `sidebar.panellist` 正是
- * `ctx.slots.subscribe("sidebar.panellist", syncPanels)`（asar @44795361）。
- */
+/** 入口：**同步返回、绝不抛**。注册挂在探测的续拍上：前端启动自检只看 entry 声明的 `inject` 服务齐不齐，
+ *  且槽位注册是注册表的一次 mutation、渲染层按微任务批量订阅，晚一拍注册照常上屏。 */
 export function apply(ctx: unknown): void {
   const client = ctx as ClientContextLike
-  // 指针模态的两个 window 监听器归 effect：条目卸载 / HMR 换代时摘掉，不留无人认领的闭包。
-  // 注册失败不改变入口；Tooltip 的模态判断退化为「非指针」，只是少一层时序优化。
+  // 指针模态的两个 window 监听器归 effect：条目卸载 / HMR 换代时摘掉；注册失败不改变入口（只是少一层时序优化）。
   if (typeof client.effect === 'function') {
     try {
       client.effect(() => installPointerModality(), 'session-delete: pointer modality')
     } catch {
-      // 见上：监听器是优化，不是入口的前置条件。
+      // 监听器是优化，不是入口的前置条件。
     }
   }
   void activate(client).catch((error: unknown) => {

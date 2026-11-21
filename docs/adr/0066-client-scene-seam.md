@@ -1,6 +1,6 @@
 # 浏览器半的跨槽位现场收成可实例化的场景，默认实例只为兼容兜底
 
-Status: accepted
+Status: superseded by 0067
 
 浏览器半有九份跨槽位现场（回收站 / 归档修订台、首帧快照与详情账本、撤销通知台、主视图收尾、宿主行登记、批量选中集、两个确认框的请求现场），interface 长得像纯函数、实现是模块级可变单例：调用方必须知道次序（`noteSelection` 没有快照时静默、`reloadSucceeded` 按上一份清单修剪），测试只能靠一枚全局复位口（19 个文件 / 50 次）。决定把它们聚成**可实例化的场景**：注册面创建一份、各贡献经 Provider 读同一实例，测试可以各造一份；自由函数导出保留为默认实例的薄委托，旧测试的调用面不变（`write-seats.test` 只把四枚替身桩换成 `importOriginal` 展开）。
 
@@ -43,4 +43,4 @@ Status: accepted
 - **引入全局事件总线或依赖注入容器**：九份现场是编译期已知的一组，不是插件生态；静态聚合 + 一个 Provider 已够。
 - **把默认实例也删掉、所有调用点强制传 scene**：21 个旧测试与事件处理器要全改，收益只是去掉兼容层，不解决任何行为问题。
 
-锚点：`src/client/scene.ts`（`ClientScene` / `createClientScene` / `ClientSceneProvider` / `useClientScene` / `installClientScene` / `resetDefaultClientScene`）；九个现场模块的工厂与兼容自由函数（`src/client/trash-store.ts` 的 `createTrashRevisionScene`、`src/client/archive-store.ts` 的 `createArchiveRevisionScene`、`src/client/trash-snapshot.ts` 的 `createTrashSnapshotScene`、`src/client/undo-notices.ts` 的 `createUndoNoticeScene`、`src/client/main-view.ts` 的 `createMainViewScene`、`src/client/host-rows.ts` 的 `createHostRowsScene`、`src/client/batch-selection-store.ts` 的 `createBatchSelectionScene`、`src/client/delete-confirm.tsx` 的 `createDeleteRequestScene`、`src/client/batch-confirm.tsx` 的 `createBatchConfirmScene`）；`src/client/reset-client-state.ts` 的 `resetClientState`；`src/client/index.tsx`（注册面安装场景与 Provider）；`tests/client/scene.test.ts`；`docs/architecture.md` §3 / §4.3；`CONTEXT.md` 的「场景」；ADR-0018、ADR-0048、ADR-0056（语义不动）。
+锚点：`src/client/scene.ts`（`ClientScene` / `createClientScene` / `ClientSceneProvider` / `useClientScene` / `installClientScene`）；九个现场模块的工厂与兼容自由函数（`src/client/trash-store.ts` 的 `createTrashRevisionScene`、`src/client/archive-store.ts` 的 `createArchiveRevisionScene`、`src/client/trash-snapshot.ts` 的 `createTrashSnapshotScene`、`src/client/undo-notices.ts` 的 `createUndoNoticeScene`、`src/client/main-view.ts` 的 `createMainViewScene`、`src/client/host-rows.ts` 的 `createHostRowsScene`、`src/client/batch-selection-store.ts` 的 `createBatchSelectionScene`、`src/client/delete-confirm.tsx` 的 `createDeleteRequestScene`、`src/client/batch-confirm.tsx` 的 `createBatchConfirmScene`）；`src/client/index.tsx`（注册面安装场景与 Provider）；`tests/client/scene.test.ts`；`docs/architecture.md` §3 / §4.3；`CONTEXT.md` 的「场景」；ADR-0018、ADR-0048、ADR-0056（语义不动）。

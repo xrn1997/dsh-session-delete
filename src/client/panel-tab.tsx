@@ -1,16 +1,7 @@
 /**
- * 一档的**四格版面**：工具行 / 清单 / 详情 / 页脚。两档共用这一份容器与分栏/下钻分支，视图件只交
- * 四个槽位（工具行内容、清单内容、详情槽、页脚内容）与三格布局事实（`split` / `detailMounted` /
- * 清单列宽）。之前这几行在 `trash-panel.tsx` 里按档各写一遍，容器与样式只差一个 data 属性。
- *
- * 版面的判据（为什么这么摆）仍住 `docs/ui-spec.md` §3：
- * - 工具行住在 body **之外**（长清单滚到底也不滚走），仍是面板根的直接子级；
- * - 两栏成立时清单是可拖的定宽、详情吃余下；否则详情铺满（下钻）或清单铺满单列；
- * - 单列时清单 `flex:'1 1 auto'` 铺满，不按内容宽缩在左；不再限宽 760 居中；
- * - 详情栏外壳（滚动容器 + 提问轨）由 `detail-pane.tsx` 的 `DetailPane` 画，槽位只交
- *   `{ kind, scrollRef, rail, children }`——两档不再各自拼一遍。
- *
- * 本组件返回 **fragment**（不新增 DOM 容器）：面板根的子级顺序与直接子级关系保持不变。
+ * 一档的**四格版面**：工具行 / 清单 / 详情 / 页脚。两档共用容器与分栏/下钻分支，视图件只交四个槽位与
+ * 三格布局事实。版面判据住 `docs/ui-spec.md` §3：工具行住在 body **之外**（长清单滚到底也不滚走）；
+ * 两栏成立时清单可拖定宽、详情吃余下，否则铺满。返回 **fragment**（不新增 DOM 容器）。
  */
 import type { CSSProperties, ReactNode, RefObject } from 'react'
 import type { Translate } from './copy.js'
@@ -29,10 +20,8 @@ const BODY: CSSProperties = {
 }
 
 /**
- * 清单那一栏的**布局**（宽与 `flex` 不在这里——由本组件按 `split` 现给：两栏时是可拖的定宽，
- * 单列时 `flex:'1 1 auto'` 铺满）。两栏不成立时（窄档，或宽档但清单为空/读不到）同一个配方
- * 直接铺满：**不再限宽 760 居中**，那条关心得只适用于正文（见 `detail-pane.tsx` 的 `DETAIL_TEXT_MAX_WIDTH`）。
- * 滚动配方（overflow / 内边距 / 滚动条档位）住 `detail-pane.tsx` 的 `SCROLL_COLUMN`，`ListPane` 自己合上。
+ * 清单那一栏的**布局**（宽与 `flex` 由本组件按 `split` 现给）。两栏不成立时同一个配方直接铺满：
+ * **不再限宽 760 居中**（那条只适用于正文，见 `DETAIL_TEXT_MAX_WIDTH`）；滚动配方住 `SCROLL_COLUMN`。
  */
 const LIST_COLUMN: CSSProperties = {
   display: 'flex',
@@ -44,8 +33,8 @@ const LIST_COLUMN: CSSProperties = {
 }
 
 /**
- * 视图开关（全部折叠 / 全部展开、多选）的容器。住在面板体顶端，不进滚动容器，长清单滚到底也不会滚走。
- * 宽度上限由 `split` 现给：两栏时跟清单列宽，单列时不设上限。
+ * 视图开关（全部折叠 / 全部展开、多选）的容器：住面板体顶端、不进滚动容器，长清单滚到底也不滚走；
+ * 宽度上限由 `split` 现给（两栏时跟清单列宽，单列时不设上限）。
  */
 const TOOLBAR: CSSProperties = {
   display: 'flex',
@@ -76,9 +65,7 @@ export interface PanelTabFrameProps {
   readonly split: boolean
   /** 窄档下详情栏在 DOM 里（宽档恒真，本组件按 `split` 先用）。 */
   readonly detailMounted: boolean
-  /** 清单列宽（`useColumnResize` 的 `listWidth`）。 */
   readonly listWidth: number
-  /** 两栏之间那根把手的 props（`useColumnResize` 的 `handleProps`）。 */
   readonly handleProps: ColumnResizeHandleProps
   /** 工具行的 DOM 身份（回收站档带 `trash-toolbar`，归档档的标识挂在它自己的工具行里）。 */
   readonly toolbarAttr?: string
@@ -89,10 +76,7 @@ export interface PanelTabFrameProps {
   readonly t: Translate
 }
 
-/**
- * 四格版面本体。`split` 时清单定宽 + 把手 + 详情；否则 `detailMounted` 时详情铺满，其余清单铺满。
- * 页脚内容原样摆（两档各自的页脚件自己决定出不出现）。
- */
+/** 四格版面本体。`split` 时清单定宽 + 把手 + 详情；否则 `detailMounted` 时详情铺满，其余清单铺满。 */
 export function PanelTabFrame({
   split,
   detailMounted,

@@ -1,15 +1,7 @@
 /**
- * 详情右缘的提问轨：一句用户提问一格，常驻、零开合——点一格跳到那句，悬停 / 键盘聚焦出预览卡。
- *
- * 为什么不是列表或弹层：正文旁的导航件一旦要开合，读者就多出「打开、找、关」两步；宿主的轮次轨
- * 已经证明「贴边常驻 + 悬停预览 + 点一下」是长会话里操作最少的那一种（ADR-0057）。轨只画：
- * 当前哪句、补页与落位归 `use-prompt-rail`。
- *
- * 几何：`position: absolute` 贴在详情正文栏的右槽里（判据住 `layout.css` 的 `.sd-prompt-rail`），
- * 不占正文布局；预览卡在轨左侧、跟那一格竖直居中，`pointer-events: none` 不挡点击。
- * **右缘从哪算由调用方给**（`right`）：那是正文列宽的函数，面板手上有那一格；样式表里写死一个
- * 列宽就是第二份 860，迟早与 `DETAIL_TEXT_MAX_WIDTH` 漂开。轨宽只有 `RAIL_WIDTH` 一个来源（这里），
- * 行内交给 nav；面板的右槽 `RAIL_GUTTER` 从它派生，样式表不写第二份。
+ * 详情右缘的提问轨：一句用户提问一格，常驻、零开合——点一格跳到那句，悬停 / 键盘聚焦出预览卡（ADR-0057）。
+ * 当前哪句、补页与落位归 `use-prompt-rail`；几何：绝对定位在详情正文栏的右槽、不占正文布局，右缘由
+ * 调用方给（正文列宽的函数），轨宽只有 `RAIL_WIDTH` 一个来源，面板的右槽从它派生。
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { absoluteText, type Translate } from './copy.js'
@@ -28,8 +20,7 @@ export interface PromptRailProps {
   /** 跳转收手时的说明（目前只有「太远」一种）。 */
   readonly notice: PromptRailNotice | null
   readonly onJump: (id: string) => void
-  /** 右缘的定位表达式（`max(14px, calc(100% - <正文列宽>px))`）：由面板从 `DETAIL_TEXT_MAX_WIDTH`
-   *  算好交进来，样式表不重抄列宽。 */
+  /** 右缘的定位表达式（正文列宽的函数）：由面板算好交进来，样式表不重抄列宽。 */
   readonly right: string
   /** 详情保持期：轨跟着上一条的帧一起顶住，但整条不可交互（不把人补到别人的游标上）。 */
   readonly disabled?: boolean
@@ -66,7 +57,7 @@ export function PromptRail({ prompts, loadedIds, activeId, busyId, notice, onJum
     }
   }, [activeId])
 
-  /** 预览卡的位置取那一格的屏幕中线（相对轨的顶）：轨内自己滚动时也不会歪。 */
+  /** 预览卡的位置取那一格的屏幕中线（相对轨顶）：轨内自己滚动时也不歪。 */
   const showPeek = useCallback((id: string, element: HTMLElement | null): void => {
     if (disabled) {
       setPeek(null)

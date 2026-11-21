@@ -1,19 +1,7 @@
 /**
  * 回收站中央面板（main 槽占用者）：页面骨架、两档平级分段、布局几何，以及两档的互斥。
- *
- * 一档的**装配线**住 `use-panel-tab.ts`（清单读数 → 分组 → 选择面 → 控制器 → 键盘 → 预取 → 详情帧），
- * **四格版面**住 `panel-tab.tsx`；两档各自的视图件与 adapter 住 `trash-tab.tsx` / `archive-pane.tsx`。
- * 本文件只剩「面板自己的事」：
- * - 页面骨架（`PANEL_PAGE`）、宽窄断点与列宽拖拽（`SPLIT_MIN_WIDTH` / `LIST_COLUMN_*` / `DETAIL_RESERVE`）；
- * - 两档分段与 header 副标题（条数、共可释放量、归档惰性计数 M）；
- * - 两档互斥：切档清勾选、各档导航只收自己那一下 Esc（`drillEnabled`/`drilled` 由档内 adapter 给）；
- * - 上一趟写动作的附件回执（`Notice`）与回收站确认框宿主。
- *
- * 两个 `usePanelTab` **无条件调用**：查询/选择面/控制器/详情读路常驻挂载，同一次挂载内切档保留已读缓存
- * （ADR-0060 决定第 4 条；两档状态仍各一份，只有视图按 `tab` 渲染）。
- *
- * 样式：结构与布局用内联样式；配色与圆角走宿主 token；控件与清单行样式在 `src/client/ui/`。
- * 改断点或列宽前先看 SPLIT_MIN_WIDTH、LIST_COLUMN_DEFAULT / LIST_COLUMN_MIN、DETAIL_RESERVE 与 usePanelWidth。
+ * 一档的装配线住 `use-panel-tab.ts`，四格版面住 `panel-tab.tsx`，视图件与 adapter 住 `trash-tab.tsx`
+ * / `archive-pane.tsx`。两个 `usePanelTab` 无条件调用：两档常驻挂载、同一次挂载内切档保留已读缓存。
  */
 import { useId, useRef, useState, type CSSProperties } from 'react'
 import { useBusyGate } from './busy-gate.js'
@@ -28,13 +16,8 @@ import type { PanelTabDeps } from './use-panel-tab.js'
 import { ELLIPSIS } from './ui/recipe.js'
 import { fileSizeText } from './ui/format.js'
 
-/**
- * 页面骨架：撑满中央列（`height:100%` 落在 `.centerCol` 这个有定高的网格项上），自收滚动。
- *
- * `boxSizing:'border-box'` **不是装饰**：宿主文档没有全局 border-box reset（220 处 `box-sizing`
- * 声明全是组件自己带的），默认是 content-box ⇒ `height:100%` 再加 20px 上边距会溢出 20px，
- * 把页脚整块推到中央列底边之外（真机浅色截图上页脚贴着窗口下缘就是这个）。
- */
+/** 页面骨架：撑满中央列，自收滚动。`boxSizing:'border-box'` 不是装饰：宿主没有全局 border-box reset，
+ *  默认 content-box ⇒ `height:100%` 再加 20px 上边距会溢出，把页脚推到中央列底边之外。 */
 const PANEL_PAGE: CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -44,9 +27,8 @@ const PANEL_PAGE: CSSProperties = {
   padding: '20px 24px 12px',
 }
 
-/** 面板的依赖面：两个读（`list` / `detail`）+ **一段 `apply`** + 清空 + 归档两读。
- *  **没有第二条路**：「恢复一条」也走 `apply`（N=1）。无主子会话的检查/清理不在这里——
- *  它是插件设置页维护卡的手动动作（`use-maintenance.ts`），面板一次都不自动扫（ADR-0021）。 */
+/** 面板的依赖面：两个读 + 一段 `apply` + 清空 + 归档两读；**没有第二条路**（N=1 也走 `apply`）。
+ *  无主子会话检查是维护卡的手动动作（ADR-0021），面板不自动扫。 */
 export type TrashPanelDeps = PanelTabDeps
 
 export interface TrashPanelProps {
@@ -55,20 +37,14 @@ export interface TrashPanelProps {
   t?: Translate
 }
 
-/**
- * 断点：面板盒子宽 ≥ 此值走两栏，窄于此走下钻（docs/ui-spec.md）。
- * 两栏要成立，详情列至少 399，加两道 gap 32、把手 10、页内边距 48 ⇒ 地板 489；
- * 900 这一档清单为 411，刚好守住两边可读下限。改数字前先同步 DETAIL_RESERVE 与 usePanelWidth。
- */
+/** 断点：盒子宽 ≥ 此值走两栏，窄于此走下钻。两栏要成立，详情列至少 399 + 两道 gap 32 + 把手 10 +
+ *  页内边距 48 = 489；900 这一档清单为 411，刚好守住两边可读下限。改数字前同步 DETAIL_RESERVE 与 usePanelWidth。 */
 const SPLIT_MIN_WIDTH = 900
-/** 左栏默认宽：为“行内有动作”设计——两颗 28px 图标按钮加间距与行内边距约 80px，
- *  剩下约 340px 给标题与元信息。可拖范围见 LIST_COLUMN_MIN / DETAIL_RESERVE。 */
+/** 左栏默认宽：为「行内有动作」设计——两颗 28px 图标按钮加间距与行内边距约 80px，剩下给标题与元信息。 */
 const LIST_COLUMN_DEFAULT = 420
-/** 左栏下限 330：再窄时「删除于 … · 224KB」那行就会开始被省略号截断。
- *  按钮 flex:none，不参与这个下限。 */
+/** 左栏下限 330：再窄「删除于 … · 224KB」那行就会被省略号截断；按钮 flex:none，不参与这个下限。 */
 const LIST_COLUMN_MIN = 330
-/** 拖到最右时给详情留的地板：正文最小宽 399 + 两道 gap 32 + 把手 10 + 页内边距 48 = 489。
- *  900 − 489 = 411，断点下沿清单抢不动宽度。 */
+/** 拖到最右时给详情留的地板：正文 399 + 两道 gap 32 + 把手 10 + 页内边距 48 = 489。 */
 const DETAIL_RESERVE = 489
 /** 分隔线键盘一格的像素数（←→）。 */
 const HANDLE_STEP = 20
@@ -76,8 +52,7 @@ const HANDLE_STEP = 20
 export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
   /** 面板唯一的一枚全局闸（写动作在飞时按住一排按钮）：本体住 `busy-gate.ts`，查询侧的写动作也吃它。 */
   const gate = useBusyGate()
-  /** 分段按钮的计数说明 id：可见计数已画在按钮里，`aria-describedby` 把它带进可及描述，
-   *  按钮的可及名仍保持纯档名（不把 N/M 拼进 name，读屏念「归档」而不是「归档 2 按钮」）。 */
+  /** 分段按钮的计数说明 id：可见计数已画在按钮里，`aria-describedby` 带进可及描述，可及名仍保持纯档名。 */
   const tabCountId = useId()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const width = usePanelWidth(rootRef)
@@ -92,8 +67,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
     label: t('list.divider.label'),
   })
 
-  // ── 两档（平级分段）：查询/选择面/控制器/详情读路**常驻挂载**（同一次挂载内切档保留已读缓存，
-  //    卸载即丢）；`active` 门控读取（不活动只置脏不读，不为可能不打开的档付一次全语料读）。
+  // 两档查询/选择面/控制器/详情读路常驻挂载（切档保留已读缓存）；`active` 门控读取，不活动只置脏。
   const [tab, setTab] = useState<'trash' | 'archive'>('trash')
   const trashTab = useTrashTab({
     deps,

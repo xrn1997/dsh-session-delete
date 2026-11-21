@@ -1,16 +1,7 @@
 /**
- * 清单上的**选择面**（通用；回收站档与归档档各一台实例，互不干扰）：多选态、折叠起来的组、
- * 勾选集合，以及由它们派生的只读（`checkedRows` / `checkedIds` / `ordered` / 两种三态判定）。
- *
- * 两条承重规矩：
- * - **勾选顺序 = 清单从上往下**（组间按各组最新一条、组内按时间键），不是点击顺序：页脚两颗按
- *   **屏幕上的顺序**执行，否则"我先后点了哪几条"会改变一批动作的执行次序读感。折叠组里的行
- *   照样算在内——折叠只是不收它们进 DOM。
- * - **清单换了就把已经不存在的勾选剔掉**：别处（侧栏菜单、撤销提示）动过清单时，留着一条
- *   "看不见的勾选"会让页脚那颗带着它去删一条已经不在的东西。
- *
- * 行身份由 `idOf` 取（回收站 = 条目 id，归档 = 会话 id）；组装这件事不在这里：`groups` 由面板
- * （或它的取数一侧）算好再传进来，这个 module 只回答"哪些被勾了、屏幕上从上往下是哪些行"。
+ * 清单上的**选择面**（通用；两档各一台实例）：多选态、折叠组、勾选集合与派生只读。
+ * 两条承重规矩：**勾选顺序 = 清单从上往下**（不是点击顺序，折叠组里的行也算）；**清单换了就把已不
+ * 存在的勾选剔掉**（清单未知 ≠ 没了）。行身份由 `idOf` 取，`groups` 由面板算好传进来。
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLatest } from './store.js'
@@ -27,9 +18,8 @@ export interface ListSelection<R> {
   /** 键盘 ↑↓ 与下钻走这个顺序：**只含展开的组**（折叠的行不在 DOM 里，方向键别停过去）。 */
   readonly ordered: readonly R[]
   readonly allCollapsed: boolean
-  /** 方法一律写成**属性声明**：面板会把它们摘下来传给导航/行组件，实现体也都不读 `this`。
-   *  方法简写带来的隐式 `this: ListSelection<R>` 会让 `unbound-method` 误报，且会诱导调用点
-   *  为了消警报去包箭头函数——那会让 `ListSelection` 每次渲染换新身份（见 ADR 外的回归教训）。 */
+  /** 方法一律写成**属性声明**：面板会把它们摘下来传给导航/行组件，实现体也都不读 `this`——方法简写会被
+   *  `unbound-method` 误报。 */
   isCollapsed: (projectDir: string) => boolean
   enterSelect: () => void
   exitSelect: () => void
@@ -57,15 +47,13 @@ export function useListSelection<R>({
   const idOfLatest = useLatest(idOf)
   const keyOf = useCallback((row: R): string => idOfLatest.current(row), [idOfLatest])
   /**
-   * 折叠起来的组（键 = `projectDir`，也就是组头那一份身份）。**只活在面板这次打开**：
-   * 这是一层视图偏好，为它开一条 Node 半的读写通道不值，而宿主 webview 的 origin 是不透明的
-   * `null`（AGENTS.md 实测），`localStorage` 那条路在真机上大概率直接抛。
+   * 折叠起来的组（键 = `projectDir`）；只活在面板这次打开——视图偏好，而宿主 webview 的 origin 是
+   * 不透明的 `null`，`localStorage` 那条路在真机上大概率直接抛。
    */
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set())
 
-  // 清单换了 ⇒ 勾着的那条可能已经不存在了（别处删了 / 恢复了 / 彻底删了）：剔掉它。
-  // 清单未知（null）不算“没了”：这一拍只是不知道，勾选留着；读数回来 effect 会再跑一次，
-  // 把真不在的行剔掉。与控制器“未知不算清场”同一条判据。
+  // 清单换了 ⇒ 勾着的那条可能已不存在（别处删了 / 恢复了）：剔掉它。清单未知（null）不算“没了”：
+  // 这一拍只是不知道，勾选留着；读数回来 effect 会再跑一次，把真不在的行剔掉。
   useEffect(() => {
     if (rows === null) return
     setChecked((current) => {

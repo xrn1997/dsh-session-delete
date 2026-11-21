@@ -1,21 +1,14 @@
 // 控件面：行首常驻勾选 + 行尾兜底（2026-10-17；2026-10-20 选中集与模式语义拆去
 // `batch-selection-store.test.ts`，这里只钉"控件渲染与翻转"这一半）。
-// 两个现场都是模块级（跨用例存活）：每个用例前清一次。
+// 两个现场都在场景里：setup 每例换新，用例间不串味。
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { BatchPickButton, BatchPickCheckbox, fetchCounts } from '../../src/client/batch-select.js'
 import { readVisibleSelectableRows } from '../../src/client/host-rows.js'
 import { enterSelection, getPicks, togglePick } from '../../src/client/batch-selection-store.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
-afterEach(() => {
-  resetClientState()
-})
 
 describe('多选态的渲染门', () => {
   it('不在模式内时两颗勾选开关都不渲染（入口只在「⋯ → 多选」）', () => {

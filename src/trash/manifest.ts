@@ -1,7 +1,7 @@
 import type { TrashEntry } from './entry.js'
 
-/** 回收站清单的 **raw 索引端口**：只给 `src/trash/ledger.ts` 与对账实现；动词与路由只认 ledger，
- *  不认 storage domain 的形状。`list()` 不保证与 `session-trash/` 目录一致（对账在 ledger 的 `list()`）。 */
+/** 回收站清单的 **raw 索引端口**：只给 `src/trash/ledger.ts` 与对账实现；动词与路由只认 ledger，不认 storage domain 的形状
+ *  （`list()` 不保证与 `session-trash/` 目录一致；对账在 ledger 的 `list()`）。 */
 export interface ManifestPort {
   /** 属性声明：`list` 会被摘下来转交给对账（`manifest: { list: manifest.list, … }`），实现不读 `this`。 */
   list: () => Promise<TrashEntry[]>
@@ -9,10 +9,8 @@ export interface ManifestPort {
   remove: (id: string) => Promise<void>
 }
 
-/** 宿主 storage domain 的最小面。这是**接缝**，不是对宿主 API 的断言：
- *  探针只枚举到 `ctx.storageDomain` 有 `open` / `get` / `domains` / `reserved` 等成员，
- *  **没有**枚举 `open()` 返回的 domain 句柄面 ⇒ 真实绑定由 `src/trash/storage-manifest.ts` 的
- *  `createHostStorageManifest` 写一层薄适配
+/** 宿主 storage domain 的最小面。这是**接缝**，不是对宿主 API 的断言：探针只枚举到 `ctx.storageDomain` 有 `open` / `get` / `domains` / `reserved`
+ *  等成员，**没有**枚举 `open()` 返回的 domain 句柄面 ⇒ 真实绑定由 `src/trash/storage-manifest.ts` 的 `createHostStorageManifest` 写一层薄适配
  *  （官方读面若只有迭代器/快照，就把迭代器折成 `readAll()`，不在动词层引入第二种读法）。 */
 export interface StorageDomainLike {
   readAll(): Promise<TrashEntry[]>

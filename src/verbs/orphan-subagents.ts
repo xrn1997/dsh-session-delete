@@ -29,16 +29,12 @@ interface RawGroup {
 
 /**
  * 无主子会话 = `origin:"subagent"`、父**既不在当前语料（live ∪ persisted）也不在回收站清册里**的会话。
+ * 清册里的父不算孤儿（那是 **stranded**：孩子本该跟父一起恢复或一起永久删除，组语义见 `src/trash/groups.ts`）——
+ * 把它的根当孤儿删掉就是替用户做了没人点过的决定；父被彻底删掉才是孤儿唯一的来路。
  *
- * 为什么清册里的父不算孤儿：那种是 **stranded**——父还在回收站里等着，孩子本该跟着父一起恢复或一起
- * 彻底删除（组语义见 `src/trash/groups.ts`），把它的根当孤儿删掉就是**替用户做了一个没人点过的决定**。孤儿只
- * 有一种来路：父被彻底删掉了（或被手工从盘上清掉了），清册里再也没有这一行。
- *
- * 根按**传递闭包**收全部 subagent 后代（与 `HostCorpusPort.subagentMembersOf` 同一实现：闭包核心住
- * `src/domain/closure.ts` 的 `orphanRootsOf`，孩子与孙代都算，深度不设上限；普通 fork 不是成员、
- * 也不穿过它收后代），同一条记录只归一组
- * （`claimed`）——数据里真出现环时结果是"少数一条"，不是把一个会话删两遍。
- * 归堆与去重**两边都去 `session-` 前缀**：同一个父在两代宿主里写法不同（见 `bareSessionId` 的来历）。
+ * 根按**传递闭包**收全部 subagent 后代（核心住 `orphanRootsOf`：孩子与孙代都算，普通 fork 不算也不穿过），
+ * 同一条记录只归一组（`claimed`）——数据里真出现环时结果是"少数一条"，不是把一个会话删两遍。
+ * 归堆与去重**两边都去 `session-` 前缀**：同一个父在两代宿主里写法不同。
  */
 export function orphanGroupsOf(
   corpus: readonly SessionIdentity[],
@@ -49,17 +45,10 @@ export function orphanGroupsOf(
   return orphanRootsOf(corpus, known)
 }
 
-/** **本函数是纯扫描，不对账、不写清册行**（`/orphans` 声明为 pure，一次扫描不能顺手写行）。
- *  清册行由调用方选好再交进来：`/orphans` 交 `read.rows()`（raw 索引），`orphan-clean` 交
- *  `ledger.list()`（对账后的行）——否则刚被人手工搬进 `session-trash/` 的父目录还没有行，会被当成
- *  "父没了"直接删盘。扫描不再自己回落到 `ledger.raw()`：读面归属住路由记录（ADR-0004 / ADR-0012）。
- *
- *  `listSessions()` 回 `{ available: false }` 时**必须抛**：那是宿主的会话语料服务没挂，不是"这个家没有孤儿"。
- *  拿缺席当空语料 ⇒ 报告说"零条孤儿"、界面上一句"没有要清理的"，而盘上真有几百 MB——那是假话，
- *  所以这里按 `io` 响亮失败（AGENTS.md：`available: false` 意味着服务缺席，扫描方不许冒充读数）。
- *
- *  `roots` 只收请求点名的那几组、**在量字节之前过滤**：`/orphans` 不传（报告全部），
- *  `orphan-clean` 传这次的根——否则点一组会把整个家所有孤儿的树都递归量一遍。 */
+/** **纯扫描，不对账、不写清册行**（`/orphans` 声明为 pure）：清册行由调用方选好交进来（`/orphans` 交 raw 索引、
+ *  `orphan-clean` 交对账后的行），否则刚被手工搬进 `session-trash/` 的父目录还没行，会被当成"父没了"直接删盘。
+ *  `listSessions()` 回 `{ available: false }` 时**必须抛**：那是宿主的会话语料服务没挂，拿缺席当空语料会报"零条孤儿"的假话；
+ *  `roots` 只收请求点名的组、**在量字节之前过滤**，否则点一组会把整个家所有孤儿的树都递归量一遍。 */
 export async function loadOrphanGroups(
   deps: CoreDeps,
   /** 调用方选好并交来的清册行：`/orphans` 交 `read.rows()`，`orphan-clean` 交 `ledger.list()`。 */
@@ -89,8 +78,7 @@ export async function loadOrphanGroups(
       })
     }
     const root = members[0]
-    // 组定义写明 `members` 含根自己 ⇒ 必非空；真缺了是上游构造坏了，走本文件既有失败通道（宁炸不猜），
-    // 不拿第一成员硬当根（那会把一个错组静默写成正常读数）。
+    // 组定义写明 `members` 含根自己 ⇒ 必非空；缺了是上游构造坏了，走失败通道（宁炸不猜），不拿第一成员硬当根。
     if (root === undefined) {
       throw verbError('io', `无主子会话组没有成员（父 ${group.parentSessionId}）`)
     }
@@ -99,8 +87,7 @@ export async function loadOrphanGroups(
   return out
 }
 
-/** 把一组组收成那份报告：根清单 + 闭包总数/总字节 + 失踪父的**去重计数** + 按项目目录的分摊。
- *  `groups` 按字节从多到少排（界面上"哪家还剩得最多"要看第一行）。 */
+/** 收成报告：根清单 + 闭包总数/总字节 + 失踪父的**去重计数** + 按项目目录分摊（按字节从多到少排）。 */
 export function reportOrphans(groups: readonly OrphanGroup[]): OrphanReportWire {
   const projects = new Map<string, { sessions: number; bytes: number }>()
   let totalSessions = 0
@@ -127,18 +114,12 @@ export function reportOrphans(groups: readonly OrphanGroup[]): OrphanReportWire 
 }
 
 /**
- * 清一组：`planOrphanRemoval`（只读计划，整组 live 准入在一切写之前）→ `executeRemoval`（只写）。
- * 量目录、摘归档集与账本、删目录与成员通告的顺序和失败形状都住 `verbs/permanent-removal.ts`；
- * 这里只把这一组接上去，别在这再长出一段手写步骤（purge 走的是同一条路）。
- *
- * 顺序与删除那一半是**对偶**的，但不是照抄：
- * - 删除那一半不再用归档藏会话（ADR-0008）：它摘账本、搬目录，最后才摘活体。这里目录是**删掉**
- *   不是搬走，藏不藏都不影响可见性 ⇒ 归档集反而**在写之前整批摘掉**：失败时目录还在，下一次还能重试，
- *   不会留下"会话没了但还在归档集里挂着"的幽灵 id。
- * - `unarchive` 对未归档的会话是官方幂等 no-op（`registry.unarchiveSession`），所以这里不需要那次
- *   `wasArchived` 读——这里没有"还原到删除前"的义务。
- * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 本来就是「未分组」，不是故障）。
- * - 独占图片的剩余引用源由附件域自己扫：活动会话 + 全部 session-trash + storages/cache。
+ * 清一组：`planOrphanRemoval`（只读计划，整组 live 准入在一切写之前）→ `executeRemoval`（只写）。量目录、摘归档集与账本、
+ * 删目录与成员通告的顺序和失败形状都住 `permanent-removal.ts`；这里只把这一组接上去。顺序与删除那一半**对偶**
+ * 但不照抄：
+ * - 删除那一半不碰归档（ADR-0008）；这里目录是**删掉**不是搬走 ⇒ 归档集**在写之前整批摘掉**：失败时目录还在可重试，
+ *   不留"会话没了却还在归档集里挂着"的幽灵 id（`unarchive` 对未归档会话本就是幂等 no-op，无需那次 `wasArchived` 读）。
+ * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 未分组，不是故障）；独占图片的剩余引用源由附件域自己扫。
  */
 export async function cleanOrphanGroup(
   deps: RemovalDeps,

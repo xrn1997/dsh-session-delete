@@ -1,30 +1,18 @@
 /**
- * 回收站清单的**对账**：以 `session-trash/` 里的条目目录为准，把清单修回一致（CONTEXT.md 的「对账」条）。
+ * 回收站清单的**对账**：以 `session-trash/` 里的条目目录为准，把清单修回一致（CONTEXT.md 的「对账」条）。手工动回收站**只需要动那一个目录**——
+ * 多出来的目录在这里被重建出行、目录没了的行在这里被摘掉；`~/.dsh/storages/` 那份清单从此是**内部索引**，不用手碰。
  *
- * 手工动回收站**只需要动那一个目录**——多出来的目录在这里被重建出行、目录没了的行在这里被摘掉；
- * `~/.dsh/storages/` 那份清单从此是**内部索引**，不用手碰。
- *
- * 五条口径（都不是口味）：
- * ① **每次真相读都对账**（`src/trash/ledger.ts` 的 `list()`；`GET /list` 的正文就是"对账 + 读"）：挂载、
- *    刷新、别处动过后的自动重读、客户端挂载后的首次列表读全走这条 ⇒ "改完目录不用再做任何事，下一次读就对了"。
- *    pure 读面（`/orphans`、`/detail`）走 `raw()`，不对账——对账会写行，必须排在到达序链上。
- *    代价 = 每次真相读多一次目录枚举（本机 124 条，毫秒级）；**零漂移零写入**（快路直接返回原清单）。
- * ② **回收站根不在 ⇒ 整套跳过、一个字节都不动**：那不是"回收站空了"，是"这块地不在原处"
- *    （人为搬走、盘没挂上）——照常对账会把全部行的元数据一次判没。
- * ③ **重建行只写"文件里真有的事实"**：`id` = 目录名、`sessionId`/`cwd` 读日志 header、
- *    `projectDir` 由 `cwd` 经宿主同名算法 `projectKey` 反推、`deletedAt` 从目录名的时间戳解、
- *    `sizeBytes` 现场量。**文件侧没有副本的三件**按缺省落：`workspaceId: ''`（恢复时跳过挂账本，
- *    落在「未分组」）、`wasArchived: false`（文件侧没有归档事实；旧条目恢复走迁移支）、`title: ''`（详情有日志标题兜底）
- *    ——这是重建的固有代价，不是可以"再读读看"的东西。
- * ④ **认不出 / 读不出的目录：不动、不列**（名字不像条目、目录里没有日志、header 读不出、尺寸量不出，
- *    各跳过各的）。header 走 {@link HEADER_READ_BYTES} 的**有界头读**：只为一行 header 不付整本日志的
- *    内存；窗口里切不出完整帧同样算认不出，不拿半截 header 冒充身份。它是"外人放进来的东西"，不是
- *    用户动作失败：跳过即静默，绝不为它删目录或抛掉整次读数。
+ * 五条口径（都不是口味）：① **每次真相读都对账**（`src/trash/ledger.ts` 的 `list()`）：挂载、刷新、别处动过后的自动重读全走这条；
+ * pure 读面对账会写行，必须排在到达序链上，所以走 `raw()`。代价 = 每次真相读多一次目录枚举；**零漂移零写入**。
+ * ② **回收站根不在 ⇒ 整套跳过、一个字节都不动**：那不是"回收站空了"，照常对账会把全部行的元数据一次判没。
+ * ③ **重建行只写"文件里真有的事实"**：`id` = 目录名、`sessionId`/`cwd` 读日志 header、`projectDir` 由 `cwd` 经 `projectKey` 反推、
+ * `deletedAt` 从目录名时间戳解、`sizeBytes` 现场量。**文件侧没有副本的三件**按缺省落：`workspaceId: ''`（恢复落「未分组」）、
+ * `wasArchived: false`、`title: ''`——这是重建的固有代价，不是可以"再读读看"的东西。
+ * ④ **认不出 / 读不出的目录：不动、不列**（各跳过各的）：header 走有界头读，窗口里切不出完整帧同样算认不出；**跳过即静默**，绝不为它删目录或抛掉整次读数。
  * ⑤ **幂等**：再跑一遍零写入；崩在任何一步，下一次读清单接着把它修完。
  *
- * 与三个写动词的**串行化不在这里**（那是传输层的事，见 `src/api/dispatch.ts` 的到达序链）：
- * 对账与删除/恢复/彻底删除都是"读清单 + 动文件 + 写清单"的多步，交错跑会互相踩——删除刚把目录搬进
- * 回收站、行还没写上时，对账抢先把这行按目录"重建"出来，随后又被真实行覆盖成降级元数据。
+ * 与三个写动词的**串行化不在这里**（传输层的事，见 `src/api/dispatch.ts` 的到达序链）：交错跑会互相踩——删除刚把目录搬进回收站、行还没写上时，
+ * 对账抢先把这行按目录"重建"出来，随后又被真实行覆盖成降级元数据。
  */
 import { isSinglePathSegment, parseEntryId, trashDirOf, type TrashEntry } from './entry.js'
 import type { ManifestPort } from './manifest.js'
@@ -34,12 +22,8 @@ import { pickSessionLog, readSessionHeader } from '../log/session-log.js'
 import { TRASH_DIR_NAME } from '../shared/wire.js'
 import { decodeSessionSegment } from '../shared/session-path.js'
 
-/** 对账只为读 header：**有界头读**的窗口（1 MiB）。
- *  日志的 header 是第一帧里的第一行（宿主建会话时先落它，实测远小于 1 KiB），1 MiB 留足余量；
- *  这个数不是"日志大小上限"，而是"不为一行 header 把整本日志读进内存"的读取预算。窗口若切在
- *  某一帧中间，头读**按前缀读的容忍口径**丢掉最后那个不完整帧（`readSessionHeader` 的
- *  `tolerateTruncatedTail`）——header 在第一个完整帧里，照样读得到；不在这个窗口里才是"认不出"，
- *  按下面 ④ 的口径整条跳过，不猜半截 header。 */
+/** 对账只为读 header：**有界头读**的窗口（1 MiB）。header 是第一帧里的第一行（实测远小于 1 KiB），这个数是"不为一行把整本日志读进内存"的读取预算，
+ *  不是"日志大小上限"。窗口切在帧中间时按前缀读的容忍口径丢掉最后那个不完整帧——header 在第一个完整帧里，照样读得到；不在窗口里才算"认不出"。 */
 const HEADER_READ_BYTES = 1024 * 1024
 
 export interface ReconcileDeps {
@@ -48,9 +32,8 @@ export interface ReconcileDeps {
   home: string
 }
 
-/** 目录名是不是一条条目 id（形状契约在 `entry.ts`：`<删除时刻UTC>-<会话目录段>`；
- *  段是宿主 `encodeSegment` 的产物（编码前的存量条目也可能还是原始目录名），无论哪种都必须能
- *  安全地拼回磁盘路径——带分隔符的名字仍按"外人"跳过，不让一次对账读崩）。 */
+/** 目录名是不是一条条目 id（形状契约在 `entry.ts`）：段是宿主 `encodeSegment` 的产物（存量条目也可能还是原始目录名），无论哪种都必须能安全拼回磁盘路径——
+ *  带分隔符的名字仍按"外人"跳过，不让一次对账读崩。 */
 function isEntryId(name: string): boolean {
   try {
     return isSinglePathSegment(parseEntryId(name).sessionDirName)
@@ -60,12 +43,8 @@ function isEntryId(name: string): boolean {
 }
 
 /**
- * 从一个手工放进回收站的目录重建清单行。**任一件事实拿不到就整体放弃这一条**（回 `undefined`）：
- * 半截行比"不列"更坏——恢复会照它把目录搬去一个错的地方（同 `detail.ts` 那条"半截正文"的口径）。
- *
- * `sessionId` 取日志 header 的 `id`（恢复之后宿主按日志 header 建索引，那才是会话身份）；
- * header 缺席这个字段才回落到目录段——反解回原始 id（编码前的存量条目段本身可能已是原始目录名，
- * 反解对不含 `~XXXX` 形态的串原样交回）。
+ * 从一个手工放进回收站的目录重建清单行。**任一件事实拿不到就整体放弃这一条**（回 `undefined`）：半截行比"不列"更坏——恢复会照它把目录搬去错的地方。
+ * `sessionId` 取日志 header 的 `id`（恢复之后宿主按日志 header 建索引，那才是会话身份）；header 缺席这个字段才回落到目录段——反解回原始 id。
  */
 async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry | undefined> {
   const dir = trashDirOf(id, deps.home)
@@ -102,9 +81,8 @@ async function buildEntry(deps: ReconcileDeps, id: string): Promise<TrashEntry |
   }
 
   const { deletedAt, sessionDirName } = parseEntryId(id)
-  // 判据与删除计划、会话列表投影**同一支**（`src/ports/host-port.ts` 的 `projectDirOfCwd`）：
-  // 只有 header 里没有 cwd 才落 `_no-cwd`，空串照常编码。删除时写进行里的 `projectDir`
-  // 就是按那一支算的，对账重建必须复现它；同一条会话在删除、恢复与孤儿扫描里不能指向两个目录。
+  // 判据与删除计划、会话列表投影**同一支**（`src/ports/host-port.ts` 的 `projectDirOfCwd`）：只有 header 里没有 cwd 才落 `_no-cwd`，
+  // 空串照常编码。同一条会话在删除、恢复与孤儿扫描里不能指向两个目录。
   const cwd = typeof header.cwd === 'string' ? header.cwd : undefined
   return {
     id,

@@ -1,23 +1,9 @@
 /**
  * 附件原始字节（`GET /attachment`，全仓唯一的二进制响应段）。
- *
- * 四条硬口径：
- * ① **寻址只认 sha256 id**：`id` 必须 `sha256:<64 位小写 hex>`，路径不来自请求里的任何一截
- *    （`name` 只做下载名；媒体元数据只给宿主 `attachments` 服务做引用校验）。
- * ② **kind 只认 image / file**：分别对应宿主附件库的 `objects`（图片）与 `file-objects`（普通文件）；
- *    不认 v2、tmp、cache，也不给"读任意文件"留入口。
- * ③ **单文件 ≤ `maxAttachmentBytes`（默认 20 MiB，可配，ADR-0037）**：所有路径共用同一道
- *    `assertWithinLimit`；服务路径先按引用字节拦一道、再按实际字节复核，流式读在累计处停下。
- * ④ **直接 fs 路径**按**魔数**给图片类型（PNG / JPEG / GIF / WebP），认不出就按下载处理
- *    （`application/octet-stream` + `attachment`），不猜、也不拿请求里的名字当类型来源；服务路径用
- *    宿主归一化后的 `mediaType`（ADR-0035）。
- *
- * **读取优先走宿主 `attachments` 服务**（ADR-0035）：`readImage` / `readFileStream` 会按记录里的
- * 引用校验字节；`attachments` 缺席或请求里没有足够的引用元数据时，才退回直接 fs（旧宿主）。
- * 两种"接不了这次读"（服务缺席 / 元数据不够）在调用方看来是同一个 `undefined`，不各写一条 fallback。
- * 直接 fs 的路径仍只由 `attachmentPathOf(home, kind, id)` 推导。
- *
- * 请求本身不对（id/kind 形状）⇒ 400；对象不在 / 超限 / 读失败 ⇒ 200 + 信封（与其余段同一条错误面）。
+ * 寻址只认 sha256 id；kind 只认 image / file，不给「读任意文件」留入口。
+ * 所有路径共用一道 `maxAttachmentBytes` 闸；直接 fs 路径按魔数给图片类型，认不出按下载处理。
+ * 读取优先走宿主 `attachments` 服务（ADR-0035），缺席或元数据不够才退回直接 fs（旧宿主）。
+ * 请求本身不对 ⇒ 400；对象不在 / 超限 / 读失败 ⇒ 200 + 信封。
  */
 import type { FsAttachmentPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
@@ -63,15 +49,11 @@ function sniffImage(bytes: Buffer): string | undefined {
   return undefined
 }
 
-/**
- * 下载名过闸：只当头部里的一个串用，**不参与寻址**。
- * 路径分隔符、控制字符、`..` 与不成对的代理项一律换 `_`；按码点截到 120 个字符（不劈开代理对，
- * 否则 `encodeURIComponent` 会在写头时抛）。
- */
+/** 下载名过闸：只当头部里的一个串用，不参与寻址；分隔符 / 控制字符 / `..` / 不成对代理项换 `_`，
+ *  按码点截 120（不劈代理对，否则 `encodeURIComponent` 会在写头时抛）。 */
 function safeFilename(name: string | null | undefined, fallback: string): string {
   const raw = name === null || name === undefined || name === '' ? fallback : name
-  // `Array.from(string)` 与 `[...string]` 同为按码点切分；换成它只是避开 no-misused-spread 的
-  // 语法误报，码点安全语义不变（注释下一行说明了截断不劈代理对）。
+  // `Array.from` 按码点切分，避开 no-misused-spread 的语法误报；截断不劈代理对。
   const base = Array.from(raw)
     .slice(0, 120)
     .join('')
@@ -99,8 +81,7 @@ function downloadResponse(body: Buffer, filename: string): BinaryResponse {
   return { body, contentType: 'application/octet-stream', disposition: 'attachment', filename }
 }
 
-/** 服务读取/校验失败按 io 上屏，不 fallback 直接 fs：宿主读 `files/.../<name>` 别名并做摘要/元数据
- *  校验，直接 fs 读 `file-objects/...` 对象；绕过会跳过宿主的校验（ADR-0035 边界）。 */
+/** 服务读取/校验失败按 io 上屏，不 fallback 直接 fs：绕过会跳过宿主的校验（ADR-0035 边界）。 */
 function attachmentsIoError(id: string, error: unknown): never {
   throw verbError('io', `读取附件失败：${id}（${String(error)}）`, error)
 }
@@ -136,8 +117,7 @@ function imageServiceRef(id: string, query: URLSearchParams): ImageAttachmentRef
 function fileServiceRef(id: string, query: URLSearchParams): FileAttachmentRefLike | undefined {
   const bytes = positiveInt(query.get(PARAMS.attachmentBytes))
   const name = query.get(PARAMS.attachmentName)
-  // 宿主 `readFileStream` 要求 `name` 是规范叶名；空/缺名不是"空名字"而是无效引用
-  // （宿主把 '' 归一成 'file'），这场读取会落成 io 而不是 fallback。按"元数据不够"退回直接 fs。
+  // 宿主要求 `name` 是规范叶名；空/缺名是无效引用，按「元数据不够」退回直接 fs。
   if (bytes === undefined || name === null || name === '') return undefined
   return { attachmentId: id, name, bytes }
 }

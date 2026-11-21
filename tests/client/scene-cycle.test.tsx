@@ -10,14 +10,10 @@
 import { TARGET_CARD } from '../../src/client/delete-confirm.js'
 import { BatchConfirmHost, requestDeleteBatch } from '../../src/client/batch-confirm.js'
 import { render } from '@testing-library/react'
-import { beforeEach, expect, it, vi } from 'vitest'
-import { resetClientState } from '../../src/client/reset-client-state.js'
+import { expect, it, vi } from 'vitest'
 import { createFakeRemote, remoteOk } from './support/fake-remote.js'
 import { countOutcomes } from './support/outcomes.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
 it('从 delete-confirm 入口进入模块环：批删目标卡仍带单删卡的完整配方', () => {
   const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(countOutcomes(ids)))

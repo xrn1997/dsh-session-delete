@@ -1,19 +1,8 @@
 /**
  * 两档清单读数共用的**读一趟**生命周期：latest-wins 票、挂载归属（`alive`）、`refreshing` 标记、
- * 失败落面与首帧初值。两档的取数形状（`/list` 的行 vs `/archive-list` 的四态信封）与缺席语义
- * （回收站没有 absent；归档有 `{available:false}`）各自由 adapter 折成 {@link PanelReadOutcome}，
- * 生命周期只住这一处。
- *
- * 为什么收：`use-trash-query.ts` 与 `use-archive-query.ts` 曾各写一遍「票 + alive + refreshing +
- * 失败上屏」；同一件事写两遍，一边补了卸载晚到守卫、另一边忘了是不可能的漂移。收口之后两档只
- * 留自己的数据语义（首帧快照 / corpus-missing / 附件回执 / 归档计数），共用读的落地。
- *
- * **排读节奏不在这里**：`use-gated-refresh.ts` 拥有「什么时候排读」（active/修订/合并/单飞）。
- * 本 hook 只暴露唯一动作 `reload()`，由调用方（或它自己的 gated-refresh 接线）驱动——归档档在
- * 自己的 query 里直接接线，回收站档由面板控制器接线，两档的既有语义都不搬。
- *
- * 合并窗两档不同、是**行为差异**不是实现细节：归档档同一拍的多次 `reload` 共享一个微任务
- * （它的失效来源多台）；回收站保持既有语义（每次调用各自发一趟，latest-wins 裁决落地）。
+ * 失败落面与首帧初值；两档取数形状各由 adapter 折成 {@link PanelReadOutcome}，生命周期只住这一处。
+ * **排读节奏不在这里**：`use-gated-refresh.ts` 拥有「什么时候排读」，本 hook 只暴露 `reload()`。
+ * 合并窗两档不同、是**行为差异**：归档档同一拍的多次 `reload` 共享一个微任务，回收站每次各自发一趟。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createLatestWins, useLatest } from './store.js'
@@ -49,11 +38,9 @@ export interface PanelListRead<R, M> {
   readonly state: PanelListState<R, M>
   /** 读数已有行、重读还在飞；只给 `aria-busy`，不是第五态。 */
   readonly refreshing: boolean
-  /** 唯一重读入口：挂载、显式重试、写后、失效通告都走这一条。
-   *  属性声明而非方法简写：它会被摘下来交给 `useGatedRefresh`，隐式 `this` 会触发 `unbound-method`。 */
+  /** 唯一重读入口：挂载、显式重试、写后、失效通告都走这一条；属性声明是因为会被摘下来交给 `useGatedRefresh`。 */
   readonly reload: () => Promise<void>
-  /** 聚合写失败等「读数之外」的失败落面：作废在飞读、跑 `onFailure`、把清单打成 failure。
-   *  回收站的清空失败走这一条（旧行与快照一起作废，措辞原文由调用方给）。 */
+  /** 聚合写失败等「读数之外」的失败落面：作废在飞读、跑 `onFailure`、把清单打成 failure。 */
   readonly fail: (message: string) => void
 }
 

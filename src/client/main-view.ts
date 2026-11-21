@@ -1,40 +1,25 @@
 /**
  * 宿主**主视图**的一处窄面：删掉当前打开的会话时把它关掉，撤销恢复后把它重开。
- *
- * 为什么需要：宿主客户端的常驻 `Session` 实例把 `removed` 记成**粘性**状态
- * （`dsh-api-session-controller/lib/client.js` 的 `handleRemoved()` 只置位；`handleSessionAdded()`
- * 只 merge 摘要，从不清它）。我们发 `api-session/removed` 之后，正在看的那个会话会一直停在
- * `removed=true`：输入框禁用、占位文案是「会话不可用」。恢复再发 `api-session/added` 也不会把它
- * 清掉——**除非把常驻实例本身丢掉**。宿主自己的归档走的就是这条路：`clearArchivedCurrent()`
- * 发现当前会话进了归档集就 `clearMain()`（`dsh-client-ui-workspace/lib/client.js`）。
- *
- * 所以关闭/重开是**一段生命周期**，不是一个 id：删除成功后 `afterDelete` 关掉当前
- * 主视图并记下"这一条是我们关掉的"；撤销成功后 `afterRestore` 只重开自己记过的那些。调用方不再
- * 各自判定该不该关、也不再把会话 id 塞进撤销提示传一圈——判据全在这一处。两次重开排队时只有最新
- * 那条会打开（等待本身住 `src/client/pending-open.ts` 的票与订阅），`reset` 清掉这份记忆
- * 并取消在等的重开。
- *
- * 形状：**可实例化的现场**（`createMainViewScene`）——`client`、`closedByUs`、在等重开都在实例里，
- * 由 `scene.ts` 的 `ClientScene` 聚合；自由函数委托默认场景（兼容旧调用点与测试）。
- *
- * **不 import 宿主客户端包**（AGENTS.md 红线）：只通过 `ctx.get('uiWorkspace')` 可选读服务，
- * 形状不符/服务缺席都安静退回，绝不影响插件激活。字段与方法名来自上面两个包的产物原文；
- * 宿主换代时先复核 `UiWorkspaceService` 的 `selection` / `sessions` / `clearMain` / `openSession`。
+ * 宿主常驻 `Session` 的 `removed` 是**粘性**的（`dsh-api-session-controller/lib/client.js` 的 `handleRemoved()`
+ * 只置位，`handleSessionAdded()` 只 merge 摘要、从不清它），除非把
+ * 常驻实例本身丢掉：所以关闭/重开是**一段生命周期**，不是一个 id——`afterDelete` 只记我们自己关过的，
+ * `afterRestore` 只重开记过的；两次重开排队时只有最新那条会打开（等待住 `pending-open.ts`）。
+ * 归档时 `clearMain()` 的判据在 `dsh-client-ui-workspace/lib/client.js`。
+ * 不 import 宿主客户端包（AGENTS.md 红线）：只通过 `ctx.get('uiWorkspace')` 可选读服务，形状不符/缺席安静退回。
  */
 import type { ClientContextLike } from './context.js'
 import { createPendingOpen } from './pending-open.js'
 import { getDefaultClientScene } from './scene.js'
 
 interface SnapshotStoreLike<T> {
-  /** 返回值允许空：宿主 `getSnapshot()` 在"还没装好"那一拍可能回 null / undefined；
-   *  镜像按真实形状声明，`?.` 才是必要的（「缺席不等于没有」）。 */
+  /** 返回值允许空：宿主 `getSnapshot()` 在"还没装好"那一拍可能回 null / undefined（「缺席不等于没有」）。 */
   getSnapshot(): T | null | undefined
   /** 快照变化通知；返回退订。旧 store 可能没有——那时 `openWhenListed` 放弃这次等待，不退回轮询。 */
   subscribe?(listener: () => void): () => void
 }
 
-/** `uiWorkspace` 服务里用到的字段（构造函数原文：`selection = createSnapshotStore({}, …)`、
- *  `this.sessions = sessions`；方法 `clearMain()` / `openSession(target)`）。 */
+/** `uiWorkspace` 服务里用到的字段与方法（构造函数原文：`selection = createSnapshotStore({}, …)`、
+ *  `this.sessions = sessions`；方法 `clearMain()` / `openSession(target)`）；服务缺席/形状不符都安静退回。 */
 interface UiWorkspaceLike {
   readonly selection?: SnapshotStoreLike<{ readonly sessionId?: string }>
   /** 客户端 Session Controller 服务；它的 `list` 是摘要快照（`byId` 里有这条就说明 added 已落地）。 */
@@ -44,8 +29,7 @@ interface UiWorkspaceLike {
 }
 
 /** 过了就绪判据之后的形状：方法不再可选，`afterRestore` 的 `openSession(...)` 与
- *  `afterDelete` 的 `clearMain()` 不必再用非空断言逼编译器相信判据。这是纯类型面收窄，
- *  判据本身仍在 `uiWorkspaceOf` 里（同一处，只有一份）。 */
+ *  `afterDelete` 的 `clearMain()` 不必再用非空断言逼编译器相信判据。判据本身仍只在 `uiWorkspaceOf`。 */
 type ReadyUiWorkspace = UiWorkspaceLike & Required<Pick<UiWorkspaceLike, 'clearMain' | 'openSession'>>
 
 /** 一台主视图收尾现场：绑定宿主 / 关主视图 / 重开 / 遗忘 / 收场。 */
@@ -96,14 +80,10 @@ export function createMainViewScene(): MainViewScene {
   }
 
   /**
-   * 把会话重新打开：`api-session/added` 从宿主发出到客户端摘要表落地有一拍（WS 与 HTTP 响应各走
-   * 各的），`openSession` 的目标必须先出现在清单里才不会抛「unknown session」——先查一次快照，没有就
-   * **订阅**宿主快照 store；出现且票仍是当前、焦点没被抢走时打开。最多等 2 秒，一个放弃 timer，不轮询。
-   * 期间用户若已经选了别的会话就不再抢焦点。等不到就什么都不做，行还在那里。
-   *
-   * 这段状态机住 `src/client/pending-open.ts` 的 `createPendingOpen`：这里只把「查什么、能不能开、
-   * 怎么开」交进去；取消也只剩 `pendingOpen.cancel()` 一次。没有 `subscribe` 的旧 store 直接放弃
-   * 等待，不退回轮询（ADR-0036）。
+   * 把会话重新打开：`api-session/added` 从宿主发出到客户端摘要表落地有一拍，`openSession` 的目标必须先
+   * 出现在清单里才不会抛「unknown session」——没有就**订阅**宿主快照 store；出现且票仍是当前、焦点没被
+   * 抢走时打开。最多等 2 秒、一个放弃 timer、不轮询；等不到就什么都不做，行还在那里。状态机住
+   * `pending-open.ts`；没有 `subscribe` 的旧 store 直接放弃，不退回轮询（ADR-0036）。
    */
   function openWhenListed(sessionId: string): void {
     const ui = uiWorkspaceOf()

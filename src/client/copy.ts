@@ -1,17 +1,11 @@
 /**
- * 界面文案与宿主 locale 服务的接入。
- *
- * - zh 是完整真源，en 逐键镜像。
- * - locale 服务通过 ctx.get('locale') 可选读，服务缺席时退回内置 zh；为什么不进 inject 见
- *   docs/architecture.md §3。
- * - 面板行名传 thunk，语言切换时宿主会重读；其余文案走 t(key, params)。
- * - 渠道错误原文（src/client/receipt.ts 的 missing-id/幂等空值、src/client/remote.ts 的取数通道错误）
- *   不在此字典，它们是协议诊断，固定中文。
+ * 界面文案与宿主 locale 服务的接入。zh 是完整真源，en 逐键镜像；locale 服务经 `ctx.get('locale')` 可选读，
+ * 缺席退回内置 zh（为什么不用 inject 见 `docs/architecture.md` §3）。面板行名传 thunk，语言切换时宿主重读。
+ * 渠道错误原文（`receipt.ts` 的 missing-id / 幂等空值、`remote.ts` 的取数通道错误）是协议诊断，固定中文，不入本字典。
  */
 import { relativeTime, type RelativeTimeUnit } from './ui/format.js'
 import type { ClientContextLike } from './context.js'
 
-/** 本插件的文案命名空间（第三方必须自带前缀；官方占用的是 `common` / `settings` / `sidebar` 这些）。 */
 const COPY_NS = 'xrn1997-session-delete'
 
 /** zh 是真源；`en` 必须逐键齐全（宿主的对象形式注册会整体校验）。 */
@@ -37,9 +31,8 @@ const ZH = {
   'trash.row.deletedAgo': '删除于 {n}{unit}前',
   'trash.row.subagents': '含 {n} 个子会话',
   'trash.row.strandedSubagents': '盘上还剩 {n} 个子会话',
-  // 删除时记下的工作区已经不在账本里（宿主的「删除工作区」只删注册、保留日志）：
-  // 恢复照常回盘，但会落在「未分组」——清单的分组本身就是去向的说明；这句话只留给批量恢复
-  // 确认框逐条说，行上不再重复。
+  // 删除时记下的工作区已不在账本里（宿主「删除工作区」只删注册、保留日志）：恢复照常回盘但落在「未分组」；
+  // 这句话只留给批量恢复确认框逐条说，行上不重复。
   'trash.row.workspaceGone': '原工作区已不存在，恢复后归入未分组',
   'trash.unit.minutes': '分钟',
   'trash.unit.hours': '小时',
@@ -55,15 +48,13 @@ const ZH = {
   'trash.confirm.all': '清空回收站？',
   'trash.confirm.one': '彻底删除 1 个会话？',
   'trash.confirm.one.meta': '{project} · 删除于 {at} · {size}',
-  // 只清 `.dsh` 里的副本与这些会话自己的缓存记录：用户磁盘上的原图/原文件不进任何删除链路
-  // （`src/trash/attachments.ts` 的两条红线；缓存判据住 `src/trash/projection-cache.ts`）。
+  // 只清 `.dsh` 里的独占副本与这些会话自己的缓存记录：源文件不进任何删除链路（ADR-0020）。
   'trash.confirm.body':
     '这会从回收站移除文件，{strong}。只清理会话独占的图片附件副本（共享副本保留）；这些会话自己的投影缓存记录也会一并清理，其他会话的缓存与你磁盘上的原图不受影响。',
   'trash.confirm.body.strong': '之后没有任何副本可以恢复',
   'trash.confirm.purge': '彻底删除',
 
-  // 两档共用的清单文案（回收站档与归档档读同一份键）：组头计数与折叠、分栏把手、整组勾选。
-  // 「条目」专属的那几句仍留在 `trash.*`——共用键不许带档名（CONTEXT 的「条目」专指回收站一行）。
+  // 两档共用的清单文案；「条目」专属的仍留 `trash.*`（共用键不许带档名，见 `CONTEXT.md`）。
   'list.group.count': '{count} 个会话',
   'list.group.ungrouped': '未分组',
   'list.group.collapseAll': '全部折叠',
@@ -71,9 +62,7 @@ const ZH = {
   'list.divider.label': '调整左右分栏宽度',
   'list.select.group': '勾选「{project}」这 {count} 条会话',
 
-  // 多选态的入口与读数（两档 + 宿主侧栏的浮条与菜单共用这一份）。批量恢复与批量彻底删除
-  // 那两句是回收站专属，归档档的对应两句在 `archive.select.*`。恢复是加法，但一批条目多，
-  // 去向是各自的原项目目录，点之前也要过一道确认框。单行恢复仍直接执行。
+  // 多选入口与读数（两档 + 浮条与菜单共用）；回收站专属两句在 `trash.select.*`，归档在 `archive.select.*`。
   'list.select.enter': '多选',
   'list.select.exit': '退出多选',
   'list.select.count': '已选 {count} 条',
@@ -86,10 +75,8 @@ const ZH = {
   'trash.confirm.restore.body': '这一批会回到它们各自的原项目目录，恢复到会话列表里。',
   'trash.confirm.restoreNow': '恢复',
 
-  // 回收站之外的无主子会话。父会话既不在宿主语料也不在清册里，它的孩子
-  // 就没人再列、也没人能删——宿主客户端把 `origin:"subagent"` 整排藏掉了，所以这一格
-  // 只能由我们报出来。**清理走 `/apply` 的 `orphan-clean`**，回执按组：`not-found` 单列「已不在了」，
-  // 真失败可能带部分回执（已删目录数/字节）；这里不写"整组已清完"这种服务端没说的话。
+  // 回收站之外的无主子会话：父会话既不在宿主语料也不在清册里，宿主客户端把 `origin:"subagent"` 整排藏掉，
+  // 所以只能由我们报出来。清理走 `/apply` 的 `orphan-clean`，回执按组；不写服务端没说的话。
   'trash.orphans.banner': '回收站之外发现 {count} 个无主子会话',
   'trash.orphans.meta': '共 {size}，来自 {parents} 个失踪的父会话',
   'trash.orphans.open': '查看并清理',
@@ -103,11 +90,8 @@ const ZH = {
   'trash.orphans.cleanFailed': '{count} 组未清理：{message}',
   'trash.orphans.cleanPartial': '已先删掉 {removed} 个会话目录（{size}）',
   'trash.orphans.cleanGone': '有 {count} 组已不在了（可能已被别处清理，或父会话已恢复）',
-  // 删除/清空回执里的附件那半句（面板与维护卡共用同一判据，读法住 `receipt.ts`）。跳过不是失败：
-  // `skipped` 说的是
-  // "有候选或剩余引用源读不出，这一轮部分或整体没敢清"（原因上屏），`failed` 是逐文件真出错的那几件；
-  // 两个数分开说，不合并。`skipped` 而 `removed > 0` 时说「部分」：那一轮清掉了 `removed` 件，
-  // 不冒充"整轮没清"。`skipped` 与 `failed` 同时出现时，失败件数追加在跳过句尾（前缀带分隔符）。
+  // 附件那半句（面板与维护卡共用，读法住 `receipt.ts`）。`skipped` 不是失败：它是"读不出引用源，这一轮
+  // 部分或整体没敢清"；`failed` 是逐文件真出错。两个数分开说。`skipped` 而 `removed > 0` 时说「部分」。
   'trash.attachments.failed': '已删除会话，但 {count} 个附件未能清理',
   'trash.attachments.skipped': '附件未清理：{reason}',
   'trash.attachments.skippedPartial': '部分附件未清理：{reason}（已清理 {removed} 个）',
@@ -132,11 +116,9 @@ const ZH = {
   'config.invalid': '需为 {min}–{max} 的整数',
   'config.unchanged': '没有改动',
 
-  // 插件设置页的「维护」卡：三段都是手动触发（检查 → 预览 → 清理），没有自动扫描也没有定时器。
-  // 状态行六档：尚未检查 / 检查中 / 清理中 / 检查失败 / 没有发现 / N——在飞的动作优先于一切，
-  // 检查/清理失败优先于「尚未检查」（失败不是"还没查"）。孤儿会话段复用 `trash.orphans.*` 的呈现文案，
-  // 清理回执里的附件读数复用 `trash.attachments.skipped*` 那对句子；孤儿附件段的确认句必须把三条
-  // 边界说完（只清 `.dsh` 内无引用图片副本、源文件不动、共享引用保留）；投影缓存段只念条数。
+  // 维护卡三段都是手动触发（检查 → 预览 → 清理），没有自动扫描也没有定时器。状态行六档：在飞优先，
+  // 检查/清理失败优先于「尚未检查」。孤儿附件确认句必须把三条边界说完（只清 `.dsh` 内无引用副本、
+  // 源文件不动、共享引用保留）。
   'maintenance.title': '维护',
   'maintenance.orphans.title': '孤儿会话',
   'maintenance.orphans.hint': '父会话已不在会话列表或回收站里的子会话。检查只读，不会自动运行。',
@@ -270,7 +252,6 @@ const ZH = {
   'detail.injection.other': '其他上下文',
   'detail.image': '[图片]',
   'detail.image.alt': '[图片 · {alt}]',
-  // 附件条（`src/client/attachment-view.tsx`）：空名用「文件」兜底；放大框标题优先用文件名。
   'detail.attachment.file': '文件',
   'detail.attachment.preview': '附件预览',
   'detail.attachment.alt': '附件图片',
@@ -302,9 +283,7 @@ const ZH = {
   'dialog.hint': '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。',
   'dialog.confirm': '移入回收站',
 
-  // 宿主列表批量删除。子会话那两句**复用** `trash.row.subagents`（行内 chip）与
-  // `dialog.subagents`（汇总），n=1 的标题复用 `dialog.title`，运行中原因复用 `menu.live`，
-  // 「多选/退出多选」复用清单那两句 `list.select.enter` / `list.select.exit`——不造第二句。
+  // 宿主列表批量删除。子会话、n=1 标题、运行中原因、多选两句都复用既有键，不造第二句。
   'batch.row.pick': '勾选「{title}」以批量删除',
   'batch.bar.count': '已选 {n} 条',
   'batch.bar.pickHint': '点击会话行选择',
@@ -328,8 +307,8 @@ const ZH = {
 
 export type CopyKey = keyof typeof ZH
 
-/** en：与 `ZH` 逐键镜像（键集合由 `Record<CopyKey, string>` 盯住，漏一个就编译不过）。
- *  单位词与宿主 en 侧 `relativeTime` 的写法对齐（宿主 en 的桶就是 `5min` / `3h` / `2d` / `4mo` / `1y`）。 */
+/** en 与 `ZH` 逐键镜像（`Record<CopyKey, string>` 盯住）；单位词与宿主 en 的 `relativeTime` 写法对齐
+ *  （宿主 en 的桶就是 `5min` / `3h` / `2d` / `4mo` / `1y`）。 */
 const EN: Record<CopyKey, string> = {
   'common.untitled': '(Untitled session)',
   'common.cancel': 'Cancel',
@@ -391,7 +370,6 @@ const EN: Record<CopyKey, string> = {
   'trash.confirm.restore.body': 'They go back to their original project folders and reappear in the session list.',
   'trash.confirm.restoreNow': 'Restore',
 
-  // 与 zh 逐键同序。漏一个键由 `Record<CopyKey, string>` 直接编译不过，这段注释只负责两块读得对齐。
   'trash.orphans.banner': 'Found {count} orphan subagent sessions outside the trash',
   'trash.orphans.meta': '{size} total, from {parents} missing parent sessions',
   'trash.orphans.open': 'Review and clean',
@@ -625,8 +603,7 @@ function interpolate(template: string, params?: CopyParams): string {
   )
 }
 
-/** 服务缺席时的缺省：字典里那套 zh。**也是组件 prop 的缺省值**——它表达的是"这次没有 locale 服务"，
- *  与运行期 `createTranslate` 的降级分支是同一件事，不是"忘了传"。 */
+/** 服务缺席时的缺省字典；也是组件 prop 的缺省值（表达"这次没有 locale 服务"，不是忘了传）。 */
 export const zhTranslate: Translate = (key, params) => interpolate(ZH[key], params)
 
 /** 宿主 locale 服务的窄镜像（只声明本插件用到的两个方法 + 一次强转；不装宿主类型包）。 */
@@ -646,17 +623,11 @@ function detectLocaleService(ctx: ClientContextLike): LocaleServiceLike | undefi
 }
 
 /**
- * 注册字典并交回本插件的 `t`。服务不在时返回 `zhTranslate`（不抛、不 pending）。
+ * 注册字典并交回本插件的 `t`；服务不在时返回 `zhTranslate`（不抛、不 pending）。
  *
- * **空值判据同时认 `undefined` 与 `null`**：宿主 `ctx.get` 可以回 null（同一条窄镜像的读法见
- * `main-view.ts` 的 `isReadyUiWorkspace`）。这里只判 `undefined` 的版本会把 null 当成"服务在"，
- * 下一句 `service.register` 抛错——而本函数跑在**任何槽位注册之前**，抛出去等于整个客户端条目
- * 从页面消失（`apply` 只打一条 warn）。注册 / 绑定自身失败同样退回内置 zh：文案降级远好过没有插件。
- * `bind` 在注册之后才跑，它失败时字典已挂上但没人用——留着无害（宿主只是多一份不用的词典），
- * 不为它补撤销路径再引入新的失败面。
- *
- * 注册必须挂在 `ctx.effect` 上：`register` 返回的 disposer 是**官方契约**（卸载时要把字典摘掉），
- * 而且同一命名空间的同一语言**只能注册一次**——effect 没挂，HMR 重挂就撞 "already has locale"。
+ * **空值判据同时认 `undefined` 与 `null`**：宿主 `ctx.get` 可以回 null，只判 undefined 会让 `service.register`
+ * 抛错——而本函数跑在任何槽位注册之前，抛出去等于整个客户端条目从页面消失。注册 / 绑定失败同样退回 zh。
+ * 注册必须挂在 `ctx.effect` 上：`register` 返回的 disposer 是官方契约，且同一命名空间同一语言只能注册一次。
  */
 export function createTranslate(ctx: ClientContextLike): Translate {
   const service = detectLocaleService(ctx)
@@ -672,32 +643,20 @@ export function createTranslate(ctx: ClientContextLike): Translate {
 }
 
 /**
- * `MarkdownBody`（`markdown.tsx`）memo comparator 的**语言探针**：借一句固定键的译文，当
- * 「当前是哪种语言」的读数。为什么借译文而不问 locale 服务：宿主 locale 服务的窄镜像不暴露
- * 当前语言（受窄镜像形状约束，不做 `locale()` 探针），当前语言只能从 `t` 的输出里读出来。
+ * `MarkdownBody` memo comparator 的**语言探针**：借一句固定键的译文当「当前语言」的读数（窄镜像不暴露
+ * 当前语言，只能从 `t` 的输出读）。必须在**渲染时**现算：comparator 里现调会让 prev/next 都取到新值、
+ * 换语言就漏了。也必须是词的读数而不是 `t` 的身份：宿主 `t` 身份稳定，换语言后同一个 `t` 吐另一套词。
  *
- * 为什么必须在**渲染时**现算、由调用方存进 props：宿主 `t` 读的是**当前** locale，若在
- * comparator 里现调，prev/next 那一拍都取到新值、恒等，换语言就漏了——只有渲染那一刻算好的
- * 那份才是换语言那一拍的读数。
- *
- * 为什么拿 `t` 的输出当读数、而不是拿 `t` 的身份：宿主 `t` 是 `bind` 出来的**稳定身份**
- * （`createTranslate` 一次客户端激活只造一个），换语言后同一个 `t` 吐另一套词——身份不变、
- * 词变了，所以判据必须是这个词（探针值）而不是身份本身。
- *
- * 「借哪句」的知识只住这里：调用方与测试一律传 `probe={localeProbe(t)}`，不各自记得借哪句。
- *
- * **失效模式**：借的那句若在两种语言下译成同一个字面，探针就分不出换语言——memo 恒等、旧语言滞留。
- * 这条由 `tests/client/markdown.test.tsx` 的换语言用例兜住；换借句或改那句译文时先看它红不红。
+ * **失效模式**：借的那句若两种语言译成同一字面，探针分不出换语言（memo 恒等、旧语言滞留）；由
+ * `tests/client/markdown.test.tsx` 的换语言用例兜住，换借句或改那句译文时先看它红不红。
  */
 export function localeProbe(t: Translate): string {
   return t('common.close')
 }
 
 /**
- * 把一句话里内嵌的那一段拆出来：`'…文件，之后没有任何副本可以恢复。'` 交给调用面用 `<b>` 包中间那段。
- *
- * 为什么不留成"前段 / 内嵌段 / 后段"三个键：那等于把英文和中文的语序各钉一次，两段翻译各自
- * 成立、拼起来未必成立。整句一个键 + 一个占位符，语言自己决定那一段落在哪里。
+ * 把一句话里内嵌的那一段拆出来（调用面用 `<b>` 包中间那段）。不留成「前 / 中 / 后」三个键：那等于把
+ * 中英语序各钉一次，拼起来未必成立；整句一个键 + 一个占位符，语序归语言自己。
  */
 export function splitOn(sentence: string, inner: string): [string, string, string] {
   const at = sentence.indexOf(inner)
@@ -705,18 +664,12 @@ export function splitOn(sentence: string, inner: string): [string, string, strin
   return [sentence.slice(0, at), inner, sentence.slice(at + inner.length)]
 }
 
-/**
- * 绝对时间那一句串。清单行的 `title`、确认框里的meta、详情的会话信息三处要的是同一个写法，
- * 各自 `new Date(...).toLocaleString()` 一遍迟早会漂成两种样子。
- */
+/** 绝对时间那句串：清单行 `title`、确认框 meta、详情三处要同一个写法，各写一遍迟早漂成两种样子。 */
 export function absoluteText(at: number): string {
   return new Date(at).toLocaleString()
 }
 
-/**
- * 单位词的键（`relativeTime` 只交回桶与量 `{unit, n}`，措辞按它自己的约定留在字典里；
- * 数字与单位之间不空格是它的写法）。清单行与详情共用这一张表，别再各抄一份。
- */
+/** 单位词的键：`relativeTime` 只交回桶与量，措辞留字典；清单行与详情共用这一张表。 */
 const UNIT_KEY: Record<Exclude<RelativeTimeUnit, 'now'>, CopyKey> = {
   minutes: 'trash.unit.minutes',
   hours: 'trash.unit.hours',
@@ -725,7 +678,6 @@ const UNIT_KEY: Record<Exclude<RelativeTimeUnit, 'now'>, CopyKey> = {
   years: 'trash.unit.years',
 }
 
-/** 单位词本身（调用方把它填进各自语言的整句模板里，语序由各语言自己钉）。 */
 export function unitWord(unit: RelativeTimeUnit, t: Translate): string {
   return unit === 'now' ? t('common.justNow') : t(UNIT_KEY[unit])
 }

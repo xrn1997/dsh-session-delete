@@ -1,12 +1,11 @@
 // 批量删除浮条（2026-10-17）：多选模式、计数、已选清单、行点击选择与确认框。
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton } from '../../src/client/batch-select.js'
 import { BatchBar } from '../../src/client/batch-bar.js'
 import { BatchConfirmHost } from '../../src/client/batch-confirm.js'
 import type { RemoteOutcome } from '../../src/client/remote.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import {
   enterSelection,
@@ -17,12 +16,8 @@ import {
 import { countOutcomes } from './support/outcomes.js'
 import { pick } from '../support/fixture.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
 afterEach(() => {
-  resetClientState()
   document.body.replaceChildren()
 })
 

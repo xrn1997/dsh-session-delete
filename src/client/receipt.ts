@@ -1,5 +1,11 @@
 import type { Translate } from './copy.js'
 import {
+  PURGE_STATS_ATTACHMENTS_SCHEMA,
+  TRASH_ENTRY_ARCHIVED_SCHEMA,
+  TRASH_ENTRY_ID_SCHEMA,
+  TRASH_ENTRY_SESSION_ID_SCHEMA,
+} from '../shared/apply-values.js'
+import {
   SESSION_DELETE_CODES,
   type ApplyAction,
   type ApplyOutcome,
@@ -9,15 +15,8 @@ import {
 } from '../shared/wire.js'
 
 /**
- * 一条 `/apply` 结果对一个请求 id 的含义。各写入面不许再各自推导：
- * 缺 id 是通道错误，`null` 是幂等成功，orphan-clean 的 `not-found` 是中性提示而非失败，
- * **N=1 的 `null` 是协议错**——最后这条也在这里判，`applyOne` 与 `runWrite` 只消费同一份 verdict。
- *
- * 各 action 可能出现的 kind（类型面故意保持同一个联合，消费方按 action 自己收窄）：
- * - delete / restore：`ok` / `already-gone` / `failed` / `missing`
- * - count / purge / unarchive：`ok` / `failed` / `missing`
- * - orphan-clean：`ok` / `neutral` / `failed` / `missing`
- * - 单条读法（`readSingleReceipt`）：不含 `already-gone`；null 折成 `failed`
+ * 一条 `/apply` 结果对一个请求 id 的含义（各写入面不许再各自推导）：缺 id 是通道错误，`null` 是幂等成功，
+ * orphan-clean 的 `not-found` 是中性提示，**N=1 的 `null` 是协议错**；`applyOne` 与 `runWrite` 只消费同一份 verdict。
  */
 export type ReceiptVerdict<A extends ApplyAction> =
   | { readonly kind: 'ok'; readonly id: string; readonly value: Exclude<ApplyValueByAction[A], null> }
@@ -27,7 +26,6 @@ export type ReceiptVerdict<A extends ApplyAction> =
   | { readonly kind: 'missing'; readonly id: string; readonly message: string }
 
 export interface Receipt<A extends ApplyAction> {
-  /** 产生这份回执的动作：摘要据此只派发该动作真的有的那几种落地 id。 */
   readonly action: A
   readonly verdicts: readonly ReceiptVerdict<A>[]
   readonly byId: ReadonlyMap<string, ReceiptVerdict<A>>
@@ -36,32 +34,26 @@ export interface Receipt<A extends ApplyAction> {
 /** 浏览器半自己的未分类诊断码（通道打不通 / 非信封 / 单条协议错）。它不过线，线上失败码仍归 `shared/wire.ts`。 */
 export const CLIENT_UNKNOWN_CODE = 'client/unknown'
 
-/**
- * 一个动作在回执读法里的三格事实。**`Record<ApplyAction, …>` 是编译闸**：`/apply` 新增动作而这里
- * 忘了登记，编译不过——新动作不许静默落进「not-found 算失败 / 没有附件读数 / 没有落地 id」这三条
- * 兜底。与 `src/api/route-table.ts` 的 `APPLY_ACTION_TABLE` 同一个处方：按动作的知识只有一张表。
- */
+/** 一个动作在回执读法里的两格语义（值形状住 `shared/apply-values.ts`，回执只读窄格）；
+ *  `Record<ApplyAction, …>` 是编译闸：新动作忘了登记就编译不过。 */
 interface ReceiptShape {
-  /** `not-found` 失败是不是中性提示（孤儿清理把「组已经不在了」当成功）。 */
+  /** `not-found` 算中性提示（孤儿清理把「组已不在」当成功）。 */
   readonly neutralOnNotFound: boolean
-  /** `ok` 回执里的值是否带那半份附件读数（purge / orphan-clean）。 */
-  readonly attachmentCleanup: boolean
-  /** 真正落地、可以参与撤销/回盘的 id 域；`none` = 这个动作没有可撤销的落地 id。 */
+  /** 可参与撤销/回盘的落地 id 域；`none` = 没有。 */
   readonly landed: 'entry' | 'session' | 'none'
 }
 
 const RECEIPT_SHAPE: Record<ApplyAction, ReceiptShape> = {
-  delete: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'entry' },
-  restore: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'session' },
-  purge: { neutralOnNotFound: false, attachmentCleanup: true, landed: 'none' },
-  count: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'none' },
-  'orphan-clean': { neutralOnNotFound: true, attachmentCleanup: true, landed: 'none' },
+  delete: { neutralOnNotFound: false, landed: 'entry' },
+  restore: { neutralOnNotFound: false, landed: 'session' },
+  purge: { neutralOnNotFound: false, landed: 'none' },
+  count: { neutralOnNotFound: false, landed: 'none' },
+  'orphan-clean': { neutralOnNotFound: true, landed: 'none' },
   // 解除归档没有撤销/回盘座位：清单重读归归档档自己的失效链（`archive-store`）。
-  unarchive: { neutralOnNotFound: false, attachmentCleanup: false, landed: 'none' },
+  unarchive: { neutralOnNotFound: false, landed: 'none' },
 }
 
 export interface ReceiptOptions {
-  /** N=1：null 只能是通道答错了，不冒充幂等成功。 */
   readonly single?: boolean
 }
 
@@ -80,13 +72,11 @@ function singleNullMessage(action: ApplyAction, id: string): string {
   return `单条动作回了幂等空值：${action} ${id}`
 }
 
-/** 三种“这一条没成”的 verdict；`failureMessage` 是它们原文取值的唯一入口。 */
 export type FailureVerdict<A extends ApplyAction> = Extract<
   ReceiptVerdict<A>,
   { kind: 'failed' | 'neutral' | 'missing' }
 >
 
-/** failed / neutral 取服务端原文 `error.message`；missing 取通道自己写的那句。 */
 export function failureMessage<A extends ApplyAction>(verdict: FailureVerdict<A>): string {
   return verdict.kind === 'failed' || verdict.kind === 'neutral' ? verdict.error.message : verdict.message
 }
@@ -135,10 +125,7 @@ export function readReceipt<A extends ApplyAction>(
   return { action, verdicts, byId: new Map(verdicts.map((verdict) => [verdict.id, verdict])) }
 }
 
-/**
- * N=1 的读法：null 折成协议错，类型面因此不含 `already-gone`（下面那次过滤只服务类型收窄，
- * single 读法运行期不会产出它）。`applyOne` 用它之后只剩「按 id 取一条 + 抛失败」。
- */
+/** N=1 读法：`null` 折成协议错，类型面因此不含 `already-gone`（运行期不会产出，过滤只服务类型收窄）。 */
 export function readSingleReceipt<A extends ApplyAction>(
   action: A,
   id: string,
@@ -149,32 +136,24 @@ export function readSingleReceipt<A extends ApplyAction>(
   return { verdicts, byId: new Map(verdicts.map((verdict) => [verdict.id, verdict])) }
 }
 
-/** 一次写入回执的**一个读法**：成功、失败、中性、部分计数与落地 id 都从这里出。
- *  座位与收尾不再自己 walk `verdicts`——那会把同一套判据在调用点再组装一遍。 */
+/** 一次写入回执的唯一读法：成功 / 失败 / 中性 / 部分计数 / 落地 id 都从这里出，座位与收尾不再各自 walk `verdicts`。 */
 export interface ReceiptSummary {
   readonly successIds: readonly string[]
   readonly neutralIds: readonly string[]
   /** failed + missing（通道没回）；neutral 单独在 `neutralIds`。 */
   readonly failed: readonly { readonly id: string; readonly error: RemoteFailure }[]
-  /** 部分计数的累加语义只住这里：只从 failed 的 `details` 取 `removed`/`freedBytes` 并按批相加
-   *  （"删了一半才炸"的那部分释放量）；neutral / missing 不带 details，不参与累加。 */
+  /** 部分计数只住这里：只累加 failed 的 `details`（"删了一半才炸"的释放量）；neutral / missing 不参与。 */
   readonly partial: { readonly removed: number; readonly freedBytes: number }
-  /** 这次动作真正落地的 id。**域由 `action` 定**：delete 是条目 id（撤销名单），restore 是会话 id
-   *  （回盘名单）；purge / count / orphan-clean 没有可撤销的落地 id，恒为空。
-   *  两个域不混在一个数组里靠调用方猜，也不各留一个永远为空的字段。 */
+  /** 真正落地的 id，域由 `action` 定：delete = 条目 id，restore = 会话 id，其余恒空（两个域不混）。 */
   readonly landedIds: readonly string[]
-  /** 落地条目里带**已归档**标记的那些（域同 `landedIds` 的 entry 域）：已归档会话删除后
-   *  撤销是**回「归档」**不是回会话列表，撤销文案据此改口（ADR-0060 决定第 1 条）。 */
+  /** 带**已归档**标记的落地条目（entry 域）：撤销回「归档」而非会话列表，撤销文案据此改口（ADR-0060）。 */
   readonly landedArchivedIds: readonly string[]
   readonly anySuccess: boolean
-  /** purge / orphan-clean 的 `ok` 回执里那半份附件读数，**按批相加**（一段 `/apply` 可能带多条 ok）。
-   *  `skipped` 取第一条有的：它说的是"这一轮为什么没敢清"，不是可累加的计数。
-   *  两种动作都没有读数（或这一批一条都没落地）时缺席——不拿零冒充"清过"。 */
+  /** purge / orphan-clean 的附件读数，按批相加；`skipped` 取第一条有的（不是可累加计数）。没有读数时缺席——不拿零冒充「清过」。 */
   readonly attachmentCleanup?: AttachmentCleanupWire
 }
 
-/** 一次摘要派生的两样产物：聚合摘要与逐条失败原文。
- *  失败表只挂在 `WriteSuccess` 上（成败两支的统一读法），摘要自己不再留第二份。 */
+/** 摘要派生的两样产物：聚合摘要与逐条失败原文（失败表只挂在成功支上，摘要不另存）。 */
 export interface ReceiptRead {
   readonly summary: ReceiptSummary
   readonly failures: ReadonlyMap<string, string>
@@ -194,24 +173,14 @@ function isSuccessVerdict<A extends ApplyAction>(
   return verdict.kind === 'ok' || verdict.kind === 'already-gone'
 }
 
-/** purge / orphan-clean 的成功值里那半份附件读数；别的动作与没有读数的那几条回执都没有这一格。
- *  `attachments: null` 这类畸形线上值也按"没有读数"处理：这一层只读回执，不替契约在加法里兜底。 */
+/** 只校附件那一格：`attachments: null` 这类畸形线上值按「没有读数」处理，不在加法里替契约兜底。 */
 function statsAttachments(value: unknown): AttachmentCleanupWire | undefined {
-  if (typeof value !== 'object' || value === null || !('attachments' in value)) return undefined
-  const attachments = (value as { readonly attachments?: unknown }).attachments
-  return typeof attachments === 'object' && attachments !== null
-    ? attachments as AttachmentCleanupWire
-    : undefined
+  return PURGE_STATS_ATTACHMENTS_SCHEMA.check(value) ? value.attachments : undefined
 }
 
-/**
- * 附件读数跨 `ok` 回执相加（一段 `/apply` 可能带多条），`skipped` 取第一条有的——它说的是这一轮
- * 为什么没敢清，不是能累加的数。`removed` 可能 > 0 而 `skipped` 有值：那是**部分**没清，上屏时要说清。
- */
 function summarizeAttachmentCleanup<A extends ApplyAction>(
   receipt: Receipt<A>,
 ): AttachmentCleanupWire | undefined {
-  if (!RECEIPT_SHAPE[receipt.action].attachmentCleanup) return undefined
   let removed = 0
   let freedBytes = 0
   let failedCount = 0
@@ -234,10 +203,8 @@ function summarizeAttachmentCleanup<A extends ApplyAction>(
 }
 
 /**
- * 附件清理回执的「跳过半句」：`skipped` 说的是"这一轮为什么没敢清"，不是失败——原因上屏，
- * `removed > 0` 时说「部分」，`failed` 件数追加在句尾（不被跳过原因吞掉）。
- * 面板（`use-trash-query.ts`）与维护卡（`use-maintenance.ts`）共用这一判据，不许各拼一份。
- * 没 `skipped` 时回 `null`：后半句（全清/失败怎么说）两个面各有各的口径，由调用方自己接。
+ * 附件清理回执的「跳过半句」：`skipped` 是"为什么没敢清"而非失败——原因上屏，`removed > 0` 说「部分」，`failed` 件数追加句尾。
+ * 面板与维护卡共用这一判据；没 `skipped` 回 `null`（后半句口径归调用方）。
  */
 export function attachmentSkippedSentence(a: AttachmentCleanupWire, t: Translate): string | null {
   if (a.skipped === undefined) return null
@@ -290,50 +257,32 @@ export function summarizeReceipt<A extends ApplyAction>(
       landedIds,
       landedArchivedIds: landedArchivedEntryIds(receipt),
       anySuccess: successIds.length > 0,
-      // 摘要随回执上屏/落账：附件读数没有时不建键——「没有读数」是键的缺席，不是显式 undefined。
       ...(attachmentCleanup !== undefined ? { attachmentCleanup } : {}),
     },
     failures,
   }
 }
 
-function isRestoreEntry(value: unknown): value is { readonly sessionId: string } {
-  return typeof value === 'object' && value !== null && 'sessionId' in value
-}
-
-function isEntryWithId(value: unknown): value is { readonly id: string } {
-  return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string'
-}
-
-/** 落地条目里带**已归档**标记的那些（`wasArchived` 那一格，删除动词读 `isArchived` 记下的事实）。 */
 function landedArchivedEntryIds<A extends ApplyAction>(receipt: Receipt<A>): string[] {
   const ids: string[] = []
   for (const verdict of receipt.verdicts) {
     if (verdict.kind !== 'ok') continue
     const value: unknown = verdict.value
-    if (isEntryWithId(value) && 'wasArchived' in value && (value as { wasArchived?: unknown }).wasArchived === true) {
-      ids.push(value.id)
-    }
+    if (TRASH_ENTRY_ARCHIVED_SCHEMA.check(value) && value.wasArchived) ids.push(value.id)
   }
   return ids
 }
 
-/**
- * `/apply` 成功支回执里的条目 id（delete / restore 的 `value.id`）；purge 的聚合值与 count 的数字值跳过。
- * 撤销名单只收 `ok` 支的条目 id：already-gone 是「已被同批前一条带走」的幂等条，跟着组走，不单列。
- */
+/** delete / restore 成功支的条目 id（purge / count 的值跳过）；already-gone 是「同批前一条已带走」的幂等条，不单列。 */
 export function landedEntryIds<A extends ApplyAction>(receipt: Receipt<A>): string[] {
   const ids: string[] = []
   for (const verdict of receipt.verdicts) {
-    if (verdict.kind === 'ok' && isEntryWithId(verdict.value)) ids.push(verdict.value.id)
+    if (verdict.kind === 'ok' && TRASH_ENTRY_ID_SCHEMA.check(verdict.value)) ids.push(verdict.value.id)
   }
   return ids
 }
 
-/**
- * restore 回执里真正回盘的会话 id：`ok` 支取条目上的 `sessionId`；`already-gone` 没有行，
- * 由调用方给条目查找兜底。purge / count 的 `ok` 值没有 `sessionId`，会被跳过。
- */
+/** restore 回执里真正回盘的会话 id：`ok` 取 `sessionId`，`already-gone` 由调用方按条目查找兜底。 */
 export function restoredSessionIds<A extends ApplyAction>(
   receipt: Receipt<A>,
   sessionIdOfEntry?: (entryId: string) => string | undefined,
@@ -341,7 +290,7 @@ export function restoredSessionIds<A extends ApplyAction>(
   const ids: string[] = []
   for (const verdict of receipt.verdicts) {
     if (verdict.kind === 'ok') {
-      if (isRestoreEntry(verdict.value)) ids.push(verdict.value.sessionId)
+      if (TRASH_ENTRY_SESSION_ID_SCHEMA.check(verdict.value)) ids.push(verdict.value.sessionId)
       continue
     }
     if (verdict.kind === 'already-gone' && sessionIdOfEntry !== undefined) {

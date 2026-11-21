@@ -8,7 +8,7 @@
 // 多开一种扩展名——扩展名跟着任务单的指名走。
 import { act, fireEvent, render, waitFor } from '@testing-library/react'
 import { createElement, Fragment, type ReactElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   getVisibleSelectableRowsSnapshot,
   readVisibleSelectableRows,
@@ -30,14 +30,9 @@ import {
   isSelecting,
   togglePick,
 } from '../../src/client/batch-selection-store.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
 afterEach(() => {
-  resetClientState()
   document.body.replaceChildren()
 })
 

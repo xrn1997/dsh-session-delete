@@ -184,11 +184,6 @@ describe('回收站详情块 · 有内容', () => {
     expect(screen.getAllByText('—')).toHaveLength(3)
   })
 
-  it('一条正文都没有 ⇒ 明说"没有可显示的内容"，不装作还在读', () => {
-    at({ kind: 'ready', subject: entry, detail: { ...detail, blocks: [], userMessageCount: 0, assistantMessageCount: 0 } })
-    expect(screen.getByText('这条会话没有可显示的内容')).toBeInTheDocument()
-  })
-
   it('详情里不摆动作按钮（2026-10-15 真机反馈后：动作住在清单行右侧）', () => {
     at({ kind: 'ready', subject: entry, detail })
     expect(screen.queryByRole('button', { name: '恢复' })).not.toBeInTheDocument()

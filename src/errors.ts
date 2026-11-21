@@ -1,5 +1,4 @@
-/** 失败的**结构与措辞**。码本身、码的前缀读法与动词词表都住在 `shared/wire.ts`（ADR-0003）：
- *  浏览器半也要认它们，它们属于两半共同的契约，不属于 Node 半。这里只做动词抛错与回滚措辞。 */
+/** 失败的**结构与措辞**：码与前缀读法住 `shared/wire.ts`（ADR-0003），这里只做动词抛错与回滚措辞。 */
 import {
   SESSION_DELETE_CODES,
   verbCodeOf,
@@ -7,8 +6,7 @@ import {
   type VerbCode,
 } from './shared/wire.js'
 
-/** 一次失败的**结构**：码、上屏原文、可选 cause（`map-error` 沿 cause 链认宿主类型化错误）、
- *  可选的结构化附带物（对齐官方 `rpcErrorSchema` 的第三件 `details`）。 */
+/** 一次失败的结构：码、上屏原文、可选 cause 与结构化附带物（对齐官方 `rpcErrorSchema` 第三件）。 */
 export interface VerbError extends Error {
   code: string
   details?: Record<string, unknown>
@@ -36,9 +34,8 @@ export function routeError(code: RouteCode, httpStatus: number, message: string)
   return e
 }
 
-/** 一条回滚步骤失败的**标签句**：label 说的是"这一步在退什么"，原文带出**那一步抛的东西**
- *  （`Error` 取 message，其余一律 `String()`；对象带 `message` 的差异归 `map-error.messageOf` 管）。
- *  调用方不许另抄这份格式——那样 details 里的句子会随各处 catch 变形，界面上就变成"同一个失败三个说法"。 */
+/** 一条回滚步骤失败的标签句：label 说「这一步在退什么」，原文带出那一步抛的东西。
+ *  调用方不许另抄格式，否则同一个失败会上屏三个说法。 */
 export function rollbackReason(label: string, error: unknown): string {
   return `${label}：${error instanceof Error ? error.message : String(error)}`
 }
@@ -49,11 +46,8 @@ function carriedRollbackFailures(error: unknown): string[] {
   return Array.isArray(raw) ? raw.filter((item): item is string => typeof item === 'string') : []
 }
 
-/** 原错误保留，回滚失败作为 `details.rollbackFailures` 上线；码仍按原错误的动词码，
- *  没有可继承的就落 io。**内层的回滚失败要并进来**：一个成员自己退失败、兄弟也退失败时，
- *  两份失败都得在 details 里，消息也不能出现第二个「回滚未完成」。
- *  **原错误 details 的其余键原样保留**：孤儿清理的部分回执（`removed` / `freedBytes` /
- *  `failedSessionId`）就挂在它上面，整份替换会把已经发生的删除报成 0。 */
+/** 原错误保留，回滚失败作为 `details.rollbackFailures` 上线；内层的回滚失败要并进来。
+ *  **原错误 details 的其余键原样保留**：孤儿清理的部分回执挂在它上面，整份替换会把已删除报成 0。 */
 export function withRollbackFailures(error: unknown, failures: readonly string[]): VerbError {
   const code = verbCodeOf(error) ?? 'io'
   const carried = carriedRollbackFailures(error)

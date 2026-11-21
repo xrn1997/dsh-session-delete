@@ -1,5 +1,5 @@
 import { act, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { isSelecting } from '../../src/client/batch-selection-store.js'
 import {
   createSessionMenuContribution,
@@ -8,7 +8,6 @@ import {
 } from '../../src/client/context-menu-actions.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import { useDeleteRequest } from '../../src/client/delete-confirm.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
 const TARGET = { sessionId: 'session-a', displayTitle: '/code-review' }
 
@@ -37,13 +36,7 @@ function DeleteRequestProbe() {
   return <div data-testid="request">{request?.sessionId ?? 'none'}</div>
 }
 
-beforeEach(() => {
-  resetClientState()
-})
 
-afterEach(() => {
-  resetClientState()
-})
 
 describe('0.2.2 contextMenus 数据动作', () => {
   it('贡献 order 700，返回 afterContent 的多选与删除两行', async () => {

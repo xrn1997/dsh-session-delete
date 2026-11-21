@@ -1,11 +1,6 @@
 /**
- * 详情里的**子会话段**（回收站与归档共用）：默认收起成一条摘要条，展开后逐条列孩子。
- * 调用方交来的是**每个孩子的原始事实**（显示名、字节数、时间、可不可点）加上总数与合计；
- * 段里的三样派生读数——徽标条数、「已列 N / 共 M」、合计那格文案——由本模块自己算，
- * 呈现、开合、锚点与意图预取也只在这里。
- *
- * 为什么独立成文件：两档的数据来源不同（回收站看清册、归档看宿主闭包），但界面表现应一致；
- * 把样式、交互与这些派生读数只留一份，别让两档各抄一套、各算一次。
+ * 详情里的子会话段（回收站与归档共用）：默认收起成摘要条，展开逐条列孩子；徽标、「已列 N / 共 M」与合计由本模块算。
+ * 两档数据来源不同（回收站看清册、归档看宿主闭包），呈现与交互只留一份。
  */
 import { useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { agoText, type Translate } from './copy.js'
@@ -163,10 +158,7 @@ export function rowName(row: { readonly label?: string; readonly title: string }
   return name === '' ? t('common.untitled') : name
 }
 
-/**
- * 一个孩子的**原始事实**（不是文案）：显示名两档各自按名次序算好交进来（那是词汇表里的
- * 「显示名次序」，不属于这一段），其余三样由这一段自己念成话。
- */
+/** 一个孩子的原始事实：显示名两档各按名次序算好交进来，其余三样由这一段念成话。 */
 export interface SubagentChild {
   readonly id: string
   readonly name: string
@@ -182,12 +174,9 @@ export interface SubagentSectionInput {
   readonly subjectId: string
   /** 已列出来的孩子（被条数闸截断时就是前 N 条）。空表 ⇒ 整段不画。 */
   readonly children: readonly SubagentChild[]
-  /** 孩子总数，只在被截断时给（`undefined` = 已列的就是全部）：徽标与摘要条念它，
-   *  「已列 N / 共 M」也由它与 `children.length` 算出。写成 `number | undefined` 而不是可选键：
-   *  调用方交的就是「详情里那一格有没有读数」，两者在这里同义。 */
+  /** 孩子总数，只在被截断时给（`undefined` = 已列的就是全部）；徽标与「已列 N / 共 M」都读它。 */
   readonly total: number | undefined
-  /** **全部**孩子的已知大小合计；`undefined` = 没有可信读数 ⇒ 摘要条不摆这一格。
-   *  合计的家在 Node 半：这里不拿已列的前 N 条求和，那是少报。 */
+  /** **全部**孩子的已知大小合计（家在 Node 半，不拿已列前 N 条求和——那是少报）；`undefined` ⇒ 不摆这一格。 */
   readonly totalSizeBytes: number | undefined
   /** 单行大小缺席时念什么（归档交自己键上的那句，与它的清单行同一个字符）；不给 ⇒ 「—」。 */
   readonly sizeAbsentText?: string
@@ -198,7 +187,7 @@ export interface SubagentSectionInput {
   readonly t: Translate
 }
 
-/** 一行的可见文案：由原始事实 + 本段的口径算出来，不给调用方留第二份算法。 */
+/** 一行的可见文案：由原始事实 + 本段口径算出，不给调用方留第二份算法。 */
 interface SubagentRowView {
   readonly id: string
   readonly name: string
@@ -207,10 +196,7 @@ interface SubagentRowView {
   readonly navigable: boolean
 }
 
-/**
- * 子会话段的两个槽：徽标（标题排）与段体（计量行之后）。没有孩子时返回 `undefined`，
- * 调用方整段不画。
- */
+/** 子会话段的两个槽：徽标（标题排）与段体（计量行之后）；没有孩子时缺席。 */
 export function useSubagentSection(input: SubagentSectionInput): SubagentSectionProps | undefined {
   const { subjectId, children, total, totalSizeBytes, sizeAbsentText, note, onOpenChild, onPrefetchChild, t } = input
   const [open, setOpen] = useState(false)

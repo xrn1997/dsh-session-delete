@@ -8,8 +8,8 @@
  * 这里只钉"面板这一侧一次都不自动扫"——挂载读、写后重读与清空都不碰 `/orphans`。
  */
 import { act, renderHook } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { listView, useTrashQuery } from '../../src/client/use-trash-query.js'
+import { describe, expect, it, vi } from 'vitest'
+import { rowsOf, useTrashQuery } from '../../src/client/use-trash-query.js'
 import type { BusyGate } from '../../src/client/busy-gate.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { RemoteOutcome, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
@@ -17,7 +17,6 @@ import { readCachedTrashDetail, readTrashSnapshot, reloadSucceeded, writeTrashDe
 import { publishUndoNotice, useUndoNotice } from '../../src/client/undo-notices.js'
 import type { PurgeStatsWire } from '../../src/shared/wire.js'
 import { createFakeRemote, remoteFail, remoteOk, type FakeRemote } from './support/fake-remote.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import { pick } from '../support/fixture.js'
 
 const rows: TrashEntryLike[] = [
@@ -29,9 +28,6 @@ const detailOf = (entryId: string): TrashDetailLike => ({
   turnCount: 0, userMessageCount: 0, assistantMessageCount: 0, toolCallCount: 0,
   injectedCount: 0, blocks: [], olderCursor: null,
 })
-
-// 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
-beforeEach(() => { resetClientState() })
 
 function deps(over: Partial<FakeRemote> = {}): FakeRemote {
   return createFakeRemote({
@@ -53,24 +49,12 @@ function mount(over: Partial<FakeRemote> = {}, around: Around = passThrough) {
   return { d, ...view }
 }
 
-describe('取数编排 · 清单状态的唯一解读', () => {
-  it('loading / unknown / ready 一次交出 rows、failure、loading、空态与刷新中', () => {
-    expect(listView({ status: 'loading' })).toEqual({
-      rows: null, failure: null, loading: true, empty: false, refreshing: false,
-    })
-    expect(listView({ status: 'unknown', failure: '清单坏了' })).toEqual({
-      rows: null, failure: '清单坏了', loading: false, empty: false, refreshing: false,
-    })
-    expect(listView({ status: 'ready', rows: [] })).toEqual({
-      rows: [], failure: null, loading: false, empty: true, refreshing: false,
-    })
-    expect(listView({ status: 'ready', rows })).toEqual({
-      rows, failure: null, loading: false, empty: false, refreshing: false,
-    })
-    // 已有行、重读还在飞：行照画，只是多一个"这行来自上一份成功读数"的信号（视图拿它挂 aria-busy，不画文字）。
-    expect(listView({ status: 'ready', rows }, true)).toEqual({
-      rows, failure: null, loading: false, empty: false, refreshing: true,
-    })
+describe('取数编排 · 清单状态窄读', () => {
+  it('只有 ready 交出行集；loading / unknown 交 null（未知不是空，空态是 ready([])）', () => {
+    expect(rowsOf({ status: 'loading' })).toBeNull()
+    expect(rowsOf({ status: 'unknown', failure: '清单坏了' })).toBeNull()
+    expect(rowsOf({ status: 'ready', rows: [] })).toEqual([])
+    expect(rowsOf({ status: 'ready', rows })).toEqual(rows)
   })
 })
 
@@ -416,8 +400,7 @@ describe('取数编排 · 清空走注入的闸', () => {
 })
 
 describe('取数编排 · 清空与撤销横幅', () => {
-  // 横幅的现场是模块级的：每个用例从干净的现场起，别让上一个用例的发布混进来。
-  beforeEach(() => { resetClientState() })
+  // 横幅的现场在场景里：setup 每例换新场景，别让上一个用例的发布混进来。
 
   it('清空成功：指向发起时在场条目的横幅收掉——落点全没了，留着就是一条注定失败的「撤销」', async () => {
     publishUndoNotice({ entryId: 'a', title: 'A' })

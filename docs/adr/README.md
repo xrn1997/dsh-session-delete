@@ -10,7 +10,7 @@
 | --- | --- |
 | `0001` | 回收站里「这一组有谁」为什么收进 `src/trash/groups.ts` 一个纯函数面（当时四处各算、且已算出过两个不同答案） |
 | `0002` | 「这一批」与「一次移动的步骤」为什么要各有一个 module，而不是散在三个动词里 |
-| `0003` | 线上形状为什么住 `src/shared/wire.ts`、落地形状为什么留 `src/trash/entry.ts`，投影为什么必须显式写一遍（段名表的请求体形状同属线上形状） |
+| `0003` | 线上形状为什么住 `src/shared/wire.ts`、落地形状为什么留 `src/trash/entry.ts`，投影为什么必须显式写一遍（段名表的请求体形状同属线上形状）（已被 `0068` 取代：请求形状仍住 wire，`/apply` 成功值形状搬到 `apply-values` 的 schema DSL） |
 | `0004` | 段名的方法 / 纯度 / 读面 / body 为什么是一条记录，`dispatch` 为什么只读它 |
 | `0005` | 成员离场 / 归位通告为什么收进 `src/verbs/member-presence.ts` 一个家（当时四个动词六处调用各写、三态与归位条件各拼各的）（已被 `0019` 取代） |
 | `0006` | 永久删除为什么收进 `src/verbs/permanent-removal.ts` 一个只读计划 + 执行器（当时 purge 与 orphan 各手写一遍删除序列，purge 还借 journal 放没有反向动作的步骤；`/list` 念的是清册里记的旧 `sizeBytes`）（已被 `0027` 取代） |
@@ -69,7 +69,9 @@
 | `0063` | 三个读路径为什么共用一条重读生命周期：失效必达、active/demand 两道门、挂载不算修订、合并窗与单飞收进 `useGatedRefresh`，消费者只留数据语义；不轮询、不用 abort、失效粒度仍整条修订号（被否：三处各修各的 effect、轮询兜底、AbortController、精确 changed ids、用户可调合并窗） |
 | `0064` | 行读数为什么按输出计划读：批量面 / 逐行面（有界并发 8、只服务输出行）/ 合计三层；归档详情先算 limit 再投影、合计覆盖全部孩子；wire 与失败语义零变化（被否：端口加批量 label、用户并发旋钮、砍清单行、逐行串行、先全量投影再切片、合计只加显示行） |
 | `0065` | 面板两档为什么共用一条「档」装配线：`usePanelTab` 收两档装配与共有面、`PanelTabAdapter` 收两档差异、`PanelTabFrame` 收四格版面，两档状态仍各一份（ADR-0060 不翻）；不改 DOM / 文案 / 键盘语义（被否：继续两档各写一遍、合成一台状态机、只抽版面、运行时 adapter 容器） |
-| `0066` | 浏览器半跨槽位现场为什么收成可实例化的场景：`ClientScene` / `createClientScene` / `ClientSceneProvider` 聚合九份现场，生产注册面一份、测试各造；自由函数与默认实例兜底兼容旧测试，`resetClientState` 退化成一条；`write-seats` 与事件路径仍走默认实例（被否：保留模块级只收复位口、全量显式 scene 参数、每棵树各自 Context、事件总线 / DI 容器、删掉默认实例） |
+| `0066` | 浏览器半跨槽位现场为什么收成可实例化的场景：`ClientScene` / `createClientScene` / `ClientSceneProvider` 聚合九份现场，生产注册面一份、测试各造；自由函数与默认实例兜底兼容旧测试，`resetClientState` 退化成一条；`write-seats` 与事件路径仍走默认实例（被否：保留模块级只收复位口、全量显式 scene 参数、每棵树各自 Context、事件总线 / DI 容器、删掉默认实例）（已被 `0067` 取代：实例 seam 保留，懒建默认实例与复位口被推翻） |
+| `0067` | 进程场景为什么只认安装的那一份：不懒建默认实例、未安装即抛错；安装默认沿用已装实例（HMR），`replace` 只给测试；测试由 `tests/client/support/setup.ts` 每例换新，`reset-client-state.ts` 删除；自由函数仍是进程场景的薄委托（被否：保留懒建、全量显式传 scene、每棵树各自 Context） |
+| `0068` | `/apply` 成功值为什么从 `wire.ts` 搬进 `apply-values.ts` 的 schema DSL：一枚 schema 同时给运行期判形与类型，动作 → 值形状只留一张表；矩阵测试的期望表独立写死（被否：接口 + 手写判形两份、引入第三方 schema、把请求与信封也搬走） |
 
 ## 文档与真相
 

@@ -1,17 +1,10 @@
 // ⋯ 菜单里的「多选」入口（2026-10-17 改版：常驻勾选被用户打回，改成显式模式）
 import { fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { BatchSelectMenuItem } from '../../src/client/batch-menu-item.js'
 import { getPicks, isSelecting, togglePick } from '../../src/client/batch-selection-store.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-beforeEach(() => {
-  resetClientState()
-})
 
-afterEach(() => {
-  resetClientState()
-})
 
 describe('⋯ 菜单的多选入口', () => {
   it('点「多选」进入模式并收菜单；再点「退出多选」退出并清空名单', () => {

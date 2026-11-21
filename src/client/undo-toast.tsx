@@ -1,11 +1,8 @@
 /**
- * 撤销提示（`docs/ui-spec.md` §2 ③）：删除成功后一条可撤销的横幅。
- *
- * 现场与发布住在 `undo-notices.ts`；本文件只做组件：画通知台已有的事实，「撤销」整趟按下交给
- * `write-seats.ts` 的 `restoreFromUndo`（编排归恢复座位，见 ADR-0018 的边界）。
- * 为什么组件要独立：宿主的菜单行随菜单**一起卸载**（真产物 Menu 的注释原文
- * "the rows unmount with the list"），而提示要在菜单关掉之后还活着。宿主的官方配方同形——
- * 会话行的动作把请求写进一个模块级 store，`shell.overlay` 里的 `workspace.row-toast` 读它。
+ * 撤销提示（`docs/ui-spec.md` §2 ③）：删除成功后一条可撤销的横幅。现场与发布住 `undo-notices.ts`，
+ * 本文件只做组件；「撤销」整趟交给 `write-seats.ts` 的 `restoreFromUndo`。组件必须独立于菜单行：
+ * 宿主的菜单行随菜单一起卸载，而提示要在菜单关掉之后还活着（宿主官方配方同形：模块级 store +
+ * `shell.overlay` 里的 toast 读它）。
  */
 import { zhTranslate, type Translate } from './copy.js'
 import { useBusyGate } from './busy-gate.js'
@@ -23,11 +20,8 @@ import { Toast } from './ui/Toast.js'
 import { restoreFromUndo } from './write-seats.js'
 
 /**
- * 常驻的撤销提示宿主。挂 `shell.overlay`（框架级浮层；槽位说明原文 "a toast stack or a status
- * pill all belong here"）：没有待撤销的事时什么都不渲染。
- *
- * 两种来源共用这一个宿主：**当前横幅**优先；横幅不在时顶上一条待显示的撤销失败（在飞期间
- * 横幅被新删除覆盖或被面板恢复熄灭，失败原文不能跟着消失）。
+ * 常驻的撤销提示宿主，挂 `shell.overlay`。两种来源共用：**当前横幅**优先；不在时顶上一条待显示的
+ * 撤销失败（在飞期间横幅被覆盖/熄灭，失败原文不能跟着消失）。
  */
 export function UndoToast({ deps, t = zhTranslate }: { deps: OneShotDeps; t?: Translate }) {
   const current = useUndoNotice()
@@ -45,8 +39,7 @@ export function UndoToast({ deps, t = zhTranslate }: { deps: OneShotDeps; t?: Tr
       />
     )
   }
-  // 每条通知一个以 seq 为 key 的躯体：闸跟着通知走——旧撤销还在飞时来了新删除，新横幅的
-  // 「撤销」不许被旧那一趟按灰（issue #8 第 8 条的在飞闸按通知隔离）。
+  // 每条通知一个以 seq 为 key 的躯体：闸跟着通知走——旧撤销还在飞时来了新删除，新横幅的「撤销」不许被按灰。
   return <NoticeToast key={current.seq} deps={deps} current={current} t={t} />
 }
 
@@ -72,8 +65,7 @@ function NoticeToast({ deps, current, t }: { deps: OneShotDeps; current: UndoNot
       key={seq}
       tone="success"
       text={
-        // 已归档会话删除后撤销是回「归档」，不是回会话列表——整句一个键，不在 JSX 里拼标点
-        // （ADR-0060 决定第 1 条）。
+        // 已归档会话撤销是回「归档」，不是回会话列表——整句一个键，不在 JSX 里拼标点（ADR-0060 决定第 1 条）。
         current.kind === 'one'
           ? t(current.archived === true ? 'undo.movedArchived' : 'undo.moved', {
             title: current.title === '' ? t('undo.session') : current.title,
@@ -90,8 +82,7 @@ function NoticeToast({ deps, current, t }: { deps: OneShotDeps; current: UndoNot
           ? [{
               label: t('undo.undo'),
               disabled: gate.busy,
-              // 整趟包进这条横幅自己的闸（连点防重与按灰都归 busy-gate.ts，不在这里另造一套）；
-              // ids 组装、回执改写与收自己都归 `restoreFromUndo`，这里只按下。
+              // 整趟包进这条横幅自己的闸；ids 组装、回执改写与收自己都归 `restoreFromUndo`。
               onClick: () => { void gate.around(() => restoreFromUndo(deps, current, t)) },
             }]
           : undefined

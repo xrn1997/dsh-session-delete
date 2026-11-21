@@ -1,15 +1,8 @@
 /**
- * 「这一批」的唯一实现（ADR-0002）：POST /apply 的落点——一组 id 上的同一个动作。
- *
- * 批量是请求的性质，不是单个动词的性质。这里拥有三件事：
- * - 去重并保持输入顺序；
- * - 逐条信封：一条失败不传染下一条，失败按 map-error 折成错误对象；
- * - 恢复通告攒到批尾，一次 announceRestored(ids)。
- *
- * 「已被同批前一条带走」是幂等成功（delete/restore 回 null，purge 回 0），不是失败；
- * 判据在 src/trash/groups.ts，收缩视图的持有机制在 src/trash/shrinking-view.ts；同批已带走集：
- * delete / restore 在 src/verbs/batch-carried.ts，purge 那份的实例由 src/verbs/trash-scope.ts
- * （清册作用域）持有。
+ * 「这一批」的唯一实现（ADR-0002）：POST /apply 的落点——一组 id 上的同一个动作。批量是请求的性质，
+ * 不是单个动词的性质：这里拥有去重保序、逐条信封（失败不传染，按 map-error 折成错误对象）、恢复通告攒到批尾一次发。
+ * 「已被同批前一条带走」是幂等成功（delete/restore 回 null，purge 回 0），判据住 `groups.ts`；
+ * 同批已带走集：delete / restore 住 `batch-carried.ts`，purge 那份由清册作用域持有。
  */
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../domain/closure.js'
@@ -27,7 +20,7 @@ function failure(id: string, action: ApplyAction, error: unknown): ApplyOutcome 
   return { id, action, ok: false, error: toRemoteFailure(error) }
 }
 
-/** 按动作收窄的成功支（判别联合要的是**字面量**，所以动作参数按 `A` 收，不收成宽化的 `ApplyAction`）。 */
+/** 按动作收窄的成功支（判别联合要的是**字面量**）。 */
 function success<A extends ApplyAction>(id: string, action: A, value: ApplyValueByAction[A]): Extract<ApplyOutcome, { action: A }> {
   return { id, action, ok: true, value } as Extract<ApplyOutcome, { action: A }>
 }
@@ -45,7 +38,7 @@ function unique(ids: readonly string[]): string[] {
 }
 
 /**
- * 一条 id 一条结果：**这是批量唯一的形式**（单条就是长度为 1 的批量，仓里不留第二条执行路径）。
+ * 一条 id 一条结果：**批量唯一的形式**（单条就是长度为 1 的批量，仓里不留第二条执行路径）。
  * 动词只收一个 id、只吐一条结果；`try/catch` 在这一处，失败不传染下一条。
  */
 async function forEachId<A extends ApplyAction>(
@@ -66,8 +59,7 @@ async function forEachId<A extends ApplyAction>(
 
 async function applyDelete(deps: DeleteSessionDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const run = deleteSession(deps)
-  // 同批父先被删时，孩子是跟着父一起搬走的；后到的孩子 id 是一次幂等 no-op。
-  // 这份名单**由动词的结果长出**（`movedSessionIds` = 这次真的搬走的整组），删除写完之后不再读一次清册。
+  // 同批父先被删时孩子跟着父一起搬走，后到的孩子 id 是一次幂等 no-op；名单由动词结果长出（这次真的搬走的整组），删完不再读清册。
   const carried = createSessionCarried()
   return forEachId('delete', ids, async (sessionId) => {
     if (carried.claim(sessionId).verdict === 'carried') return null
@@ -77,8 +69,7 @@ async function applyDelete(deps: DeleteSessionDeps, ids: readonly string[]): Pro
   })
 }
 
-/** restore 的「这条是不是被同批前一条带走了」与视图收缩都归 `batch-carried.ts`（purge 那一半归
- *  `trash-scope.ts`）；`apply` 整批只读一次清册，动词只拿它交回的只读组与当前清册。 */
+/** restore 的同批判据与视图收缩归 `batch-carried.ts`（purge 那一半归 `trash-scope.ts`）；`apply` 整批只读一次清册。 */
 async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   // 整批一次清册读（"最初的样子"）+ 一份会收缩的同批已带走集；通告攒到批尾，一次发整组 id。
   const carried = createEntryCarried(await deps.ledger.list())
@@ -101,9 +92,7 @@ async function applyRestore(deps: CoreDeps, ids: readonly string[]): Promise<App
   return outcomes
 }
 
-/** purge 的整批语义收进清册作用域：选组、收缩视图、同批带走的幂等（回 0）与 absent 的
- *  trash-empty（原文点名）都在 `scope.purge(id)` 里——这里整批只读一次清册、逐 id 只交一个 id，
- *  两份数组（算好的组 + 收缩中的视图）不再从批量层递两遍。 */
+/** purge 的整批语义收进清册作用域：选组、收缩视图、幂等回 0 与 absent 的 trash-empty 都在 `scope.purge(id)`。 */
 async function applyPurge(deps: RemovalDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   // 删的能力住这一层（`RemovalDeps`），按调用点注入给作用域——作用域自己够不着删除面。
   const scope = createTrashScope(deps, await deps.ledger.list(), (plan) => executeRemoval(deps, plan))
@@ -111,8 +100,7 @@ async function applyPurge(deps: RemovalDeps, ids: readonly string[]): Promise<Ap
 }
 
 /** 删除确认框那句「含 N 个子会话」：一次问完整批（`subagentMembersOf` 本来就是批量口）。
- *  宿主口缺席（`available:false`）时按 0（这里不再有"空表"这一步）；真读失败则整次调用失败，
- *  浏览器半按"读不到"把整句不说。 */
+ *  宿主口缺席按 0；真读失败则整次调用失败，浏览器半按"读不到"把整句不说。 */
 async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   const wanted = unique(ids)
   const read = await deps.host.subagentMembersOf(wanted)
@@ -120,9 +108,8 @@ async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<Apply
 }
 
 /**
- * 解除归档（归档档的显式动作，ADR-0008 不翻案：它不是删除/恢复的副作用）。逐 id 调宿主
- * `unarchiveSession`（未归档是幂等 no-op）；成功值固定 `1`——「这条 id 被处理成功」，不是
- * 实际状态变化数（宿主不给返回值，也不为此多读一次 `isArchived` 去猜）。
+ * 解除归档（归档档的显式动作，不是删除/恢复的副作用，ADR-0008 不翻案）：逐 id 调宿主 `unarchiveSession`
+ * （未归档是幂等 no-op）；成功值固定 `1`——「这条 id 被处理成功」，不是实际状态变化数（宿主不为此多读一次 `isArchived`）。
  */
 async function applyUnarchive(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   return forEachId('unarchive', ids, async (sessionId) => {
@@ -132,26 +119,19 @@ async function applyUnarchive(deps: CoreDeps, ids: readonly string[]): Promise<A
 }
 
 /**
- * 清一组无主子会话（父已被彻底删掉、孩子还留在 `sessions/` 里的那些）。id 是**根会话 id**——
- * 界面先 `GET /orphans` 拿 `roots` 再原样带回来，所以这里的 `not-found` 说的是"这句话已经过期了"
- * （父又被人放回回收站、组已被上一个请求带走，或另一处已经把目录清掉），不是"用户打错了一个 id"。
- * 根 id 两边都去 `session-` 前缀再比：报告原样回传是正常路径，外部调用带另一种写法也认。
+ * 清一组无主子会话（父已被彻底删掉、孩子还留在 `sessions/` 里的那些）。id 是**根会话 id**；`not-found` 说的是
+ * "这句话已经过期了"（父又回了回收站、组已被上一个请求带走），不是用户打错 id；根 id 两边都去 `session-` 前缀再比。
  *
- * **这是写动作，排在到达序链上**，而且**先对账再扫**：`loadOrphanGroups` 本身只扫描、不写清册；
- * 这里先把 `ledger.list()` 对账后的行交给它——刚被人手工搬进 `session-trash/` 的那一格目录此刻可能还
- * 没有对应行，拿 raw 索引扫就会把"父还在回收站里等着"的一组当成孤儿**直接删盘**，替用户做了一个没人
- * 点过的决定（那种组该跟着父恢复或彻底删除）。
+ * **写动作，排在到达序链上**，而且**先对账再扫**：交给 `loadOrphanGroups` 的必须是 `ledger.list()` 对账后的行——
+ * 刚被手工搬进 `session-trash/` 的目录此刻可能还没有行，拿 raw 索引扫就会把"父还在回收站里等着"的一组当成孤儿**直接删盘**。
  */
 async function applyOrphanClean(deps: RemovalDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {
   // 对账交回的行直接给扫描，不再读第二遍 raw 索引；无主子会话与清册收缩无关，不经过清册作用域。
-  // 语料面（宿主 `sessionQuery`）缺席时这一句抛 `io` ⇒ 整次调用失败，不回一份"零条"的假回执。
-  // 只量请求点名的根：报告可能列着几十组，这里不该为没被点的那几组递归量树。
+  // 语料面缺席时这一句抛 `io` ⇒ 整次调用失败，不回"零条"的假回执；只量请求点名的根。
   const groups = await loadOrphanGroups(deps, await deps.ledger.list(), ids)
   const byRoot = new Map(groups.map(group => [bareSessionId(group.root.sessionId), group]))
-  // 组内没有回收站这一层可退：`cleanOrphanGroup` 的 live 准入在任何写之前（整组拒绝、零副作用）；
-  // 删到一半失败时已删目录不回滚，失败错误的 `details` 带 `{ removed, freedBytes }` 作为部分回执，
-  // 不会伪装成"整组清完了"。`not-found` 在这里抛，由 `forEachId` 折成失败信封；`receipt.ts`
-  // 对 orphan-clean 的 `not-found` 再判为中性。
+  // 组内没有回收站这一层可退：live 准入在任何写之前（整组拒绝、零副作用）；删到一半失败不回滚，
+  // `details` 带 `{ removed, freedBytes }` 作部分回执，不伪装成"整组清完了"；`not-found` 由 `forEachId` 折成失败信封。
   return forEachId('orphan-clean', ids, async (id) => {
     const group = byRoot.get(bareSessionId(id))
     if (group === undefined) throw verbError('not-found', `不再是可清理的无主子会话：${id}`)

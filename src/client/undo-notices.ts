@@ -1,22 +1,12 @@
 /**
- * 撤销横幅的**通知台**：现场、seq、发布 / 熄灭与停留时长。
- *
- * 为什么独立于 Toast 组件：提示的现场要跨槽位存活（菜单行随菜单卸载，`shell.overlay` 里的组件才常驻），
- * 而写入座位与取数编排只需要发布 / 熄灭，不需要 import 一个 `.tsx`。通知台放在这里之后，
- * `undo-toast.tsx` 只做组件并组合恢复座位，`write-seats.ts` 与 `use-trash-query.ts` 只依赖本 module。
- *
- * 形状：**可实例化的现场**（`createUndoNoticeScene`）——两份 store（当前横幅、待上屏失败）与全部
- * 意图名住实例，由 `scene.ts` 的 `ClientScene` 聚合。自由函数委托默认场景（兼容旧调用点与测试），
- * 读数 hook 走 `useClientScene()`（生产 Provider 实例；测试无 Provider 回退默认）。
+ * 撤销横幅的**通知台**：现场、seq、发布 / 熄灭与停留时长。提示现场要跨槽位存活，所以独立于 Toast
+ * 组件：`undo-toast.tsx` 只做组件，写入座位与取数编排只依赖本 module。实例由 `ClientScene` 聚合。
  */
 import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'
 
-/**
- * 一次待撤销的事。两形：单条删除（主语是会话名）／批量删除（主语是条数）。
- * 同一个 Toast 宿主、同一停留时长；撤销动作按形分派（单条 / 批量），两条都走同一个外部恢复座位
- * （`write-seats.ts` 的 `restoreFromUndo`），单条带 `single: true` 的读法（null 是协议错，不冒充幂等成功）。
- */
+/** 一次待撤销的事：单条删除（主语是会话名）或批量删除（主语是条数）；撤销动作按形分派，
+ *  两条都走同一个外部恢复座位（`write-seats.ts` 的 `restoreFromUndo`）。 */
 export type UndoNotice = {
   /** 每次发布递增：Toast 靠它重挂载，同一段文案连续出现两次也能重新计一次停留。 */
   seq: number
@@ -41,11 +31,8 @@ export type UndoNotice = {
     }
 )
 
-/**
- * 一条**待显示**的撤销失败：撤销在飞时横幅被新删除覆盖、或被面板恢复 / 清空熄灭，失败就失去了
- * 落点。`failNotice` 到那时把原文留在这里，等当前没有横幅时由 `undo-toast.tsx` 顶上并到时清掉
- * ——失败不因为横幅先走一步而被吞掉（`docs/ui-spec.md` §2 ③ 的「旧撤销的失败留到空档再上屏」说的就是这一格）。
- */
+/** 一条待显示的撤销失败：撤销在飞时横幅被新删除覆盖或被面板恢复熄灭，失败就失去了落点；
+ *  `failNotice` 把原文留在这里，等当前没有横幅时由 `undo-toast.tsx` 顶上——失败不被吞掉。 */
 export interface UndoFailureNotice {
   /** 每次发布递增：Toast 靠它重挂载、重新计停留。 */
   seq: number
@@ -58,17 +45,16 @@ export interface UndoNoticeScene {
   publishOne(input: { entryId: string; title: string; archived?: boolean }): void
   /** 批量删除成功后发布一条撤销提示：覆盖上一条，只报这一次移走的条数。 */
   publishBatch(input: { entryIds: readonly string[]; n: number; archived?: boolean }): void
-  /** 整条横幅不再留：撤销成了，或停留时间走完。 */
+  /** 整条横幅不再留。 */
   clear(): void
   /** 指向这些条目的横幅熄掉（任一命中就清整条；清空回收站按发起时名单调它）。 */
   dismiss(entryIds: readonly string[]): void
-  /** 当前撤销横幅（当场读；事件路径与场景测试用，渲染侧用 {@link useNotice}）。 */
+  /** 当前撤销横幅（当场读；渲染侧用 {@link useNotice}）。 */
   read(): UndoNotice | null
-  /** 当前撤销横幅（订阅）。 */
   useNotice(): UndoNotice | null
   /** 当前没有撤销横幅时要顶上来的那条失败（订阅）。 */
   useFailure(): UndoFailureNotice | null
-  /** 待显示的失败已经上屏（到时或用户看过）：清掉它。 */
+  /** 待显示的失败已经上屏：清掉它。 */
   clearFailure(): void
   /** 这次撤销开始时的那条横幅还在吗——期间被新删除覆盖、或由面板恢复熄灭时，旧请求不许改写它。 */
   owns(current: UndoNotice): boolean
@@ -142,12 +128,10 @@ export function createUndoNoticeScene(): UndoNoticeScene {
 
 /* ── 兼容自由函数（旧调用点与测试）：委托默认场景的实例 ────────────────────────── */
 
-/** 删除成功后发布一条撤销提示（单条，默认场景）。 */
 export function publishUndoNotice(input: { entryId: string; title: string; archived?: boolean }): void {
   getDefaultClientScene().undo.publishOne(input)
 }
 
-/** 批量删除成功后发布一条撤销提示（默认场景）。 */
 export function publishUndoBatchNotice(input: {
   entryIds: readonly string[]
   n: number
@@ -161,7 +145,6 @@ export function clearUndoNotice(): void {
   getDefaultClientScene().undo.clear()
 }
 
-/** 指向这些条目的横幅熄掉（默认场景）。 */
 export function dismissUndoNotice(entryIds: readonly string[]): void {
   getDefaultClientScene().undo.dismiss(entryIds)
 }
@@ -171,12 +154,10 @@ export function useUndoNotice(): UndoNotice | null {
   return useClientScene().undo.useNotice()
 }
 
-/** 供组件订阅待上屏的失败。 */
 export function useUndoFailure(): UndoFailureNotice | null {
   return useClientScene().undo.useFailure()
 }
 
-/** 待显示的失败已经上屏：清掉它（默认场景）。 */
 export function clearUndoFailure(): void {
   getDefaultClientScene().undo.clearFailure()
 }
@@ -184,12 +165,10 @@ export function clearUndoFailure(): void {
 /** 提示停留时长。**6 秒** 定死在本行（比 Toast 默认的 3 秒长）——`docs/ui-spec.md` §2 ③ 只指到这里，不抄这个数。 */
 export const UNDO_HOLD_MS = 6000
 
-/** 这次撤销开始时的那条横幅还在吗（默认场景）。 */
 export function ownsNotice(current: UndoNotice): boolean {
   return getDefaultClientScene().undo.owns(current)
 }
 
-/** 撤销失败（默认场景）：把原因换到同一条横幅上；横幅已经不在了就献给待显示队。 */
 export function failNotice(current: UndoNotice, message: string): void {
   getDefaultClientScene().undo.fail(current, message)
 }

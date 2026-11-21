@@ -1,15 +1,8 @@
 /**
- * 插件设置页「维护」卡的手动编排：孤儿会话 + 孤儿附件 + 投影缓存三段。
- *
- * 状态机本身（报告 / 失败 / 中性提示 / 确认框 / 在飞档位 / 最新票 / 清完必重查）收在
- * `src/client/use-maintenance-section.ts` 的泛型段 module 里，三段各实例化一次；这一层只剩薄 glue：
- * 各段自己的远程调用、"没活可干"的判据与回执拼句。三条承重规矩（没有自动扫描 / 挂载只交初始态 /
- * 没有定时器）由段 module 保证，这一层同样不挂 effect。
- *
- * 写动作走既有的三段：孤儿会话是 `/apply` 的 `orphan-clean`（回执判读复用 `receipt.ts` 的读法），
- * 孤儿附件是聚合的 `POST /attachment-clean`（回执就是 `AttachmentCleanupWire` 本身），
- * 投影缓存是聚合的 `POST /projection-clean`（回执 `{ removed, failed }`）。
- * 面板的 `useTrashQuery` 与本 hook 互不引用：维护卡是手动面，面板是挂载即读的清单面。
+ * 插件设置页「维护」卡的手动编排：孤儿会话 + 孤儿附件 + 投影缓存三段。状态机收在
+ * `use-maintenance-section.ts` 的泛型段 module 里，三段各实例化一次；这一层只剩薄 glue：各段自己的
+ * 远程调用、"没活可干"的判据与回执拼句，同样不挂 effect。写动作走 `/apply` 的 `orphan-clean` 与
+ * 两个聚合清理段；面板的 `useTrashQuery` 与本 hook 互不引用。
  */
 import type { Translate } from './copy.js'
 import { attachmentSkippedSentence, readReceipt, summarizeReceipt, type ReceiptSummary } from './receipt.js'
@@ -39,12 +32,8 @@ export interface Maintenance {
   readonly projection: MaintenanceSectionView<ProjectionCacheOrphanReportWire>
 }
 
-/**
- * 附件清理回执 → 一句上屏的话。跳过半句与面板共用同一判据（`receipt.ts` 的
- * `attachmentSkippedSentence`），这里只接非跳过的后半句：
- * - 有逐文件失败：未清件数与已清件数都在句里。
- * - 全清干净且没有失败：只说清了几件；一件都没动就是 `null`（不拿"清了 0 件"占一行）。
- */
+/** 附件清理回执 → 一句上屏的话：跳过半句与面板共用 `attachmentSkippedSentence`；有失败说件数、全清干净
+ *  只说清了几件，一件没动是 `null`。 */
 function attachmentCleanupNotice(a: AttachmentCleanupWire, t: Translate): string | null {
   const skipped = attachmentSkippedSentence(a, t)
   if (skipped !== null) return skipped
@@ -56,8 +45,8 @@ function attachmentCleanupNotice(a: AttachmentCleanupWire, t: Translate): string
     : null
 }
 
-/** orphan-clean 回执里的"没清成"句：服务端原文 + 部分计数（"删了一半才炸"的那部分释放量）。
- *  首条失败由调用方在判过非空之后作为参数交进来——签名因此写明前提，函数体不必再赌 `failed[0]` 在。 */
+/** orphan-clean 回执里的"没清成"句：服务端原文 + 部分计数（"删了一半才炸"的释放量）；
+ *  首条失败由调用方判过非空后交进来。 */
 function orphanCleanFailureSentence(
   summary: ReceiptSummary,
   first: ReceiptSummary['failed'][number],
@@ -92,8 +81,7 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
     clean: (report) => report.roots.length === 0
       ? null
       : deps.applyOutcomes('orphan-clean', report.roots),
-    // 回执判读只住 `receipt.ts`（三态判读与 partial 的累加语义都在那里）；这里只消费摘要。
-    // 请求名单用**这一趟**点击那一刻的报告：状态机把它随回执一起交回来，段不自存"最近一次的名单"。
+    // 回执判读只住 `receipt.ts`；请求名单用这一趟点击那一刻的报告，段不自存"最近一次的名单"。
     afterClean: (outcome, report) => {
       if (!outcome.ok) {
         return { plan: { failure: t('trash.orphans.failure', { message: outcome.failure.message }) } }
@@ -122,8 +110,7 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
     clean: (report) => report.count === 0
       ? null
       : deps.cleanAttachmentOrphans(),
-    // 一次判读、两处落地：成功且没有跳过/失败时，重查飞着时先收成 0（旧报告已过期）；
-    // 重查回来再落真实读数（若重查失败则走失败块，不保留旧读数）。
+    // 成功且没有跳过/失败时，重查飞着时先收成 0（旧报告已过期），重查回来再落真实读数。
     afterClean: (outcome) => {
       if (!outcome.ok) {
         // 清理顶层失败没有"件数"可说：本地化前缀 + 服务端原文（引用源读不出、盘上忙…）。
@@ -138,8 +125,7 @@ export function useMaintenance({ deps, t }: { deps: MaintenanceDeps; t: Translat
     },
   })
 
-  /* ── 投影缓存段：`GET /projection-orphans` 读 + 聚合的 `POST /projection-clean` 写 ──
-   *  清理只删「扫描那一刻仍无会话痕迹」的记录；服务端清完重查，UI 不自己猜剩余量。 */
+  /* ── 投影缓存段：清理只删「扫描那一刻仍无会话痕迹」的记录；服务端清完重查，UI 不自己猜剩余量。 ── */
   const projection = useMaintenanceSection<ProjectionCacheOrphanReportWire, ProjectionCacheCleanupWire>({
     scan: async () => scanText(
       await deps.scanProjectionCacheOrphans(),

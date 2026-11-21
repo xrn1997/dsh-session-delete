@@ -1,21 +1,10 @@
 /**
- * 会话详情的**通用视图**（只画状态，不取数）：状态壳（idle/loading/holding/failed/ready）、
- * 会话信息表、计量行、四档工作步骤、提问轨、附件内联与分页按钮的唯一实现。
+ * 会话详情的通用视图（只画状态，不取数）：状态壳、信息表、计量行、工作步骤、提问轨、附件与分页。
  *
- * 档差全在**三个投影口**里，不在这份代码里：
- * - `head`：显示名与大小——**与选中行配对**（列表行给，详情不重算）；
- * - `infoRows`：信息表行集（回收站七行 / 归档五行，各档自己投影）；
- * - `subagents`：子会话段的徽标与段体（两档都传；没有孩子 ⇒ 缺席 = 不画，呈现归 `subagent-section.tsx`）。
+ * 档差只在三个投影口里：`head`（与选中行配对）、`infoRows`（两档各自的行集）、`subagents`（子会话段）。
+ * 两档共用的接线（读路状态 + 分页读面 + 提问轨）由 `use-detail-frame.ts` 拼成详情帧，这里只消费 `state` / `pager`。
  *
- * 两档共用的接线（读路状态 + 分页读面 + 提问轨）由 `use-detail-frame.ts` 拼成**详情帧**；
- * 这份代码只消费帧里的 `state` / `pager` 两格，行的投影由两档包装交进来。
- *
- * 三条界面约束（两档同守）：
- * - 动作留在清单行右侧；详情只负责看。
- * - 正文是**块**：用户/助手文字常显；思考、工具、注入、系统消息、压缩摘要默认折叠，折叠头给
- *   标签 + 首行摘要（工具另给状态）。注入也铺进正文——这是对宿主 Chat 的有意偏离（它隐藏普通注入，
- *   而这里的目标是「删之前看全」）；条数另进计量行。
- * - 助手正文与思考走 Markdown，用户提问保持原话；工具参数/结果走等宽纯文本（限高可滚）。
+ * 两档同守：动作留在清单行；正文是块（用户/助手常显，其余默认折叠；注入也铺进正文——对宿主 Chat 的有意偏离，删之前看全）；助手/思考走 Markdown，提问保持原话。
  */
 import {
   type CSSProperties,
@@ -40,11 +29,7 @@ import { hasDialogue, isDisclosureBlock, threadItems } from './detail-blocks.js'
 import { useDetailFramePager, type DetailFrameView } from './use-detail-frame.js'
 import { JUMP_SCROLL_MARGIN_PX } from './use-prompt-rail.js'
 
-/** 详情的导航面（孩子视图的开与回）：类型定义住在这里（视图定 prop 形状），
- *  控制器 `import type` 它避免环。判据（谁在场、title 给什么）住控制器的 `detailNav` 派生。
- *
- *  孩子一律按 **id** 交接：这一面两档共用——回收站档的孩子是清册行、归档档的孩子是宿主闭包行，
- *  两种行型不是两种身份。谁把这半行读数补回来归各自的控制台（判据住它那里的 `ADR-0055`）。 */
+/** 详情的导航面（孩子视图的开与回）：类型定义在这里（控制器 `import type` 避免环）；孩子一律按 id 交接（ADR-0055）。 */
 export interface DetailNav {
   /** 只在主体是清单选中那条时交出（ADR-0055 沿用的单级判据，唯一实现）。 */
   readonly onOpenChild?: (childId: string) => void
@@ -63,22 +48,19 @@ export interface DetailInfoRow {
   readonly code?: boolean
 }
 
-/** 子会话段的投影槽：徽标（头排）与段体（计量行之后）由各自档交来（两档共用 `subagent-section.tsx` 那一台）；缺席整段不画。 */
 export interface SubagentSectionProps {
   readonly badge: ReactNode
   readonly body: ReactNode
 }
 
 export interface SessionDetailProps<S, D extends SessionDetailWire> {
-  /** 详情帧（`use-detail-frame.ts`）里壳消费的那两格：读路状态与分页读面。
-   *  `rail` 归栏外壳、`canNavigate` 归控制器与轨、行投影归两档包装——壳不碰它们。 */
+  /** 详情帧：壳只消费读路状态与分页读面；`rail` / `canNavigate` / 行投影不归壳。 */
   frame: DetailFrameView<S, D>
   /** 主体身份（换条复位滚动、body 重挂载的 key、保持提示的判据都按它）。 */
   subjectId: string
   /** 标题与大小与**选中行**配对：列表行给 display name 与大小，详情不重算。 */
   head: { readonly displayName: string; readonly sizeText: string | null }
   infoRows: readonly DetailInfoRow[]
-  /** 两档都传（子会话段）；没有孩子或缺席 ⇒ 不画。 */
   subagents?: SubagentSectionProps
   busy: boolean
   wide: boolean
@@ -93,18 +75,12 @@ const SHELL: CSSProperties = {
   flexDirection: 'column',
   gap: 12,
   boxSizing: 'border-box',
-  // 只给下限、不给定高：`HEAD` 的 sticky 包含块是这一层，定高会被滚动容器拉成首屏高，
-  // 长会话读到第二屏之后返回键就跟着滚走（触屏没有 Esc 兜底）。`minHeight` 让壳随内容长高。
+  // 只给下限、不给定高：`HEAD` 的 sticky 包含块是这一层，定高会被滚动容器拉成首屏高，返回键跟着滚走。
   minHeight: '100%',
   minWidth: 0,
 }
 
-/** 返回键排在标题之后：排在之前会把整条标题的起点往右挤（`docs/ui-spec.md` §2 ⑥）。
- *  标题排按紧凑按钮（`ui.css` 的 `.sd-button-sm`）预留高度：宽档父详情没有返回键、孩子视图有，
- *  不预留时下方会话信息会在父子切换时跳 6px。
- *
- *  `position: sticky`：长会话读到中段时返回键仍在顶上（触屏没有 Esc 兜底，返回必须常驻）。
- *  底色用宿主页面底色（`bg-base`）把滚过的正文盖住。 */
+/** 返回键排在标题之后；标题排按紧凑按钮预留高度（父子切换不跳 6px）。`position: sticky`：长会话中段返回键仍在（触屏没有 Esc）。 */
 export const HEAD_MIN_HEIGHT = 28
 export const HEAD_PAD_BOTTOM = 6
 
@@ -124,11 +100,9 @@ const TITLE_LINE: CSSProperties = { ...ELLIPSIS, flex: '1 1 auto', minWidth: 0, 
 
 const BACK: CSSProperties = { flex: 'none' }
 
-/** 详情保持超过这个静默窗口才出「正在读…」：本地一次读数通常在这之前落地，用户看不到任何字样。
- *  300ms 与宿主目录选择器的慢扫描提示同档（`SLOW_SCAN_DELAY_MS`）。 */
+/** 保持超过 300ms 才出「正在读…」：本地读数通常在这之前落地；与宿主慢扫描提示同档。 */
 const HOLD_NOTICE_DELAY_MS = 300
 
-/** 保持期的提示：排在标题之后、返回键之前，行高不超出标题排预留的 28px。 */
 const HOLD_NOTICE: CSSProperties = {
   flex: 'none',
   fontSize: 12,
@@ -136,11 +110,7 @@ const HOLD_NOTICE: CSSProperties = {
   color: 'var(--sd-label-tertiary)',
 }
 
-/**
- * 会话信息表：一张两列表，行序按「认出这条会话 → 时间定位 → 精确核对 → 调试属性」排
- * （`docs/ui-spec.md` §2 ⑥）。标签列自动宽、值列吃余宽；长串省略号收、全称走 `title`。
- * 不做折叠、不做卡片：这类信息是给核对用的，默认就该看得见。
- */
+/** 会话信息表：行序按「认出 → 时间定位 → 精确核对 → 调试属性」排（`docs/ui-spec.md` §2 ⑥）；长串省略、全称走 `title`。 */
 const META: CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'auto 1fr',
@@ -165,10 +135,7 @@ const META_CODE = {
   color: 'var(--dsw-alias-label-secondary)',
 } as CSSProperties
 
-/**
- * 计量行：一行内联的「标签 值」对，自动换行。和表分开是因为它们是**可以横着扫的数字**，
- * 不是要逐行核对的字符串。不插中点分隔符——分隔符是各语言自己的写法，拼在 JSX 里就钉死了某一门语言的标点。
- */
+/** 计量行：可横着扫的数字，与表分开；不插中点分隔符——那是各语言自己的标点。 */
 const METRICS: CSSProperties = {
   display: 'flex',
   flexWrap: 'wrap',
@@ -189,28 +156,20 @@ const METRIC_VALUE = {
   minWidth: 0,
 } as CSSProperties
 
-/**
- * 线程的行距取宿主那两档里的 12px 那档（`ChatView.module.css` 的 `--dsh-chat-flow-gap`：默认 6px，
- * **换轮**之后 12px）。我们的线程里相邻两条必然换轮（一问一答），所以落在 12 这一档。
- */
+/** 行距取宿主 `--dsh-chat-flow-gap` 的换轮档 12px（我们相邻两条必然换轮）。 */
 const THREAD: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 }
 
 /**
- * 消息行照宿主抄（来源 `app.asar` 里
- * `@deepseek-ai/dsh-client-ui-chat/lib/client.js` 内联的 `MessageItem.module.css` 与
- * `AssistantMarkdown.module.css`，逐字声明）。两条关键事实：
- * **只有用户有气泡**，助手那侧宿主不铺底、不给边框，正文直接铺满栏；给助手画带边框的卡片
- * 会与宿主消息行不同形。字号走 `--dsh-content-font-size` 那根轴，宿主调内容字号时这里一起动。
+ * 消息行照宿主 `MessageItem` / `AssistantMarkdown` 抄（来源 `app.asar` 里 `@deepseek-ai/dsh-client-ui-chat/lib/client.js`
+ * 内联的 `MessageItem.module.css` 与 `AssistantMarkdown.module.css`，逐字声明）：只有用户有气泡，助手正文铺满栏（给助手画卡片会走形）；
+ * 字号走 `--dsh-content-font-size`，宿主调内容字号时这里一起动。
  */
 /** 提问轨跳过来的落位让位（`JUMP_SCROLL_MARGIN_PX`）：目标行停在 sticky 标题排之下而不是被它盖住。 */
 const USER_ROW: CSSProperties = { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6, minWidth: 0, scrollMarginTop: JUMP_SCROLL_MARGIN_PX }
 
 const ASSISTANT_ROW: CSSProperties = { display: 'flex', flexDirection: 'column', minWidth: 0 }
 
-/**
- * 宿主是 `.userRow > .userStack > .bubble` 三层，`min(内容宽 × .702, 82%)` 这个上限住在中间那层；
- * 我们一行只有一个气泡，直接把上限挂在气泡上（同一父宽下百分比与 `min()` 的结果一致，少一层）。
- */
+/** 宿主是 `.userRow > .userStack > .bubble` 三层，宽度上限在中间层；这里一行一气泡，直接挂在气泡上（少一层）。 */
 const BUBBLE: CSSProperties = {
   background: 'var(--sd-specific-bubble)',
   borderRadius: 'var(--sd-radius-xl)',
@@ -258,13 +217,8 @@ const BLOCK_ROW: CSSProperties = {
   gap: 8,
 }
 
-/**
- * 标签不参与收缩：摘要是 `1 1 auto`，标签若也可缩，长结果会把「工具调用 / 来源」挤成几个字。
- *
- * 颜色**不跟着 `.sd-disclosure-row` 继承**：那颗类给的是 `label-tertiary`，而摘要也是 tertiary，
- * 两截同色只差一个字重，真机上就糊成一句「系统消息You are an AI agent…」。标签提到 secondary，
- * 摘要留在 tertiary，中间再留 8px，标签才真的像标签。
- */
+/** 标签不参与收缩：摘要是 `1 1 auto`，标签若也可缩，长结果会把「工具调用 / 来源」挤成几个字。
+ *  颜色不跟 `.sd-disclosure-row` 继承：标签提 secondary、摘要留 tertiary，否则同色糊成一句。 */
 const BLOCK_TITLE: CSSProperties = {
   ...ELLIPSIS,
   flex: 'none',
@@ -362,9 +316,7 @@ export function timeText(ms: number): string {
   return ms === 0 ? '—' : absoluteText(ms)
 }
 
-/** 活跃跨度：不足一天给小时，超过给天——都是"这条会话活了多久"这一个问题的答案。
- *  两端任一缺省就**不答**（不把"不知道"报成任何量级）；不足一小时说"不足 1 小时"，
- *  不把 10 分钟舍入成 1 小时冒充整点。 */
+/** 活跃跨度：不足一天给小时、超过给天；两端任一缺省就不答（不把「不知道」报成任何量级）。 */
 function spanText(from: number, to: number, t: Translate): string | undefined {
   if (from === 0 || to === 0) return undefined
   const ms = Math.max(0, to - from)
@@ -379,7 +331,6 @@ export function present(value: string | undefined): value is string {
   return value !== undefined && value !== ''
 }
 
-/** 折叠头的摘要：第一行非空文字。 */
 function firstLine(text: string): string {
   const line = text.split('\n').find((candidate) => candidate.trim() !== '') ?? ''
   return line.trim()
@@ -421,8 +372,7 @@ function toolStatus(status: 'ok' | 'error' | 'unfinished', t: Translate): string
   return t('detail.block.status.unfinished')
 }
 
-/** 工作步骤展示的档位（学宿主「工作步骤展示」那四档；回收站的轮次全部已结束，
- *  所以落成「过程块显示多少」这一件事）。`docs/ui-spec.md` §2 ⑥ 是判据的家。 */
+/** 工作步骤展示档位（学宿主那四档；回收站轮次都已结束，所以只落成「过程块显示多少」）；判据住 `docs/ui-spec.md` §2 ⑥。 */
 type ViewMode = 'compact' | 'standard' | 'detailed' | 'verbose'
 
 const VIEW_MODES: readonly { readonly key: ViewMode; readonly label: CopyKey }[] = [
@@ -446,7 +396,6 @@ interface DisclosureProps {
   children: ReactNode
 }
 
-/** 一个可折叠块：折叠头一行（chevron + 标签 + 摘要 + 可选状态 + 时间），展开体由调用方给。 */
 function Disclosure({ block, label, title, summary, status, time, open, onToggle, children }: DisclosureProps) {
   return (
     <div data-sd-block={block.kind} style={BLOCK}>
@@ -485,7 +434,6 @@ function TruncatedNote({ t }: { t: Translate }) {
   return <div style={TRUNCATED}>{t('detail.block.truncated')}</div>
 }
 
-/** 展开体走 Markdown 的折叠块（思考、压缩摘要）。 */
 function markdownFold(block: TrashDetailTextBlockWire, label: string, context: BlockRenderContext): ReactNode {
   const { open, toggle, probe, t } = context
   return (
@@ -504,7 +452,6 @@ function markdownFold(block: TrashDetailTextBlockWire, label: string, context: B
   )
 }
 
-/** 展开体走等宽原文的折叠块（注入、系统消息）：这两类带附件。 */
 function plainFold(
   block: TrashDetailTextBlockWire | TrashDetailInjectionBlockWire,
   label: string,
@@ -622,9 +569,8 @@ export function SessionDetail<S, D extends SessionDetailWire>({
   const shownId = state.kind === 'idle' ? null : subjectId
   const [holdNotice, setHoldNotice] = useState(false)
 
-  // 换到另一条（含 holding → ready 的整帧换）时滚动位置回顶：容器是共用的，不显式复位就会
-  // 继承上一条的偏移（长切短还会被浏览器 clamp 到中段，观感就是跳）。
-  // 只在**shown id 真的变了**时复位：首挂不碰（新容器本来就是 0，也不能覆盖分页补偿的初始读数）。
+  // 换到另一条（含 holding → ready 的整帧换）时滚动回顶：容器共用，不复位就继承上一条的偏移。
+  // 只在 shown id 真的变了时复位：首挂不碰，也不覆盖分页补偿的初始读数。
   const previousShownId = useRef<string | null | undefined>(undefined)
   useLayoutEffect(() => {
     const previous = previousShownId.current
@@ -634,9 +580,7 @@ export function SessionDetail<S, D extends SessionDetailWire>({
     if (element !== null && element !== undefined) element.scrollTop = 0
   }, [shownId, scrollRef])
 
-  // 提示只在保持超过静默窗口后出现：本地读数通常在这之前落地，用户看不到 loading 字样。
-  // `holdId` 从 A 换成 B（保持对象换了）时先把上一条的提示收掉：那一句「正在读…」说的是 A，
-  // 跟着搬给 B 会让新主体一开口就挂着旧提示——必须从 B 自己的静默窗口重新计时。
+  // 提示只在保持超过静默窗口后出现；`holdId` 从 A 换 B 时先收掉上一条的提示，从 B 自己的窗口重新计时。
   const holdId = holding ? subjectId : null
   useEffect(() => {
     setHoldNotice(false)
@@ -680,8 +624,7 @@ export function SessionDetail<S, D extends SessionDetailWire>({
 
   return (
     <div style={SHELL}>
-      {/* 两颗返回互斥（看父 vs 看清单），共用同一个位置；宽档没有父可回时不画。
-          parentContext 的 title 是清单原文，未命名兜底在这里按 t 做（判据与翻译分居两半）。 */}
+      {/* 两颗返回互斥（看父 vs 看清单）共用同一位置；未命名兜底按 t 做。 */}
       <div data-dsh-session-delete="session-detail-head" style={HEAD}>
         <div style={TITLE_LINE}>
           {/* 内层按文字收缩：悬停提示不跟着吃满整行。 */}
@@ -733,8 +676,7 @@ export function SessionDetail<S, D extends SessionDetailWire>({
       ) : null}
 
       {detail === undefined ? null : holding ? (
-        // 保持期：正文按上一条画，但整块 inert + aria-busy——不能把 A 的分页读到 B 上。
-        // 读数中不标 aria-busy：那一段有自己的状态句与骨架。
+        // 保持期：正文按上一条画，但整块 inert + aria-busy，不能把 A 的分页读到 B 上。
         <div data-dsh-session-delete="session-detail-hold-body" aria-busy="true" {...{ inert: '' }}>
           {body}
         </div>
@@ -743,9 +685,7 @@ export function SessionDetail<S, D extends SessionDetailWire>({
   )
 }
 
-/** 读数中：只有**没有上一条可保持**时才会走到这里（首次）。骨架按内容形状画：
- *  meta 表四行 + 正文块几条；条走 `--sd-bg-skeleton` 与 2s 脉冲（`layout.css`，reduced-motion 关）。
- *  不给百分比（本机量级是"一条 135ms"，给进度是假话）。 */
+/** 读数中：没有上一条可保持时才会走到这里（首次）。骨架按内容形状画，不给百分比（本机一条 135ms，进度是假话）。 */
 function LoadingBody({ t }: { t: Translate }) {
   return (
     <>
@@ -784,7 +724,6 @@ function Meta({ label, title, code, children }: { label: string; title?: string 
   )
 }
 
-/** 计量行里的一对（标签 + 值）：可以横着扫的数字，不占表的行。 */
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <span style={METRIC}>
@@ -794,26 +733,18 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
-/** 有内容态的投影口：`head` / `infoRows` / `subagents` 由两档各自的视图给，正文与工作步骤在这里画。 */
 interface ReadyBodyProps<S, D extends SessionDetailWire> {
   /** 详情帧：这里只消费 `pager` 那一格（翻页入口与分页失败面挂在它上面）；正文由上层拆成 `detail`。 */
   frame: DetailFrameView<S, D>
   head: { readonly displayName: string; readonly sizeText: string | null }
   infoRows: readonly DetailInfoRow[]
   detail: D
-  /** 子会话段（两档共用的投影槽）；缺席不画。 */
   subagentBody: ReactNode
   t: Translate
 }
 
-/**
- * 有内容：会话信息（身份 → 时间 → 核对 → 属性）+ 计量行 + 子会话段 + 工作步骤。
- *
- * 页面上**两本账分开读**：会话信息里的计数是整条日志的（注入条数也在计量行里）；
- * 正文是分页取回来的块：有更早页时工具栏出「加载更早」，跳转走右缘的提问轨（ADR-0057）。
- * 工作步骤档位与折叠状态只活在这个组件里；切条目用 `key={subjectId}` 重挂载，不会把 A 的
- * 展开状态带到 B。
- */
+/** 有内容：会话信息 + 计量行 + 子会话段 + 工作步骤。两本账分开读：会话信息的计数是整条日志的，正文是分页取回的块
+ *  （更早页由读者点「加载更早」，跳转走提问轨，ADR-0057）；档位与折叠状态只活在这里，切条目靠 `key={subjectId}` 重挂载。 */
 function ReadyBody<S, D extends SessionDetailWire>({ frame, head, infoRows, detail, subagentBody, t }: ReadyBodyProps<S, D>) {
   const { loadingOlder, olderFailure } = frame.pager
   const [mode, setMode] = useState<ViewMode>('standard')
@@ -847,9 +778,8 @@ function ReadyBody<S, D extends SessionDetailWire>({ frame, head, infoRows, deta
     })
   }
 
-  /** 换档：完全展开 = 详细档 + 把当前全部过程块铺开；离开这一档时收回，档位之间才有可感知的差别。
-   *  之后读者仍可逐条收起（完全展开不是一把锁，只是一次性的默认）。
-   *  切进简洁档时当前页全是过程块 ⇒ 先按同一份预算自动往前翻，不让首屏留白。 */
+  /** 换档：切进完全展开才铺开当前全部过程块（按住的档位不重开读者刚收起的），离开时收回；
+   *  切进简洁档且当前页全是过程块时先自动前翻，不留白。 */
   const chooseViewMode = (next: ViewMode): void => {
     setMode(next)
     // 只在**切进**完全展开时铺开：再点一次按住的档位不该把读者刚收起的块重新打开。
@@ -869,8 +799,7 @@ function ReadyBody<S, D extends SessionDetailWire>({ frame, head, infoRows, deta
 
   return (
     <>
-      {/* 会话信息：一张表 + 一行计量，全部默认可见；行集由**来源投影**给（两档信息表各画各的行），
-          顺序由调用方定（决策相关性：认出这一条 → 时间 → 精确核对 → 归档状态）。 */}
+      {/* 会话信息：行集由来源投影给，顺序由调用方定（认出 → 时间 → 精确核对 → 归档状态）。 */}
       <dl style={META}>
         {infoRows.map((row) => (
           <Meta key={row.label} label={row.label} title={row.title} code={row.code === true}>{row.value}</Meta>
@@ -884,16 +813,13 @@ function ReadyBody<S, D extends SessionDetailWire>({ frame, head, infoRows, deta
         <Metric label={t('detail.field.userMessages')} value={String(detail.userMessageCount)} />
         <Metric label={t('detail.field.assistantMessages')} value={String(detail.assistantMessageCount)} />
         <Metric label={t('detail.field.toolCalls')} value={String(detail.toolCallCount)} />
-        {/* 注入条数仍是这条会话的读数，和其余计数同一层；正文那些块是另一本账。 */}
         <Metric label={t('detail.field.injections')} value={String(detail.injectedCount)} />
       </div>
 
-      {/* 子会话段（两档共用的投影槽）：没有孩子 ⇒ 不画。 */}
       {subagentBody}
 
       <div style={TOOLBAR}>
-        {/* 分页只由读者点这里发起（ADR-0057）：滚到顶不会替人取数。在飞时按钮禁用并改说
-            「正在加载更早…」；读失败的原文落在同一行的状态格里，正文仍是「有内容」。 */}
+        {/* 分页只由读者点这里发起（ADR-0057）：滚到顶不替人取数；在飞禁用，失败原文落同一行状态格。 */}
         {detail.olderCursor === null ? null : (
           <Button variant="outline" size="sm" disabled={loadingOlder} onClick={loadOlder}>
             {loadingOlder ? t('detail.loadOlder.loading') : t('detail.loadOlder')}
@@ -952,9 +878,7 @@ function ReadyBody<S, D extends SessionDetailWire>({ frame, head, infoRows, deta
             : detail.blocks
                 .filter((block) => mode !== 'compact' || !isDisclosureBlock(block))
                 .map((block) => renderBlock(block, { open, toggle, probe, t }))}
-          {/* 简洁档只画对话；当前页全是过程内容时不能留一块空白。还有更早页就只说这一页，
-              翻完了才敢说「这段会话只有过程内容」——看不见更早的页，不等于它不存在。
-              自动连翻在飞时不挂这句：此刻工具栏那颗按钮正停在「正在加载更早…」上，不能再叫人去点它。 */}
+          {/* 简洁档只画对话；当前页全是过程内容时按有无更早页改口，自动连翻在飞时不挂（按钮正停在「正在加载更早…」）。 */}
           {mode === 'compact' && detail.blocks.length > 0 && !hasDialogue(detail.blocks) && !loadingOlder
             ? (
               <div style={META_LINE}>

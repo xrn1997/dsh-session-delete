@@ -1,46 +1,20 @@
 /**
- * 客户端**快照 store** 的唯一实现。
+ * 客户端快照 store 的唯一实现：订阅/通告只住这一处；跨槽位共享靠 `scene.ts` 的同一实例（ADR-0066）。
+ * 另有三件同源脚手架：`createLazyStore`（脏了才重读）、`createLatestWins`（并发异步读只有最新可落地）、`useLatest`（引用归一）。
  *
- * 为什么要有它：浏览器半有一批"跨卸载的现场"——回收站修订号（`trash-store.ts`）、单删请求
- * （`delete-confirm.tsx`）、批量删除请求（`batch-confirm.tsx`）、撤销提示（`undo-notices.ts`）、
- * 批量选中集（`batch-selection-store.ts`）等。它们都挂在 `shell.overlay` / `main` / 菜单行这些
- * 互不相邻的座位上，同一份场景实例是唯一的共同点（`scene.ts`，ADR-0066）。
- * 在这之前每个文件各写一遍「`let` 现场 + 监听集合 + `notify` + `useSyncExternalStore`」，
- * 各自的 seq / revision 也在分头维护。现在订阅/通告只住这一处。
- *
- * 另有一个**懒读快照**变体（`createLazyStore`）：值由组件树之外的事实源（如宿主行槽位登记）现读，
- * 脏了才重读；订阅脚手架仍住这里。
- *
- * 还有一个**最新票句柄**（`createLatestWins`）：并发的异步读里"只有最新那次可以落地"原先在每个
- * 调用方各写一遍自增序号，现在只住这一处。它只拥有 compare-and-set——防抖、轮询、焦点策略仍是
- * 调用方的现场，不搬进来。
- *
- * 以及一枚**引用归一 hook**（`useLatest`）：输入逐渲染换新对象时，回调经它只读最新那一份，
- * 身份恒稳、可安全进 effect 依赖。这一形状也只住这一处，调用方不再各写一遍「ref + 每渲染写回」。
- *
- * 语义（四条，别在调用方另算一遍）：
- * - `set` / `update` 用 `Object.is` 判"变过"：同一个引用不重渲染（React 的 snapshot 契约要求）。
- * - `publish(make)` 递增**本实例**的 seq（从 1 起）并**总是**通告——seq 是组件重挂载的 key
- *   （同一段文案连续出现两次也要重新计一次停留），不是版本号。
- * - `subscribe` 回退订函数；`use()` 就是 `useSyncExternalStore(subscribe, get, get)`。
- * - `reset()` 只给测试收场：回最初那份引用、seq 清零，值没变就不通告。
+ * 语义：`set` / `update` 用 `Object.is` 判变；`publish` 递增本实例 seq 且总是通告（seq 是重挂载 key，不是版本号）；
+ * `use()` 即 `useSyncExternalStore(subscribe, get, get)`；`reset()` 只给测试收场。
  */
 import { useEffect, useRef, useSyncExternalStore } from 'react'
 
 export interface ClientStore<T> {
   get(): T
   set(next: T): void
-  /** 回调回同一引用 ⇒ `false`（不发通告）；新值 ⇒ `true`。 */
   update(next: (current: T) => T): boolean
-  /**
-   * 以本次递增的 seq（从 1 起）造新值并通告，值没变也通告。
-   * **`make` 回的值必须把 seq 带上**（放进快照字段，如 `{ seq, items }`）：订阅方拿它当 React key
-   * 才会在"同一段文案连续出现两次"时重挂载；丢了 seq，重挂载语义会静默消失。
-   */
+  /** 以本次递增的 seq 造新值并通告（值没变也通告）；`make` 回的值**必须把 seq 带上**，订阅方靠它重挂载。 */
   publish(make: (seq: number) => T): void
   subscribe(listener: () => void): () => void
   use(): T
-  /** 测试专用：回初值并清零 seq。 */
   reset(): void
 }
 
@@ -94,10 +68,8 @@ export function createStore<T>(initial: T): ClientStore<T> {
 
 /** 懒读快照：`get()` 只在脏了时调用 `read()`，干净时回同一个引用（React snapshot 契约）。 */
 export interface LazyStore<T> {
-  /** 属性声明：`get` / `subscribe` 会被摘下来直接交给 `useSyncExternalStore`（宿主行快照），
-   *  实现不读 `this`。方法简写会给它隐式 `this: LazyStore<T>`，触发 `unbound-method` 误报。 */
+  /** 属性声明：`get` / `subscribe` 会被摘下来直接交给 `useSyncExternalStore`；方法简写会给隐式 `this`，触发 `unbound-method` 误报。 */
   get: () => T
-  /** 标脏并通告；下一次 `get()` 重读。 */
   invalidate: () => void
   subscribe: (listener: () => void) => () => void
 }
@@ -123,8 +95,7 @@ export function createLazyStore<T>(initial: T, read: () => T): LazyStore<T> {
       notify()
     },
     subscribe(listener: () => void): () => void {
-      // 只在从「无人订阅」重新挂上来时标脏：有订阅者在场时外部变更已由 `invalidate` 通告过，
-      // 每次订阅都标脏会让 React 订阅后的快照复查拿到一个新引用，白多一次重读与重渲染。
+      // 只在从「无人订阅」重新挂上来时标脏：有订阅者在场时外部变更已由 `invalidate` 通告过，不然会白多一次重读。
       if (listeners.size === 0) dirty = true
       listeners.add(listener)
       return () => {
@@ -136,19 +107,12 @@ export function createLazyStore<T>(initial: T, read: () => T): LazyStore<T> {
   }
 }
 
-/**
- * 最新票句柄：每张票记着签发时的序号，只有序号仍等于当前的那张才 `current`。
- * 调用方在发起异步读时 `issue()` 一张票，落地前问 `ticket.current`——旧读因此不会盖掉新状态。
- *
- * 组件里要拿到**同一枚**句柄时用 `useState(createLatestWins)`，不要用 `useMemo`：React 允许丢 memo
- * 缓存，丢了就是两张各自记数的票台，守卫静默失效。模块级现场（`main-view.ts`）直接建一颗，没这个问题。
- */
+/** 最新票句柄：异步读落地前问 `ticket.current`，旧读不会盖掉新状态；只拥有 compare-and-set，防抖/轮询/焦点策略仍归调用方。
+ *  组件里取同一枚句柄用 `useState(createLatestWins)`，不要 `useMemo`：React 允许丢缓存，丢了就是两张各自记数的票台。 */
 export interface LatestWinsTicket { readonly current: boolean }
 
 export interface LatestWins {
-  /** 签发一张新票；之前的票立刻作废。 */
   issue(): LatestWinsTicket
-  /** 只作废当前票，不签发新票（用于"这一拍整体作废"）。 */
   invalidate(): void
 }
 
@@ -169,12 +133,8 @@ export function createLatestWins(): LatestWins {
   }
 }
 
-/**
- * 引用归一：输入允许调用方逐渲染换新对象，回调只经这份 ref 读**最新**那一份，于是依赖它的回调
- * 身份恒稳、调用方的 effect 可以放心把它们当依赖——「输入必须是稳定引用」的隐式契约就此不存在
- * （issue #8 第 3 条）。写回在 effect 里（提交后），与 React 的渲染期只读约定一致。
- * 这一形状的唯一实现：别在调用方再手写一份「useRef + 每渲染写回」。
- */
+/** 引用归一：回调只经这份 ref 读最新值，身份恒稳、可进 effect 依赖（写回在 effect 里，与渲染期只读约定一致）。
+ *  别在调用方再手写「useRef + 每渲染写回」（issue #8 第 3 条）。 */
 export function useLatest<T>(value: T): { readonly current: T } {
   const ref = useRef(value)
   useEffect(() => { ref.current = value })

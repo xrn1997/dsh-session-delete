@@ -1,26 +1,15 @@
 /**
- * 详情这一帧的**接线 module**：把「一台详情读路 + 分页读面 + 提问轨」收成一个对象。
- *
- * 之前这条接线碎在三处：面板为两档各拼一遍 `useDetailRail` 的七个参数（`trash-panel.tsx`
- * 里两次），两档投影各自在 props 上转交一份手拼的 `pager`，壳里再拼一遍 `useDetailPager` 的
- * 七个参数。三处拼的是同一件事——「这一帧的读路」。收进来之后：
- * - 面板：`useDetailFrame(controller, { scrollRef, paneMounted })` 一档一次，交出的帧给栏外壳
- *   （`rail`）、两档投影（`state`）与壳（`state` / `pager`）；
- * - 两档投影：只做行投影（`head` / `infoRows` / `subagents`），帧原样转交；
- * - 壳：拿帧里那两格画状态与正文，翻页入口经 `useDetailFramePager` 接上（档位是壳自己的状态）。
- *
- * 判据一条都没搬：`useDetailRail` 的三条（没有正文没有轨 / 保持期顶住 / 挂载判据显式给）仍在
- * `use-detail-rail.ts`；分页的两笔账（连翻预算与滚动锚点）仍在 `use-detail-pager.ts`。这里只
- * 拥有「谁接给谁」：两档读路来源只是**结构相同**（同一个 module 接两台实例），不是同一个状态机，
- * 两档的显示模型也照旧各是各的（`TrashEntryWire` vs `ArchiveSubagentWire`）。
+ * 详情这一帧的接线 module：把「一台详情读路 + 分页读面 + 提问轨」收成一个对象。面板一档调一次，
+ * 交出 `state` / `pager` / `rail`；两档投影只做行投影，帧原样转交。判据都没搬：轨的三条仍在
+ * `use-detail-rail.ts`，分页两笔账仍在 `use-detail-pager.ts`——这里只拥有「谁接给谁」，两档读路
+ * 来源只是结构相同，不是同一个状态机。
  */
 import { useMemo, type RefObject } from 'react'
 import type { DetailBody, DetailState } from './use-detail-reader.js'
 import { useDetailPager, type DetailPagerHandle } from './use-detail-pager.js'
 import { useDetailRail, type DetailRail, type RailDetailLike } from './use-detail-rail.js'
 
-/** 分页这一块（在飞/失败 + 滚动容器）整体过手：两档详情投影各自转交，谁画正文谁拆开用。
- *  四样东西是一个概念（分页读面）的四个格子，打包走一个名字，不再逐样穿透组件边界。 */
+/** 分页这一块（在飞/失败 + 滚动容器）：四样东西是分页读面的四个格子，打包走一个名字。 */
 export interface DetailPager {
   /** 更早一页正在读。 */
   loadingOlder: boolean
@@ -31,11 +20,8 @@ export interface DetailPager {
   scrollRef?: RefObject<HTMLDivElement | null>
 }
 
-/** 帧的读路来源：两档面板控制器各交一台实例的同名五格（结构上就是控制器，不必整台传进来）。
- *  这几格与 `use-detail-reader.ts` 的 `DetailReader` 同名同义——帧不重新定义它们，只负责把它们
- *  和轨、分页读面接在一起。 */
+/** 帧的读路来源：两档面板控制器各交一台实例的同名五格（与 `DetailReader` 同名同义，帧不重新定义）。 */
 export interface DetailFrameSource<S, D extends RailDetailLike> {
-  /** 这一档的详情读路状态（控制器对外的 `detail`）。 */
   readonly detail: DetailState<S, D>
   /** 「保持期拒绝导航/跳转」判据（`use-detail-reader` 的唯一出口）：原样交给轨与投影。 */
   readonly canNavigate: boolean
@@ -51,8 +37,7 @@ export interface DetailFrameHost {
   readonly paneMounted: boolean
 }
 
-/** 详情这一帧：壳的两格（`state` / `pager`）与栏外壳的搭档（`rail`）。
- *  reader 的 `loadingOlder` / `olderFailure` 折在 `pager` 那一格里——同一件事只有一份名字。 */
+/** 详情这一帧：壳的两格（`state` / `pager`）与栏外壳的搭档（`rail`）；同一件事只有一份名字。 */
 export interface DetailFrame<S, D extends RailDetailLike> {
   readonly state: DetailState<S, D>
   readonly pager: DetailPager
@@ -88,8 +73,7 @@ export function useDetailFrame<S, D extends RailDetailLike>(
 export type DetailFrameView<S, D extends RailDetailLike> = Pick<DetailFrame<S, D>, 'state' | 'pager'>
 
 /**
- * 正文块的**翻页入口**：`useDetailPager` 的接线只住这里——帧给分页读面，壳只交正文与档位。
- * 预算与滚动锚点的判据仍在 `use-detail-pager.ts`；这里只把帧里的四个格子接上去（行为零变化）。
+ * 正文块的翻页入口：`useDetailPager` 的接线只住这里——帧给分页读面，壳只交正文与档位。
  */
 export function useDetailFramePager(
   frame: { readonly pager: DetailPager },

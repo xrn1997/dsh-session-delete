@@ -22,21 +22,16 @@ interface Member {
 }
 
 /**
- * 删除 = 移入回收站，**按组走**：用户点掉一条父会话时，宿主的客户端把 `origin:"subagent"` 的孩子
- * 整排藏了 ⇒ 那些目录既看不见也继续占着字节（本机实测 41 条父留了 320 个目录 / 74.6 MB）。
- * 所以这里把父在盘上的孩子一起搬进来，各自成目录、各自一行，清册用 `parentEntryId` 记它是谁的孩子。
+ * 删除 = 移入回收站，**按组走**：用户点掉一条父会话时宿主把 `origin:"subagent"` 的孩子整排藏了 ⇒ 那些目录既看不见也继续占字节，
+ * 所以父在盘上的孩子一起搬进来，各自一行，清册用 `parentEntryId` 记归属。
  *
- * 三段，顺序承重（成员循环与整组回滚的实现住 `verbs/move-group.ts`）：
- * ① **先点组、先验活体**（一个字节都不写）。任一成员在跑就整组拒绝——不替用户终止正在跑的活，
- *    也绝不允许"父已经搬进回收站、孩子因为在跑而搬不动"这种半套。
- * ② **逐个搬**：每个成员是一份 `journal`（`verbs/member-journal.ts`），搬不动时 journal 自己把
- *    这个成员已经做成的步骤退回去。
- * ③ **组级回滚**：某一个成员搬不动时，把**已经搬进去的**那些按相反顺序退回原处（清册行跟着摘、
- *    账本跟着挂），失败照抛——不留"半组在回收站、半组在原地"的世界。
+ * 三段，顺序承重（成员循环与整组回滚住 `verbs/move-group.ts`）：
+ * ① **先点组、先验活体**（一个字节都不写）：任一成员在跑就整组拒绝，不替用户终止活体，也不留半套；
+ * ② **逐个搬**：每个成员一份 `journal`（`member-journal.ts`），搬不动时它自己退回已做成的步骤；
+ * ③ **组级回滚**：某成员搬不动时把已搬进去的按相反顺序退回原处，失败照抛——不留"半组在回收站、半组在原地"。
  *
- * interface 只有**一个 id**：批量的性质不在这里（同批已带走集归 `verbs/batch-carried.ts`，
- * 组语义归 `trash/groups.ts`）。
- * 结果带回这次真的搬走的整组（`movedSessionIds`）——它是动词交回的内部数据，不再靠回调借用动词的手。
+ * interface 只有**一个 id**：批量的性质与组语义都不在这里（`batch-carried.ts` / `trash/groups.ts`）；
+ * 结果带回这次真的搬走的整组（`movedSessionIds`）——内部数据，不靠回调借用动词的手。
  */
 export function deleteSession(deps: DeleteSessionDeps) {
   const presence = deps.presence
@@ -48,13 +43,12 @@ export function deleteSession(deps: DeleteSessionDeps) {
     const parentProjectDir = await deps.host.projectDirOf(sessionId)
     if (parentProjectDir === undefined) throw verbError('not-found', `宿主的持久化里没有这个会话：${sessionId}`)
 
-    // ① 准入：父与孩子逐个查活体（判据与那句原文住 `verbs/live-admission.ts`）。
-    //    查的是宿主报的全部孩子，**不是**后面按盘上目录筛过的 `members`——目录不在不代表它没在跑。
+    // ① 准入：父与孩子逐个查活体（判据与原文住 `verbs/live-admission.ts`）；查的是宿主报的全部孩子，
+    //    **不是**后面按盘上目录筛过的 `members`——目录不在不代表它没在跑。
     await assertNoLive(deps.host, [sessionId, ...kids.map((kid) => kid.sessionId)])
 
-    // 父的目录必须在盘上（不在就是"账本说有、盘上没有"，按 not-found）；
-    // 孩子的目录缺席**跳过它**：宿主记录与磁盘不一致是孩子的问题，不该让父删不掉。
-    // 路径按宿主的目录命名约定拼：`sessionId` 先编成宿主目录段（`sessionDirForId`），不拿原始 id 拼。
+    // 父的目录必须在盘上（不在就是"账本说有、盘上没有"，按 not-found）；孩子的目录缺席**跳过它**：
+    // 宿主记录与磁盘不一致是孩子的问题，不该让父删不掉。路径先编成宿主目录段，不拿原始 id 拼。
     const parentDir = sessionDirForId(parentProjectDir, sessionId, deps.home)
     if (!(await deps.fs.exists(parentDir))) throw verbError('not-found', `会话目录不存在：${parentDir}`)
     const parent: Member = { sessionId, projectDir: parentProjectDir }
@@ -83,16 +77,14 @@ export function deleteSession(deps: DeleteSessionDeps) {
 }
 
 /**
- * 一个成员要做的步骤（顺序承重，那四步就列在下面一行）：
- * 读现场（两件纯读）→ 摘账本 → 搬目录 → 写清册行。搬完之后由 `memberGone` 把活体（session + agent）
- * 真正关掉；**删除不碰归档**——回收站与归档是两套状态，归档只在用户自己归档过时保留。
+ * 一个成员的步骤（顺序承重）：读现场 → 摘账本 → 搬目录 → 写清册行；搬完由 `memberGone` 关掉活体（session + agent）。
+ * **删除不碰归档**——回收站与归档是两套状态，归档只在用户自己归档过时保留。
  *
- * **已知窗口**：摘账本之后、`memberGone` 之前的这一拍，活体会短暂无主（客户端可能把它归入「未分组」）。
- * 这是 ADR-0008 去掉归档后的已知代价；`memberGone` 不能提前到文件/清册写成功之前，否则一次失败回滚
- * 会留下"文件在、agent 已关"的半个世界。窗口与可选修法登记在 ADR-0008 的「边界」。
+ * **已知窗口**：摘账本之后、`memberGone` 之前活体短暂无主；这是 ADR-0008 去掉归档后的已知代价。`memberGone` 不能提前到
+ * 文件/清册写成功之前，否则一次失败回滚会留下"文件在、agent 已关"的半个世界。
  *
- * 每一步的反向动作都是"把这件写退回原样"；**清册行是最后一件写**，它失败时 journal 会把目录搬回去、
- * 账本挂回去。清册行的反向动作带一道闸：**回收站目录还没搬回来就不摘那一行**，留着行至少元数据还在。
+ * 每一步的反向动作都是"把这件写退回原样"；清册行是最后一件写，失败时 journal 把目录搬回去、账本挂回去；
+ * 它的反向动作带闸：**回收站目录还没搬回来就不摘那一行**，留着行至少元数据还在。
  */
 async function memberMove(
   deps: CoreDeps,
@@ -135,10 +127,9 @@ async function memberMove(
       undo: () => stepUndo('账本挂回失败', () => deps.host.attach(sessionId, workspaceId)),
     }]),
     {
-      // 目录与清册行合成一步：**行必须在目录搬进回收站之后写**（否则中间有一段"行在、目录还在
-      // `sessions/`"的世界，对账会把它当成幽灵行摘掉，接着目录搬进来就成了点不开的孤儿目录）。
-      // 反向动作因此也是两件、且有先后：**先搬回目录、再摘行**——搬不回去就留着行，元数据还在。
-      // 目录一次都没搬动过（rename 自己就失败了）时没有可退的：那时清册行也还没写。
+      // 目录与清册行合成一步：**行必须在目录搬进回收站之后写**（否则中间那段"行在、目录还在 sessions/"会被对账
+      // 当幽灵行摘掉，之后目录搬进来就成了点不开的孤儿目录）。反向动作两件且有先后：**先搬回目录、再摘行**——
+      // 搬不回去就留着行，元数据还在；目录一次都没搬动过时没有可退的（那时清册行也还没写）。
       key: 'dir',
       label: '移动会话目录失败',
       undoOnFailure: true,
@@ -173,9 +164,8 @@ async function memberMove(
       sessionId,
       // 搬完之后才把「离开可见面」补上：摘活体与如实通告都不抛，且只在完全搬成之后有意义。
       onDone: 'leave',
-      /** 组级回滚：先按相反顺序退步骤，再判「目录与账本两件写都回去了吗」。
-       *  这一行已经收过 `api-session/removed`；不发「回来了」它就会在客户端消失到重连为止。
-       *  「退没退成」由 journal 的逐步结果交出来，这里只读键，不自己累计布尔。 */
+      /** 组级回滚：先按相反顺序退步骤，再判目录与账本两件写是否都回去了。这一行已经收过 `api-session/removed`，
+       *  不发「回来了」它就会在客户端消失到重连为止；「退没退成」由 journal 的逐步结果交出来。 */
       onUndone: (undo) => ({
         kind: 'return',
         diskBack: undo.restored('dir'),

@@ -8,26 +8,16 @@ import type { PresenceCapability } from '../ports/presence-port.js'
 import { moveGroup } from './move-group.js'
 
 /**
- * 恢复：把删除那次按原路退回，并按组走。
- *
- * 三段：
- * 1. 预检整组（不写盘）：每个成员的回收站目录与原项目目录都必须在；工作区账本缺席不算硬失败，
- *    恢复后归入「未分组」。预检在任何写之前，避免留下半组。
- * 2. 逐个恢复：文件先回来 → 挂账本 →（旧条目）取消归档 → 摘清册行。
- * 3. 中途失败由 journal 回滚当前成员；已恢复的兄弟由整组按相反顺序退回。
- *
- * 通告不在本文件：批量层在批尾一次 `announceRestored(ids)`（ADR-0002）。
+ * 恢复：把删除那次按原路退回，并按组走。预检整组（不写盘）：回收站目录与原项目目录必须在，账本缺席不算硬失败（归「未分组」）。
+ * 逐个恢复：文件先回来 → 挂账本 →（旧条目）取消归档 → 摘清册行；中途失败由 journal 回滚当前成员，已恢复的兄弟按相反顺序退回。
+ * 通告归批量层（ADR-0002）。
  */
 export function restoreSession(deps: CoreDeps) {
   const presence = deps.presence
   return async function restoreSession(
     entryId: string,
-    /** 这一组（只读）：批量层由 `src/verbs/batch-carried.ts` 的 `claim` 交出（三态判据是
-     *  `src/trash/groups.ts` 的 `claimOf`、经 `src/trash/shrinking-view.ts` 的持有机制），
-     *  直调者按 `src/trash/groups.ts` 的 `groupOf` 自己算。ghost 父（父行已摘、只剩孩子）的组
-     *  只有孩子、不含 `entryId`，这里照旧报 `trash-empty`；其余调用按这一组整体恢复。动词
-     *  **不收缩**它——收缩与同批已带走集都归 `src/verbs/batch-carried.ts`，组语义归
-     *  `src/trash/groups.ts`。 */
+    /** 这一组（只读）：批量层由 `batch-carried.ts` 的 `claim` 交出，直调者按 `groups.ts` 的 `groupOf` 自己算。
+     *  ghost 父（父行已摘、只剩孩子）的组只有孩子、不含 `entryId`，这里照旧报 `trash-empty`；动词**不收缩**它。 */
     group: readonly TrashEntry[],
   ): Promise<TrashEntry> {
     const [root, ...followers] = group
@@ -46,9 +36,8 @@ export function restoreSession(deps: CoreDeps) {
     }
 
     // 相反顺序退回去；某一步退不干净时**不能**让原错误独走——客户端只看 code 会以为已经回到回收站，
-    // 实际那个成员半在 `sessions/` 半在回收站里，通告还会骗它把那一行删掉。
-    // `root` 只是**操作顺序上的根**（组的第一成员）：ghost / 降级组里它可能仍记着 `parentEntryId`
-    // （真正的组根已经不在），`moveGroup` 只负责先跑它；组语义仍归 `trash/groups.ts`。
+    // 实际那个成员半在 `sessions/` 半在回收站里，通告还会骗它把那一行删掉。`root` 只是**操作顺序上的根**
+    // （ghost / 降级组里可能仍记着 `parentEntryId`）；组语义仍归 `trash/groups.ts`。
     await moveGroup<TrashEntry, undefined>({
       root,
       followers,
@@ -62,32 +51,24 @@ export function restoreSession(deps: CoreDeps) {
   }
 }
 
-/** 放回哪儿：用删除时记进 entryId 的**已编码目录段**原地回放，不从 sessionId 现编。
- *  段是宿主 `encodeSegment` 的产物（`src/shared/session-path.ts` 是唯一编码实现），删除那一刻写进 id；
- *  恢复只是把它接回 `sessions/<projectDir>/` 下——不重新编码，因此宿主换编码算法也不影响旧条目回家，
- *  但**不等于**本插件不认宿主的目录命名约定：它认的就是宿主编出来的那一段。 */
+/** 放回哪儿：用 entryId 里删除时写下的**已编码目录段**原地回放，不从 sessionId 现编——宿主换编码算法也不影响旧条目回家
+ *  （编码唯一实现住 `src/shared/session-path.ts`；本插件认的就是宿主编出来的那一段）。 */
 function restoreTargetDir(deps: CoreDeps, entry: TrashEntry): string {
   return sessionDirOf(entry.projectDir, parseEntryId(entry.id).sessionDirName, deps.home)
 }
 
 /**
- * 这一次恢复**到底挂不挂账本**：交出能挂的那个 `workspaceId`，挂不了就 `undefined`。
- *
- * 两种缺席是同一件事：空串 = 删除时它就没有账目（「未分组」的会话）；非空但账本里已经没它 =
- * 宿主的「删除工作区」只删注册、保留目录与每一份日志，那些会话之后本来就在「未分组」下。
- * 恢复不该为了挂一个不存在的账本把整条退回回收站。
- *
- * 判据**只有这一处**：`memberRestore` 拿它决定挂不挂，`GET /list` 拿它决定行上那句「原工作区已不存在，
- * 恢复后归入未分组」说不说。两边各问一遍就会有一天一个说、一个不挂。
+ * 这一次恢复**到底挂不挂账本**：交出能挂的 `workspaceId`，挂不了就 `undefined`。两种缺席是同一件事：空串 = 删除时就没有账目；
+ * 非空但账本里已没它 = 宿主的「删除工作区」只删注册、保留目录与日志，那些会话本来就在「未分组」下。
+ * 判据**只有这一处**（`memberRestore` 与 `GET /list` 共用），两处各问一遍就会有一天一个说、一个不挂。
  */
 export async function attachableWorkspaceId(host: Pick<HostIdentityPort, 'workspaceExists'>, entry: TrashEntry): Promise<string | undefined> {
   if (entry.workspaceId === '') return undefined
   return await host.workspaceExists(entry.workspaceId) ? entry.workspaceId : undefined
 }
 
-/** 这一条记着的工作区**是不是已经没了**（区别于"删除时它就没有账目"的空串）——清单行据此决定
- *  要不要在点之前说那句「原工作区已不存在，恢复后归入未分组」。由 {@link attachableWorkspaceId}
- *  派生，不另起一份判据：那样会有一天一个说、一个不挂。 */
+/** 这一条记着的工作区**是不是已经没了**（区别于删除时就没有账目的空串）——清单行据此决定说不说那句
+ *  「原工作区已不存在，恢复后归入未分组」。由 {@link attachableWorkspaceId} 派生，不另起判据（否则会一个说、一个不挂）。 */
 export async function isWorkspaceMissing(host: Pick<HostIdentityPort, 'workspaceExists'>, entry: TrashEntry): Promise<boolean> {
   return entry.workspaceId !== '' && (await attachableWorkspaceId(host, entry)) === undefined
 }
@@ -104,11 +85,8 @@ async function memberRestore(
   const trashDir = trashDirOf(entry.id, deps.home)
   const sessionDir = restoreTargetDir(deps, entry)
 
-  // 账本归属是**可选的一步**，判据见 {@link attachableWorkspaceId}。
   const workspaceId = await attachableWorkspaceId(deps.host, entry)
-  /** 旧条目迁移：早期删除用归档藏会话，盘上仍是归档态。
-   *  `wasArchived:false` 且当前仍归档 ⇒ 只可能是旧条目，恢复时取消归档；
-   *  `wasArchived:true` 是用户删除前自己归档的，保持归档态。 */
+  /** 旧条目迁移：`wasArchived:false` 且当前仍归档 ⇒ 只可能是旧条目，恢复时取消归档；`wasArchived:true` 是用户删前自己归档的，保持归档态。 */
   const legacyArchived = !entry.wasArchived && await deps.host.isArchived(entry.sessionId)
   /** 真挂上了账本才记下那个 id——回滚里"摘账本"那一步只对挂过的成员存在。 */
   let attached = false
@@ -149,8 +127,7 @@ async function memberRestore(
       // 重新归档只认会话：归档是 registry 全局的，与工作区账目无关，这里不传 workspaceId。
       undo: () => stepUndo('重新归档失败', () => deps.host.archive(entry.sessionId)),
     }]),
-    // ④ 摘清单行是最后一件写。它失败时 journal 把前几步退回去，否则会留下一条
-    //    **恢复不了也清不掉的幽灵行**（目录已经回了 `sessions/`，行却还在回收站里挂着）。
+    // ④ 摘清册行是最后一件写；它失败时 journal 把前几步退回去，否则会留下一条**恢复不了也清不掉的幽灵行**（目录已回 `sessions/`，行还挂着）。
     {
       key: 'manifest',
       label: '摘回收站条目失败',
@@ -163,8 +140,7 @@ async function memberRestore(
   return {
     journal: withPresenceTail(presence, journal, {
       sessionId: entry.sessionId,
-      // run 不动在场：恢复的「回到可见面」由批量层一次 `announceRestored(ids)` 发起（ADR-0002）。
-      // 组级回滚时目录真的退回回收站了才发 removed；没退回去就什么都别发。
+      // run 不动在场：恢复的「回到可见面」由批量层一次 `announceRestored(ids)` 发起（ADR-0002）；组级回滚时目录真的退回回收站了才发 removed。
       onUndone: (undo) => ({ kind: 'leave', backInTrash: undo.restored('dir') }),
     }),
   }

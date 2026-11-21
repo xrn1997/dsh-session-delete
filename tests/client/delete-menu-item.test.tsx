@@ -7,7 +7,7 @@
 // （`delete-confirm.tsx`；宿主与行在真实装配里是分开挂的，见 `index.test.tsx` 的门回归用例）。
 import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { type ReactElement } from 'react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DeleteConfirmHost,
   requestDelete,
@@ -18,17 +18,6 @@ import type { OneShotDeps, SessionDeleteRemote } from '../../src/client/remote.j
 import { fakeApply } from './support/fake-apply.js'
 import { createFakeRemote } from './support/fake-remote.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
-
-beforeEach(() => {
-  // 撤销台与删除请求都是**模块级现场**（跨用例存活）：一条复位口收全部，用例之间互不串味。
-  resetClientState()
-})
-
-afterEach(() => {
-  // 收场也复位：用例中途失败时，下一份文件/下一轮不从上一轮的现场接着跑。
-  resetClientState()
-})
 
 /** 菜单/确认框只吃 `applyOutcomes`：一颗完整的假远程面替掉手搭对象与 `as never`。 */
 const deps = (applyOutcomes: SessionDeleteRemote['applyOutcomes']) => createFakeRemote({ applyOutcomes: vi.fn(applyOutcomes) })
@@ -193,7 +182,7 @@ describe('确认框', () => {
   })
 })
 
-describe('模块级现场', () => {
+describe('请求现场', () => {
   it('每发一条删除请求 seq 递增（确认框靠它重挂载，busy / 失败面不带记忆）', () => {
     const { result } = renderHook(() => useDeleteRequest())
     act(() => {

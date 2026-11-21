@@ -1,13 +1,10 @@
 /**
  * 场景 seam（`src/client/scene.ts`）：两份场景互不共享、Provider 下发传入的那一份、无 Provider 回退
- * 默认场景且 `resetClientState()` 只清默认。
- *
- * 这一份是场景 seam 的验收面：旧测试继续用自由函数 + `resetClientState`，行为不变；
- * 新代码/测试可以 `createClientScene()` 各造一份、用 `ClientSceneProvider` 把它交给组件树。
+ * 进程场景。每个用例一份新场景由 `support/setup.ts` 装好。
  */
 import { createElement, type ReactElement } from 'react'
 import { act, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ClientContextLike } from '../../src/client/context.js'
 import {
   ClientSceneProvider,
@@ -16,7 +13,6 @@ import {
   installClientScene,
   type ClientScene,
 } from '../../src/client/scene.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 import type { TrashEntryLike } from '../../src/client/remote.js'
 import {
   publishUndoBatchNotice,
@@ -74,10 +70,6 @@ function ctxWithMainView(current: string, clearMain: () => void): ClientContextL
       : undefined,
   } as unknown as ClientContextLike
 }
-
-beforeEach(() => {
-  resetClientState()
-})
 
 describe('场景实例 · 互不共享', () => {
   it('首帧快照/详情账本：两份场景各写各的，默认场景不受影响', () => {
@@ -164,7 +156,7 @@ describe('场景实例 · Provider 下发', () => {
     expect(probeText()).toBe('rev:1|notice:e1|selecting:yes|delete:session-a|batch:1|rows:1')
   })
 
-  it('无 Provider：回退默认场景，`resetClientState` 只清默认、不动私有场景', () => {
+  it('无 Provider：回退进程场景，默认场景 reset 不动私有场景', () => {
     const privateScene = createClientScene()
     privateScene.snapshot.reloadSucceeded([ROW])
     privateScene.undo.publishOne({ entryId: 'private', title: '标题' })
@@ -175,7 +167,7 @@ describe('场景实例 · Provider 下发', () => {
     act(() => { publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 }) })
     expect(probeText()).toContain('notice:batch:e1,e2')
 
-    act(() => { resetClientState() })
+    act(() => { getDefaultClientScene().reset() })
     expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|batch:0|rows:0')
     // 默认场景被清，私有场景原样。
     expect(privateScene.snapshot.read()?.rows).toHaveLength(1)
@@ -214,6 +206,25 @@ describe('场景安装 · 注册面', () => {
     expect(installed).not.toBe(candidate)
     expect(installed.undo.read()).toMatchObject({ kind: 'batch', entryIds: ['kept'] })
     expect(candidate.undo.read()).toMatchObject({ kind: 'one', entryId: 'candidate' })
+  })
+
+  it('省略候选时已安装就不现造：返回默认那一份', () => {
+    const installed = installClientScene()
+    expect(installed).toBe(getDefaultClientScene())
+  })
+
+  it('`replace` 换新：采纳候选、旧现场原样留着，返回的就是候选那一份', () => {
+    const before = getDefaultClientScene()
+    act(() => { publishUndoBatchNotice({ entryIds: ['old'], n: 1 }) })
+    const candidate = createClientScene()
+
+    const installed = installClientScene(candidate, { replace: true })
+
+    expect(installed).toBe(candidate)
+    expect(getDefaultClientScene()).toBe(candidate)
+    // 旧实例不被清：换新只是让默认指针改道，不是拿它当 reset。
+    expect(before.undo.read()).toMatchObject({ kind: 'batch', entryIds: ['old'] })
+    expect(installed.undo.read()).toBeNull()
   })
 
   it('用返回值建 Provider：自由函数写入与 Provider 读数是同一份账', () => {

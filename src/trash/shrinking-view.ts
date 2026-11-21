@@ -1,9 +1,6 @@
 /**
- * 收缩视图的持有机制的唯一家：entry 适配（restore 的同批已带走集）与清册作用域（purge）过去各手抄
- * 一份「原始快照 + 会收缩的当前视图」，现在都接这一份。
- *
- * 判据不搬：三态读 `groups.ts` 的 `claimOf`、按组收缩读 `withoutGroup`——判据的家仍是组语义
- * （`src/trash/groups.ts`），这里只**持有**两份行并把它们递给判据，无 I/O。
+ * 收缩视图的持有机制的唯一家：entry 适配（restore 的同批已带走集）与清册作用域（purge）都接这一份。判据不搬：三态读 `groups.ts` 的
+ * `claimOf`、按组收缩读 `withoutGroup`——这里只**持有**两份行并把它们递给判据，无 I/O。
  */
 import type { TrashEntry } from './entry.js'
 import { claimOf, withoutGroup, type GroupClaim } from './groups.js'
@@ -22,11 +19,7 @@ export interface ShrinkingView {
 
 /**
  * 开工时把整批的原始快照捕下来（三态判据的「整批开始前的样子」），当前视图从它出发、按组收缩。
- *
- * 调用纪律：`take` / `takeAll` 都在动作**成功之后**才调——清完才收缩，失败时视图不动、下一次
- * 重试还能看见这一组。`takeAll` 是清空那一支的**收缩到底**（purgeAll 用它），与摘掉某一条 id
- * 的整组是两回事。
- *
+ * 调用纪律：`take` / `takeAll` 都在动作**成功之后**才调——清完才收缩，失败时视图不动、下一次重试还能看见这一组。
  * 什么时候收缩、把实例放在哪里仍归调用方：本函数只持有原始与当前两份行，不记账。
  */
 export function createShrinkingView(rows: readonly TrashEntry[]): ShrinkingView {

@@ -1,19 +1,8 @@
 /**
- * 批量删除的浮条：**多选模式内常驻**（0 条也渲染，既显示模式又给退出入口），
- * 汇总「已选 N 条」+（读得到时）「含 K 个子会话」；「查看已选」展开限高可滚动的标题清单
- * （逐条可移除），回答"到底选了哪些"——清单默认收起，不把底部输入区盖住。
- * 模式内的整行点击守卫也挂在这棵常驻宿主上（见 `batch-pick.ts` 的 `useSelectionRowClickGuard`）。
- *
- * 为什么单独一个文件而不是并进 `batch-select.tsx`：那份是"行开关控件"，而浮条要点开确认框
- * （要 import 它的现场）——两个方向合到一个文件上就是一圈。浮条住在
- * `shell.overlay` 上，与单删的撤销提示/确认框同类（槽位原文："a toast stack or a status pill
- * all belong here"）。
- *
- * 那个 K 是**勾选变化后防抖 300ms 的一次批量 count**（`/apply` 的 `action:'count'`，一组 id 一次），
- * 并且带**最新票守卫**：在飞的旧响应不许盖掉新名单的读数（compare-and-set 住 `createLatestWins`，
- * 防抖本身仍在下面这个 effect 里）。**读数与它对应的那份名单绑在一起存**：名单对不上（刚勾了一条、
- * 新读还在窗口里）就整句不说——拿旧读数求新名单的和，会把新增那条按 0 算出一个偏小的假数。
- * 读不到也整句不说——K 是合计，缺一条就是假数（「不许拿 0 冒充没有」）。
+ * 批量删除的浮条：**多选模式内常驻**（0 条也渲染），汇总「已选 N 条」+「含 K 个子会话」，
+ * 「查看已选」展开可滚动的标题清单。K 是勾选防抖 300ms 后的一次批量 count（`/apply` 的 action:count），
+ * 带最新票守卫；读数与它对应的名单绑在一起存，对不上就整句不说（不拿旧读数求新名单的和）。
+ * 整行点击守卫也挂在这棵常驻宿主上；浮条住 `shell.overlay`。
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import { fetchCounts } from './batch-select.js'
@@ -30,14 +19,12 @@ import { IconCloseOutlineRegular } from './ui/icons.js'
 /** 勾选变化后到发问之间的等待：连勾十条不该发十次 count。 */
 const COUNT_DEBOUNCE_MS = 300
 
-/** 一次计数读数与它对应的**那一份名单**。两者必须同进同退：名单变了而读数还没回来时，
- *  旧读数不许被当成新名单的合计（新增一条会按 0 参与求和 ⇒ 显示偏小的假数）。 */
+/** 一次计数读数与它对应的**那一份名单**：两者必须同进同退，旧读数不许当成新名单的合计。 */
 interface CountSnapshot {
   readonly ids: readonly string[]
   readonly counts: ReadonlyMap<string, number>
 }
 
-/** 两份名单是不是同一组 id（顺序无关：读数只关心"谁在里面"）。 */
 function sameIds(left: readonly string[], right: readonly string[]): boolean {
   if (left.length !== right.length) return false
   const wanted = new Set(left)
@@ -52,10 +39,8 @@ export function BatchBar({
   t?: Translate
 }): ReactElement | null {
   const { selecting, picks } = useSelection()
-  // 模式内的整行点击（勾/取消、拦会话切换）挂在浮条这棵常驻宿主上：浮条是模式的可见形态。
   useSelectionRowClickGuard()
-  // 渲染期只读快照：可见行登记住 host-rows.ts、点击守卫住 batch-pick.ts，这里不读 DOM。
-  // 浮条常驻，但行快照只在多选态订阅：模式外每次行登记都不该把它叫醒。
+  // 浮条常驻，但行快照只在多选态订阅：模式外每次行登记都不该把它叫醒（可见行登记住 `host-rows.ts`）。
   const visibleRows = useVisibleSelectableRows(selecting)
   const [snapshot, setSnapshot] = useState<CountSnapshot | null>(null)
   const [expanded, setExpanded] = useState(false)
@@ -79,8 +64,6 @@ export function BatchBar({
 
   if (!selecting) return null
   const pickedIds = picks.map((item) => item.sessionId)
-  // 读数只对**同一份名单**成立：勾选刚变、新一轮 count 还在 300ms 窗口里时，旧读数整句不说
-  // （拿旧 Map 求新名单的和会把新增那条按 0 算，显示一个偏小的假数）。
   const counted = snapshot !== null && sameIds(snapshot.ids, pickedIds) ? snapshot : null
   const kids = counted === null ? null : pickedIds.reduce((sum, id) => sum + (counted.counts.get(id) ?? 0), 0)
   const allPicked = areAllVisibleRowsSelected(visibleRows, picks)
@@ -95,7 +78,6 @@ export function BatchBar({
           <ul className="sd-batch-bar-list">
             {picks.map((item) => {
               const title = item.title === '' ? t('common.untitled') : item.title
-              // 逐行 chip 同理：读数不属于这一份名单时一个字都不说，不拿 0 冒充"没有子会话"。
               const rowKids = counted?.counts.get(item.sessionId) ?? 0
               return (
                 <li className="sd-batch-bar-item" key={item.sessionId}>

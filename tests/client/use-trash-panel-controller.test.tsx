@@ -12,7 +12,7 @@
  * 失败原文按条目留。
  */
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { RemoteOutcome, TrashDetailLike, TrashEntryLike } from '../../src/client/remote.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
 import type { TrashDetailBlockWire, TrashEntryWire } from '../../src/shared/wire.js'
@@ -39,12 +39,7 @@ import {
 import type { TrashListState } from '../../src/client/use-trash-query.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import { outcomes, purgeOutcomes, restoreOutcomes } from './support/outcomes.js'
-import { resetClientState } from '../../src/client/reset-client-state.js'
 
-// 模块级现场（跨用例存活）：一条复位口收全部，用例之间互不串味。
-beforeEach(() => {
-  resetClientState()
-})
 
 const A: TrashEntryLike = {
   id: 'a',

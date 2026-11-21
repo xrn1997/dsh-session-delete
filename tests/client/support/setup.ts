@@ -1,6 +1,14 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
-import { afterEach } from 'vitest'
+import { afterEach, beforeEach } from 'vitest'
+
+// 每个用例一份全新场景：模块级现场跨用例存活，换新比逐条复位更彻底。
+// 动态 import 是**必须**的：本文件先于用例的 `vi.mock` 注册执行，静态 import 会让场景先拉进
+// 未替身的业务模块（write-seats 等），替身对它失效。
+beforeEach(async () => {
+  const { createClientScene, installClientScene } = await import('../../../src/client/scene.js')
+  installClientScene(createClientScene(), { replace: true })
+})
 
 // vitest 没开 `globals`，@testing-library/react 的自动 cleanup 挂不上 ⇒ 显式收尾，
 // 否则上一个用例的 DOM 会留在 document 里，下一个用例报 "Found multiple elements"。

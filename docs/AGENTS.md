@@ -23,7 +23,7 @@
 | 活跃工单 | GitHub Issues | 进行中的任务与验收 | 否 |
 | 过程工件 / 生成快照 | 本机 `.superpowers/`、`.task-scratch/`、`.worktrees/`、`.qoder/` | 任务简报、报告、审查草稿、工具生成的知识快照 | 否（不入库） |
 
-本仓不另写跨半契约规格：契约的唯一主人是 `src/shared/wire.ts`，路由与形状住 `src/api/route-table.ts`，另写一份规格会造第二份契约。界面的现行状态与层级住 `docs/ui-spec.md`，不写进 architecture。
+本仓不另写跨半契约规格：契约的唯一主人是 `src/shared/wire.ts`（段名 / 请求 / 信封 / 失败码），`/apply` 成功值形状住 `src/shared/apply-values.ts`；路由与形状住 `src/api/route-table.ts`，另写一份规格会造第二份契约。界面的现行状态与层级住 `docs/ui-spec.md`，不写进 architecture。
 
 ## 2. 放置判据
 

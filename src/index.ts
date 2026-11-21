@@ -1,5 +1,4 @@
-/** 只用于类型面：`@deepseek-ai/cordis` 留在 devDependencies 供本仓与 `lib/types` 解析，
- *  不是 peer、也不在运行期加载；纯类型消费者在宿主外使用本包时需要自备它。 */
+/** 只用于类型面：`@deepseek-ai/cordis` 留在 devDependencies，不是 peer、也不在运行期加载。 */
 import type { Context } from '@deepseek-ai/cordis'
 import { createDispatcher } from './api/dispatch.js'
 import { registerConnectionRoutes, type ConnectionFetchServiceLike } from './api/connection-route.js'
@@ -19,28 +18,12 @@ export const name = '@xrn1997/dsh-session-delete'
 export { Config }
 
 /**
- * 插件依赖：**只写字符串数组**（隔离数据根上实测：写成 `{ required, optional }` 会让插件停在
- * `pending (waiting for services: required, optional)`）。
- *
- * 三项都是在隔离数据根上实测注入成功、且本插件真正用到的宿主服务。**不进 inject 的**：
- * - `remote`：那是**浏览器半**的服务（asar `dsh-api-gateway/lib/client.js`：`super(ctx, "remote")`），
- *   Node 半挂的是 `ctx.typertGateway`。把它写进 Node 半的 inject 会让插件永远 pending（同 `slots` 那次的形状）。
- * - `sessions` / `sessionProjectionCache` / `sessionPersistence`：都按 `ctx.get(...)` **可选读**——
- *   `sessions` 给 `evictLive` 和 live header 用（活跃判据走 waterfall，见 src/ports/host-port.ts；
- *   服务缺席回 `unknown`），`sessionProjectionCache` 是标题的投影读面，`sessionPersistence` 是
- *   `projectDirOf` / `titleOf` 的公开 header 读面（workspaceRegistry 硬注入它，标准组合必有）。
- *   inject 一个可能没挂的服务 = 整个插件 pending；标题取不到时 `titleOf` 返回空串，正是契约允许的降级。
- * - `agents`：只给 handle 捕获用（`ctx.get('agents')`；缺席时 `ctx.inject(['agents'])` 等服务就绪再装）。
- *   它同样可能晚于本插件激活，写进插件 inject 只会让整个插件 pending。
- *
- * `connection` 是浏览器半取数通道的唯一承载者：全部段名注册到 `connection.fetch.register` 的
- * `/api/dsh-session-delete-api/*`，Host/Origin/浏览器认证由宿主 `/api` bridge 完成（ADR-0033）。
- * 支持面是 web UI 与桌面端，二者的标准组合都装 `client-connection`；服务缺席时插件停在 pending
- * ——可见的激活失败，而不是静默地没有入口。`webServer` 不再直接使用：exact route 仍由宿主的
- * `connection` 挂在其 `/api` 前缀上，插件不需要自己碰物理服务器。
- *
- * 清册的三层各有各的家：raw 绑定 `src/trash/storage-manifest.ts`、读面（对账 + 读）`src/trash/ledger.ts`、
- * 数据根 `src/ports/home.ts`。这里只把它们接起来，任何一层都不在组合根里长判据。
+ * 插件依赖：**只写字符串数组**（写成 `{ required, optional }` 会让插件停在 pending）。
+ * 三项都是实测注入成功、且真正用到的宿主服务。**不进 inject 的**：`remote` 是浏览器半的服务
+ * （asar `dsh-api-gateway/lib/client.js` 的 `super(ctx, "remote")`），Node 半挂的是 `ctx.typertGateway`；
+ * `sessions` / `sessionProjectionCache` / `sessionPersistence` 按 `ctx.get(...)` 可选读
+ * （inject 一个可能没挂的服务 = 整个插件 pending）；`agents` 同样可能迟到，缺席时用 `ctx.inject` 等。
+ * `connection` 是取数通道的唯一承载者，缺席时插件停在 pending——可见的激活失败，而不是没有入口。
  */
 export const inject = ['workspaceRegistry', 'storageDomain', 'connection']
 
@@ -48,14 +31,8 @@ export const inject = ['workspaceRegistry', 'storageDomain', 'connection']
  * 装配
  * ------------------------------------------------------------------ */
 
-/**
- * 装配顺序：**配置归一 → 清单 → 端口 → 在场能力 → 动词依赖 → 分发器 → exact Fetch 路由**
- * （`DeleteDeps` 把这些依赖面合成一颗；`config` 是归一后的只读快照）。
- *
- * 路由用 `ctx.effect` 挂、disposer 归装载它的那根 fiber：插件卸载即摘路由（`register` 返回的
- * disposer 是官方契约）。**同一进程里只注册一次**这件事由宿主把住：重复的 `(path, method)`
- * 在 `connection.fetch.register` 里直接抛，响亮失败而不是悄悄覆盖。
- */
+/** 装配顺序：配置归一 → 清单 → 端口 → 在场能力 → 动词依赖 → 分发器 → exact Fetch 路由。
+ *  路由用 `ctx.effect` 挂、disposer 归 fiber；重复 `(path, method)` 由宿主的 register 直接抛。 */
 export function apply(ctx: Context, rawConfig?: unknown): void {
   // 归一放在装配第一步：坏配置在碰宿主之前就响亮失败，不拿半套配置启动。
   const config = normalizeConfig(rawConfig)
@@ -63,11 +40,9 @@ export function apply(ctx: Context, rawConfig?: unknown): void {
   const home = resolveHome()
   const rawManifest = createHostStorageManifest(ctx)
   const host = createHostPort(ctx)
-  // `/config` 的写支：`configEditor` 跟 `connection` 一样按 ctx.get 可选读——不是标准组合必有，
-  // 缺席时写支回 io、读支照常，不让整条插件因为一个只有插件页才用到的服务而 pending。
+  // `/config` 的写支：`configEditor` 可选读——不是标准组合必有；缺席时写支回 io，不让插件 pending。
   const configEditor = ctx.get('configEditor') as ConfigEditorLike | undefined
-  // `configEditor.edit` 要的是 Loader entry：`ctx.fiber.entry` 由 Loader 挂上，Cordis 类型里没有它，
-  // 所以按窄形状取一次；拿不到时写支回 io（读支不受影响）。
+  // 要的是 Loader entry：`ctx.fiber.entry` 由 Loader 挂上，Cordis 类型里没有，按窄形状取一次。
   const entry = (ctx as { readonly fiber?: { readonly entry?: unknown } }).fiber?.entry
   const deps: DeleteDeps = {
     fs,
@@ -82,8 +57,7 @@ export function apply(ctx: Context, rawConfig?: unknown): void {
     ...(entry === undefined ? {} : { entry }),
   }
   const connection = ctx.get('connection') as ConnectionFetchServiceLike | undefined
-  // `inject` 保证 apply 只在 connection 就绪后跑；这里仍判一次，把"服务被摘走"变成响亮错误，
-  // 而不是静默注册零条路由（插件看起来在、所有动作 404）。
+  // `inject` 已保证就绪；再判一次把「服务被摘走」变成响亮错误，而不是静默注册零条路由。
   if (connection === undefined) throw new Error('session-delete: connection 服务缺席')
   const dispatch = createDispatcher(deps)
   ctx.effect(() => {

@@ -1,20 +1,25 @@
 /**
- * `/apply` 六动作的**矩阵**：动作索引（`src/shared/apply-actions.ts`）与六家判据的双向核对。
+ * `/apply` 六动作的**矩阵**：动作索引（`src/shared/apply-actions.ts`）与值形状声明
+ * （`src/shared/apply-values.ts`）对五家判据的核对。
  *
  * 为什么要有它：一个动作的口径散在 wire 值判形、路由纯度、取数超时档、客户端回执读法、写后座位
- * 五家（文案那一格没有按动作分派的键，见文末注）。动作索引只收了三格静态事实；这一份按**各家的
- * 公开 interface 行为**逐动作核对一遍——索引写错、某一家漏了一个动作、或两处口径漂了，先在这里红，
- * 而不是等真机上"慢动作被 30 秒掐断"或"新动作没有回执读法"。
+ * 五家（文案那一格没有按动作分派的键，见文末注）。动作索引只收两格静态事实，值形状住
+ * `APPLY_VALUE_SCHEMAS`；这一份按**各家的公开 interface 行为**逐动作核对一遍——索引写错、
+ * 某一家漏了一个动作、或两处口径漂了，先在这里红，而不是等真机上"慢动作被 30 秒掐断"或
+ * "新动作没有回执读法"。
  *
  * 双向核对：
- * - 枚举：索引的键序 = 规范动作序 = 路由表动作名单（拒否原文按它念）；
- * - 索引 → 各家：每个动作喂一遍 `WIRE_VALUE_GUARDS.apply`、路由纯度函数、实际超时档、回执读法；
- * - 各家 → 索引：客户端回执的落地 id 域 / not-found 中性 / 附件读数只在索引声明的那一类形状上出现；
+ * - 枚举：索引的键序 = 规范动作序 = 路由表动作名单（拒否原文按它念），值形状表同键集；
+ * - 独立期望表：动作 → 允许的成功值与落地 id 在测试里写死，不从被测 schema 反推；
+ * - 索引 + schema → 各家：每个动作喂一遍 `WIRE_VALUE_GUARDS.apply`、路由纯度函数、实际超时档、回执读法；
+ * - 各家 → schema：判形接受集与动作 schema 逐样例一致；落地 id 域 / not-found 中性 / 附件读数
+ *   只在 schema 声明的那一类形状上出现；
  * - 类型级：写座位集与 `write-seats.ts` 的 `SeatedAction` 互为子集，`receipt.ts` 的
- *   `Record<ApplyAction, …>` 与索引的 `satisfies Record<ApplyAction, …>` 各守一侧。
+ *   `Record<ApplyAction, …>` 与索引 / schema 的 `satisfies Record<ApplyAction, …>` 各守一侧。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { APPLY_ACTIONS, APPLY_ACTION_INDEX } from '../src/shared/apply-actions.js'
+import { APPLY_VALUE_SCHEMAS } from '../src/shared/apply-values.js'
 import { APPLY_ACTION_TABLE, APPLY_ACTIONS as ROUTE_APPLY_ACTIONS, routeOf } from '../src/api/route-table.js'
 import { readReceipt, summarizeReceipt } from '../src/client/receipt.js'
 import {
@@ -34,7 +39,7 @@ import {
   type TrashEntryWire,
 } from '../src/shared/wire.js'
 
-/** 回收站那一行的线上形状（判形所需的字段；`delete` / `restore` 的成功支就是它或 null）。 */
+/** 回收站那一行的线上形状（`delete` / `restore` 的成功支是它或 null）。 */
 const TRASH_ROW: TrashEntryWire = {
   id: 'entry-x',
   sessionId: 'session-x',
@@ -56,13 +61,35 @@ const STATS: PurgeStatsWire = {
 /** 数的成功支（count / unarchive）。 */
 const NUMBER = 1
 
-/** 形状族 → 一个该形状的成功值（形状族是索引里唯一与 wire 判形共用的判别键）。 */
-function valueOfShape(shape: (typeof APPLY_ACTION_INDEX)[ApplyAction]['value']): unknown {
-  switch (shape) {
-    case 'trash-entry-or-null': return TRASH_ROW
-    case 'stats': return STATS
-    case 'number': return NUMBER
-  }
+/** 三种形状各一份样例；动作 → 允许哪几份由下面的独立期望表写死，不从被测 schema 派生。 */
+const SAMPLES = [TRASH_ROW, STATS, NUMBER, null] as const
+type Sample = (typeof SAMPLES)[number]
+
+/** 动作 → 允许的成功值（独立期望）：`null` 只属于 delete / restore 的幂等支。 */
+const EXPECTED_VALUES: Record<ApplyAction, readonly Sample[]> = {
+  delete: [TRASH_ROW, null],
+  restore: [TRASH_ROW, null],
+  purge: [STATS],
+  count: [NUMBER],
+  'orphan-clean': [STATS],
+  unarchive: [NUMBER],
+}
+
+/** 动作 → 落地 id（独立期望）：delete 是条目 id、restore 是会话 id，其余动作没有可撤销的落地 id。 */
+const EXPECTED_LANDED_IDS: Record<ApplyAction, readonly string[]> = {
+  delete: [TRASH_ROW.id],
+  restore: [TRASH_ROW.sessionId],
+  purge: [],
+  count: [],
+  'orphan-clean': [],
+  unarchive: [],
+}
+
+/** 某个动作的主样例：独立期望表的第一项。 */
+function sampleOf(action: ApplyAction): Sample {
+  const sample = EXPECTED_VALUES[action][0]
+  if (sample === undefined) throw new Error(`动作 ${action} 没有期望成功值`)
+  return sample
 }
 
 /** 一条成功的逐条回执（断言口径：判形读的是同一份 union，所以这里按动作断言）。 */
@@ -76,33 +103,44 @@ function failedOutcome(action: ApplyAction, code: string, message: string): Appl
 }
 
 describe('/apply 动作矩阵', () => {
-  it('枚举：索引六支齐全、键序 = 规范动作序 = 路由表的动作名单（拒否原文按同一份序念）', () => {
-    // `APPLY_ACTION_INDEX` 的 `satisfies Record<ApplyAction, …>` 是编译侧完整性；这里补运行期的
-    // 「三份名单是同一份」：索引键集、规范序、路由表（`Object.keys(APPLY_ACTION_TABLE)`）。
+  it('枚举：索引六支齐全、键序 = 规范动作序 = 路由表名单；值形状表同键集', () => {
+    // `APPLY_ACTION_INDEX` / `APPLY_VALUE_SCHEMAS` 的 `satisfies Record<ApplyAction, …>` 是编译侧
+    // 完整性；这里补运行期的「四份名单是同一份」：索引键集、规范序、路由表、值形状表。
     expect(Object.keys(APPLY_ACTION_INDEX)).toEqual([...APPLY_ACTIONS])
     expect([...ROUTE_APPLY_ACTIONS]).toEqual([...APPLY_ACTIONS])
     expect(Object.keys(APPLY_ACTION_TABLE)).toEqual([...APPLY_ACTIONS])
+    expect(Object.keys(APPLY_VALUE_SCHEMAS)).toEqual([...APPLY_ACTIONS])
     for (const action of APPLY_ACTIONS) {
       expect(APPLY_ACTION_TABLE[action]).toBe(APPLY_ACTION_INDEX[action].purity)
     }
   })
 
-  it('wire 值判形：每个动作的成功值形状过 `/apply` 判形；null 幂等只属于 entry 形状；换形状必须被拒', () => {
+  it('wire 值判形：每个动作的成功值过 `/apply` 判形；判形接受集 = 该动作的值 schema', () => {
     for (const action of APPLY_ACTIONS) {
-      const shape = APPLY_ACTION_INDEX[action].value
-      // 成功支：索引声明的形状能过判形（判形按 action 校 value 的形状）。
-      expect(WIRE_VALUE_GUARDS.apply([okOutcome(action, valueOfShape(shape))])).toBe(true)
+      // 成功支：独立期望表说得出的形状就过判形（判形按 action 查同一张表）。
+      expect(WIRE_VALUE_GUARDS.apply([okOutcome(action, sampleOf(action))])).toBe(true)
       // 失败支与形状无关：任何动作的失败回执都该过。
       expect(WIRE_VALUE_GUARDS.apply([failedOutcome(action, SESSION_DELETE_CODES.io, '坏了')])).toBe(true)
+      // 逐样例核对：null 幂等、换形状都必须与独立期望表一致（形状族互斥写死在这里，不从 schema 反推）。
+      for (const sample of SAMPLES) {
+        expect(WIRE_VALUE_GUARDS.apply([okOutcome(action, sample)]), `${action} 的成功值判形`)
+          .toBe(EXPECTED_VALUES[action].includes(sample))
+      }
     }
-    for (const action of APPLY_ACTIONS) {
-      const shape = APPLY_ACTION_INDEX[action].value
-      // `null` 是"被同批前一条带走"的幂等 no-op，只属于 delete / restore（entry 形状）。
-      expect(WIRE_VALUE_GUARDS.apply([okOutcome(action, null)])).toBe(shape === 'trash-entry-or-null')
-      // 形状族互斥：换一种形状的值必须被拒（否则索引的 value 就是一句空话）。
-      const wrongShape = shape === 'number' ? STATS : NUMBER
-      expect(WIRE_VALUE_GUARDS.apply([okOutcome(action, wrongShape)])).toBe(false)
+  })
+
+  it('值形状单源：索引里每个动作都有 schema；缺 schema 必填格的回执被判形拒掉', () => {
+    // 编译闸在 `APPLY_VALUE_SCHEMAS` 的 `satisfies`；这一句补运行期键集（防声明被弱化成索引）。
+    for (const action of Object.keys(APPLY_ACTION_INDEX) as ApplyAction[]) {
+      expect(Object.hasOwn(APPLY_VALUE_SCHEMAS, action), action).toBe(true)
     }
+    // 盘上真有一条这样的回执时，判形先拒掉它，不让缺格的形状喂给回执读法 / 渲染层。
+    const missingStats: Record<string, unknown> = { ...STATS }
+    delete missingStats.removed
+    expect(WIRE_VALUE_GUARDS.apply([okOutcome('purge', missingStats)])).toBe(false)
+    const missingEntry: Record<string, unknown> = { ...TRASH_ROW }
+    delete missingEntry.sessionId
+    expect(WIRE_VALUE_GUARDS.apply([okOutcome('delete', missingEntry)])).toBe(false)
   })
 
   it('纯度：路由表逐动作投影索引；运行时纯度函数逐动作一致，认不得的动作仍按 chained', () => {
@@ -152,36 +190,20 @@ describe('/apply 动作矩阵', () => {
     }
   })
 
-  it('回执读法：成功读得出成功；落地 id 域 / not-found 中性 / 附件读数与动作的索引事实对齐', () => {
-    /** 落地 id 的域：delete 是条目 id、restore 是会话 id，其余三个动作没有可撤销的落地 id。 */
-    const landedByAction = {
-      delete: ['entry-x'],
-      restore: ['session-x'],
-      purge: [],
-      count: [],
-      'orphan-clean': [],
-      unarchive: [],
-    } satisfies Record<ApplyAction, readonly string[]>
-    /** not-found 这枚失败码是不是中性提示（只有孤儿清理把"组已经不在了"当成功）。 */
-    const neutralOnNotFound = {
-      delete: false,
-      restore: false,
-      purge: false,
-      count: false,
-      'orphan-clean': true,
-      unarchive: false,
-    } satisfies Record<ApplyAction, boolean>
-
+  it('回执读法：成功读得出成功；落地 id 域 / not-found 中性 / 附件读数与值 schema 对齐', () => {
     for (const action of APPLY_ACTIONS) {
-      const shape = APPLY_ACTION_INDEX[action].value
-      const { summary } = summarizeReceipt(readReceipt(action, ['x'], [okOutcome(action, valueOfShape(shape))]))
+      const sample = sampleOf(action)
+      const { summary } = summarizeReceipt(readReceipt(action, ['x'], [okOutcome(action, sample)]))
       expect(summary.successIds).toEqual(['x'])
-      expect(summary.landedIds).toEqual([...landedByAction[action]])
-      // 附件读数只住在 stats 形状（purge / orphan-clean）的 ok 回执里；其余形状没有这一格。
-      expect(summary.attachmentCleanup !== undefined).toBe(shape === 'stats')
+      // 落地 id 的域由独立期望表写死：delete 是条目 id、restore 是会话 id，
+      // 其余动作的成功值不是清册行，没有可撤销的落地 id。
+      expect(summary.landedIds).toEqual([...EXPECTED_LANDED_IDS[action]])
+      // 附件读数只住在聚合回执（purge / orphan-clean）的 ok 值里；其余形状没有这一格。
+      expect(summary.attachmentCleanup !== undefined).toBe(EXPECTED_VALUES[action].includes(STATS))
 
+      // 只有孤儿清理把「组已经不在了」当中性提示（不算失败）；其余动作的 not-found 就是失败。
       const notFound = readReceipt(action, ['x'], [failedOutcome(action, SESSION_DELETE_CODES['not-found'], '不在了')])
-      expect(notFound.byId.get('x')?.kind).toBe(neutralOnNotFound[action] ? 'neutral' : 'failed')
+      expect(notFound.byId.get('x')?.kind).toBe(action === 'orphan-clean' ? 'neutral' : 'failed')
     }
   })
 

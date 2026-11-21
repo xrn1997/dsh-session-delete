@@ -28,7 +28,7 @@ dsh plugin --profile <profile> add "link:<本仓绝对路径>"
 
 ## 门（自动）
 
-门的唯一入口是 `pnpm gates`（typecheck / lint / test / build / pack dry-run，任一红即红；pack 不重复跑 build）；`pnpm typecheck` 与 `pnpm test` 仍必须同批跑。最后一格 `pack:dry` 的执行体是 `scripts/verify-pack.mjs`：它从 `files` 独立展开期望树、与 `npm pack --dry-run --json` 的实际文件集**双向对账**（缺一件红、多一件也红、混进 sourcemap 红），并把 `lib/` 构建树逐文件对回 `files`（构建多出的产物不会出现在 npm 包里，只能从盘上查），再做 `node --check` 与 `import lib/index.js` 的插件模块面冒烟——`npm pack` 只证明能产出 tarball，不证明包里的树对得上清单。
+门的唯一入口是 `pnpm gates`（typecheck / lint / test / build / pack dry-run，任一红即红；pack 不重复跑 build）；`pnpm typecheck` 与 `pnpm test` 仍必须同批跑。最后一格 `pack:dry` 的执行体是 `scripts/verify-pack.mjs`：期望树从 `files` 展开，并加上包必带的 `package.json` 与它声明的挂载面（main / types / icon / exports / dsh.bundle.patch），与 `npm pack --dry-run --json` 的实际文件集**双向对账**（缺一件红、多一件也红、混进 sourcemap 红），再把 `lib/` 构建树逐文件对回 `files`，最后做语法检查与 `import lib/index.js` 的模块面冒烟。发版 tarball 用同一支脚本的 `--tarball` 模式，判据只有一份。
 
 ### 编译器档位与 lint 归属
 
@@ -56,6 +56,7 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`（`.github/w
 ### 宿主换代复核（升级前逐条看）
 
 - **通道**：`ConnectionFetchRoute`（本仓窄镜像 `ConnectionFetchRouteLike`）的形状与宿主 `/api` 的 owner / 鉴权行为；锚点 `src/api/connection-route.ts`、ADR-0033。
+- **槽位**：贡献表点名的槽位仍是宿主已声明的官方槽位；名单与出处住 `src/client/index.tsx` 头注。
 - **主题**：用 `Theme.listTokens` 对照公开 token 面；新 token 的落法与已知差异见 `src/client/ui/ui.css` 头注，`tests/skeleton.test.ts` 钉别名层。
 - **行归属**：`data-row-key` 仍以 `session:` 前缀命名；锚点 `src/client/batch-pick.ts`、ADR-0034。
 - **维护卡**：`plugins.bundle.config` 仍是宿主提供的 bundle 配置槽；理由住 ADR-0021。
@@ -80,7 +81,7 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`（`.github/w
 1. **门**：`pnpm gates`，退出码看过。
 2. **写发布记录**：在 `CHANGELOG.md` 追加这一版（新增 / 变更 / 修复 / 升级注意）；未发布改动不预写，历史版本不回溯改写，逐提交明细留 git。
 3. **版本前移**：`package.json` 的 `version` 提一笔 `chore: 发版 x.y.z`；提交并 push。
-4. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——先校验 tag = `V` + `package.json` 版本，再跑 `pnpm gates` → `pnpm pack` → 按 `package.json` 的 `files` 断言包内的树（构建产物与随包资源整树进包、挂载面点名的路径都在包里、契约没点名的文件进不去）→ 挂到 Release。**Release 正文**由 `scripts/release-notes.mjs` 从 `CHANGELOG.md` 该版条目与 `package.json` 事实投影（`--notes-file`，不再用 `--generate-notes` 的 commit 列表；CHANGELOG 里没有该版条目就发不出来），`workflow_dispatch` 干跑也把正文随 artifact 传回供预览。每个 Release 两份资产：版本名 `xrn1997-dsh-session-delete-<版本>.tgz` 与稳定别名 `dsh-session-delete.tgz`；tag 带 `-` 的按 prerelease 处理，不抢 `latest`；Release 已存在时资产覆盖。`workflow_dispatch` 只干跑：跑门 + 打包 + 传 workflow artifact，不建 Release。**tag 排在 npm 之前**：GitHub 侧删了能重来，npm 同版本覆不回去——不可逆的一步放最后，CI 在同一提交上绿了才执行它。
+4. **GitHub Release 资产（自动）**：给第 3 步的提交打 annotated tag `Vx.y.z` 并 push，触发 `.github/workflows/release.yml`——校验 tag = `V` + `package.json` 版本 → `pnpm gates` → `pnpm pack` → `node scripts/verify-pack.mjs --tarball` → 挂到 Release。**Release 正文**由 `scripts/release-notes.mjs` 从 `CHANGELOG.md` 该版条目与 `package.json` 事实投影（`--notes-file`，不用 `--generate-notes` 的 commit 列表；CHANGELOG 里没有该版条目就发不出来），`workflow_dispatch` 干跑也把正文随 artifact 传回预览。每个 Release 两份资产：版本名 `xrn1997-dsh-session-delete-<版本>.tgz` 与稳定别名 `dsh-session-delete.tgz`；tag 带 `-` 的按 prerelease 处理；Release 已存在时资产覆盖。**tag 排在 npm 之前**：GitHub 侧删了能重来，npm 同版本覆不回去。
 5. **`npm publish`**：`prepack` 会跑 `build`；`files` 是**精确清单**——构建每新多出一个要发布的产物，就要同时加进 `files`。两半都不产 sourcemap，因此产物里不会留一个指向不进包文件的 `//# sourceMappingURL`。发完核对 npm 清单上的 `engines.dsh` 与 `xrn1997.dshReleases` 是否已落到产物上。`lib/types/**/*.d.ts` 对 `@deepseek-ai/cordis` 只有 type-only 引用：它在 `devDependencies` 里供本仓与声明文件解析，不是 peer、也不在运行期加载。
    - `locale/`（`locale/zh.json` + `locale/en.json`）是插件自己的**展示元信息**（`meta.title` / `meta.description` / `meta.detail`），与界面文案字典 `src/client/copy.ts` 是两样东西，改一边不必动另一边。`meta.detail` 点名插件详情页渲染的一行插图文档（`docs/DETAIL.zh.md`、`docs/DETAIL.md`，每语言一份）；不合规或文件缺失宿主按 `invalid` 报错、不回退 README（判据住 `tests/skeleton.test.ts`）。
    - 根目录 `screenshots.json` 列的是 README 那些真机图的清单；文档门钉住 README、清单与本地文件三方一致，换图时同批更新。详情短文档自带的插图（`docs/preview.zh.svg`、`docs/preview.svg`）与截图一样要进 `files`（判据住 `tests/skeleton.test.ts`）。

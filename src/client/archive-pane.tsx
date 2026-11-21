@@ -1,20 +1,6 @@
 /**
- * 归档档的三个纯视图件（清单列 / 工具行 / 页脚）：状态面来自 `useArchiveQuery`（四态），
- * 动作面来自 `useArchivePanelController`，勾选面来自 `useListSelection`（归档自己的那一台）。
- *
- * 清单的 DOM 不在这里拼——grid、组头、行壳与那三张状态卡都由 `src/client/session-list.tsx` 的
- * `SessionList` 交出，这一档只交**行读数**与**那一排动作**。
- *
- * 行语义（docs/ui-spec.md §3.1）：显示名（`displayNameOf`，label 优先）+ 最后活动/创建于 + 大小
- * （缺席显式「—」）+ 行右两枚图标按钮（解除归档 / 删除，均带 `aria-label`、不写 emoji）；行点击 =
- * 选中看详情（不做原生打开）；孤儿子会话照常显示并带「子代理」标签。
- *
- * 「最后活动」与「创建于」是归档档自己的口径（`updatedAtSource`），与回收站的「删除于」不是同一句；
- * 数据标签按档不同，界面语言按档相同（ADR-0060 边界）。
- *
- * 本文件同时是**归档档的 adapter 与四格视图**（`ARCHIVE_TAB_ADAPTER` / `ArchiveTabView`）：装配线住
- * `use-panel-tab.ts`、四格版面住 `panel-tab.tsx`，这里只回答归档这一档与回收站不同的那几格
- * （行身份 / 分组键 / 光标活动行 / 窄档下钻判据 / 预取参数域 / 详情帧的档位门）。
+ * 归档档的三个纯视图件（清单列 / 工具行 / 页脚）与 adapter：状态面来自 `useArchiveQuery`，
+ * 装配线住 `use-panel-tab.ts`、四格版面住 `panel-tab.tsx`；这里只回答归档档与回收站不同的那几格。
  */
 import type { RefObject } from 'react'
 import { absoluteText, agoText, type Translate } from './copy.js'
@@ -24,7 +10,7 @@ import { ListEmpty, ListLoading, ListNotice, SessionList, type ListDom, type Ses
 import type { ArchiveDetailLike } from './remote.js'
 import type { ArchiveDetailSubject } from './use-archive-detail-reader.js'
 import type { ArchiveQuery } from './use-archive-query.js'
-import { useArchiveQuery } from './use-archive-query.js'
+import { archiveRowsOf, useArchiveQuery } from './use-archive-query.js'
 import type { ListSelection } from './use-list-selection.js'
 import { useArchivePanelController, type ArchivePanelController } from './use-archive-panel-controller.js'
 import type { TrashNav } from './trash-nav.js'
@@ -57,20 +43,16 @@ export interface ArchiveListProps {
   selection: ListSelection<ArchiveRowWire>
   groups: readonly ProjectGroup<ArchiveRowWire>[]
   controller: Pick<ArchivePanelController, 'selectRow' | 'unarchive' | 'requestDeleteOne' | 'actionFailure' | 'busy'>
-  /** 意图预取（装配线 `usePanelTab` 建一份，两档同一套延时与去重；视图不再自己建）。 */
   prefetch: DelayedPrefetch<ArchiveRowWire>
-  /** 清单的 grid 节点：档的装配线（`usePanelTab`）的 `useRowFocus` 按 `ARCHIVE_LIST_DOM.idAttr` 查询它。 */
   listRef: RefObject<HTMLDivElement>
   /** 键盘契约（导航状态住档的装配线，窄档下钻时清单卸载也不丢 Esc 与焦点交还）。 */
   nav: TrashNav
-  /** 当前活动行（选中行优先，回落光标）：说「详情正画着这一条」，也只在非多选态参与 `aria-selected`。
-   *  光标与活动行都住控制器（`activeId` / `selectRow`），清单不再自己回报光标。 */
+  /** 当前活动行（选中优先，回落光标）：只在非多选态参与 `aria-selected`。 */
   activeId: string | null
   onRetry: () => void
   t: Translate
 }
 
-/** 清单列：四态里非「有行」的三档各交一块普通内容；有行时只交读数与动作给 `SessionList`。 */
 export function ArchiveList({ query, selection, groups, controller, prefetch, listRef, nav, activeId, onRetry, t }: ArchiveListProps) {
   const state = query.list
   const notice = state.status === 'loading' ? <ListLoading label={t('archive.loading')} />
@@ -174,7 +156,6 @@ export interface ArchiveToolbarProps {
   t: Translate
 }
 
-/** 工具行随档位：全部折叠 / 多选（归档档自己的选择面）。 */
 export function ArchiveToolbar({ selection, groups, t }: ArchiveToolbarProps) {
   return (
     <div style={{ display: 'flex', gap: 6 }} data-dsh-session-delete="archive-toolbar">
@@ -204,9 +185,8 @@ export interface ArchiveFooterProps {
   t: Translate
 }
 
-/** 页脚随档位：多选态 = 「解除所选」（无确认框）/「删除所选」（实心红，确认框语义同批量删除）。
- *  危险那颗仍是这一排的最后一个（「整页唯一一块实心红」的位置契约）。
- *  勾中的行读选择面那一份派生（`checkedRows`，含折叠组），不在这里从 groups 重算。 */
+/** 页脚随档位：多选态 = 「解除所选」（无确认框）/「删除所选」（实心红，确认框同批量删除）。
+ *  危险那颗必须是这一排的最后一个（整页唯一实心红的位置契约）；勾中行读 `checkedRows` 派生，不从 groups 重算。 */
 export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) {
   if (!selection.selectMode) return null
   const checkedRows = selection.checkedRows
@@ -254,14 +234,10 @@ export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) 
   )
 }
 
-/* ── 归档档 adapter 与四格视图（装配线与帧在 `use-panel-tab.ts` / `panel-tab.tsx`） ────────── */
-
-/** 归档档的清单读 hook：依赖由面板交，档位门原样转给 `use-archive-query.ts`。 */
 function useArchiveTabQuery(ctx: PanelTabContext): ArchiveQuery {
   return useArchiveQuery({ deps: ctx.deps, active: ctx.active })
 }
 
-/** 归档档的控制器：自动选中的档位派生（active && split）与光标/下钻包装住控制器自己。 */
 function useArchiveTabController(
   ctx: PanelTabControllerContext<ArchiveQuery, ArchiveRowWire>,
 ): ArchivePanelController {
@@ -276,19 +252,13 @@ function useArchiveTabController(
   })
 }
 
-/** 归档档 adapter：两档差异里属于归档的那一半（装配线不认识这些格子的语义）。 */
+/** 归档档 adapter：两档差异里属于归档的那一半。 */
 export const ARCHIVE_TAB_ADAPTER: PanelTabAdapter<
   ArchiveQuery, ArchiveRowWire, ArchiveDetailSubject, ArchiveDetailLike, ArchivePanelController
 > = {
   dom: ARCHIVE_LIST_DOM,
   idOf: archiveRowIdOf,
-  viewOf: (query) => ({
-    rows: query.list.status === 'ready' ? query.list.rows : null,
-    refreshing: query.refreshing,
-    failure: query.list.status === 'failure' ? query.list.message : null,
-    loading: query.list.status === 'loading',
-    empty: query.list.status === 'ready' && query.list.rows.length === 0,
-  }),
+  viewOf: (query) => ({ rows: archiveRowsOf(query.list), refreshing: query.refreshing }),
   groupsOf: (rows, t) => groupByProject(rows, t, {
     // 仅排序哨兵：显示口径住本文件（缺席说「时间未知」），不在这里念时间。
     timeOf: (row) => row.updatedAt ?? 0,
@@ -305,11 +275,10 @@ export const ARCHIVE_TAB_ADAPTER: PanelTabAdapter<
   prefetchOf: (controller) => (row) => { controller.prefetch(row.sessionId) },
   // 窄档下选中即等价于下钻（selectRow 只在 drill / split 时真正选中）。
   detailMountedNarrow: (controller) => controller.selected !== null,
-  // 归档档不活动时详情帧不挂轨监听（原 `archivePaneMounted` 的档位门，行为不变）。
+  // 归档档不活动时详情帧不挂轨监听。
   framePaneMounted: (_controller, facts) => facts.active && facts.detailMounted,
 }
 
-/** 归档档装配完的现场（面板只拿它交给 `ArchiveTabView` 与 header）。 */
 export type ArchivePanelTab = PanelTab<
   ArchiveQuery, ArchiveRowWire, ArchiveDetailSubject, ArchiveDetailLike, ArchivePanelController
 >
@@ -320,10 +289,8 @@ export interface ArchiveTabViewProps {
   readonly t: Translate
 }
 
-/**
- * 归档档的四格视图：清单列 / 工具行 / 页脚三件仍住本文件，详情投影 `ArchiveDetail` 原样转交；
- * 四格容器与分栏/下钻分支由 `PanelTabFrame` 画（与回收站档同一份）。
- */
+/** 归档档的四格视图：清单列 / 工具行 / 页脚三件住本文件，详情 `ArchiveDetail` 原样转交；
+ *  四格容器与分栏/下钻分支由 `PanelTabFrame` 画（与回收站档同一份）。 */
 export function ArchiveTabView({ tab, layout, t }: ArchiveTabViewProps) {
   const { query, selection, controller, groups } = tab
   const list = (
@@ -371,7 +338,6 @@ export function ArchiveTabView({ tab, layout, t }: ArchiveTabViewProps) {
   )
 }
 
-/** 面板用的装配入口：一档 = 共享装配线 + 归档 adapter（面板只调一次）。 */
 export function useArchiveTab(ctx: PanelTabContext): ArchivePanelTab {
   return usePanelTab(ARCHIVE_TAB_ADAPTER, ctx)
 }

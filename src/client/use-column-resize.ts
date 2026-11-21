@@ -1,15 +1,8 @@
 /**
- * 清单列与详情列之间那根可拖的宽度把手（docs/ui-spec.md 的「面板与清单」）。
- *
- * 三件事住在这里：
- * ① 宽度夹在两个界之间：下限由调用方给，上限 = 面板宽 − reserve。
- *    reserve 的数值与来历住在调用方（DETAIL_RESERVE），这一层不复制算式。
- * ② 夹在“读”的时候也做一次：窗口变窄不触发写入，listWidth 每次渲染按当前 panelWidth 重算。
- * ③ 按下才算在拖：指针捕获挂在把手元素上；拖动途中把手可能卸载，所以 window 上另兜一层
- *    pointerup/pointercancel 复用 stop；move 仍只认把手。
- *
- * 键盘：role=separator、←→ 各一格、Home 回默认、End 到上限；焦点态可见性由 ui.css 的
- * .sd-width-handle:focus-visible::after 负责。
+ * 清单列与详情列之间那根可拖的宽度把手。
+ * ① 宽度夹在 [min, panelWidth − reserve]，reserve 的算式住调用方；② 夹在读的时候也做一次（窗口变窄
+ * 不触发写入）；③ 按下才算在拖：指针捕获挂把手，window 上另兜 pointerup/pointercancel——拖动途中把手
+ * 可能卸载，它自己的 pointerup 永远不来。
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 
@@ -86,8 +79,7 @@ export function useColumnResize({
     setResizing(false)
   }
 
-  // 拖住期间另在 window 上兜结束那一路：把手若在拖动途中被卸载（`split` 翻了），它自己的
-  // pointerup 永远不来，`resizing` 就挂在 true 上（见文件头③）。
+  // 拖住期间另在 window 上兜结束：把手若在拖动途中被卸载（`split` 翻了），它的 pointerup 永远不来。
   useEffect(() => {
     if (!resizing) return
     window.addEventListener('pointerup', stop)

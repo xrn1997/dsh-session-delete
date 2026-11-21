@@ -1,28 +1,18 @@
 /**
- * 批量选择的**动作面**：全选、全选判定与模式内整行点击守卫。
- *
- * 可见行的事实源仍住 `host-rows.ts`（槽位登记 + 快照）；选中集住 `batch-selection-store.ts`。
- * 本文件只把两者接起来，于是依赖方向单向：`batch-pick` → `host-rows` / `batch-selection-store`；
- * 浮条与行开关 → `batch-pick` / `host-rows`。`host-rows` 不再 import 任何选择动作。
- *
- * DOM 只在这里读一次 `data-row-key`（ADR-0034 记下的受约束偏离）：守卫把指针下的行映射成
- * sessionId，再查登记；它不枚举行，也不维护行列表。
+ * 批量选择的**动作面**：全选、全选判定与模式内整行点击守卫。可见行住 `host-rows.ts`、选中集住
+ * `batch-selection-store.ts`，本文件只接起来（依赖单向：`batch-pick` → 两者，`host-rows` 不 import 选择动作）。
+ * DOM 只在这里读一次 `data-row-key`（ADR-0034 的受约束偏离）。
  */
 import { useEffect } from 'react'
 import { addPicks, togglePick, useSelection, type PickItem } from './batch-selection-store.js'
 import { pickableRowOf, readVisibleSelectableRows, registeredHostRowOf } from './host-rows.js'
 
-/** 全选：把当前可见可选行按登记序追加；已在名单里的由 `addPicks` 自己跳过，原有选中保持在前。 */
+/** 全选：按登记序追加当前可见行；已在名单里的由 `addPicks` 跳过，原有选中保持在前。 */
 export function selectAllVisible(): void {
   addPicks(readVisibleSelectableRows())
 }
 
-/**
- * 同一个切换口该显示「全选」还是「取消全选」：
- * - 有选中、且当前可见可选行全都选中 ⇒ 取消全选；
- * - 有选中、但当前没有可见可选行（全折叠/过滤掉）⇒ 只能清空，也显示取消全选；
- * - 其余（含 0 条）⇒ 全选。
- */
+/** 切换口显示「全选」还是「取消全选」：有选中而没有可见行时也算「取消全选」（此时点它只能清空）。 */
 export function areAllVisibleRowsSelected(
   rows: readonly PickItem[],
   picks: readonly PickItem[],
@@ -38,13 +28,10 @@ const INTERACTIVE_IN_ROW =
   'button, a, input, select, textarea, [role="menuitem"], [role="menu"], [data-dsh-session-delete="batch-pick"]'
 
 /**
- * 多选态内的整行点击守卫（document 捕获阶段）。
- *
- * 边界：行里的按钮 / 链接 / 输入 / 菜单项一律放行（否则 ⋯ 菜单、归档、置顶、单删都点不动）；
- * 双击的第二下与 dblclick 不翻转（第一下已经选中，第二下不能又反掉，也不能打开宿主的重命名）。
- * 认行靠 `data-row-key="session:…"`——**这是本文件唯一一处 DOM 读**（ADR-0034）：宿主将来改掉这个
- * 属性，最差是模式内点行不生效，勾选框本身仍在。**先查登记再吞事件**：没登记的行（别的列表 / 本插件
- * 没接管的会话行）一个默认行为都不改。模式外不挂监听：这时点行必须还是宿主的"打开会话"。
+ * 多选态内的整行点击守卫（document 捕获阶段）。行里的按钮 / 链接 / 输入 / 菜单项一律放行；双击的第二下
+ * 与 dblclick 不翻转；模式外不挂监听（点行仍是宿主的「打开会话」）。
+ * 认行靠 `data-row-key="session:…"`——**本文件唯一一处 DOM 读**（ADR-0034）：宿主改掉它是可接受的降级。
+ * **先查登记再吞事件**：没登记的行一个默认行为都不改（吞掉会让它们静默失效）。
  */
 export function useSelectionRowClickGuard(): void {
   const selecting = useSelection().selecting
@@ -58,9 +45,6 @@ export function useSelectionRowClickGuard(): void {
       if (!key.startsWith('session:')) return
       const sessionId = key.slice('session:'.length)
       if (sessionId === '') return
-      // **先确认这一行是本插件登记过的可见会话行，再决定吞不吞事件**：没登记 = 不在本插件的
-      // 可见集合里（别的列表 / 本插件没接管的行）。那些地方必须保持宿主原本的行为——吞掉
-      // click 的捕获阶段会让它们连自己的 onClick 都收不到（静默失效，比不选中更糟）。
       // 登记过但**在跑**的行仍要吃掉这一下（不许点整行打开它），只是不勾选。
       if (registeredHostRowOf(sessionId) === undefined) return
       if (event.target.closest(INTERACTIVE_IN_ROW) !== null) return

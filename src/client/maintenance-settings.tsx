@@ -1,16 +1,6 @@
 /**
- * 插件设置页的「维护」卡（ADR-0021）：那张槽位上的两张卡里，本文件只拥有下面这一张。
- *
- * 三段都是**手动**的：检查 → 预览 → 清理，没有挂载即扫、没有定时器。卡片的职责只有呈现：
- * 状态那一行、检查按钮、以及各段自己的横幅 / 失败 / 提示 / 确认框；读数与动作全归
- * `src/client/use-maintenance.ts`。两张卡的先后与 `summary` 守卫在 `src/client/settings-cards.tsx`。
- *
- * 与回收站面板的区别：这里没有面板高度、没有清单与详情两栏、没有全局闸。控件只用
- * `settingsCardShell` / `Button` / `Modal` / `fileSizeText`，所以同一张卡放在插件详情页的任意宽度下都成立。
- *
- * 孤儿会话段直接复用 `OrphanMaintenance`（警告条 / 失败 / 中性提示 / 预览确认的既有呈现）；
- * 孤儿附件段是本文件里的 `AttachmentMaintenance`（横幅 + 失败 + 回执 + 缩略图预览与清理确认）；
- * 投影缓存段是 `ProjectionMaintenance`（横幅 + 失败 + 回执 + 只按条数确认）。
+ * 插件设置页的「维护」卡（ADR-0021）。三段都是**手动**的（检查 → 预览 → 清理，没有挂载即扫、没有定时器），
+ * 卡片只呈现，读数与动作归 `use-maintenance.ts`；孤儿会话段复用 `OrphanMaintenance`，另两段在本文件。
  */
 import type { ReactElement, ReactNode } from 'react'
 import { AttachmentStrip } from './attachment-view.js'
@@ -37,17 +27,17 @@ interface MaintenanceSectionProps {
   slot: 'maintenance-orphans' | 'maintenance-attachments' | 'maintenance-projection'
   title: string
   hint: string
-  /** 这一段的计数（从报告里点名：孤儿会话念组数、附件念件数、投影缓存念条数）；报告不在 = null。 */
+  /** 这一段的计数（孤儿会话念组数、附件念件数、投影缓存念条数）；报告不在 = null。 */
   count: number | null
   countKey: MaintenanceCountKey
-  /** 段对象：状态行的在飞档位 / 失败与检查按钮的忙碌都从它取（busy 由段自己给，不再当 prop 传）。 */
+  /** 段对象：状态行的在飞档位 / 失败与检查按钮的忙碌都从它取。 */
   section: Pick<MaintenanceSectionView<unknown>, 'busy' | 'phase' | 'failure'>
   onScan: () => void
   t: Translate
   children: ReactNode
 }
 
-/** 一段的标题行：标题 + 说明 + 状态 + 检查按钮。状态按优先级：清理中 / 检查中 / 检查失败 / 尚未检查 / 没有发现 / N。 */
+/** 一段的标题行：标题 + 说明 + 状态 + 检查按钮。状态按优先级：清理中 / 检查中 / 失败 / 尚未检查 / 没有发现 / N。 */
 function MaintenanceSection({ slot, title, hint, count, countKey, section, onScan, t, children }: MaintenanceSectionProps): ReactElement {
   const status = statusText({ phase: section.phase, failure: section.failure, count, countKey, t })
   return (
@@ -82,10 +72,7 @@ function MaintenanceSection({ slot, title, hint, count, countKey, section, onSca
   )
 }
 
-/**
- * 状态那一行只有一个判据，顺序固定：
- * 在飞的动作（清理中 / 检查中）→ 失败（检查失败，不是"尚未检查"）→ 报告在不在、是否为 0（尚未检查 / 没有发现 / N）。
- */
+/** 状态那一行只有一个判据，顺序固定：在飞（清理中 / 检查中）→ 失败（不是"尚未检查"）→ 报告在不在、是否为 0。 */
 function statusText(input: {
   phase: MaintenancePhase | null
   failure: string | null
@@ -102,11 +89,7 @@ function statusText(input: {
   return input.t(input.countKey, { count: input.count })
 }
 
-/**
- * 三段共用的正文骨架：横幅（报告 > 0 且在飞时不画）/ 失败块 / 回执行 / 确认框。
- * 各段只交横幅正文与确认框；`slot` 决定 `data-dsh-session-delete` 的名字，`noticeTone` 决定回执行色调。
- * 抽这一层是为了让「什么时候画什么」只有一份；正文与危险层级仍归各段。
- */
+/** 三段共用的正文骨架：横幅（报告 > 0 且在飞时不画）/ 失败块 / 回执行 / 确认框；正文与危险层级归各段。 */
 function MaintenanceSectionBody<R extends { count: number }>({
   section,
   slot,
@@ -154,10 +137,7 @@ interface AttachmentMaintenanceProps {
   t: Translate
 }
 
-/**
- * 孤儿附件段：报告 >0 时出横幅（数量 + 体积 + 查看并清理）；检查/清理失败在原位摆原文 + 重试；
- * 上一趟清理的回执单独一行（已清 / 跳过 / 逐文件失败）。确认框把三条边界说完再动手。
- */
+/** 孤儿附件段：报告 >0 出横幅（数量 + 体积 + 查看并清理）；失败原位摆原文 + 重试；上一趟回执单独一行。 */
 function AttachmentMaintenance({ section, t }: AttachmentMaintenanceProps): ReactElement {
   return (
     <MaintenanceSectionBody
@@ -235,15 +215,12 @@ function AttachmentConfirm({
 }
 
 interface ProjectionMaintenanceProps {
-  /** 段视图：报告只有条数（缓存记录不是本插件的字节读数面）；失败、提示与确认框在同一台状态机上。 */
+  /** 段视图：报告只有条数；失败、提示与确认框在同一台状态机上。 */
   section: MaintenanceSectionView<ProjectionCacheOrphanReportWire>
   t: Translate
 }
 
-/**
- * 投影缓存段：报告 >0 时出横幅（条数 + 查看并清理）；检查/清理失败原位摆原文 + 重试；
- * 上一趟清理的回执单独一行。确认框只清「没有对应会话 / 回收站条目」的派生记录，不动会话本体。
- */
+/** 投影缓存段：报告 >0 出横幅；确认框只清「没有对应会话 / 回收站条目」的派生记录，不动会话本体。 */
 function ProjectionMaintenance({ section, t }: ProjectionMaintenanceProps): ReactElement {
   return (
     <MaintenanceSectionBody
@@ -309,7 +286,7 @@ export interface MaintenanceSettingsProps {
 }
 
 export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettingsProps): ReactElement {
-  // 三个段各自一台状态机（busy / 报告 / 提示都从段对象取）；这个 hook 不自动扫描。
+  // 三个段各自一台状态机；这个 hook 不自动扫描。
   const maintenance = useMaintenance({ deps, t })
   return (
     <div data-dsh-session-delete="maintenance-card" style={CARD_SHELL}>

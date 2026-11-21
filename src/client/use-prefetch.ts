@@ -1,11 +1,6 @@
 /**
  * 意图预取的延时器：hover / focus 之后等一小段再读，鼠标扫过整列不会变成一串 `/detail` 请求。
- *
- * 只做「延时 + 取消」这一件事：读什么、怎么去重归调用方（详情读路
- * `use-trash-detail-reader.ts` 已有在飞登记，同一条在飞时第二次 `begin` 回 false，不会发两条）。
- *
- * `run` 常是内联箭头（每拍新身份）：经 `store.ts` 的 `useLatest` 归一，定时器只认最新那一份；
- * 卸载时清掉未落地的定时器。悬停/聚焦四件事的接线只在 `intentPrefetchHandlers` 一处。
+ * `run` 常是内联箭头：经 `useLatest` 归一，定时器只认最新那一份；卸载时清掉未落地的定时器。
  */
 import { useCallback, useEffect, useRef } from 'react'
 import { useLatest } from './store.js'

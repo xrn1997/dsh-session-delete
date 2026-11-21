@@ -1,45 +1,31 @@
 import { TRASH_DIR_NAME, type TrashEntryWire } from '../shared/wire.js'
 import { encodeSessionSegment } from '../shared/session-path.js'
 
-/** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<宿主编码后的会话目录段>`）——**它不是
- *  随手起的键**：回收站目录名就是它，恢复也按它把原目录段原地放回（CONTEXT.md 的「条目」条），所以
- *  id 的形状有契约意义。原目录段是**宿主 `encodeSegment` 的产物**（`src/shared/session-path.ts`，
- *  只含 `[A-Za-z0-9._~-]`），不是原始 session id：恢复照条目 id 里记下的段回放，不再从 sessionId
- *  现编一遍。编码之前写下的**存量条目**里还可能有空白/引号，id 照原样带着它们（往返契约压倒 HTML
- *  合法性——DOM id 的编码归浏览器半的 `trash-panel.tsx`）。其余字段在删除那一刻就地取。 */
+/** 回收站的一条记录。`id` 由 `makeEntryId` 生成（`<删除时刻>-<宿主编码后的会话目录段>`）——**不是随手起的键**：回收站目录名就是它，
+ *  恢复也按它把原目录段原地放回（CONTEXT.md 的「条目」条），所以 id 的形状有契约意义。原目录段是宿主 `encodeSegment` 的产物
+ *  （只含 `[A-Za-z0-9._~-]`），不是原始 session id；编码之前写下的**存量条目**里还可能有空白/引号，id 照原样带着它们（往返契约压倒 HTML 合法性）。 */
 export interface TrashEntry {
   id: string
   sessionId: string
   projectDir: string
-  /** 删除时它所属的工作区；**空串 = 删除时就没有账目**（「未分组」的会话，宿主的"删除工作区"会造出这种），
-   *  恢复时据此跳过 `attach`。 */
+  /** 删除时它所属的工作区；**空串 = 删除时就没有账目**（「未分组」的会话），恢复时据此跳过 `attach`。 */
   workspaceId: string
-  /** 删除前的归档态，只作事实记录：删除不再改变归档，恢复也不按它还原可见性。
-   *  旧条目迁移用它区分“删除时被我们归档的”（false 且当前仍归档）与“用户删前自己归档的”（true）。 */
+  /** 删除前的归档态，只作事实记录：删除不再改变归档，恢复也不按它还原可见性。旧条目迁移用它区分“删除时被我们归档的”与“用户删前自己归档的”。 */
   wasArchived: boolean
   deletedAt: number
-  /** 删除时**尽力**取的**显示名**（与工作中同名：子会话取 `subagent` 投影的 label，其余取 `title`
-   *  投影；判据住 `src/ports/host-port.ts` 的 `titleOf`，ADR-0058。底层是
-   *  `storages/session_projcache/sessions/<会话id>.json` 里的投影行）。取不到存空串，绝不因此让删除失败。
-   *  存量条目的读时兜底（父日志 catalog / 子会话自己的日志）不回写这一格，见 `src/trash/detail.ts`。 */
+  /** 删除时**尽力**取的**显示名**（与工作中同名：子会话取 `subagent` 投影的 label，其余取 `title`；判据住 `src/ports/host-port.ts` 的 `titleOf`，ADR-0058）。
+   *  取不到存空串，绝不因此让删除失败；存量条目的读时兜底（父日志 catalog / 子会话自己的日志）不回写这一格，见 `src/trash/detail.ts`。 */
   title: string
   /** 删除时用 `fs.sizeOfDir` 量到的会话目录字节数。 */
   sizeBytes: number
-  /** **组语义**：这一条是跟着父一起进回收站的子会话 ⇒ 记父那一行的 `id`。
-   *  缺席 = 这一行是父（或它自己就是被单独删掉的）。清单据此把孩子折进父行、不单独列。
-   *  清册被清后由目录重建出来的行没有这个字段（文件侧没有它的副本，与
-   *  `workspaceId`/`wasArchived`/`title` 同一类降级），那一趟它们会各占一行——那是"分组信息随清册一起没了"
-   *  的如实结果，不假装知道（CONTEXT.md 的「无主子会话」条）。 */
+  /** **组语义**：这一条是跟着父一起进回收站的子会话 ⇒ 记父那一行的 `id`；缺席 = 这一行是父（或它自己就是被单独删掉的）。
+   *  清册被清后由目录重建出来的行没有这个字段（文件侧没有它的副本，与 `workspaceId`/`wasArchived`/`title` 同一类降级），那一趟各占一行。 */
   parentEntryId?: string
 }
 
 /**
- * 清册里**每条记录都必须有**的那几格（`TrashEntry` 的非可选字段）——运行期校验器与「文件里真有的事实」
- * 共用这一份清单。
- *
- * **可选字段不在这里**：`parentEntryId`（级联那批加的）缺席是合法的——老行没有它，缺了就是"没有父"；
- * 校验器只管这几格的类型，其余键**原样带走**（`parse` 交回的就是 `raw` 本身）⇒ 新字段照旧存得住。
- *
+ * 清册里**每条记录都必须有**的那几格（`TrashEntry` 的非可选字段）——运行期校验器与「文件里真有的事实」共用这一份清单。
+ * **可选字段不在这里**：`parentEntryId` 缺席是合法的（老行没有它，缺了就是"没有父"）；校验器只管这几格的类型，其余键**原样带走**。
  * 键集与接口由 `tests/wire-shape.test.ts` 双向钉住：接口加一个必填字段而这里没跟 ⇒ 测试红。
  */
 export const REQUIRED_ENTRY_FIELDS = {
@@ -47,9 +33,7 @@ export const REQUIRED_ENTRY_FIELDS = {
   wasArchived: 'boolean', deletedAt: 'number', title: 'string', sizeBytes: 'number',
 } as const
 
-/** 清册行 → 线上清册行形状。**显式字面量、不用 `...row`**：线上多一格必填时这里编译不过。
- *  只搬清册里真有的事实、不带任何只读数；`/list` 的 `toWire` 与详情的子会话摘要共用这一份
- *  （否则同一条清册行会有两份会漂移的投影）。 */
+/** 清册行 → 线上清册行形状。**显式字面量、不用 `...row`**：线上多一格必填时这里编译不过；`/list` 与详情的子会话摘要共用这一份（否则会有两份会漂移的投影）。 */
 export function entryWire(row: TrashEntry): TrashEntryWire {
   return {
     id: row.id,
@@ -66,8 +50,7 @@ export function entryWire(row: TrashEntry): TrashEntryWire {
 
 const pad = (n: number, w = 2) => String(n).padStart(w, '0')
 
-/** 条目 id = 删除时刻 + **已编码的会话目录段**（宿主 `encodeSegment` 的产物，不是原始 session id）。
- *  编码的唯一实现在 `src/shared/session-path.ts`；调用方拿段的方式归 {@link sessionDirSegmentOf}。 */
+/** 条目 id = 删除时刻 + **已编码的会话目录段**（不是原始 session id）。调用方拿段的方式归 {@link sessionDirSegmentOf}。 */
 export function makeEntryId(deletedAt: number, encodedSessionDirName: string): string {
   const d = new Date(deletedAt)
   const stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T` +
@@ -77,10 +60,8 @@ export function makeEntryId(deletedAt: number, encodedSessionDirName: string): s
 
 const ENTRY_ID_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-(.+)$/
 
-/** `makeEntryId` 的逆。交回的 `sessionDirName` 是**已编码目录段**：恢复拿它原地放回，不再解码回
- *  session id（宿主编码是单射，从这里反推原始 id 既不需要也不该做）。时间戳按 UTC 拆字段再
- *  `Date.UTC` 合回——不交给 `Date.parse` 去猜（`20260930T130500Z` 不是任何被承认的日期格式，
- *  猜出来的是 NaN）。 */
+/** `makeEntryId` 的逆。交回的 `sessionDirName` 是**已编码目录段**：恢复拿它原地放回，不再解码回 session id。
+ *  时间戳按 UTC 拆字段再 `Date.UTC` 合回——不交给 `Date.parse` 去猜（`20260930T130500Z` 不是任何被承认的日期格式，猜出来的是 NaN）。 */
 export function parseEntryId(id: string): { deletedAt: number; sessionDirName: string } {
   const m = ENTRY_ID_RE.exec(id)
   if (!m) throw new Error(`bad entry id: ${id}`)
@@ -93,8 +74,7 @@ export function parseEntryId(id: string): { deletedAt: number; sessionDirName: s
   return { deletedAt: Date.UTC(+y, +mo - 1, +d, +h, +mi, +s), sessionDirName }
 }
 
-/** 路径里的每一段都必须是**单段**：这一层不信宿主的 `header.id` 与清册，破坏性动词直接删目录。
- *  `/`、`\`、`.`、`..` 与 NUL 都能把递归删除带出 `sessions/` / `session-trash/`。 */
+/** 路径里的每一段都必须是**单段**：这一层不信宿主的 `header.id` 与清册，破坏性动词直接删目录；`/`、`\`、`.`、`..` 与 NUL 都能把递归删除带出界。 */
 export function isSinglePathSegment(value: string): boolean {
   return value !== '' && value !== '.' && value !== '..' && !/[\\/\0]/u.test(value)
 }
@@ -109,24 +89,19 @@ function assertSingleSegment(value: string, label: string, allowEmpty = false): 
   }
 }
 
-/** sessionId → 宿主会话目录 `sessions/<projectDir>/` 下那一段（`encodeSegment` 的**唯一调用点**）。
- *  删除写条目 id 与 {@link sessionDirForId} 都从这里拿段：编码只发生一次，两种用途不会各编一套。 */
+/** sessionId → 宿主会话目录 `sessions/<projectDir>/` 下那一段（`encodeSegment` 的**唯一调用点**）：删除写条目 id 与 `sessionDirForId` 都从这里拿段。 */
 export function sessionDirSegmentOf(sessionId: string): string {
   return encodeSessionSegment(sessionId)
 }
 
-/** `sessionDirName` 是**已编码目录段**（宿主 `encodeSegment` 的产物，`sessions/<projectDir>/` 下那一段；
- *  不是原始 session id——拿原始 id 拼路径见 `src/shared/session-path.ts` 的头注）。
- *  允许空串：恢复的预检用它取**项目根**（`sessions/<projectDir>`），不是会话目录。 */
+/** `sessionDirName` 是**已编码目录段**（不是原始 session id）。允许空串：恢复的预检用它取**项目根**（`sessions/<projectDir>`），不是会话目录。 */
 export function sessionDirOf(projectDir: string, sessionDirName: string, home: string): string {
   assertSingleSegment(projectDir, '项目目录名')
   assertSingleSegment(sessionDirName, '会话目录名', true)
   return `${home}/sessions/${projectDir}/${sessionDirName}`
 }
 
-/** 原始 sessionId 的直接落点：先经 {@link sessionDirSegmentOf} 编成宿主目录段，再拼路径。
- *  需要同时拿路径与条目 id 的调用方（删除成员）先取段、再分别交给 {@link sessionDirOf} /
- *  {@link makeEntryId}，别编两遍。 */
+/** 原始 sessionId 的直接落点：先编成宿主目录段，再拼路径。需要同时拿路径与条目 id 的调用方先取段、再分别交给 `sessionDirOf` / `makeEntryId`。 */
 export function sessionDirForId(projectDir: string, sessionId: string, home: string): string {
   return sessionDirOf(projectDir, sessionDirSegmentOf(sessionId), home)
 }
