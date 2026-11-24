@@ -17,12 +17,14 @@ import {
   type MaintenanceSettlePlan,
 } from './use-maintenance-section.js'
 
-/** 维护卡只需要这六段：三份报告 + 孤儿会话的批量写 + 孤儿附件/投影缓存的聚合写。 */
+/** 维护卡只需要这七段：三份报告 + 孤儿会话的批量写 + 孤儿附件/投影缓存的聚合写，加进度认领那一读
+ *  （确认框里的进度行轮询 `/progress`，不在 /progress 覆盖面的两段只拿它当兜底文案不管）。 */
 export type MaintenanceDeps = Pick<
   SessionDeleteRemote,
   | 'scanOrphans' | 'applyOutcomes'
   | 'scanAttachmentOrphans' | 'cleanAttachmentOrphans'
   | 'scanProjectionCacheOrphans' | 'cleanProjectionCacheOrphans'
+  | 'progress'
 >
 
 export interface Maintenance {

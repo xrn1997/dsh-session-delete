@@ -6,6 +6,7 @@
 import type { ReactElement } from 'react'
 import type { Translate } from './copy.js'
 import type { OrphanReportWire } from '../shared/wire.js'
+import type { OneShotDeps } from './remote.js'
 import type { MaintenanceSectionView } from './use-maintenance-section.js'
 import { MaintenanceBanner, MaintenanceFailure } from './maintenance-parts.js'
 import { OrphanConfirm } from './trash-confirm.js'
@@ -16,10 +17,12 @@ import { IconWarningOutlineRegular } from './ui/icons.js'
 export interface OrphanMaintenanceProps {
   /** 段视图：读数、提示、确认框、忙碌与四个动作都在它上面，本块不多要也不少读。 */
   section: MaintenanceSectionView<OrphanReportWire>
+  /** 确认框里的进度行要轮询 `/progress`（写身份认领），走同一份取数依赖。 */
+  deps: OneShotDeps
   t: Translate
 }
 
-export function OrphanMaintenance({ section, t }: OrphanMaintenanceProps): ReactElement | null {
+export function OrphanMaintenance({ section, deps, t }: OrphanMaintenanceProps): ReactElement | null {
   const { report, failure, notice, confirm, busy } = section
   return (
     <>
@@ -74,6 +77,7 @@ export function OrphanMaintenance({ section, t }: OrphanMaintenanceProps): React
 
       {confirm && report !== null ? (
         <OrphanConfirm
+          deps={deps}
           report={report}
           busy={busy}
           t={t}

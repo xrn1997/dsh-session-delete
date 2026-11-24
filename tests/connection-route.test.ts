@@ -48,7 +48,7 @@ describe('connection exact Fetch 路由 · 注册', () => {
     const { deps } = createFakeDeps()
     const harness = makeService()
     const dispose = registerConnectionRoutes(harness.service, createDispatcher(deps))
-    expect(harness.routes.size).toBe(14)
+    expect(harness.routes.size).toBe(15)
     const expected: Array<[string, 'GET' | 'POST']> = [
       ['/list', 'GET'],
       ['/ping', 'GET'],
@@ -64,6 +64,7 @@ describe('connection exact Fetch 路由 · 注册', () => {
       ['/projection-clean', 'POST'],
       ['/archive-list', 'GET'],
       ['/archive-detail', 'POST'],
+      ['/progress', 'GET'],
     ]
     for (const [segment, method] of expected) {
       const route = routeAt(harness, segment)

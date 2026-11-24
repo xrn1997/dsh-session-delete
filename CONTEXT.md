@@ -125,12 +125,24 @@ _唯一实现_: `src/trash/ledger.ts` 的 `TrashLedger`。
 _Avoid_: 账本（本仓「账本」指宿主工作区注册表）。
 
 **清册作用域（trash scope）**:
-purge 这条写路径的拿目标 owner：交进一份清册快照与收缩视图，只做拿目标、把计划交给执行器；删的能力由执行器注入。
+purge 这条写路径的拿目标 owner：接一份清册快照、自持收缩视图，只做拿目标、把计划交给执行器；删的能力由执行器注入。
 _唯一实现_: `src/verbs/trash-scope.ts` 的 `createTrashScope`。
 
 **同批已带走集（batch carried）**:
 同一批里已被前一条带走的 id：delete 的 session 域只分 fresh / carried；restore 的 entry 域由收缩视图判 carried。
 _唯一实现_: `src/verbs/batch-carried.ts` 的 `createEntryCarried` / `createSessionCarried`。
+
+**写入进度（write progress）**:
+一趟写动作的遥测快照：身份（动作 + id 集）、k/N 与步骤码；写动作在到达序链上串行 ⇒ 全局一份记录无歧义，`/progress` 纯读它。生命周期随进程，宿主重启不留残留。
+_唯一实现_: `src/verbs/write-progress.ts` 的 `writeProgress` / `readWriteProgress`。
+
+**进度面（write progress face）**:
+写入进度按写身份认领后的界面脸，渲染成进度行：认领上出 k/N、当前步骤与已用秒数；认领不上只说排队中（不冒领另一趟写的 k/N）；没认领到就不出进度行，按钮忙碌文案兜底。
+_唯一实现_: `src/client/use-write-progress.ts` 的 `WriteProgressFace`；渲染住 `src/client/write-progress.tsx` 的 `WriteProgressLine`。
+
+**写身份认领（write-identity claim）**:
+浏览器半判定「这条进度是不是我这趟写」的机制：`action` 相同且 `ids` 与本批有交集才认领；空集名单归「没认领到」，同 action 不相交出「排队中」。
+_唯一实现_: `src/client/use-write-progress.ts` 的 `claimProgress`。
 
 **路由读面（route read）**:
 路由记录上的一格：`none` / `list`（真相读）/ `raw`（索引快照）；处理函数只消费路由交来的 `RouteRead`。

@@ -4,15 +4,19 @@ import { fileURLToPath } from 'node:url'
 import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  cleanOrphanGroup,
   loadOrphanGroups,
   orphanGroupsOf,
+  planOrphanGroup,
   reportOrphans,
+  runOrphanGroup,
   type OrphanGroup,
 } from '../src/verbs/orphan-subagents.js'
 import type { SessionIdentity } from '../src/ports/host-port.js'
 import { pick } from './support/fixture.js'
-import { attachmentPathOf } from '../src/trash/attachments.js'
+import { attachmentPathOf, planBatchImageAttachmentRemoval } from '../src/trash/attachments.js'
+import { executeAttachmentTail } from '../src/verbs/permanent-removal.js'
+import { synthesizeAttachmentReadings } from '../src/verbs/batch.js'
+import type { DeleteDeps } from '../src/deps.js'
 import { sessionDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { createLogWorld, trashEntry } from './support/world.js'
 
@@ -52,6 +56,21 @@ function deps(corpus: readonly SessionIdentity[], seed: TrashEntry[] = []) {
       : `${method}(${String(args[0])})`),
   })
   return { fs: made.fs, host: made.host, calls: made.calls, d: made.deps, seed }
+}
+
+/** 一组的批驱动（与 `batch.ts` 的批驱动同构的单组版）：计划（`'measuring'` tick 的唯一落点）→ 一次批一扫
+ *  → 执行 → 批尾 → 合成回执。回执形状照旧：`attachments` 随 ok 支带（单组时它就是尾的全批读数）。 */
+async function cleanGroup(d: DeleteDeps, group: OrphanGroup) {
+  const plan = await planOrphanGroup(d, group)
+  const batch = await planBatchImageAttachmentRemoval(d, [{ id: group.root.sessionId, dirs: plan.attachmentDirs }])
+  const stats = await runOrphanGroup(d, plan)
+  const tail = await executeAttachmentTail(d, batch)
+  const readings = synthesizeAttachmentReadings(batch, tail, [{ id: group.root.sessionId, ok: true }])
+  return {
+    removed: stats.removed,
+    freedBytes: stats.freedBytes,
+    attachments: readings.get(group.root.sessionId) ?? NOTHING_CLEANED,
+  }
 }
 
 describe('孤儿分组（纯函数）', () => {
@@ -150,7 +169,7 @@ describe('扫描报告与清理', () => {
       s('session-kid', { parentSessionId: 'session-root', subagent: true }),
     ])
     const [group] = await loadOrphanGroups(d, [])
-    const result = await cleanOrphanGroup(d, group as OrphanGroup)
+    const result = await cleanGroup(d, group as OrphanGroup)
     expect(result).toEqual({ removed: 2, freedBytes: 200, attachments: NOTHING_CLEANED })
     expect(calls).toEqual([
       'unarchive(session-root)', 'unarchive(session-kid)',
@@ -177,7 +196,7 @@ describe('扫描报告与清理', () => {
     fs.removeFile.mockImplementation(async (p: string) => { order.push(`removeFile:${p}`) })
 
     const [group] = await loadOrphanGroups(d, [])
-    const result = await cleanOrphanGroup(d, group as OrphanGroup)
+    const result = await cleanGroup(d, group as OrphanGroup)
 
     expect(result).toEqual({ removed: 1, freedBytes: 100, attachments: { removed: 1, freedBytes: 7, failed: 0 } })
     expect(order).toEqual([`removeDir:${dir}`, `removeFile:${imagePath}`])
@@ -190,7 +209,7 @@ describe('扫描报告与清理', () => {
     ])
     const [group] = await loadOrphanGroups(d, [])
     fs.exists.mockImplementation(async (...args: unknown[]) => !String(args[0]).endsWith('session-kid'))
-    const result = await cleanOrphanGroup(d, group as OrphanGroup)
+    const result = await cleanGroup(d, group as OrphanGroup)
     expect(result).toEqual({ removed: 1, freedBytes: 100, attachments: NOTHING_CLEANED })
     expect(fs.removeDir).toHaveBeenCalledTimes(1)
     expect(fs.removeDir).toHaveBeenCalledWith(sessionDirOf('--p--', 'session-root', HOME))
@@ -206,7 +225,7 @@ describe('扫描报告与清理', () => {
     fs.removeDir.mockImplementation(async (...args: unknown[]) => {
       if (String(args[0]).endsWith('session-kid')) throw new Error('boom')
     })
-    await expect(cleanOrphanGroup(d, group as OrphanGroup)).rejects.toMatchObject({
+    await expect(cleanGroup(d, group as OrphanGroup)).rejects.toMatchObject({
       code: 'sessiondelete/io',
       details: { removed: 1, freedBytes: 100, failedSessionId: 'session-kid' },
     })
@@ -219,7 +238,7 @@ describe('扫描报告与清理', () => {
     ])
     const [group] = await loadOrphanGroups(d, [])
     host.isLive = vi.fn(async (id: string) => id === 'session-kid')
-    await expect(cleanOrphanGroup(d, group as OrphanGroup)).rejects.toMatchObject({ code: 'sessiondelete/live' })
+    await expect(cleanGroup(d, group as OrphanGroup)).rejects.toMatchObject({ code: 'sessiondelete/live' })
     expect(host.unarchive).not.toHaveBeenCalled()
     expect(fs.removeDir).not.toHaveBeenCalled()
   })

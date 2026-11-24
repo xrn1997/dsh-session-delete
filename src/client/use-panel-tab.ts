@@ -17,10 +17,11 @@ import type { RailDetailLike } from './use-detail-rail.js'
 import { useDelayedPrefetch, type DelayedPrefetch } from './use-prefetch.js'
 import { useListSelection, type ListSelection } from './use-list-selection.js'
 
-/** 一档的依赖面：面板的两条读 + 一段 `/apply` + 清空；控制器/查询的输入是它的窄切片。 */
+/** 一档的依赖面：面板的两条读 + 一段 `/apply` + 清空 + 进度读（`progress` 面板自己不读，随座位的
+ *  `OneShotDeps` 面向下转发，认领轮询归 `use-write-progress.ts`）；控制器/查询的输入是它的窄切片。 */
 export type PanelTabDeps = Pick<
   SessionDeleteRemote,
-  'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'archiveList' | 'archiveDetail'
+  'list' | 'detail' | 'applyOutcomes' | 'emptyTrash' | 'archiveList' | 'archiveDetail' | 'progress'
 >
 
 /** 清单读数对视图的**共用两格**：行与「重读在飞」。空/缺/失败由各档视图按自己的状态选卡片。 */

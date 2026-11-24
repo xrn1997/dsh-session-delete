@@ -468,6 +468,27 @@ describe('宿主服务层端口的接线', () => {
       })
     })
 
+    it('多个请求根有父子关系时，父闭包仍包含子根及其后代', async () => {
+      const asked: string[][] = []
+      const { ctx } = makeEnv({
+        sessionQuery: closing([
+          { id: 'session-kid', parentSession: 'session-root' },
+          { id: 'session-grand', parentSession: 'session-kid' },
+        ], asked),
+      })
+      const read = await createHostPort(ctx).subagentMembersOf(['session-root', 'session-kid'])
+      expect(read).toEqual({
+        available: true,
+        value: {
+          'session-root': [
+            { sessionId: 'session-kid', projectDir: '_no-cwd' },
+            { sessionId: 'session-grand', projectDir: '_no-cwd' },
+          ],
+          'session-kid': [{ sessionId: 'session-grand', projectDir: '_no-cwd' }],
+        },
+      })
+    })
+
     // 行数与宿主调用次数**脱钩**：一层一次，而不是每行各扫一遍库（清单可以有几百行）。
     it('多个父合在一起问 ⇒ 层数决定调用次数，与行数无关', async () => {
       const asked: string[][] = []

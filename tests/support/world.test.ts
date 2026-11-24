@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { normalizeParentIds } from '../../src/ports/host-port.js'
 import { makeEntryId } from '../../src/trash/entry.js'
 import { createFakeHost } from './fake-deps.js'
-import { createLogWorld, failureOf, trashEntry } from './world.js'
+import { createLogWorld, expectSteps, failureOf, holdCalls, trashEntry } from './world.js'
 
 describe('条目记录', () => {
   it('缺省就是一条最安静的条目；over 逐格覆盖', () => {
@@ -146,5 +146,56 @@ describe('假 fs 的路径树世界', () => {
     })
     const rows = await world.ledger.list()
     expect(rows.map((r) => r.id)).toEqual([id])
+  })
+})
+
+// 「写在飞途中插进读请求」（如 `GET /progress`）需要能挂起一次调用、用例手动放行：
+// `holdCalls` 把替身方法的每次调用先挂在闸上，放行才走原实现——生产语义一格不动。
+describe('可手动放行的调用（holdCalls）', () => {
+  it('调用先挂起、放行才走原实现；一次 release 只放最早那条（FIFO）', async () => {
+    const world = createLogWorld({ logMethods: ['removeDir'] })
+    const held = holdCalls(world.fs.removeDir)
+
+    const first = world.fs.removeDir('/h/a')
+    const second = world.fs.removeDir('/h/b')
+    // 调用一发出去就同步挂在闸上：原实现还没走（日志还是空的）。
+    expect(held.waiting).toBe(2)
+    expect(world.calls).toEqual([])
+
+    held.release()
+    await first
+    expect(world.calls).toEqual(['removeDir'])
+    expect(held.waiting).toBe(1)
+
+    held.release()
+    await second
+    expect(world.calls).toEqual(['removeDir', 'removeDir'])
+    expect(held.waiting).toBe(0)
+  })
+
+  it('闸上没人时 release 是 no-op：不误放之后才来的调用', async () => {
+    const world = createLogWorld({ logMethods: ['removeDir'] })
+    const held = holdCalls(world.fs.removeDir)
+
+    held.release()
+    const later = world.fs.removeDir('/h/c')
+    expect(held.waiting).toBe(1)
+
+    held.release()
+    await later
+    expect(world.calls).toEqual(['removeDir'])
+  })
+})
+
+// 步骤序列按「按序包含」判：期望是映射表在该场景的子序列——夹着别的码、某码重复都不算数，
+// 顺序乱了、缺步才是红（钉全等会把夹具噪声混进映射口径）。
+describe('步骤序列的按序包含断言（expectSteps）', () => {
+  it('按序包含即过：中间夹别的码、某码重复都不影响', () => {
+    expect(() => expectSteps(['a', 'x', 'b', 'b', 'c'], ['a', 'b', 'c'])).not.toThrow()
+  })
+
+  it('缺步或乱序都红：期望的下一码在余下序列里找不到就失败', () => {
+    expect(() => expectSteps(['a', 'c', 'b'], ['a', 'b', 'c'])).toThrow(/'c'/)
+    expect(() => expectSteps(['a', 'b'], ['a', 'z'])).toThrow(/'z'/)
   })
 })

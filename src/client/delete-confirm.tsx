@@ -10,7 +10,9 @@ import { applyOne, type OneShotDeps } from './remote.js'
 import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'
 import { Tag } from './ui/Tag.js'
+import { useWriteProgress } from './use-write-progress.js'
 import { deleteSessionFromMenu } from './write-seats.js'
+import { WriteProgressLine } from './write-progress.js'
 
 /**
  * 被操作对象那张卡。`Modal` 的 `.sd-modal-body` 不设字号也不给层级 ⇒ 裸摆一行标题会和下面那句提示
@@ -102,6 +104,8 @@ function DeleteConfirmDialog({
 }) {
   /** 这一趟的闸：写入座位把 apply → 收尾 → 重读整趟包在里面，`busy` 期间主按钮按住。 */
   const gate = useBusyGate()
+  // 写身份认领（ADR-0069 决定 4）：单删也逐步推进（k/N 就是 0/1 → 1/1），认领不上只说排队中。
+  const face = useWriteProgress(deps, { action: 'delete', ids: [current.sessionId] }, gate.busy)
   const [failure, setFailure] = useState<string | null>(null)
   /**
    * 这条会话在盘上带多少个后代。删除按组走（组语义见 `src/trash/groups.ts`），而宿主客户端本来就把孩子那几行
@@ -152,6 +156,7 @@ function DeleteConfirmDialog({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('dialog.confirm')}
       busy={gate.busy}
+      busyLabel={t('progress.action.delete')}
       onCancel={() => { scene.deleteRequest.clear(current) }}
       onConfirm={() => void confirm()}
     >
@@ -173,6 +178,7 @@ function DeleteConfirmDialog({
       {subagents === 0 ? null : <p>{t('dialog.subagents', { n: subagents })}</p>}
       <p>{t('dialog.hint')}</p>
       {failure === null ? null : <Tag tone="danger">{failure}</Tag>}
+      <WriteProgressLine face={face} t={t} />
     </ConfirmDialog>
   )
 }

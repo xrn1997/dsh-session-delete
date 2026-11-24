@@ -7,7 +7,7 @@ import {
   cleanOrphanImageAttachments,
   executeImageAttachmentRemoval,
   imageIdsOfDir,
-  planImageAttachmentRemoval,
+  planBatchImageAttachmentRemoval,
   recheckImageRemovalExclusivity,
   scanOrphanImageAttachments,
 } from '../src/trash/attachments.js'
@@ -37,6 +37,12 @@ const log = (id: string) =>
   ))
 
 const imagePath = (id: string) => attachmentPathOf(HOME, 'image', id)
+
+/** 独占计划的单组形：批级计划的一组 = 全部被删目录；测试要的只是它退化出来的 `plan` 那一格。 */
+const planRemoval = async (
+  deps: Parameters<typeof planBatchImageAttachmentRemoval>[0],
+  dirs: readonly string[],
+) => (await planBatchImageAttachmentRemoval(deps, [{ id: 'all', dirs }])).plan
 
 /** 额外安全用例的载荷构造：与 `log` 同一日志形状，content 段由用例点名。 */
 const imageBlock = (id: string) => ({
@@ -158,7 +164,7 @@ describe('日志提取', () => {
 describe('单目录引用扫描', () => {
   it('空目录 = 没有引用；只有子目录、没有规范日志 = 不可读', async () => {
     const empty = makeWorld({ logs: {}, dirs: () => [], files: () => [] })
-    expect(await imageIdsOfDir(empty.deps, '/h/sessions/--p--/session-empty')).toEqual({ ids: new Set() })
+    expect(await imageIdsOfDir(empty.deps, '/h/sessions/--p--/session-empty')).toEqual({ ids: new Set(), present: true })
 
     const nested = makeWorld({
       logs: {},
@@ -178,7 +184,7 @@ describe('单目录引用扫描', () => {
       files: (p) => p === dir ? [temp] : [],
       statFile: () => ({ size: 0 }),
     })
-    expect(await imageIdsOfDir(zero.deps, dir)).toEqual({ ids: new Set() })
+    expect(await imageIdsOfDir(zero.deps, dir)).toEqual({ ids: new Set(), present: true })
 
     const nonZero = makeWorld({
       logs: {},
@@ -334,7 +340,7 @@ describe('单目录引用扫描', () => {
       files: (p) => p === dir ? ['session.lock'] : [],
       statFile: () => ({ size: 0 }),
     })
-    expect(await imageIdsOfDir(made.deps, dir)).toEqual({ ids: new Set() })
+    expect(await imageIdsOfDir(made.deps, dir)).toEqual({ ids: new Set(), present: true })
   })
 })
 
@@ -351,7 +357,7 @@ describe('独占计划与执行', () => {
       files: (p) => p === remaining ? ['session.v4.jsonl.zstd'] : [],
       sizes: { [imagePath(ID)]: 7 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
   })
@@ -366,7 +372,7 @@ describe('独占计划与执行', () => {
       sizes: { [imagePath(ID)]: 7 },
     })
     // bad 目录存在且声明有日志，但 readFile 没夹具 ⇒ 抛 ⇒ 该候选被跳过
-    const plan = await planImageAttachmentRemoval(made.deps, [bad, good])
+    const plan = await planRemoval(made.deps, [bad, good])
     expect(plan.entries.map((e) => e.id)).toEqual([ID])
     expect(plan.skipped).toMatch(/日志读不出/)
   })
@@ -381,7 +387,7 @@ describe('独占计划与执行', () => {
       files: (p) => (p === removed || p === remaining ? ['session.v4.jsonl.zstd', 'session.lock'] : []),
       statFile: (p) => ({ size: p.endsWith('/session.lock') ? 0 : p === imagePath(ID) ? 7 : 100 }),
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.skipped).toBeUndefined()
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
@@ -396,7 +402,7 @@ describe('独占计划与执行', () => {
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : p === remaining ? ['session.v4.jsonl.zstd'] : [],
       sizes: { [imagePath(ID)]: 7 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.skipped).toMatch(/无法证明独占|读不到/)
   })
@@ -413,8 +419,9 @@ describe('独占计划与执行', () => {
 
     const rechecked = await recheckImageRemovalExclusivity(made.deps, plan)
 
-    expect(rechecked.entries).toEqual([])
-    expect(rechecked.bytes).toBe(0)
+    expect(rechecked.plan.entries).toEqual([])
+    expect(rechecked.plan.bytes).toBe(0)
+    expect(rechecked.recheckSkipped).toBeUndefined()
   })
 
   it('执行期复核读不出 ⇒ 空计划 + skipped（fail closed，宁可留孤儿）', async () => {
@@ -429,9 +436,11 @@ describe('独占计划与执行', () => {
 
     const rechecked = await recheckImageRemovalExclusivity(made.deps, plan)
 
-    expect(rechecked.entries).toEqual([])
-    expect(rechecked.bytes).toBe(0)
-    expect(rechecked.skipped).toMatch(/无法复核独占/)
+    expect(rechecked.plan.entries).toEqual([])
+    expect(rechecked.plan.bytes).toBe(0)
+    expect(rechecked.plan.skipped).toMatch(/无法复核独占/)
+    // 复核失败按结构化的一格交回：批驱动合成 per-id 不拿原文子串当判据。
+    expect(rechecked.recheckSkipped).toMatch(/无法复核独占/)
   })
 
   // 计划期「候选日志读不出」与执行期「复核读不出」是两条不同的原因，二选一等于藏掉一条。
@@ -450,16 +459,16 @@ describe('独占计划与执行', () => {
 
     const rechecked = await recheckImageRemovalExclusivity(made.deps, plan)
 
-    expect(rechecked.entries).toEqual([])
-    expect(rechecked.skipped).toContain('候选日志读不出：session-a')
-    expect(rechecked.skipped).toMatch(/无法复核独占/)
+    expect(rechecked.plan.entries).toEqual([])
+    expect(rechecked.plan.skipped).toContain('候选日志读不出：session-a')
+    expect(rechecked.plan.skipped).toMatch(/无法复核独占/)
   })
 
   it('执行期复核：空计划不为零删付一次全 home 扫描', async () => {
     const made = makeWorld({ logs: {} })
     const empty = { entries: [], bytes: 0 } as const
 
-    expect(await recheckImageRemovalExclusivity(made.deps, empty)).toBe(empty)
+    expect((await recheckImageRemovalExclusivity(made.deps, empty)).plan).toBe(empty)
     expect(made.fs.listDirs).not.toHaveBeenCalled()
   })
 
@@ -473,10 +482,10 @@ describe('独占计划与执行', () => {
       sizes: { [imagePath(ID)]: 7 },
       removeFile: (p) => { removedFiles.push(p) },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     const stats = await executeImageAttachmentRemoval(made.deps, plan)
     expect(removedFiles).toEqual([imagePath(ID)])
-    expect(stats).toEqual({ removed: 1, freedBytes: 7, failed: 0 })
+    expect(stats).toEqual({ removed: 1, freedBytes: 7, failed: 0, failedIds: [] })
   })
 
   // 以下三条补简报样例没走到的分支：ENOENT、失败计数、普通文件不代删。
@@ -490,12 +499,12 @@ describe('独占计划与执行', () => {
         return { size: 100 }
       },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     const stats = await executeImageAttachmentRemoval(made.deps, plan)
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
     expect(plan.skipped).toBeUndefined()
-    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0, failedIds: [] })
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
@@ -510,7 +519,7 @@ describe('独占计划与执行', () => {
         return { size: 7 }
       },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries.map((e) => e.id)).toEqual([ID3])
     expect(plan.bytes).toBe(7)
     // ENOENT 是"本来就不在"，不置 skipped；只有 EACCES 那一件算"读不出"。
@@ -531,11 +540,11 @@ describe('独占计划与执行', () => {
           removedFiles.push(p)
         },
       })
-      const plan = await planImageAttachmentRemoval(made.deps, [removed])
+      const plan = await planRemoval(made.deps, [removed])
       const stats = await executeImageAttachmentRemoval(made.deps, plan)
       expect(plan.entries.map((e) => e.id)).toEqual([ID, ID2])
       expect(removedFiles).toEqual([imagePath(ID2)])
-      expect(stats).toEqual({ removed: 1, freedBytes: 9, failed: 1 })
+      expect(stats).toEqual({ removed: 1, freedBytes: 9, failed: 1, failedIds: [ID] })
       expect(warn).toHaveBeenCalledTimes(1)
     } finally {
       warn.mockRestore()
@@ -548,10 +557,10 @@ describe('独占计划与执行', () => {
       logs: { [`${removed}/session.v4.jsonl.zstd`]: logWith(fileBlock(ID2)) },
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : [],
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     const stats = await executeImageAttachmentRemoval(made.deps, plan)
     expect(plan.entries).toEqual([])
-    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0, failedIds: [] })
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
@@ -570,7 +579,7 @@ describe('独占计划与执行', () => {
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : p === cacheSessions ? ['session-b.json'] : [],
       sizes: { [json]: 64 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
   })
@@ -587,14 +596,14 @@ describe('引用源不可读（fail closed）', () => {
       // 夹具只声明尺寸：判据本来就是 stat.size，读满 10 MiB 不增加信息。
       statFile: () => ({ size: 10 * 1024 * 1024 + 1 }),
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     const stats = await executeImageAttachmentRemoval(made.deps, plan)
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
     expect(plan.skipped).toMatch(/无法证明独占/)
     expect(plan.skipped).toMatch(/未扫描/)
     expect(plan.skipped).toContain(big)
-    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0, failedIds: [] })
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
@@ -608,7 +617,7 @@ describe('引用源不可读（fail closed）', () => {
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : p === storages ? ['session_projcache.json'] : [],
       statFile: () => ({ size: 101 }),
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.skipped).toMatch(/超过扫描上限 100 字节/)
     expect(plan.skipped).toContain(oversized)
@@ -624,7 +633,7 @@ describe('引用源不可读（fail closed）', () => {
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : p === remaining ? ['session.v4.jsonl'] : [],
       sizes: { [imagePath(ID)]: 7 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
     expect(plan.skipped).toMatch(/无法证明独占/)
@@ -646,7 +655,7 @@ describe('引用源不可读（fail closed）', () => {
       files: (p) => p === removed || p === unlisted ? ['session.v4.jsonl.zstd'] : [],
       sizes: { [imagePath(ID)]: 7 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
     expect(plan.skipped).toBeUndefined()
@@ -662,12 +671,12 @@ describe('损坏日志按不可读处理', () => {
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : [],
       sizes: { [imagePath(ID)]: 7 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     const stats = await executeImageAttachmentRemoval(made.deps, plan)
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
     expect(plan.skipped).toMatch(/日志读不出/)
-    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(stats).toEqual({ removed: 0, freedBytes: 0, failed: 0, failedIds: [] })
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
@@ -684,7 +693,7 @@ describe('损坏日志按不可读处理', () => {
       files: (p) => p === removed ? ['session.v4.jsonl.zstd'] : p === remaining ? ['session.v4.jsonl.zstd'] : [],
       sizes: { [imagePath(ID)]: 7 },
     })
-    const plan = await planImageAttachmentRemoval(made.deps, [removed])
+    const plan = await planRemoval(made.deps, [removed])
     expect(plan.entries).toEqual([])
     expect(plan.bytes).toBe(0)
     expect(plan.skipped).toMatch(/无法证明独占/)
@@ -701,7 +710,7 @@ describe('执行闸：只认 ID 推导出的 objects 路径', () => {
         entries: [{ id: ID, path: '/h/sessions/--p--/session-b/session.v4.jsonl.zstd', bytes: 7 }],
         bytes: 7,
       }
-      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1, failedIds: [ID] })
       expect(made.fs.removeFile).not.toHaveBeenCalled()
       expect(warn).toHaveBeenCalledTimes(1)
     } finally {
@@ -717,7 +726,7 @@ describe('执行闸：只认 ID 推导出的 objects 路径', () => {
         entries: [{ id: ID, path: `${imagePath(ID)}/../../../sessions/--p--/session-b/session.v4.jsonl.zstd`, bytes: 7 }],
         bytes: 7,
       }
-      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1, failedIds: [ID] })
       expect(made.fs.removeFile).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
@@ -729,7 +738,7 @@ describe('执行闸：只认 ID 推导出的 objects 路径', () => {
     try {
       const made = makeWorld({ logs: {} })
       const plan = { entries: [{ id: ID, path: attachmentPathOf(HOME, 'file', ID), bytes: 7 }], bytes: 7 }
-      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1, failedIds: [ID] })
       expect(made.fs.removeFile).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
@@ -740,8 +749,9 @@ describe('执行闸：只认 ID 推导出的 objects 路径', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const made = makeWorld({ logs: {} })
-      const plan = { entries: [{ id: `sha256:${'a'.repeat(62)}/..`, path: '../../etc/passwd', bytes: 7 }], bytes: 7 }
-      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      const badId = `sha256:${'a'.repeat(62)}/..`
+      const plan = { entries: [{ id: badId, path: '../../etc/passwd', bytes: 7 }], bytes: 7 }
+      expect(await executeImageAttachmentRemoval(made.deps, plan)).toEqual({ removed: 0, freedBytes: 0, failed: 1, failedIds: [badId] })
       expect(made.fs.removeFile).not.toHaveBeenCalled()
     } finally {
       warn.mockRestore()
@@ -884,6 +894,7 @@ describe('孤儿附件扫描与清理', () => {
     const removed: string[] = []
     const made = orphanWorld({ removeFile: (p) => { removed.push(p) } })
     const stats = await cleanOrphanImageAttachments(made.deps)
+    // 线上读数就这三格：`failedIds` 是批尾的内部读数，不从维护卡的回执过线。
     expect(stats).toEqual({ removed: 1, freedBytes: 30, failed: 0 })
     expect(removed).toEqual([imagePath(ID3)])
     const listed = made.fs.listFiles.mock.calls.map(([p]) => p)
@@ -904,5 +915,205 @@ describe('孤儿附件扫描与清理', () => {
     expect(stats.skipped).toMatch(/无法判定孤儿/)
     expect(removed).toEqual([])
     expect(made.fs.removeFile).not.toHaveBeenCalled()
+  })
+})
+
+// 批级计划（「一次批一扫」）：一批多组共享**一次**剩余引用扫描——这是批量永久删除的性能主菜。
+// 候选 → 组的映射（`byGroup`）只收进 `plan.entries` 的对象，且对象**单归属**：同批多组候选命中
+// 同一个对象时只归第一组（按组序先到先得），批内读数相加才不双计。
+describe('批级独占计划：一次批一扫', () => {
+  const GA = '/h/session-trash/20260101T000000Z-session-a'
+  const GB = '/h/session-trash/20260101T000000Z-session-b'
+  const REMAINING = '/h/sessions/--p--/session-c'
+  const LOG = 'session.v4.jsonl.zstd'
+  const sessionsEmpty = (p: string) =>
+    p === '/h/sessions' ? ['--p--'] : p === '/h/sessions/--p--' ? ['session-c'] : []
+
+  it('两组共享一次剩余引用扫描：同一引用源只走一遍', async () => {
+    const made = makeWorld({
+      logs: {
+        [`${GA}/${LOG}`]: log(ID),
+        [`${GB}/${LOG}`]: log(ID2),
+        [`${REMAINING}/${LOG}`]: log(ID3),
+      },
+      dirs: sessionsEmpty,
+      files: (p) => (p === GA || p === GB || p === REMAINING ? [LOG] : []),
+      sizes: { [imagePath(ID)]: 7, [imagePath(ID2)]: 8, [imagePath(ID3)]: 9 },
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GB] },
+    ])
+    // 性能主菜的判据：两组共享同一次全语料扫描（逐组各扫时这两个计数都会是 2）。
+    expect(made.fs.readFile.mock.calls.filter(([p]) => p === `${REMAINING}/${LOG}`)).toHaveLength(1)
+    expect(made.fs.listFiles.mock.calls.filter(([p]) => p === REMAINING)).toHaveLength(1)
+    expect(batch.plan.entries.map((e) => e.id)).toEqual([ID, ID2])
+    expect(batch.plan.bytes).toBe(15)
+    expect(batch.plan.skipped).toBeUndefined()
+  })
+
+  it('候选目录的 exists 读失败只跳过该组，不把整批计划炸掉', async () => {
+    const made = makeWorld({
+      logs: { [`${GB}/${LOG}`]: log(ID2) },
+      dirs: sessionsEmpty,
+      files: (p) => (p === GB ? [LOG] : []),
+      sizes: { [imagePath(ID2)]: 8 },
+    })
+    made.fs.exists.mockImplementation(async (p: string) => {
+      if (p === GA) throw new Error('EACCES: exists')
+      return true
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GB] },
+    ])
+    expect(batch.plan.entries.map((entry) => entry.id)).toEqual([ID2])
+    expect(batch.plan.skipped).toMatch(/1 个被删会话日志读不出/)
+    expect(batch.unreadableCandidatesByGroup.get('ga')).toBe(1)
+    expect(batch.byGroup.get('gb')).toEqual(new Set([ID2]))
+  })
+
+  it('对象 stat 读不出按单归属记进自己的组：合计句在 skipped，组数在 byGroup 面', async () => {
+    const made = makeWorld({
+      logs: { [`${GA}/${LOG}`]: log(ID), [`${GB}/${LOG}`]: log(ID2) },
+      dirs: sessionsEmpty,
+      files: (p) => (p === GA || p === GB ? [LOG] : []),
+      // ID 的 stat 抛错（权限档，不是"不在"）；ID2 正常。
+      sizes: { [imagePath(ID2)]: 8 },
+    })
+    made.fs.statFile.mockImplementation(async (p: string) => {
+      if (p === imagePath(ID)) throw new Error('EACCES: stat')
+      return { size: 8 }
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GB] },
+    ])
+    expect(batch.plan.entries.map((entry) => entry.id)).toEqual([ID2])
+    expect(batch.plan.skipped).toMatch(/1 个附件对象读不出/)
+    expect(batch.unreadableObjectsByGroup.get('ga')).toBe(1)
+    expect(batch.unreadableObjectsByGroup.has('gb')).toBe(false)
+    // 对象的读不出是逐组事实，不进全批共享格（那里只住证明失败）。
+    expect(batch.sharedSkipped).toBeUndefined()
+  })
+
+  it('byGroup 只含进 plan.entries 的对象：剩余仍引用的共享图不归任何组', async () => {
+    // GB 的日志与剩余会话都引用 ID2 ⇒ 共享保留、不进 entries ⇒ 也不进 byGroup。
+    const made = makeWorld({
+      logs: {
+        [`${GA}/${LOG}`]: log(ID),
+        [`${GB}/${LOG}`]: log(ID2),
+        [`${REMAINING}/${LOG}`]: log(ID2),
+      },
+      dirs: sessionsEmpty,
+      files: (p) => (p === GA || p === GB || p === REMAINING ? [LOG] : []),
+      sizes: { [imagePath(ID)]: 7, [imagePath(ID2)]: 8 },
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GB] },
+    ])
+    expect(batch.plan.entries.map((e) => e.id)).toEqual([ID])
+    expect(batch.byGroup.get('ga')).toEqual(new Set([ID]))
+    expect(batch.byGroup.has('gb')).toBe(false)
+  })
+
+  it('同一对象被两组候选命中 ⇒ 只归第一组（对象单归属，批内相加不双计）', async () => {
+    const made = makeWorld({
+      logs: { [`${GA}/${LOG}`]: log(ID), [`${GB}/${LOG}`]: log(ID) },
+      dirs: () => [],
+      files: (p) => (p === GA || p === GB ? [LOG] : []),
+      sizes: { [imagePath(ID)]: 7 },
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GB] },
+    ])
+    expect(batch.plan.entries.map((e) => e.id)).toEqual([ID])
+    expect(batch.byGroup.get('ga')).toEqual(new Set([ID]))
+    expect(batch.byGroup.has('gb')).toBe(false)
+  })
+
+  it('同 id 的两组按并集合并候选（不静默丢后一组）', async () => {
+    const made = makeWorld({
+      logs: { [`${GA}/${LOG}`]: log(ID), [`${GB}/${LOG}`]: log(ID2) },
+      dirs: () => [],
+      files: (p) => (p === GA || p === GB ? [LOG] : []),
+      sizes: { [imagePath(ID)]: 7, [imagePath(ID2)]: 8 },
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'dup', dirs: [GA] },
+      { id: 'dup', dirs: [GB] },
+    ])
+    expect(batch.plan.entries.map((e) => e.id)).toEqual([ID, ID2])
+    expect(batch.byGroup.get('dup')).toEqual(new Set([ID, ID2]))
+  })
+
+  it('跨组共享候选目录只读一次，对象仍按组序单归属', async () => {
+    const made = makeWorld({
+      logs: { [`${GA}/${LOG}`]: log(ID), [`${GB}/${LOG}`]: log(ID2) },
+      dirs: () => [],
+      files: (p) => (p === GA || p === GB ? [LOG] : []),
+      sizes: { [imagePath(ID)]: 7, [imagePath(ID2)]: 8 },
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GA, GB] },
+    ])
+    expect(made.fs.listFiles.mock.calls.filter(([p]) => p === GA)).toHaveLength(1)
+    expect(batch.plan.entries.map((entry) => entry.id)).toEqual([ID, ID2])
+    expect(batch.byGroup.get('ga')).toEqual(new Set([ID]))
+    expect(batch.byGroup.get('gb')).toEqual(new Set([ID2]))
+  })
+
+  it('同一不可读候选目录被两组共享 ⇒ 合计只数一次，逐组仍各归因一次', async () => {
+    const made = makeWorld({
+      logs: {},
+      dirs: sessionsEmpty,
+      files: (p) => (p === GA ? [LOG] : []),
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: 'ga', dirs: [GA] },
+      { id: 'gb', dirs: [GA] },
+    ])
+    expect(batch.plan.skipped).toBe('1 个被删会话日志读不出')
+    expect(batch.unreadableCandidatesByGroup.get('ga')).toBe(1)
+    expect(batch.unreadableCandidatesByGroup.get('gb')).toBe(1)
+    expect(made.fs.listFiles.mock.calls.filter(([p]) => p === GA)).toHaveLength(1)
+  })
+
+  it('剩余引用源读不出 ⇒ 整体 skipped（fail closed 照旧），byGroup 空', async () => {
+    const made = makeWorld({
+      logs: { [`${GA}/${LOG}`]: log(ID) },
+      dirs: sessionsEmpty,
+      // 剩余会话声明有日志但没有夹具 ⇒ readFile 抛 ⇒ 读不出，不折成"没有引用"。
+      files: (p) => (p === GA || p === REMAINING ? [LOG] : []),
+      sizes: { [imagePath(ID)]: 7 },
+    })
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: 'ga', dirs: [GA] }])
+    expect(batch.plan.entries).toEqual([])
+    expect(batch.plan.skipped).toMatch(/无法证明独占|读不到/)
+    expect(batch.byGroup.size).toBe(0)
+  })
+
+  it('executeImageAttachmentRemoval 回执带 failedIds：失败对象逐个点名（批尾按组归失败要用）', async () => {
+    const made = makeWorld({
+      logs: {},
+      sizes: { [imagePath(ID)]: 7, [imagePath(ID2)]: 8 },
+      removeFile: (p) => { if (p === imagePath(ID2)) throw new Error('EBUSY') },
+    })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const stats = await executeImageAttachmentRemoval(made.deps, {
+        entries: [
+          { id: ID, path: imagePath(ID), bytes: 7 },
+          { id: ID2, path: imagePath(ID2), bytes: 8 },
+        ],
+        bytes: 15,
+      })
+      expect(stats).toEqual({ removed: 1, freedBytes: 7, failed: 1, failedIds: [ID2] })
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

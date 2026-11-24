@@ -68,6 +68,9 @@ export type GroupClaim =
   | { readonly verdict: 'carried' }
   | { readonly verdict: 'absent' }
 
+/** 带 id 的裁决（`claimAll` 的逐条形）：id 与裁决同条交付，调用方不靠名单下标配对。 */
+export type IdGroupClaim = { readonly id: string } & GroupClaim
+
 /**
  * 「这条是被**同批前一条**带走的，还是整批开始前就没有，还是仍在？」幂等语义只属于 `carried`：后来者本来就不在清册里（用户点了条幽灵 id、
  * 或对账刚摘掉它）必须照样响亮报 `trash-empty`。**所以判据是快照的原始形状，不是当前形状**：原始快照里认得出而当前视图已空 ⇒ 同批带走的。

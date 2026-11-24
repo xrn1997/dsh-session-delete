@@ -11,6 +11,7 @@ import { vi } from 'vitest'
 import { DEFAULT_CONFIG } from '../../../src/config.js'
 import {
   type ArchiveDetailLike,
+  type OneShotDeps,
   type RemoteOutcome,
   type SessionDeleteRemote,
   type TrashDetailLike,
@@ -21,6 +22,7 @@ import type {
   OrphanReportWire,
   RemoteFailure,
   SessionDeleteConfigWire,
+  WriteProgressWire,
 } from '../../../src/shared/wire.js'
 import { outcomes } from './outcomes.js'
 import type { Mocked } from '../../support/mocked.js'
@@ -74,13 +76,15 @@ const DEFAULTS: SessionDeleteRemote = {
   archiveDetail: async () => remoteOk(ARCHIVE_DETAIL_FIXTURE),
   applyOutcomes: async (action, ids) => remoteOk(outcomes(action, ids)),
   emptyTrash: async () => remoteOk({ removed: 0, freedBytes: 0 }),
+  progress: async () => remoteOk<WriteProgressWire>({ status: 'idle' }),
 }
 
-/** 只需要一段 `/apply` 的座位测试：通道形状的函数直接就是 deps（断言仍打原来那枚 mock）。 */
+/** 只需要一段 `/apply` 的座位测试：通道形状的函数直接就是 deps（断言仍打原来那枚 mock）。
+ *  `progress` 给安静的 `idle` 缺省——认领轮询的用例在 `use-write-progress.test.ts` 自己驱动节奏。 */
 export function applyDeps(
   applyOutcomes: (action: ApplyAction, ids: readonly string[]) => Promise<RemoteOutcome<ApplyOutcome[]>>,
-): Pick<SessionDeleteRemote, 'applyOutcomes'> {
-  return { applyOutcomes }
+): OneShotDeps {
+  return { applyOutcomes, progress: async () => remoteOk<WriteProgressWire>({ status: 'idle' }) }
 }
 
 /** 覆盖表与旧假件同形：每个方法一枚 `vi.fn`（参数与落地面类型与生产 interface 保持不变，用例不必
@@ -104,6 +108,7 @@ export function createFakeRemote(over: Partial<FakeRemote> = {}): FakeRemote {
     applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]) =>
       DEFAULTS.applyOutcomes(action, ids)),
     emptyTrash: vi.fn(async () => DEFAULTS.emptyTrash()),
+    progress: vi.fn(async () => DEFAULTS.progress()),
   }
   return { ...defaults, ...over }
 }

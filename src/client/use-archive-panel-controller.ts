@@ -45,7 +45,8 @@ export interface ArchivePanelController
 }
 
 export function useArchivePanelController(input: {
-  deps: Pick<SessionDeleteRemote, 'archiveDetail' | 'applyOutcomes'>
+  /** `progress` 不在这里读：slice 按「自己读或向下转发的」收——座位吃 `OneShotDeps`（含认领轮询那一格）。 */
+  deps: Pick<SessionDeleteRemote, 'archiveDetail' | 'applyOutcomes' | 'progress'>
   gate: BusyGate
   query: ArchiveQuery
   ordered: readonly ArchiveRowWire[]

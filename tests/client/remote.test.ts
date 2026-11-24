@@ -14,6 +14,7 @@ import {
   OFFICIAL_SESSION_DELETE_API_PREFIX,
   type ApplyOutcome,
   type TrashEntryWire,
+  type WriteProgressWire,
 } from '../../src/shared/wire.js'
 import {
   applyOne,
@@ -77,7 +78,7 @@ async function failureMessage(run: Promise<RemoteOutcome<unknown>>): Promise<str
 }
 
 describe('createHttpRemote · 文档挂载点', () => {
-  it('十三个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
+  it('十四个 JSON 段的 fetch 都保留 document.baseURI 的挂载点（config 读/写同段）', async () => {
     // 这条只钉路径：假 fetch 回同一个 `[]`，多数段的形状判形会按失败落地并留 warn——收掉噪音。
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     vi.spyOn(document, 'baseURI', 'get').mockReturnValue('http://host/dsh/')
@@ -104,6 +105,7 @@ describe('createHttpRemote · 文档挂载点', () => {
     await remote.archiveDetail('session-a')
     await remote.applyOutcomes('purge', ['e1'])
     await remote.emptyTrash()
+    await remote.progress()
 
     expect(paths).toEqual([
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.list.path}`,
@@ -120,6 +122,7 @@ describe('createHttpRemote · 文档挂载点', () => {
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.archiveDetail.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`,
       `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.empty.path}`,
+      `/dsh${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.progress.path}`,
     ])
   })
 })
@@ -449,12 +452,17 @@ describe('注入面 · 一个动作只有一条路', () => {
     expect([remoteHasRestore, panelHasRestore, remoteHasCount]).toEqual([false, false, false])
   })
 
+  /** `applyOne` 只读 `applyOutcomes`，deps 面却是写组件共用的 `OneShotDeps`（含认领轮询那一格）：
+   *  这几条用例手搭回执形状，`progress` 补一格安静的 idle，别把「凑依赖」扩写成第二套假件。 */
+  const idleProgress = async (): Promise<RemoteOutcome<WriteProgressWire>> => ({ ok: true, value: { status: 'idle' } })
+
   it('`applyOne` 取的是**发出去的那个 id** 的结果，不是第一条', async () => {
     const deps = {
       applyOutcomes: async (action: 'restore', ids: readonly string[]) => ({
         ok: true as const,
         value: ids.map((id) => ({ id, action, ok: true as const, value: { id } as never })),
       }),
+      progress: idleProgress,
     }
     const outcome = await applyOne(deps, 'restore', 'only-one')
     expect(outcome.ok).toBe(true)
@@ -463,7 +471,7 @@ describe('注入面 · 一个动作只有一条路', () => {
   })
 
   it('applyOne：请求的 id 没回 / 回了幂等空值 ⇒ 都当通道错，不冒充成功', async () => {
-    const empty = { applyOutcomes: async () => ({ ok: true as const, value: [] as ApplyOutcome[] }) }
+    const empty = { applyOutcomes: async () => ({ ok: true as const, value: [] as ApplyOutcome[] }), progress: idleProgress }
     expect(await failureMessage(applyOne(empty, 'restore', 'a'))).toMatch(/批量通道没回这一条的结果/)
 
     const gone = {
@@ -471,6 +479,7 @@ describe('注入面 · 一个动作只有一条路', () => {
         ok: true as const,
         value: ids.map((id) => ({ id, action, ok: true as const, value: null })),
       }),
+      progress: idleProgress,
     }
     expect(await failureMessage(applyOne(gone, 'restore', 'a'))).toMatch(/单条动作回了幂等空值/)
   })
@@ -653,5 +662,90 @@ describe('取数通道 · 单次往返超时', () => {
       ok: false,
       failure: { code: 'client/unknown', message: CALLER_ABORT_MESSAGE },
     })
+  })
+})
+
+// 2026-11 写入进度：`GET /progress` 是纯读小段（写在飞时轮询也要立刻回，不进到达序链——ADR-0069 决定 1）。
+// 通道契约与其余段同一条：信封解析、值判形、失败原样交回；这里钉 progress 自己的两形与坏形状支。
+describe('createHttpRemote · progress 那一趟（各段里的 `GET /progress`）', () => {
+  const envelope = (value: unknown) =>
+    new Response(JSON.stringify({ ok: true, value }), { headers: { 'content-type': 'application/json' } })
+  const RUNNING: WriteProgressWire = {
+    status: 'running',
+    action: 'delete',
+    ids: ['s1'],
+    done: 1,
+    total: 2,
+    step: 'moving',
+    startedAt: 7,
+  }
+
+  it('GET 到 /progress，不带 body；idle 与 running 两形都原样展开', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = []
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      calls.push({ path, init })
+      return envelope({ status: 'idle' })
+    })
+    await expect(createHttpRemote().progress()).resolves.toEqual({ ok: true, value: { status: 'idle' } })
+    expect(pick(calls, 0).path).toBe(`${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.progress.path}`)
+    expect(pick(calls, 0).init?.method).toBe('GET')
+    expect(pick(calls, 0).init?.body).toBeUndefined()
+    vi.unstubAllGlobals()
+
+    vi.stubGlobal('fetch', async () => envelope(RUNNING))
+    await expect(createHttpRemote().progress()).resolves.toEqual({ ok: true, value: RUNNING })
+    vi.unstubAllGlobals()
+  })
+
+  it('进度读走独立 2 秒上限，不沿用普通请求的 30 秒', async () => {
+    vi.useFakeTimers()
+    try {
+      let seen: AbortSignal | null | undefined
+      vi.stubGlobal('fetch', async (_path: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        seen = init?.signal
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'))
+        }, { once: true })
+      }))
+      const run = createHttpRemote({ timeoutMs: 60_000 }).progress()
+      await vi.advanceTimersByTimeAsync(2000)
+      const pending = Symbol('pending')
+      const outcome = await Promise.race([
+        run,
+        new Promise<typeof pending>((resolve) => setTimeout(() => resolve(pending), 10)),
+      ])
+      await vi.advanceTimersByTimeAsync(10)
+      expect(outcome).toEqual({
+        ok: false,
+        failure: { code: 'client/unknown', message: REQUEST_TIMEOUT_MESSAGE },
+      })
+      expect(seen?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('信封对但值形状不对 ⇒ CHANNEL_SHAPE_MESSAGE 失败支，不喂给组件', async () => {
+    // 形状不对会在通道里留一条 console.warn（诊断线索）；这里只钉落地面，收掉噪音。
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    for (const value of [{ status: 'running' }, { status: 'bogus' }, 42]) {
+      vi.stubGlobal('fetch', async () => envelope(value))
+      await expect(createHttpRemote().progress()).resolves.toEqual({
+        ok: false,
+        failure: { code: 'client/unknown', message: CHANNEL_SHAPE_MESSAGE },
+      })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('失败信封原样交回：进度读失败不许折成 idle（「没写在飞」是成功值的判断，不是失败的兜底）', async () => {
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'sessiondelete/io', message: '读进度失败' } }),
+        { headers: { 'content-type': 'application/json' } }))
+    await expect(createHttpRemote().progress()).resolves.toEqual({
+      ok: false,
+      failure: { code: 'sessiondelete/io', message: '读进度失败' },
+    })
+    vi.unstubAllGlobals()
   })
 })

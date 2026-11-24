@@ -1,8 +1,9 @@
 import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import { createTrashScope } from '../src/verbs/trash-scope.js'
-import { executeRemoval, type RemovalPlan } from '../src/verbs/permanent-removal.js'
-import { attachmentPathOf } from '../src/trash/attachments.js'
+import { executeAttachmentTail, executeRemoval, planTrashRemoval, type RemovalPlan } from '../src/verbs/permanent-removal.js'
+import { planBatchImageAttachmentRemoval, attachmentPathOf } from '../src/trash/attachments.js'
+import { runPurgeBatch, type StatsOutcome } from '../src/verbs/batch.js'
 import { sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { createLogWorld, trashEntry } from './support/world.js'
 
@@ -38,16 +39,39 @@ function deps(seed: TrashEntry[]) {
   })
   const { deps: d, fs, host, manifest } = made
 
+  /** 一条的批执行结果 → 回执或抛（与动词时代同形：失败原样抛、carried 回幂等零）。 */
+  async function unwrap(outcomes: readonly StatsOutcome[]) {
+    const outcome = outcomes[0]
+    if (outcome === undefined) throw new Error('批驱动没有交回结果')
+    if (outcome.ok) return outcome.value
+    // 失败支是线上失败形状（不是 Error）：按原样交回给 rejects 断言——包一层只为了满足 throw 的对象形。
+    throw Object.assign(new Error(outcome.error.message), outcome.error)
+  }
+
   /** 直调路径自己开一个作用域：清册读一次、选组与收缩都在 scope 里（批量层同样整批只开一次）。
    *  这里的条目 id 是合成串（不是回收站目录名）⇒ 读 **raw** 算组：ledger 的对账会把它们当外人目录。
    *  这条用例集钉的是 purge 的组语义与执行顺序，对账已由 `tests/ledger.test.ts` 单独验穿。 */
   async function open() {
-    return createTrashScope(d, await manifest.list(), (plan) => executeRemoval(d, plan))
+    const rows = await manifest.list()
+    const scope = createTrashScope(rows, (plan) => executeRemoval(d, plan))
+    // 这份作用域上的单条批执行：多条共用一个作用域的用例走它（carried / 收缩语义长在同一份视图上）。
+    const purgeOn = (id: string) => runPurgeBatch(d, scope, rows, [id]).then(unwrap)
+    // `/empty` 同构：全量一组 → 组内计划 → 一次批一扫 → 执行 → 批尾；回执 = stats + 尾读数。
+    // 这里不复用生产的 `runEmptyBatch`：这些用例钉的是**同一份作用域**上的收缩语义，而那函数自开作用域
+    //（`/empty` 的驱动序与进度 tick 由 `tests/api.test.ts` 经真 `runEmptyBatch` 端到端钉住）。
+    const emptyAll = async () => {
+      const plan = await planTrashRemoval(d, rows, rows)
+      const batch = await planBatchImageAttachmentRemoval(d, [{ id: 'empty', dirs: plan.attachmentDirs }])
+      const stats = await scope.purgeAll(plan)
+      const tail = await executeAttachmentTail(d, batch)
+      return { removed: stats.removed, freedBytes: stats.freedBytes, attachments: tail.run }
+    }
+    return { scope, purgeOn, emptyAll }
   }
 
   async function purge(entryId?: string) {
-    const scope = await open()
-    return entryId === undefined ? await scope.purgeAll() : await scope.purge(entryId)
+    const { purgeOn, emptyAll } = await open()
+    return entryId === undefined ? await emptyAll() : await purgeOn(entryId)
   }
 
   return { calls: made.calls, fs, host, manifest, d, open, purge }
@@ -271,10 +295,10 @@ describe('清册作用域：一份快照上的选面、选组与收缩', () => {
 
   it('同批第一条清完后，第二条 idempotent 回 {removed:0,freedBytes:0}（不带附件读数）', async () => {
     const { fs, open, manifest } = deps([parent, kid])
-    const scope = await open()
-    const first = await scope.purge('p')
+    const { purgeOn } = await open()
+    const first = await purgeOn('p')
     expect(first.removed).toBe(2) // 父那一组：父 + 孩子
-    const second = await scope.purge('k')
+    const second = await purgeOn('k')
     // 与旧批量回执同形：这一趟没有附件读数，`attachments` 缺席，不拿零冒充"清过"。
     expect(second).toEqual({ removed: 0, freedBytes: 0 })
     expect(fs.removeDir).toHaveBeenCalledTimes(2)
@@ -283,25 +307,25 @@ describe('清册作用域：一份快照上的选面、选组与收缩', () => {
 
   it('absent（原始快照里就认不出）⇒ trash-empty 且原文点名 id，不当成"被带走"', async () => {
     const { open, fs } = deps([parent])
-    const scope = await open()
+    const { purgeOn } = await open()
     const message: unknown = expect.stringContaining('ghost')
-    await expect(scope.purge('ghost')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty', message })
+    await expect(purgeOn('ghost')).rejects.toMatchObject({ code: 'sessiondelete/trash-empty', message })
     expect(fs.removeDir).not.toHaveBeenCalled()
   })
 
   it('收缩视图按组摘：先清孩子再清父，父那一组不再连带已经清掉的孩子（经 purge 行为间接钉收缩）', async () => {
     const { fs, open } = deps([parent, kid])
-    const scope = await open()
-    expect((await scope.purge('k')).removed).toBe(1)
+    const { purgeOn } = await open()
+    expect((await purgeOn('k')).removed).toBe(1)
     // 收缩若没发生，父那一组会把快照里还在的 kid 行再数一遍（removed 2）——这道断言钉的正是那一次收缩
-    expect((await scope.purge('p')).removed).toBe(1)
+    expect((await purgeOn('p')).removed).toBe(1)
     expect(fs.removeDir).toHaveBeenCalledTimes(2)
   })
 
   it('purgeAll 把全部行当一组递进执行器：一条都不剩', async () => {
     const { fs, manifest, open } = deps([parent, kid, trashEntry('z')])
-    const scope = await open()
-    const r = await scope.purgeAll()
+    const { emptyAll } = await open()
+    const r = await emptyAll()
     expect(r).toEqual({ removed: 3, freedBytes: 1536, attachments: NOTHING_CLEANED })
     expect(fs.removeDir).toHaveBeenCalledTimes(3)
     expect(await manifest.list()).toHaveLength(0)
@@ -309,16 +333,56 @@ describe('清册作用域：一份快照上的选面、选组与收缩', () => {
 
   it('purgeAll 之后收缩到底：同一作用域再 purge 走 carried 幂等', async () => {
     const { fs, open } = deps([trashEntry('a'), trashEntry('b')])
-    const scope = await open()
-    await scope.purgeAll()
-    expect(await scope.purge('a')).toEqual({ removed: 0, freedBytes: 0 })
+    const { emptyAll, purgeOn } = await open()
+    await emptyAll()
+    expect(await purgeOn('a')).toEqual({ removed: 0, freedBytes: 0 })
     expect(fs.removeDir).toHaveBeenCalledTimes(2)
   })
 })
 
+// 批预裁决面（「一次批一扫」的批驱动序第一步）：claimAll 在**输入序**上把每条裁成 fresh/carried/absent，
+// 裁决视图按 claim 序演化——与逐条 claim 的判据同一份（`groups.ts` 的 `claimOf`），只是提前算干净。
+describe('清册作用域：批预裁决（claimAll）与组执行（runGroup）', () => {
+  const parent = trashEntry('p')
+  const kid = { ...trashEntry('k'), parentEntryId: 'p' }
+
+  it('claimAll 语义 = 依次逐条 claim：同批两条同组 ⇒ 后者 carried；幽灵 id ⇒ absent', async () => {
+    const { open } = deps([parent, kid])
+    const { scope } = await open()
+    const claims = scope.claimAll([parent.id, kid.id, 'ghost'])
+    // fresh 带整组（父那一组含孩子）；carried / 没有组可交。
+    expect(claims.map((claim) => (claim.verdict === 'fresh' ? claim.group.map((row) => row.id) : claim.verdict))).toEqual([
+      [parent.id, kid.id],
+      'carried',
+      'absent',
+    ])
+  })
+
+  it('runGroup 成功后视图收缩：被带走的组在下一轮 claimAll 是 carried', async () => {
+    const { d, fs, manifest, open } = deps([parent, kid])
+    const { scope } = await open()
+    const claim = scope.claimAll([parent.id])[0]
+    const plan = await planTrashRemoval(d, await manifest.list(), claim?.verdict === 'fresh' ? claim.group : [])
+    await scope.runGroup(plan)
+    expect(scope.claimAll([kid.id]).map((c) => c.verdict)).toEqual(['carried'])
+    expect(fs.removeDir).toHaveBeenCalledTimes(2)
+  })
+
+  it('runGroup 失败视图不动：这一组的后来者仍认领得到（第二波补跑的前提）', async () => {
+    const { d, fs, manifest, open } = deps([parent, kid])
+    const { scope } = await open()
+    fs.removeDir.mockImplementation(async () => { throw new Error('boom') })
+    const claim = scope.claimAll([parent.id])[0]
+    const plan = await planTrashRemoval(d, await manifest.list(), claim?.verdict === 'fresh' ? claim.group : [])
+    await expect(scope.runGroup(plan)).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    expect(scope.claimAll([kid.id]).map((c) => c.verdict)).toEqual(['fresh'])
+    expect(fs.removeDir).toHaveBeenCalled()
+  })
+})
+
 /**
- * 删的能力经类型表达（同 `PresenceCapability` 品牌门替换源码扫描的先例）：作用域收
- * `CoreDeps` + 注入的执行器，purge 的删除只可能出自那注入的一支——假执行器记录收到的计划，
+ * 删的能力经类型表达（同 `PresenceCapability` 品牌门替换源码扫描的先例）：作用域只收清册快照与注入的执行器
+ * ——连 deps 都不进手，purge 的删除只可能出自那注入的一支；假执行器记录收到的计划，
  * 假 fs 的 `removeDir` 一次都不该响（作用域自己没有删除路径）。
  */
 describe('purge 只经注入的执行器动删', () => {
@@ -327,12 +391,15 @@ describe('purge 只经注入的执行器动删', () => {
     const received: RemovalPlan[] = []
     const fakeExecute = vi.fn(async (plan: RemovalPlan) => {
       received.push(plan)
-      return { removed: plan.trash.length, freedBytes: plan.bytes, attachments: NOTHING_CLEANED }
+      return { removed: plan.trash.length, freedBytes: plan.bytes }
     })
-    const scope = createTrashScope(d, await manifest.list(), fakeExecute)
-    const r = await scope.purge('a')
+    const rows = await manifest.list()
+    const scope = createTrashScope(rows, fakeExecute)
+    const claim = scope.claimAll(['a'])[0]
+    const plan = await planTrashRemoval(d, rows, claim?.verdict === 'fresh' ? claim.group : [])
+    const r = await scope.runGroup(plan)
     // 回执就是执行器交回的那一份：作用域只做选组与收缩，不改写读数。
-    expect(r).toEqual({ removed: 1, freedBytes: 512, attachments: NOTHING_CLEANED })
+    expect(r).toEqual({ removed: 1, freedBytes: 512 })
     expect(fakeExecute).toHaveBeenCalledTimes(1)
     expect(received).toHaveLength(1)
     expect(received[0]?.kind).toBe('trash')

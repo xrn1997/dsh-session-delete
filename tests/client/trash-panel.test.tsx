@@ -18,7 +18,7 @@ import {
   noteSelection,
 } from '../../src/client/trash-snapshot.js'
 import { invalidateTrash } from '../../src/client/trash-store.js'
-import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
+import type { ApplyAction, ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import type { ArchiveDetailLike, PurgeResultLike, RemoteOutcome, TrashDetailLike } from '../../src/client/remote.js'
 import type { ArchiveListWire } from '../../src/shared/wire.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
@@ -165,6 +165,68 @@ describe('回收站面板', () => {
     expect(deps.emptyTrash).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '彻底删除' }))
     await waitFor(() => expect(deps.emptyTrash).toHaveBeenCalledTimes(1))
+  })
+
+  it('彻底删除写在飞时框内出进度行（/progress 的 running 帧按写身份认领）', async () => {
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const deps = makeDeps({
+      applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+        if (action === 'purge') return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve })
+        return remoteOk(outcomesOf(action, ids))
+      }),
+      progress: vi.fn(async () => remoteOk<WriteProgressWire>({
+        status: 'running', action: 'purge', ids: ['a'], done: 0, total: 1, step: 'deleting', startedAt: Date.now(),
+      })),
+    })
+    renderWide(deps)
+    fireEvent.click(within(await screen.findByRole('row', { name: /code-review/ })).getByRole('button', { name: /^彻底删除/ }))
+    fireEvent.click(await screen.findByRole('button', { name: '彻底删除' }))
+    expect(await screen.findByRole('button', { name: '正在彻底删除' })).toBeDisabled()
+    expect(await screen.findByRole('status')).toHaveTextContent(/正在彻底删除 0\/1 · 删除中 · 已用 \d+ 秒/)
+    release(remoteOk(outcomesOf('purge', ['a'])))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('清空写在飞时进度行按在场条目认领（/empty 的记录就是这些行）', async () => {
+    let release!: (value: RemoteOutcome<PurgeResultLike>) => void
+    const deps = makeDeps({
+      emptyTrash: vi.fn(async (): Promise<RemoteOutcome<PurgeResultLike>> =>
+        new Promise<RemoteOutcome<PurgeResultLike>>((resolve) => { release = resolve })),
+      progress: vi.fn(async () => remoteOk<WriteProgressWire>({
+        status: 'running', action: 'empty', ids: ['a'], done: 0, total: 1, step: 'measuring', startedAt: Date.now(),
+      })),
+    })
+    render(<TrashPanel deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
+    fireEvent.click(await screen.findByRole('button', { name: '彻底删除' }))
+    expect(await screen.findByRole('status')).toHaveTextContent(/正在清空回收站 0\/1 · 测量中 · 已用 \d+ 秒/)
+    release(remoteOk({ removed: 1, freedBytes: 1 }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('清空写在飞时冻结发起那一刻的行身份，清单换版不改认领名单', async () => {
+    let release!: (value: RemoteOutcome<PurgeResultLike>) => void
+    const changedRows = [{ ...pick(rows, 0), id: 'b', sessionId: 'session-b', title: '换版后的行' }]
+    const deps = makeDeps({
+      list: vi.fn()
+        .mockResolvedValueOnce(remoteOk(rows))
+        .mockResolvedValue(remoteOk(changedRows)),
+      emptyTrash: vi.fn(async (): Promise<RemoteOutcome<PurgeResultLike>> =>
+        new Promise<RemoteOutcome<PurgeResultLike>>((resolve) => { release = resolve })),
+      progress: vi.fn(async () => remoteOk<WriteProgressWire>({
+        status: 'running', action: 'empty', ids: ['a'], done: 0, total: 1, step: 'measuring', startedAt: Date.now(),
+      })),
+    })
+    render(<TrashPanel deps={deps} />)
+    fireEvent.click(await screen.findByRole('button', { name: '清空回收站…' }))
+    fireEvent.click(await screen.findByRole('button', { name: '彻底删除' }))
+    expect(await screen.findByRole('status')).toHaveTextContent(/正在清空回收站 0\/1 · 测量中 · 已用 \d+ 秒/)
+
+    act(() => { invalidateTrash() })
+    await screen.findByRole('row', { name: /换版后的行/ })
+    expect(screen.getByRole('status')).toHaveTextContent(/正在清空回收站 0\/1 · 测量中 · 已用 \d+ 秒/)
+    release(remoteOk({ removed: 1, freedBytes: 1 }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
   it('清空失败 ⇒ 清单失败块上屏，旧行的页脚动作不再出现', async () => {

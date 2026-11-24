@@ -109,10 +109,12 @@ export interface ModalProps {
   closeLabel: string
   /** 动作行（取消／确认）。 */
   footer?: ReactNode
+  /** 忙碌中的确认框仍保留关闭钮作为焦点落点，但向辅助技术声明不可关闭。 */
+  busy?: boolean
   children?: ReactNode
 }
 
-export function Modal({ open, onClose, title, closeLabel, footer, children }: ModalProps): ReactElement | null {
+export function Modal({ open, onClose, title, closeLabel, footer, busy, children }: ModalProps): ReactElement | null {
   const dialog = useRef<HTMLDivElement>(null)
   useModalLayer(dialog, open, onClose)
   if (!open) return null
@@ -126,11 +128,18 @@ export function Modal({ open, onClose, title, closeLabel, footer, children }: Mo
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        aria-busy={busy || undefined}
       >
         <div className="sd-modal-content">
           <div className="sd-modal-header">
             <h2 className="sd-modal-title">{title}</h2>
-            <button type="button" className="sd-modal-close" aria-label={closeLabel} onClick={onClose}>
+            <button
+              type="button"
+              className="sd-modal-close"
+              aria-label={closeLabel}
+              aria-disabled={busy || undefined}
+              onClick={onClose}
+            >
               <IconCloseOutlineRegular size={14} />
             </button>
           </div>

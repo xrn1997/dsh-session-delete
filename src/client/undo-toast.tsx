@@ -17,7 +17,9 @@ import {
 } from './undo-notices.js'
 import { IconWarningOutlineRegular } from './ui/icons.js'
 import { Toast } from './ui/Toast.js'
+import { useWriteProgress } from './use-write-progress.js'
 import { restoreFromUndo } from './write-seats.js'
+import { WriteProgressLine } from './write-progress.js'
 
 /**
  * 常驻的撤销提示宿主，挂 `shell.overlay`。两种来源共用：**当前横幅**优先；不在时顶上一条待显示的
@@ -46,6 +48,12 @@ export function UndoToast({ deps, t = zhTranslate }: { deps: OneShotDeps; t?: Tr
 /** 一条通知的躯体：busy 生命周期归 `useBusyGate`（连点的同步判重也在闸里），这里只组合呈现。 */
 function NoticeToast({ deps, current, t }: { deps: OneShotDeps; current: UndoNotice; t: Translate }) {
   const gate = useBusyGate()
+  // 无框恢复也要看得见进度（`docs/ui-spec.md` §2）：restore 的认领名单就是撤销名单（回收站条目 id）。
+  const face = useWriteProgress(
+    deps,
+    { action: 'restore', ids: current.kind === 'one' ? [current.entryId] : current.entryIds },
+    gate.busy,
+  )
   const { seq, failure } = current
   if (failure !== undefined) {
     return (
@@ -65,12 +73,17 @@ function NoticeToast({ deps, current, t }: { deps: OneShotDeps; current: UndoNot
       key={seq}
       tone="success"
       text={
-        // 已归档会话撤销是回「归档」，不是回会话列表——整句一个键，不在 JSX 里拼标点（ADR-0060 决定第 1 条）。
+        /* 已归档会话撤销是回「归档」，不是回会话列表——整句一个键，不在 JSX 里拼标点（ADR-0060 决定第 1 条）。 */
         current.kind === 'one'
           ? t(current.archived === true ? 'undo.movedArchived' : 'undo.moved', {
             title: current.title === '' ? t('undo.session') : current.title,
           })
           : t(current.archived === true ? 'undo.movedBatchArchived' : 'undo.movedBatch', { n: current.n })
+      }
+      detail={
+        /* 进度行进横幅副行（按钮之后，免得块级节点把「撤销」挤到下一行）；认领不上只说排队中，不冒领另一趟写的 k/N。
+           横幅外层是 `role=alert`，逐 tick 播报会持续打断读屏 ⇒ 这一行只做视觉，播报归横幅本身。 */
+        <WriteProgressLine face={face} t={t} announce={false} />
       }
       holdMs={UNDO_HOLD_MS}
       // 撤销在飞时横幅不自动熄灭：失败原文要落回这一条，先收掉就只剩一条「失败被吞」。

@@ -1637,7 +1637,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
       await m.result.current.select(A)
     })
     act(() => {
-      m.result.current.request({ kind: 'all' })
+      m.result.current.request({ kind: 'all', ids: ['a'] })
     })
     const refreshBefore = m.reload.mock.calls.length
 
@@ -1659,6 +1659,27 @@ describe('面板控制器 · 恢复与确认动作', () => {
     expect(m.result.current.detail.kind).toBe('ready')
   })
 
+  it('confirmPurge 清空前按最新清单刷新身份：开框后换版不冒用旧名单', async () => {
+    const m = mount({ entries: [A] })
+    const run = deferred<GateRun<boolean>>()
+    m.emptyTrash.mockReturnValueOnce(run.promise)
+    act(() => {
+      m.result.current.request({ kind: 'all', ids: ['a'] })
+    })
+    m.update({ entries: [B] })
+
+    let confirming!: Promise<void>
+    act(() => {
+      confirming = m.result.current.confirmPurge()
+    })
+    expect(m.result.current.pending).toEqual({ kind: 'all', ids: ['b'] })
+    await act(async () => {
+      run.resolve({ kind: 'ran', value: true })
+      await confirming
+    })
+    expect(m.result.current.pending).toBeNull()
+  })
+
   it('confirmPurge 清空失败：pending 照样收起，账本保留', async () => {
     const m = mount({ entries: [A] })
     await act(async () => {
@@ -1666,7 +1687,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
     m.emptyTrash.mockResolvedValueOnce({ kind: 'ran', value: false })
     act(() => {
-      m.result.current.request({ kind: 'all' })
+      m.result.current.request({ kind: 'all', ids: ['a'] })
     })
 
     await act(async () => {
@@ -1689,7 +1710,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
     })
     m.emptyTrash.mockResolvedValueOnce({ kind: 'blocked' })
     act(() => {
-      m.result.current.request({ kind: 'all' })
+      m.result.current.request({ kind: 'all', ids: ['a'] })
     })
 
     await act(async () => {

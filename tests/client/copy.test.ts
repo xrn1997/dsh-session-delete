@@ -411,3 +411,59 @@ describe('归档档文案键', () => {
       .toBe('会话 已移入回收站；撤销后回到「归档」')
   })
 })
+
+// 写入进度行与忙碌面（进度面）的文案：动作 / 步骤 / 计数 / 秒数 / 排队 / 兜底各归自己的键，
+// 进度行只做拼接。键集由 `Record<CopyKey, string>` 编译闸盯住，这里钉两种语言都真出话。
+describe('写入进度文案键', () => {
+  const PROGRESS_KEYS = [
+    'progress.action.delete', 'progress.action.restore', 'progress.action.purge',
+    'progress.action.unarchive', 'progress.action.orphanClean', 'progress.action.empty',
+    'progress.step.checking', 'progress.step.measuring', 'progress.step.moving',
+    'progress.step.ledger', 'progress.step.deleting', 'progress.step.attachments',
+    'progress.step.finishing',
+    'progress.count', 'progress.elapsed', 'progress.queued', 'progress.working',
+  ] as const
+
+  it('zh：动作句带「正在」（进度行与忙碌按钮共用同一枚键），步骤是进行态短语', () => {
+    expect(zhTranslate('progress.action.delete')).toBe('正在删除')
+    expect(zhTranslate('progress.action.restore')).toBe('正在恢复')
+    expect(zhTranslate('progress.action.purge')).toBe('正在彻底删除')
+    expect(zhTranslate('progress.action.unarchive')).toBe('正在解除归档')
+    expect(zhTranslate('progress.action.orphanClean')).toBe('正在清理孤儿会话')
+    expect(zhTranslate('progress.action.empty')).toBe('正在清空回收站')
+    expect(zhTranslate('progress.step.checking')).toBe('检查中')
+    expect(zhTranslate('progress.step.ledger')).toBe('记账中')
+    expect(zhTranslate('progress.step.attachments')).toBe('清理附件中')
+    expect(zhTranslate('progress.count', { done: 2, total: 5 })).toBe('2/5')
+    expect(zhTranslate('progress.elapsed', { s: 3 })).toBe('已用 3 秒')
+    // 认领不上只说排队中：别人的 k/N 一个字都不上屏（假进度是反目标）。
+    expect(zhTranslate('progress.queued')).toBe('排队中：另一写入进行中…')
+    // 不在 /progress 覆盖面的确认框（附件 / 投影清理）只有这句兜底忙碌文案。
+    expect(zhTranslate('progress.working')).toBe('正在处理…')
+  })
+
+  it('en 逐键镜像：不是键名、不带中文，占位符插得进去', () => {
+    const service = fakeLocale()
+    createTranslate(contextWith(service))
+    const [, dicts] = service.register.mock.calls[0] as [
+      string,
+      { zh: Record<string, string>; en: Record<string, string> },
+    ]
+    const en: Translate = (key, params) => {
+      const template = must(dicts.en[key], `en 字典里的键 ${key}`)
+      return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+        params !== undefined && name in params ? String(params[name]) : match,
+      )
+    }
+    expect(Object.keys(dicts.en).sort()).toEqual(Object.keys(dicts.zh).sort())
+    for (const key of PROGRESS_KEYS) {
+      expect(dicts.en[key], key).toBeDefined()
+      expect(dicts.en[key], key).not.toBe(key)
+      expect(dicts.en[key], key).not.toMatch(/[\u4e00-\u9fff]/)
+    }
+    expect(en('progress.count', { done: 1, total: 2 })).toBe('1/2')
+    expect(en('progress.elapsed', { s: 3 })).toBe('3s elapsed')
+    expect(en('progress.queued')).toContain('Queued')
+    expect(en('progress.working')).toContain('…')
+  })
+})

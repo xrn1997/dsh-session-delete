@@ -13,7 +13,7 @@ ADR-0020 的独占计划要回答的是「这个图片副本除了被删的这�
 ## 决定
 
 1. 新增执行期复核 `recheckImageRemovalExclusivity`：入参是计划里的附件条目，重扫「全部会话日志 + 全部 `session-trash` 目录 + `storages` / `cache` JSON」，把这一刻已有引用的条目从计划里剔除，字节按剩余条目重算。
-2. 调用时机在**会话 / 回收站目录已经删掉之后**、`executeImageAttachmentRemoval` 之前：那时被删的引用源已经不在，扫到的就是真正的剩余；保留「对象只在会话真的没了之后才动」这条既有顺序。
+2. 调用时机在**会话 / 回收站目录已经删掉之后**、`executeImageAttachmentRemoval` 之前：那时被删的引用源已经不在，扫到的就是真正的剩余；保留「对象只在会话真的没了之后才动」这条既有顺序。批量永久删除的「复核 → 删除」由批级尾 `executeAttachmentTail` 承担（ADR-0070）：全部组执行完之后一次复核、一次删除，复核与删除之间不夹任何写；按组执行管线里没有附件段。
 3. 读不出照旧 fail closed：回空计划 + `skipped`，宁可在盘上留下孤儿，也不删共享。空计划直接返回，不为零删付一次全 home 扫描。
 4. 计划的原 `skipped`（候选日志读不出）原样保留；执行期复核不另造第二套跳过原因。
 
@@ -38,4 +38,4 @@ ADR-0020 的独占计划要回答的是「这个图片副本除了被删的这�
 - **把附件删除提到删目录之前**：那时被删会话自己的引用还在，会把候选全判成共享；而且对象先没了、目录删一半失败，恢复回来的会话图片就坏了。
 - **不做，接受这个窗口**：后果是删掉仍被引用的活体图片，且不可回滚；与 ADR-0020「宁可留孤儿也不删共享」正面冲突。
 
-锚点：`src/trash/attachments.ts` 的 `recheckImageRemovalExclusivity`；`src/verbs/permanent-removal.ts` 的 `executeRemoval`；`tests/attachments.test.ts`；`tests/permanent-removal.test.ts`；ADR-0020（附件独占与 fail closed）；ADR-0027（永久删除的计划与执行器）；ADR-0040（执行器失败路径）
+锚点：`src/trash/attachments.ts` 的 `recheckImageRemovalExclusivity`；`src/verbs/permanent-removal.ts` 的 `executeAttachmentTail`；`tests/attachments.test.ts`；`tests/permanent-removal.test.ts`；ADR-0020（附件独占与 fail closed）；ADR-0027（永久删除的计划与执行器）；ADR-0040（执行器失败路径）；ADR-0070（批级尾的调用时机）

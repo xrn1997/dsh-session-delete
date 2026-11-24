@@ -14,7 +14,9 @@ import { getDefaultClientScene, useClientScene } from './scene.js'
 import type { PickItem } from './batch-selection-store.js'
 import { createStore } from './store.js'
 import { Tag } from './ui/Tag.js'
+import { useWriteProgress } from './use-write-progress.js'
 import { deleteSessionsFromBatch } from './write-seats.js'
+import { WriteProgressLine } from './write-progress.js'
 
 export interface BatchDeleteRequest {
   /** 每次发布递增：换一批就重挂载，busy / 失败面不带着上一批的记忆。 */
@@ -139,6 +141,8 @@ function BatchConfirmDialog({
   const [counts, setCounts] = useState<Map<string, number> | null>(null)
 
   const ids = current.items.map((item) => item.sessionId)
+  // 写身份认领（ADR-0069 决定 4）：这一批的 k/N 才上屏，另一趟在写就只说排队中。
+  const face = useWriteProgress(deps, { action: 'delete', ids }, gate.busy)
   const failedIds = [...failures.keys()]
   const totalKids = counts === null
     ? 0
@@ -188,6 +192,7 @@ function BatchConfirmDialog({
         ? t('dialog.batch.retry', { n: failedIds.length })
         : t('batch.run', { n: ids.length })}
       busy={gate.busy}
+      busyLabel={t('progress.action.delete')}
       onCancel={() => { scene.batchConfirm.clear(current) }}
       onConfirm={() => void run()}
     >
@@ -212,6 +217,7 @@ function BatchConfirmDialog({
       </div>
       {totalKids === 0 ? null : <p>{t('dialog.subagents', { n: totalKids })}</p>}
       <p>{t('dialog.hint')}</p>
+      <WriteProgressLine face={face} t={t} />
     </ConfirmDialog>
   )
 }

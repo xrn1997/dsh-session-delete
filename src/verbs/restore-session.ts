@@ -6,6 +6,7 @@ import { createJournal, stepUndo, type Journal, type JournalStep } from './membe
 import { withPresenceTail } from './member-presence.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
 import { moveGroup } from './move-group.js'
+import { writeProgress } from './write-progress.js'
 
 /**
  * 恢复：把删除那次按原路退回，并按组走。预检整组（不写盘）：回收站目录与原项目目录必须在，账本缺席不算硬失败（归「未分组」）。
@@ -96,7 +97,11 @@ async function memberRestore(
     {
       key: 'dir',
       label: '放回会话目录失败',
-      run: async () => { await deps.fs.rename(trashDir, sessionDir) },
+      run: async () => {
+        // 步骤 tick（只加观测，下同）：搬回目录。
+        writeProgress.step('moving')
+        await deps.fs.rename(trashDir, sessionDir)
+      },
       undo: () => stepUndo('目录退回回收站失败', () => deps.fs.rename(sessionDir, trashDir)),
     },
     // ② 再挂账本（`workspaceId` 缺席 = 没有账本可挂）
@@ -104,6 +109,8 @@ async function memberRestore(
       key: 'workspace' as const,
       label: '挂回账本失败',
       run: async () => {
+        // 挂账本 / 取消归档 / 摘清册行都是「元数据写」，同归 ledger（码不给既有事实造第二个名字）。
+        writeProgress.step('ledger')
         try {
           await deps.host.attach(entry.sessionId, workspaceId)
           attached = true
@@ -123,7 +130,10 @@ async function memberRestore(
       key: 'archive' as const,
       label: '取消归档失败',
       undoOnFailure: true,
-      run: async () => { await deps.host.unarchive(entry.sessionId) },
+      run: async () => {
+        writeProgress.step('ledger')
+        await deps.host.unarchive(entry.sessionId)
+      },
       // 重新归档只认会话：归档是 registry 全局的，与工作区账目无关，这里不传 workspaceId。
       undo: () => stepUndo('重新归档失败', () => deps.host.archive(entry.sessionId)),
     }]),
@@ -131,7 +141,10 @@ async function memberRestore(
     {
       key: 'manifest',
       label: '摘回收站条目失败',
-      run: async () => { await deps.ledger.remove(entry.id) },
+      run: async () => {
+        writeProgress.step('ledger')
+        await deps.ledger.remove(entry.id)
+      },
       undo: () => stepUndo('清册行写回失败', () => deps.ledger.add(entry)),
     },
   ]

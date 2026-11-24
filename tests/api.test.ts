@@ -31,9 +31,10 @@ import { attachmentPathOf } from '../src/trash/attachments.js'
 import type { DeleteDeps } from '../src/deps.js'
 import { AttachmentsUnavailableError, type AttachmentsPort, type ImageAttachmentRefLike } from '../src/ports/attachments-port.js'
 import { restoreSession } from '../src/verbs/restore-session.js'
+import { resetWriteProgress } from '../src/verbs/write-progress.js'
 import { createFakeDeps } from './support/fake-deps.js'
 import { pick } from './support/fixture.js'
-import { trashEntry } from './support/world.js'
+import { holdCalls, trashEntry } from './support/world.js'
 
 const HOME = '/h'
 const NOW = Date.UTC(2026, 8, 30, 13, 5, 0)
@@ -207,6 +208,15 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     expect(status).toBe(200)
     expect(body.ok).toBe(true)
     expect((body.value as TrashEntry[]).map((e) => e.id)).toEqual([entryIdOf('b'), entryIdOf('a')])
+  })
+
+  it('GET /progress 回 200 + 信封，未开写时值就是 {status:idle}', async () => {
+    resetWriteProgress()
+    const { deps } = makeDeps()
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.progress.path)
+    expect(status).toBe(200)
+    expect(body).toEqual({ ok: true, value: { status: 'idle' } })
   })
 
   // 清单**只列父行**：孩子折进父那一行（宿主的客户端本来就藏孩子，回收站里也不单独列——单独列会冒出
@@ -1381,6 +1391,181 @@ describe('路由层 · POST /empty（清空 = 聚合回执，不按条回）', (
     expect(fs.removeDir).toHaveBeenCalledWith(`/h/session-trash/${id}`)
     expect(await manifest.list()).toEqual([])
   })
+
+  // 失败路径的附件泄漏（批尾修正）：执行中途失败不回滚已删目录 ⇒ 批尾必须照走——尾只带走**真删掉**目录的
+  // 独占副本（没删掉的目录仍在剩余引用扫描面里，图片自动保留），失败路径不再泄漏孤儿；原错误照抛。
+  it('/empty 执行中途失败 ⇒ 批尾照走（已删行的独占图清掉、没删的保留），原错误上抛', async () => {
+    const rowA = entry('a')
+    const rowB = entry('b')
+    const dirA = trashDirOf(rowA.id, HOME)
+    const dirB = trashDirOf(rowB.id, HOME)
+    const { deps, fs } = makeDeps({ seed: [rowA, rowB] })
+    const imageA = `sha256:${'a'.repeat(64)}`
+    const imageB = `sha256:${'b'.repeat(64)}`
+    const imageLogOf = (id: string) => zlib.zstdCompressSync(Buffer.from(
+      `${JSON.stringify({ type: 'session', version: 4, id: 'session-x', createdAt: 1, cwd: 'C:/p' })}\n` +
+      `${JSON.stringify({
+        type: 'user/message',
+        time: 2,
+        data: {
+          source: { kind: 'user' },
+          content: [{ type: 'image', attachment: { attachmentId: id, mediaType: 'image/png', bytes: 3, width: 1, height: 1 } }],
+        },
+      })}\n`,
+      'utf8',
+    ))
+    fs.readFile.mockImplementation(async (p: string) => imageLogOf(p === `${dirA}/session.v4.jsonl.zstd` ? imageA : imageB))
+    fs.statFile.mockImplementation(async (p: string) => ({
+      size: p === attachmentPathOf(HOME, 'image', imageA) ? 7 : p === attachmentPathOf(HOME, 'image', imageB) ? 8 : 0,
+    }))
+    // 行 B 删目录抛错：行 A 已经真删（世界落墓碑 ⇒ 它的引用随之消失），B 的目录与引用都还在。
+    const realRemoveDir = fs.removeDir.getMockImplementation()
+    if (realRemoveDir === undefined) throw new Error('假件的 removeDir 必须有实现')
+    fs.removeDir.mockImplementation(async (p: string) => {
+      if (p === dirB) throw new Error('boom')
+      await realRemoveDir(p)
+    })
+    const base = await start(deps)
+    const { body } = await call(base, ROUTES.empty.path, { method: 'POST', body: {} })
+
+    expect(body).toMatchObject({ ok: false, error: { code: 'sessiondelete/io' } })
+    // 尾照走：已删的 A 行独占图随尾清掉；B 没删掉 ⇒ 复核里它的图仍是"剩余引用"，保留。
+    expect(fs.removeFile).toHaveBeenCalledWith(attachmentPathOf(HOME, 'image', imageA))
+    expect(fs.removeFile).not.toHaveBeenCalledWith(attachmentPathOf(HOME, 'image', imageB))
+  })
+})
+
+// 写入进度（GET /progress）随写而动：写在飞时轮询要看得见身份与 k/N；`count` 是纯读、不出进度。
+// 执行用 world 的放行闸挂在半空，`GET /progress` 就能在写在飞途中插进来读。
+describe('路由层 · GET /progress 在写在飞时会动（条目级 tick）', () => {
+  it('purge 一批两条并发在飞：running done:0，放行一条 ⇒ done:1，整批落定 ⇒ idle', async () => {
+    resetWriteProgress()
+    const { deps, fs } = makeDeps({ seed: [entry('a'), entry('b')] })
+    const base = await start(deps)
+    const held = holdCalls(fs.removeDir)
+    const batch = call(base, ROUTES.apply.path, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [entryIdOf('a'), entryIdOf('b')] },
+    })
+    // 波次 1 有界并发：两条互不相交的条目同时走到删目录一步（组间并发、组内串行——串行语义在组里）。
+    await vi.waitFor(() => { expect(held.waiting).toBe(2) })
+    const mid = await call(base, ROUTES.progress.path)
+    // startedAt 是 begin 时刻的快照、逐次跑不同——剥出来判「在场且是数字」；身份与计数逐格钉死，
+    // `step` 不再精确钉（步骤序列归动词测试的序列用例，这里只管 k/N 与身份）。
+    const { startedAt, ...rest } = mid.body.value as Record<string, unknown>
+    expect(rest).toMatchObject({
+      status: 'running',
+      action: 'purge',
+      ids: [entryIdOf('a'), entryIdOf('b')],
+      done: 0,
+      total: 2,
+    })
+    expect(typeof startedAt).toBe('number')
+    held.release()
+    // 放行一条 ⇒ 它收口 tick 一次（done 与「已处理条数」同义）；另一条仍挂在闸上。
+    // 身份（action）与计数在同一次读里钉住：闸上那条还在飞，快照不会先一步落 idle，不必再读一遍。
+    await vi.waitFor(async () => {
+      const snap = await call(base, ROUTES.progress.path)
+      expect(snap.body.value).toMatchObject({ status: 'running', action: 'purge', done: 1, total: 2 })
+    })
+    held.release()
+    await batch
+    const after = await call(base, ROUTES.progress.path)
+    expect(after.body.value).toEqual({ status: 'idle' })
+  })
+
+  it('count 不出进度：/apply count 在飞时 /progress 仍 idle', async () => {
+    resetWriteProgress()
+    const { deps, host } = makeDeps({ seed: [entry('a')] })
+    const base = await start(deps)
+    const held = holdCalls(host.subagentMembersOf)
+    const batch = call(base, ROUTES.apply.path, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'count', [PARAMS.ids]: [entryIdOf('a')] },
+    })
+    await vi.waitFor(() => { expect(held.waiting).toBe(1) })
+    const mid = await call(base, ROUTES.progress.path)
+    expect(mid.body.value).toEqual({ status: 'idle' })
+    held.release()
+    await batch
+  })
+
+  it('顶层失败（清册读不出）也回 idle：进度不是第二本账，失败面另有信封', async () => {
+    resetWriteProgress()
+    const { deps } = makeDeps()
+    deps.ledger.list = async () => { throw new Error('清册读不出') }
+    const base = await start(deps)
+    const { status, body } = await call(base, ROUTES.apply.path, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'purge', [PARAMS.ids]: [entryIdOf('a')] },
+    })
+    expect(status).toBe(200)
+    expect(body.ok).toBe(false)
+    const after = await call(base, ROUTES.progress.path)
+    expect(after.body.value).toEqual({ status: 'idle' })
+  })
+
+  it('empty 也报进度：action:empty、身份是当时行 id、total 是当时行数，落定回 idle', async () => {
+    resetWriteProgress()
+    // deletedAt 拉开：清册 list 按它降序，ids 序就是行序，不必猜稳定排序的边。
+    const { deps, fs } = makeDeps({ seed: [entry('a', { deletedAt: 2 }), entry('b', { deletedAt: 1 })] })
+    const base = await start(deps)
+    const held = holdCalls(fs.removeDir)
+    const batch = call(base, ROUTES.empty.path, { method: 'POST', body: {} })
+    await vi.waitFor(() => { expect(held.waiting).toBe(1) })
+    const mid = await call(base, ROUTES.progress.path)
+    // startedAt 逐次跑不同，剥出来单判；身份与计数（含行 id 序）逐格钉死，`step` 不再精确钉。
+    const { startedAt, ...rest } = mid.body.value as Record<string, unknown>
+    expect(rest).toMatchObject({
+      status: 'running',
+      action: 'empty',
+      ids: [entryIdOf('a'), entryIdOf('b')],
+      done: 0,
+      total: 2,
+    })
+    expect(typeof startedAt).toBe('number')
+    held.release()
+    await vi.waitFor(() => { expect(held.waiting).toBe(1) })
+    // 逐行 tick（/empty 的 k/N 按行）：第一行落定 ⇒ done:1，此刻第二行的删目录正挂着。
+    const mid2 = await call(base, ROUTES.progress.path)
+    expect(mid2.body.value).toMatchObject({ status: 'running', action: 'empty', done: 1, total: 2 })
+    held.release()
+    await batch
+    const after = await call(base, ROUTES.progress.path)
+    expect(after.body.value).toEqual({ status: 'idle' })
+  })
+
+  it('unarchive 也报进度：`/apply` 的写动作统一 begin/finish，逐条 tick（done 是已处理条数）', async () => {
+    resetWriteProgress()
+    const { deps, host } = makeDeps()
+    const base = await start(deps)
+    const held = holdCalls(host.unarchive)
+    const batch = call(base, ROUTES.apply.path, {
+      method: 'POST',
+      body: { [PARAMS.action]: 'unarchive', [PARAMS.ids]: ['session-a', 'session-b'] },
+    })
+    // forEachId 是单条循环：第一条挂在放行闸上时 done 还是 0。
+    await vi.waitFor(() => { expect(held.waiting).toBe(1) })
+    const mid = await call(base, ROUTES.progress.path)
+    const { startedAt, ...rest } = mid.body.value as Record<string, unknown>
+    expect(rest).toMatchObject({
+      status: 'running',
+      action: 'unarchive',
+      ids: ['session-a', 'session-b'],
+      done: 0,
+      total: 2,
+    })
+    expect(typeof startedAt).toBe('number')
+    held.release()
+    await vi.waitFor(() => { expect(held.waiting).toBe(1) })
+    // 第一条收口 tick 一次，此刻第二条正挂着。
+    const mid2 = await call(base, ROUTES.progress.path)
+    expect(mid2.body.value).toMatchObject({ status: 'running', action: 'unarchive', done: 1, total: 2 })
+    held.release()
+    await batch
+    const after = await call(base, ROUTES.progress.path)
+    expect(after.body.value).toEqual({ status: 'idle' })
+  })
 })
 
 // 附件段（2026-10-27）：附件字节。全仓唯一的二进制响应段；读的是宿主附件库
@@ -2139,5 +2324,6 @@ describe('路由层 · 成功信封的值形状过浏览器半判形（wire 单�
       body: { [PARAMS.action]: 'count', [PARAMS.ids]: ['session-a'] },
     }))
     await expectGuarded('empty', call(base, ROUTES.empty.path, { method: 'POST', body: {} }))
+    await expectGuarded('progress', call(base, ROUTES.progress.path))
   })
 })

@@ -10,7 +10,7 @@ import type { ConfigDeps } from './remote.js'
 import type { MaintenanceDeps } from './use-maintenance.js'
 
 export interface SettingsCardsProps {
-  /** 维护六件 + 可调项两件；只造维护六件的测试替身会让「可调项」卡整体缺席。 */
+  /** 维护七件 + 可调项两件；只造维护七件的测试替身会让「可调项」卡整体缺席。 */
   deps: MaintenanceDeps & Partial<ConfigDeps>
   t?: Translate
   /** 宿主 `plugins.bundle.config` 的视图：`summary` 是插件行的一行摘要，两张卡都只属于详情页。 */

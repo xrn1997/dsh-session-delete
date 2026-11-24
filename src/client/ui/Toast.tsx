@@ -13,7 +13,8 @@
  * **砍掉的**：`anchor`（把横幅对齐到某个元素的水平中心——本插件的撤销提示就是窗口居中）、
  * `actions[].prefix`（动作文案前的连接词，本插件只用「撤销」两个字）。**没砍 `text`/`icon`/`tone`/
  * `holdMs`/`actions`/`onDone`**：唯一的调用点这几样都在用。
- * **本插件加的**：`paused`（撤销在飞时冻结停留与淡出，失败原文要落回同一条横幅；官方没有这个开关）。
+ * **本插件加的**：`paused`（撤销在飞时冻结停留与淡出，失败原文要落回同一条横幅；官方没有这个开关）；
+ * `detail`（排在动作按钮之后的副行槽位，撤销横幅放写入进度行，避免块级节点把按钮挤到下一行）。
  */
 import {
   useEffect,
@@ -40,8 +41,10 @@ export interface ToastAction {
 }
 
 export interface ToastProps {
-  /** 已解析好的横幅文案（本地化由调用面负责）。 */
+  /** 已解析好的横幅文案（本地化由调用面负责）。副行走 `detail`，主句保持纯文本。 */
   text: string
+  /** 排在动作按钮之后的副行（如在飞进度行）：主句与行内按钮先落第一行，块级副行另起第二行，不把按钮挤下去。 */
+  detail?: ReactNode
   /** 前导 glyph；`tone="success"` 时被忽略（那一档自带对勾）。 */
   icon?: ReactNode
   tone?: 'success'
@@ -55,7 +58,7 @@ export interface ToastProps {
   onDone: () => void
 }
 
-export function Toast({ text, icon, tone, holdMs = DEFAULT_HOLD_MS, actions, paused = false, onDone }: ToastProps): ReactElement {
+export function Toast({ text, detail, icon, tone, holdMs = DEFAULT_HOLD_MS, actions, paused = false, onDone }: ToastProps): ReactElement {
   const latestOnDone = useRef(onDone)
   useLayoutEffect(() => {
     latestOnDone.current = onDone
@@ -110,6 +113,7 @@ export function Toast({ text, icon, tone, holdMs = DEFAULT_HOLD_MS, actions, pau
             {action.label}
           </button>
         ))}
+        {detail}
       </span>
     </div>,
     document.body,

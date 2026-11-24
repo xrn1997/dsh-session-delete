@@ -7,6 +7,7 @@ import { assertNoLive } from './live-admission.js'
 import { withPresenceTail } from './member-presence.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
 import { moveGroup } from './move-group.js'
+import { writeProgress } from './write-progress.js'
 
 export interface DeleteResult {
   readonly entry: TrashEntry
@@ -116,6 +117,8 @@ async function memberMove(
       key: 'read',
       label: '读取会话现场失败',
       run: async () => {
+        // 步骤 tick（只加观测，下同）：量现场。
+        writeProgress.step('measuring')
         entry.title = await deps.host.titleOf(sessionId)
         entry.sizeBytes = await deps.fs.sizeOfDir(sessionDir)
       },
@@ -123,7 +126,11 @@ async function memberMove(
     ...(workspaceId === undefined ? [] : [{
       key: 'workspace' as const,
       label: '摘账本失败',
-      run: async () => { await deps.host.detach(sessionId, workspaceId) },
+      run: async () => {
+        // 摘账本是「元数据写」，码归 ledger。
+        writeProgress.step('ledger')
+        await deps.host.detach(sessionId, workspaceId)
+      },
       undo: () => stepUndo('账本挂回失败', () => deps.host.attach(sessionId, workspaceId)),
     }]),
     {
@@ -134,10 +141,13 @@ async function memberMove(
       label: '移动会话目录失败',
       undoOnFailure: true,
       run: async () => {
+        writeProgress.step('moving')
         await deps.fs.ensureDir(`${deps.home}/${TRASH_DIR_NAME}`)
         await deps.fs.rename(sessionDir, trashDir)
         moved = true
         try {
+          // 同一步里两格是两个动作点：搬完目录后写清册行前回到 ledger。
+          writeProgress.step('ledger')
           await deps.ledger.add(entry)
         } catch (error) {
           // 这一句的措辞承重（既有上屏原文），所以在这里就地给动词码，不走 journal 的默认折法
@@ -158,9 +168,18 @@ async function memberMove(
   ]
 
   const journal = createJournal(steps)
+  // 步骤 tick 的最后一格 `finishing` 落在 journal run 的收尾、紧邻尾巴的 `memberGone` 之前；
+  // run 没跑完（回滚）就没有「收尾」这一步，失败路不报。纯观测：步骤与反向动作一格不动。
+  const observed: Journal = {
+    async run() {
+      await journal.run()
+      writeProgress.step('finishing')
+    },
+    undo: () => journal.undo(),
+  }
   return {
     entry,
-    journal: withPresenceTail(presence, journal, {
+    journal: withPresenceTail(presence, observed, {
       sessionId,
       // 搬完之后才把「离开可见面」补上：摘活体与如实通告都不抛，且只在完全搬成之后有意义。
       onDone: 'leave',

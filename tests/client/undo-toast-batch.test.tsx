@@ -5,7 +5,7 @@ import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-li
 import { describe, expect, it, vi } from 'vitest'
 import { afterDelete, bindMainView } from '../../src/client/main-view.js'
 import type { RemoteOutcome } from '../../src/client/remote.js'
-import type { ApplyOutcome } from '../../src/shared/wire.js'
+import type { ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
@@ -423,5 +423,43 @@ describe('撤销横幅 · archived 句', () => {
     publishUndoNotice({ entryId: 'e1', title: '标题' })
     render(<UndoToast deps={createFakeRemote()} />)
     expect(screen.queryByText(/撤销后回到「归档」/)).not.toBeInTheDocument()
+  })
+})
+
+// 无框恢复也要看得见进度（`docs/ui-spec.md` §2）：进度行进横幅副行，认领不上只说排队中。
+describe('撤销横幅 · 撤销在飞的进度行', () => {
+  it('撤销在飞时横幅出进度行且排在「撤销」按钮之后（不把按钮挤到第三行）', async () => {
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve }))
+    const progress = vi.fn(async (): Promise<RemoteOutcome<WriteProgressWire>> => remoteOk({
+      status: 'running', action: 'restore', ids: ['e1'], done: 0, total: 1, step: 'moving', startedAt: Date.now(),
+    }))
+    publishUndoNotice({ entryId: 'e1', title: '标题' })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes, progress })} />)
+    const button = screen.getByRole('button', { name: '撤销' })
+    fireEvent.click(button)
+    const line = await screen.findByText(/正在恢复 0\/1 · 移动中/)
+    expect(line).toBeInTheDocument()
+    expect(button.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 秒数在单独的 `aria-hidden` 节点里（不逐秒播报）：整行文本被拆成两段，分开断言。
+    expect(screen.getByText(/已用 \d+ 秒/)).toBeInTheDocument()
+    release(remoteOk(restoreOutcomes(['e1'])))
+    await waitFor(() => expect(screen.queryByText(/正在恢复/)).not.toBeInTheDocument())
+  })
+
+  it('认领不上出「排队中」：另一趟写在飞时横幅不冒领它的 k/N', async () => {
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve }))
+    const progress = vi.fn(async (): Promise<RemoteOutcome<WriteProgressWire>> => remoteOk({
+      status: 'running', action: 'delete', ids: ['zzz'], done: 3, total: 9, step: 'deleting', startedAt: Date.now(),
+    }))
+    publishUndoNotice({ entryId: 'e1', title: '标题' })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes, progress })} />)
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    expect(await screen.findByText('排队中：另一写入进行中…')).toBeInTheDocument()
+    // 别人的 k/N 一个字都不许上屏。
+    expect(screen.queryByText(/3\/9/)).not.toBeInTheDocument()
+    release(remoteOk(restoreOutcomes(['e1'])))
+    await waitFor(() => expect(screen.queryByText(/排队中/)).not.toBeInTheDocument())
   })
 })

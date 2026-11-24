@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { applyActions } from '../src/verbs/batch.js'
 import { deleteSession } from '../src/verbs/delete-session.js'
+import { resetWriteProgress, writeProgress } from '../src/verbs/write-progress.js'
 import { makeEntryId, sessionDirOf, trashDirOf } from '../src/trash/entry.js'
-import { createLogWorld, failureOf, type LogWorldOptions } from './support/world.js'
+import { createLogWorld, expectSteps, failureOf, holdCalls, stepProbe, type LogWorldOptions } from './support/world.js'
 
 const HOME = '/h'
 /** 内存里那第二个 adapter（`tests/support/fake-deps.ts`）之上的一层：世界由声明式读数描述，
@@ -339,5 +341,59 @@ describe('删除动词 · 级联（盘上的孩子一起进回收站）', () => 
     expect(err.details).toMatchObject({ rollbackFailures })
     expect(host.announceRestored).toHaveBeenCalledWith(['session-parent'])
     expect(host.announceRestored).toHaveBeenCalledWith(['session-kidA'])
+  })
+})
+
+// 步骤级 tick（写入进度）：步骤码→动作点的唯一映射住 `src/verbs/write-progress.ts`，这里把它钉成可观察的
+// 序列——放行闸挂在各动作点的替身上，放行点读 `readWriteProgress().step`（不给记录器加测试专用状态）。
+describe('删除动词 · 步骤级 tick', () => {
+  it('measuring（读现场）→ ledger（摘账本）→ moving（搬目录）→ ledger（写清册行）→ finishing（memberGone）', async () => {
+    resetWriteProgress()
+    const { deps: d, host, fs, manifest } = deps()
+    // 假件的 `manifest.add` 不是 `vi.fn`，包一层原实现才挂得上放行闸。
+    const add = vi.fn(manifest.add)
+    manifest.add = add
+    const heldTitle = holdCalls(host.titleOf)
+    const heldDetach = holdCalls(host.detach)
+    const heldRename = holdCalls(fs.rename)
+    const heldAdd = holdCalls(add)
+    const heldEvict = holdCalls(host.evictLive)
+    const { observed, at } = stepProbe()
+    writeProgress.begin('delete', ['session-abc'], 1)
+    const run = deleteSession(d)('session-abc')
+    await at(heldTitle)
+    await at(heldDetach)
+    await at(heldRename)
+    await at(heldAdd)
+    await at(heldEvict)
+    await run
+    writeProgress.finish()
+    expectSteps(observed, ['measuring', 'ledger', 'moving', 'ledger', 'finishing'])
+  })
+})
+
+// 批量删除的预测与实况可以不符：预裁决的「盘上在场」探测只是**调度依据**（carried 挂不挂、谁跟谁串行），
+// 真搬走谁以动词自己的实况读为准。孩子在执行期才出现时：父按实况把它带走一次，后来者回幂等 null——
+// 不双搬（两次 rename 同一个目录会有一条变报错）、不报错。
+describe('批量删除 · 预测与实况不符（执行期才出现的子目录）', () => {
+  const kid = { sessionId: 'session-kid', projectDir: '--p--' }
+
+  it('预测说孩子不在盘上、执行期才出现：不双搬、不报错——预判只管调度，实况为准', async () => {
+    const d = deps({ members: { 'session-parent': [kid] } })
+    // 第一次问（预裁决的盘上在场探测）说不在；之后（动词的实况读）说在。
+    let kidProbes = 0
+    d.fs.exists = vi.fn(async (p: string) => {
+      if (!p.includes('session-kid')) return true
+      kidProbes += 1
+      return kidProbes > 1
+    })
+    const outcomes = await applyActions(d.deps, 'delete', ['session-parent', 'session-kid'])
+    expect(outcomes.map((item) => item.ok)).toEqual([true, true])
+    // 实况把孩子带走了 ⇒ 后来者回幂等 null：不是报错，也不是搬第二次
+    expect(outcomes[1]).toMatchObject({ ok: true, value: null })
+    const kidMoves = d.fs.rename.mock.calls.filter((call) => call.some((p) => p.includes('session-kid')))
+    expect(kidMoves).toHaveLength(1)
+    const rows = await d.manifest.list()
+    expect(rows.filter((row) => row.sessionId === 'session-kid')).toHaveLength(1)
   })
 })

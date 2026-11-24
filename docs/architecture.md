@@ -19,7 +19,7 @@
 ```
 
 - **通道只有一条**：宿主 `connection` 的 exact Fetch 路由，全部段名注册在 `/api/dsh-session-delete-api/*`；Host / Origin / 浏览器认证归宿主 `/api` bridge（ADR-0033）。没有自建前缀与 fallback；支持面是 web UI 与桌面端。
-- **段名只有一张表**（`src/shared/wire.ts` 的 `ROUTES`，每段 `{ path, method, body }`）。十四段：`/ping`、`/list`、`/detail`、`/empty`、`/orphans`、`/attachment`、`/attachment-orphans`、`/attachment-clean`、`/projection-orphans`、`/projection-clean`、`/archive-list`、`/archive-detail`、`/config`、`/apply`。
+- **段名只有一张表**（`src/shared/wire.ts` 的 `ROUTES`，每段 `{ path, method, body }`）。十五段：`/ping`、`/list`、`/detail`、`/empty`、`/orphans`、`/attachment`、`/attachment-orphans`、`/attachment-clean`、`/projection-orphans`、`/projection-clean`、`/archive-list`、`/archive-detail`、`/config`、`/apply`、`/progress`。
 - `/apply` **六个动作**：`delete` / `restore` / `purge` / `count` / `orphan-clean` / `unarchive`；`count` 是纯读，其余五个是写动作。
 - **一组 id 进、逐条结果出**：单条就是长度为 1 的批量。
 - **状态语义**：请求体不对 → 400 + 信封；路径/方法不在路由声明内 → 宿主在 handler 之前回 404；401/403 是宿主鉴权；操作失败回 200 + 信封（浏览器半先解信封再看状态）。信封形状 `{ok:true,value}` / `{ok:false,error:{code,message,details?}}`。
@@ -92,7 +92,9 @@ index.ts  组合根：装配 + exact Fetch 注册
 | 项目目录编码 / 会话目录段编解码 | `src/shared/project-key.ts` · `src/shared/session-path.ts` |
 | 条目 id 与路径闸 / 清册读 / 与目录对账 / storage 域绑定 | `src/trash/entry.ts` · `src/trash/ledger.ts` · `src/trash/reconcile.ts` · `src/trash/storage-manifest.ts` |
 | 组语义 / 收缩视图 / 会话闭包 | `src/trash/groups.ts` · `src/trash/shrinking-view.ts` · `src/domain/closure.ts` |
-| 一批的循环与逐条信封 / 同批已带走集 | `src/verbs/batch.ts` · `src/verbs/batch-carried.ts` |
+| 一批的循环与逐条信封 / 批执行形态（预裁决 → 波次并发 → 第二波补跑） / 同批已带走集 | `src/verbs/batch.ts` · `src/verbs/batch-carried.ts` |
+| 清空回收站的批驱动（`/empty` 的驱动序与失败面） | `src/verbs/empty-batch.ts` |
+| 写入进度记录与步骤 tick 面 | `src/verbs/write-progress.ts` |
 | 成员移动步骤与组回滚 / 离场归位通告 | `src/verbs/member-journal.ts` · `src/verbs/move-group.ts` · `src/verbs/member-presence.ts` |
 | 活体准入判据 | `src/verbs/live-admission.ts` 的 `assertNoLive` |
 | 永久删除的计划与执行 / 清册作用域（purge 拿目标） | `src/verbs/permanent-removal.ts` · `src/verbs/trash-scope.ts` |
@@ -126,6 +128,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 | 提问轨（画 + 补页落位） | `src/client/prompt-rail.tsx` · `src/client/use-prompt-rail.ts` |
 | 首帧快照与详情账本 | `src/client/trash-snapshot.ts` · `src/client/detail-ledger.ts` |
 | 写链 / busy 生命周期 | `src/client/write-seats.ts` · `src/client/busy-gate.ts` |
+| 进度轮询 / 写身份认领 / 进度行 | `src/client/use-write-progress.ts` · `src/client/write-progress.tsx` |
 | 撤销现场与呈现 | `src/client/undo-notices.ts` · `src/client/undo-toast.tsx` |
 | 主视图收尾 / 重开等待 | `src/client/main-view.ts` · `src/client/pending-open.ts` |
 | 维护状态机 / 远程 glue / 呈现 | `src/client/use-maintenance-section.ts` · `src/client/use-maintenance.ts` · `src/client/maintenance-settings.tsx` · `src/client/orphan-maintenance.tsx` |

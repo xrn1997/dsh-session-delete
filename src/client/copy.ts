@@ -298,6 +298,29 @@ const ZH = {
   'dialog.batch.retry': '重试这 {n} 条',
   'undo.movedBatch': '{n} 条会话已移入回收站',
 
+  // 写入进度面（进度行 + 忙碌按钮）：动作键**自带「正在」**——进度行与忙碌按钮共用同一枚键，
+  // 行文只再拼 k/N、步骤与秒数三段（各自独立刷新，整句一个键会让任一段变化都重写整句模板）。
+  // 认领不上只说排队中，别人的 k/N 一个字都不上屏（假进度是反目标，ADR-0069 决定 4）。
+  // `working` 是不走 `/progress` 的确认框（附件 / 投影清理）唯一那句兜底忙碌文案。
+  'progress.action.delete': '正在删除',
+  'progress.action.restore': '正在恢复',
+  'progress.action.purge': '正在彻底删除',
+  'progress.action.unarchive': '正在解除归档',
+  'progress.action.orphanClean': '正在清理孤儿会话',
+  'progress.action.empty': '正在清空回收站',
+  // 步骤短语 = 动作点的进行态（码表住 `shared/wire.ts` 的 `WRITE_PROGRESS_STEPS`）。
+  'progress.step.checking': '检查中',
+  'progress.step.measuring': '测量中',
+  'progress.step.moving': '移动中',
+  'progress.step.ledger': '记账中',
+  'progress.step.deleting': '删除中',
+  'progress.step.attachments': '清理附件中',
+  'progress.step.finishing': '收尾中',
+  'progress.count': '{done}/{total}',
+  'progress.elapsed': '已用 {s} 秒',
+  'progress.queued': '排队中：另一写入进行中…',
+  'progress.working': '正在处理…',
+
   'undo.moved': '{title} 已移入回收站',
   'undo.session': '会话',
   'undo.undo': '撤销',
@@ -585,6 +608,24 @@ const EN: Record<CopyKey, string> = {
   'dialog.batch.title': 'Delete these {n} sessions?',
   'dialog.batch.retry': 'Retry these {n}',
   'undo.movedBatch': '{n} sessions were moved to the trash',
+
+  'progress.action.delete': 'Deleting',
+  'progress.action.restore': 'Restoring',
+  'progress.action.purge': 'Deleting permanently',
+  'progress.action.unarchive': 'Unarchiving',
+  'progress.action.orphanClean': 'Cleaning orphaned sessions',
+  'progress.action.empty': 'Emptying the trash',
+  'progress.step.checking': 'Checking',
+  'progress.step.measuring': 'Measuring',
+  'progress.step.moving': 'Moving',
+  'progress.step.ledger': 'Updating records',
+  'progress.step.deleting': 'Deleting',
+  'progress.step.attachments': 'Cleaning attachments',
+  'progress.step.finishing': 'Finishing',
+  'progress.count': '{done}/{total}',
+  'progress.elapsed': '{s}s elapsed',
+  'progress.queued': 'Queued: another write is in progress…',
+  'progress.working': 'Processing…',
 
   'undo.moved': '{title} was moved to the trash',
   'undo.session': 'the session',

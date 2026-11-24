@@ -13,7 +13,7 @@ import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import type { RemoteOutcome } from '../../src/client/remote.js'
-import type { ApplyOutcome } from '../../src/shared/wire.js'
+import type { ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 
 
@@ -65,6 +65,25 @@ describe('批量确认框', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '取消' })).toBeDisabled())
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
     expect(screen.getByRole('dialog')).toBeInTheDocument()
+    release(remoteOk(deleteOutcomes(['a'])))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  it('写在飞时框内出进度行：按钮换动作文案，/progress 的 running 帧按写身份认领', async () => {
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      if (action === 'count') return remoteOk(countOutcomes(ids))
+      return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve })
+    })
+    const progress = vi.fn(async (): Promise<RemoteOutcome<WriteProgressWire>> => remoteOk({
+      status: 'running', action: 'delete', ids: ['a'], done: 1, total: 2, step: 'ledger', startedAt: Date.now(),
+    }))
+    requestDeleteBatch([{ sessionId: 'a', title: 'A' }])
+    render(<BatchConfirmHost deps={createFakeRemote({ applyOutcomes, progress })} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
+    // 忙碌面两件一起上：主按钮换 spinner + 动作文案，框内正文出认领到的 k/N 进度行。
+    expect(await screen.findByRole('button', { name: '正在删除' })).toBeDisabled()
+    expect(await screen.findByRole('status')).toHaveTextContent(/正在删除 1\/2 · 记账中 · 已用 \d+ 秒/)
     release(remoteOk(deleteOutcomes(['a'])))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })

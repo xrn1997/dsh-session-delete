@@ -120,6 +120,10 @@ describe('路由表 · 段名表逐行', () => {
     expect(routeOf(ROUTES.projectionOrphans.path)?.purity).toBe('pure')
   })
 
+  it('纯度：`progress` 是纯读——写在飞时它仍要立刻回，不进到达序链', () => {
+    expect(routeOf(ROUTES.progress.path)?.purity).toBe('pure')
+  })
+
   it('纯度：`apply` 里只有 count 是纯读，其余五个动作都进链', () => {
     const purity = routeOf(ROUTES.apply.path)?.purity
     expect(typeof purity).toBe('function')

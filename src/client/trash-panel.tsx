@@ -192,6 +192,7 @@ export function TrashPanel({ deps, t = zhTranslate }: TrashPanelProps) {
 
       {trashTab.controller.pending === null ? null : (
         <TrashConfirm
+          deps={deps}
           pending={trashTab.controller.pending}
           restoreEntries={trashTab.controller.pendingEntries}
           busy={trashTab.controller.busy}

@@ -16,7 +16,7 @@ import { groupByProject } from '../../src/client/trash-view.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { BusyGate } from '../../src/client/busy-gate.js'
 import type { ArchiveQuery } from '../../src/client/use-archive-query.js'
-import type { ApplyAction, ApplyOutcome } from '../../src/shared/wire.js'
+import type { ApplyAction, ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import type { ArchiveDetailLike, RemoteOutcome, SessionDeleteRemote } from '../../src/client/remote.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
 import { remoteOk } from './support/fake-remote.js'
@@ -77,7 +77,11 @@ function mountController(
         ? failed(action, id, '解除归档失败')
         : ok('unarchive', id, 1))),
     }))
-  const deps: Pick<SessionDeleteRemote, 'archiveDetail' | 'applyOutcomes'> = { archiveDetail, applyOutcomes }
+  const deps: Pick<SessionDeleteRemote, 'archiveDetail' | 'applyOutcomes' | 'progress'> = {
+    archiveDetail,
+    applyOutcomes,
+    progress: async () => remoteOk<WriteProgressWire>({ status: 'idle' }),
+  }
   const view = renderHook(({ rows, active }: { rows: readonly ArchiveRowWire[]; active?: boolean }) => {
     const groups = groupByProject(rows, zhTranslate, {
       timeOf: (r) => r.updatedAt ?? 0,

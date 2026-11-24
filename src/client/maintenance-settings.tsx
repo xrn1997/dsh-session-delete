@@ -194,6 +194,7 @@ function AttachmentConfirm({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('maintenance.attachments.clean')}
       busy={busy}
+      busyLabel={t('progress.working')}
       onCancel={onCancel}
       onConfirm={onConfirm}
       danger
@@ -267,6 +268,7 @@ function ProjectionConfirm({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('maintenance.projection.clean')}
       busy={busy}
+      busyLabel={t('progress.working')}
       onCancel={onCancel}
       onConfirm={onConfirm}
     >
@@ -279,7 +281,7 @@ function ProjectionConfirm({
 }
 
 export interface MaintenanceSettingsProps {
-  /** 维护六件（三段读数与动作）；可调项两件由占用者另发给「可调项」卡。 */
+  /** 维护七件（三段读数与动作 + 进度认领那一读）；可调项两件由占用者另发给「可调项」卡。 */
   deps: MaintenanceDeps
   /** 文案（缺省 = 内置 zh；宿主 locale 服务缺席时也是它，见 `copy.ts`）。 */
   t?: Translate
@@ -302,7 +304,7 @@ export function MaintenanceSettings({ deps, t = zhTranslate }: MaintenanceSettin
         onScan={() => void maintenance.orphans.scan()}
         t={t}
       >
-        <OrphanMaintenance section={maintenance.orphans} t={t} />
+        <OrphanMaintenance section={maintenance.orphans} deps={deps} t={t} />
         {/* 孤儿会话清理也会顺带清掉会话独占的图片副本：回执那半份读数单独一行，句子与孤儿附件段同一套。 */}
         <Notice message={maintenance.orphans.secondaryNotice} gapBelow />
       </MaintenanceSection>

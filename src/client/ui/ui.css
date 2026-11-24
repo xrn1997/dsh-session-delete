@@ -27,7 +27,7 @@
  * 折叠头那一半（没有 `data-state` 那档状态点）、宽度把手的视觉与光标。**没抄进来的就是本插件不用的**，
  * 不预先铺开——宿主那套里还有几十个变体与控件，抄全了等于把它的表面积整个搬进来。
  *
- * **七处不是抄本**：① `.sd-resizing`（拖动期间挂在面板根上、关掉文字选中）——宿主那份没有对应的类，
+ * **九处不是抄本**：① `.sd-resizing`（拖动期间挂在面板根上、关掉文字选中）——宿主那份没有对应的类，
  * 它的把手由 JS 侧的 pointer capture 承担；② `.sd-session-row:focus-visible`
  * （清单那一行的键盘焦点描边，复用选中态那枚 `ghost-active-border`；认 `session-list.tsx` 的
  * 类名而不是档位的 `data-*` 值）——宿主那套表里行不是可聚焦
@@ -40,13 +40,16 @@
  * ⑥ `.sd-batch-pick-leading`（同日）——宿主行首那格只给 16×20，勾选框要一层 inline-flex 包装才压得回
  * 同样大小，官方没有这层包装；⑦ `.sd-toast-action:disabled`（2026-11-01）——撤销横幅在飞时那颗动作要
  * 看着就按不动，官方 Toast 的 action 没有禁用档，而我们这份自带 `color`、浏览器默认置灰不生效，
- * 档位与③的禁用档同源（`opacity` + `not-allowed`）。
- * 整张表里就这七条是我们自造的，标在这里，
+ * 档位与③的禁用档同源（`opacity` + `not-allowed`）；⑧ `.sd-spinner`（2026-11-23）——忙碌主按钮
+ * 那枚转圈，宿主控件表里没有这件东西（配套的 `sd-spin` 旋转与 reduced-motion 关动画见该规则的注）；
+ * ⑨ `.sd-modal-close[aria-disabled='true']`（2026-11-24）——忙碌确认框的关闭钮保留焦点但声明不可关闭，
+ * 官方 Modal 没有这档禁用视觉，字色与光标明确表达它当前按不动。
+ * 整张表里就这九条是我们自造的，标在这里，
  * 下次做「与官方逐条比对」时它属于**已知差异**，不是漂移。
  *
  * **还有一处系统性改写不算抄本差异**：抄来的每条规则里，配色与几何的 token 引用都走下面那层
  * `--sd-*` 别名（本插件新增的一层间接）。逐属性比对时按「别名 → 它引用/兜底的那枚 `--dsw-*`」还原
- * 之后再比；这一层不新造颜色、只加兜底，也不重复计入上面七条。
+ * 之后再比；这一层不新造颜色、只加兜底，也不重复计入上面九条。
  *
  * **另有一处已知差异不住在本文件**：回收站组头那颗按钮的整套 UA reset。宿主 `DisclosureRow` 那份是
  * `div`，没有这个坑；我们这行要做成可点的 `<button>`，UA 样式表会把背景、边框、内距、字体、居中与
@@ -200,6 +203,33 @@ body {
   justify-content: center;
 }
 
+/* 本插件自造的第八条（不是抄本，见文件头点名）：忙碌主按钮那枚转圈（2026-11-23）。宿主控件表里
+   没有 spinner 这件东西，整条自造：描边跟按钮字色走（`currentColor`，深浅两档按钮都读得清），
+   转动是纯 transform 动画；`prefers-reduced-motion` 下关掉动画，静态圆环仍说明「在忙」。 */
+.sd-spinner {
+  display: inline-block;
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: sd-spin 0.8s linear infinite;
+}
+
+@keyframes sd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sd-spinner {
+    animation: none;
+  }
+}
+
 /* ────────────────────────── Tag ────────────────────────── */
 
 /* 胶囊几何固定：一个 tag 在哪里都是同一个尺寸，只有色板随 tone 走。 */
@@ -321,8 +351,14 @@ body {
   color: var(--dsw-alias-label-secondary);
 }
 
-.sd-modal-close:hover {
+.sd-modal-close:not([aria-disabled="true"]):hover {
   background: var(--sd-interactive-bg-hover);
+}
+
+/* 本插件自造的第九条（不是抄本，见文件头点名）：忙碌确认框的关闭钮保留焦点，但明确不可关闭。 */
+.sd-modal-close[aria-disabled="true"] {
+  cursor: default;
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .sd-modal-body {

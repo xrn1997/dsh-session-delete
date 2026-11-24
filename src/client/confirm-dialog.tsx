@@ -17,6 +17,8 @@ export interface ConfirmDialogProps {
   readonly onConfirm: () => void
   /** 危险层级：实心红主按钮；缺省是普通 primary（与「移入回收站」同款）。 */
   readonly danger?: boolean
+  /** 忙碌面的动作文案：busy 时主按钮换 `.sd-spinner` + 这句（缺省时维持现状，只置灰）。 */
+  readonly busyLabel?: string
   readonly children?: ReactNode
 }
 
@@ -29,6 +31,7 @@ export function ConfirmDialog({
   onCancel,
   onConfirm,
   danger = false,
+  busyLabel,
   children,
 }: ConfirmDialogProps): ReactNode {
   // 关框规则各框共用一条（ADR-0052）：写入在飞时取消与关闭都拦住——框先消失而写还在跑，
@@ -43,6 +46,7 @@ export function ConfirmDialog({
       onClose={close}
       title={title}
       closeLabel={closeLabel}
+      busy={busy}
       footer={
         <>
           <Button variant="outline" disabled={closeDisabled} onClick={close}>
@@ -54,7 +58,14 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={onConfirm}
           >
-            {confirmLabel}
+            {busy && busyLabel !== undefined ? (
+              <>
+                <span className="sd-spinner" aria-hidden="true" />
+                {busyLabel}
+              </>
+            ) : (
+              confirmLabel
+            )}
           </Button>
         </>
       }

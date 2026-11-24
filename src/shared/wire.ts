@@ -51,6 +51,8 @@ export const ROUTES = {
    *  目标自己仍在归档集，**或**目标是 `rootSessionId` 那条已归档会话的 subagent 闭包成员；
    *  不是通用会话正文通道。 */
   archiveDetail: { path: '/archive-detail', method: 'POST', body: 'sessionId' },
+  /** 纯读：在飞写入的进度快照（`idle` = 没写在飞）；写在飞时轮询也要立刻回，不进到达序链。 */
+  progress: { path: '/progress', method: 'GET', body: 'none' },
 } as const
 
 /** 段名 → 那一段的路径；类型闸与运行期键集比对都跟着这张表走。 */
@@ -90,6 +92,29 @@ export type ApplyOutcome = { id: string } & {
     | { action: A; ok: true; value: ApplyValueByAction[A] }
     | { action: A; ok: false; error: RemoteFailure }
 }[ApplyAction]
+
+/** 写入进度报的是哪些动作：写动作 + `/empty`（`count` 是纯读，不报进度）。
+ *  身份就按 `action` + `ids` 认领，请求形状不必为进度改。 */
+export type WriteProgressAction = Exclude<ApplyAction, 'count'> | 'empty'
+
+/** 写入进度的步骤码（渲染文案归浏览器半，码只住这一处）。**码只表达动作点**：步骤码→动作点的唯一映射
+ *  住 `src/verbs/write-progress.ts`，没有动作点的码不上册（`resuming` 就这样收窄掉——冷 resume 归宿主）。 */
+export const WRITE_PROGRESS_STEPS = ['checking', 'measuring', 'moving', 'ledger', 'deleting', 'attachments', 'finishing'] as const
+export type WriteProgressStep = (typeof WRITE_PROGRESS_STEPS)[number]
+
+/** `GET /progress` 的线上形状：没写在飞是 `idle`；在飞是那趟写的快照（身份、k/N、步骤、起始时刻）。
+ *  生命周期随进程：宿主重启天然回 `idle`，不留残留。 */
+export type WriteProgressWire =
+  | { readonly status: 'idle' }
+  | {
+      readonly status: 'running'
+      readonly action: WriteProgressAction
+      readonly ids: readonly string[]
+      readonly done: number
+      readonly total: number
+      readonly step: WriteProgressStep
+      readonly startedAt: number
+    }
 
 /** 清册那一行的线上形状：字段清单住 `TRASH_ENTRY_SCHEMA`（判形与类型同源）。 */
 export type TrashEntryWire = Infer<typeof TRASH_ENTRY_SCHEMA>
@@ -675,6 +700,46 @@ function isApplyOutcomeValue(value: unknown): boolean {
   return isApplyActionValue(value.action) && APPLY_VALUE_SCHEMAS[value.action].check(value.value)
 }
 
+/** 构造面的按动作收窄（`ApplyOutcome` 的辅助判别）：`Extract` 那格是条件类型，泛型装配的字面量
+ *  TS 证不过它——收窄统一走这一枚谓词（装配即验），装配处不留窄化断言。信封判形复用
+ *  `isApplyOutcomeValue`，形状不在这里抄第二份。 */
+export function isApplyOutcomeOf<A extends ApplyAction>(
+  value: unknown,
+  action: A,
+): value is Extract<ApplyOutcome, { action: A }> {
+  return isRecordValue(value) && value.action === action && isApplyOutcomeValue(value)
+}
+
+/** 写入进度的动作在册：`empty` 归 `/empty`，其余是 `/apply` 的写动作（`count` 纯读不报进度）。
+ *  在册判据复用 `isApplyActionValue`，动作名单不在这里抄第二份。 */
+function isWriteProgressActionValue(value: unknown): value is WriteProgressAction {
+  return value === 'empty' || (isApplyActionValue(value) && value !== 'count')
+}
+
+/** 步骤码在册：名单住 `WRITE_PROGRESS_STEPS`。 */
+function isWriteProgressStepValue(value: unknown): value is WriteProgressStep {
+  return typeof value === 'string' && (WRITE_PROGRESS_STEPS as readonly string[]).includes(value)
+}
+
+function isSafeNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+/** 写入进度（`WriteProgressWire`）的判形：遥测快照不走 `/apply` 值那套 schema DSL，
+ *  与 `list`/`ping` 同法手写——只校判别键与渲染必读的那几格。 */
+export function isWriteProgressWire(value: unknown): value is WriteProgressWire {
+  if (!isRecordValue(value)) return false
+  if (value.status === 'idle') return true
+  if (value.status !== 'running') return false
+  return isWriteProgressActionValue(value.action)
+    && isStringArrayValue(value.ids)
+    && isSafeNonNegativeInteger(value.done)
+    && isSafeNonNegativeInteger(value.total)
+    && value.done <= value.total
+    && isWriteProgressStepValue(value.step)
+    && isSafeNonNegativeInteger(value.startedAt)
+}
+
 /** 段名表逐段的 JSON 值判形（`src/client/remote.ts` 的成功支只在这里问一次）。 */
 export const WIRE_VALUE_GUARDS: Record<JsonRouteName, WireValueGuard> = {
   list: (value) => Array.isArray(value) && value.every((row) => isRecordValue(row) && isTrashRowFields(row)),
@@ -705,4 +770,5 @@ export const WIRE_VALUE_GUARDS: Record<JsonRouteName, WireValueGuard> = {
       || (Array.isArray(value.subagents) && value.subagents.every((child) => isRecordValue(child) && isArchiveChildFields(child))))
     && isOptionalNumberValue(value.subagentsTotal)
     && isOptionalNumberValue(value.subagentsSizeBytes),
+  progress: isWriteProgressWire,
 }

@@ -15,17 +15,19 @@ import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import type { EvictionOutcome } from '../src/ports/host-port.js'
 import { sessionDirForId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
-import { attachmentPathOf } from '../src/trash/attachments.js'
+import { attachmentPathOf, planBatchImageAttachmentRemoval } from '../src/trash/attachments.js'
 import { visibleGroups } from '../src/trash/groups.js'
 import { verbError } from '../src/errors.js'
 import {
+  executeAttachmentTail,
   executeRemoval,
   planOrphanRemoval,
   planTrashRemoval,
   planVisibleTrash,
   type RemovalPlan,
 } from '../src/verbs/permanent-removal.js'
-import { createLogWorld, failureOf, trashEntry } from './support/world.js'
+import { readWriteProgress, resetWriteProgress, writeProgress } from '../src/verbs/write-progress.js'
+import { createLogWorld, expectSteps, failureOf, holdCalls, stepProbe, trashEntry } from './support/world.js'
 
 const HOME = '/h'
 
@@ -104,11 +106,6 @@ const imageLog = () => zlib.zstdCompressSync(Buffer.from(
   })}\n`,
   'utf8',
 ))
-
-/** 计划里没有可清的附件（空计划、无 `skipped`）。 */
-const NO_ATTACHMENTS = { entries: [], bytes: 0 } as const
-/** 执行器一个附件都没碰的回执。 */
-const NOTHING_CLEANED = { removed: 0, freedBytes: 0, failed: 0 } as const
 
 /** `exists` 与 `sizeOfDir` 之间目录消失时 Node 抛的那种错误（判据只看 `code`）。 */
 function enoent(path: string): Error {
@@ -466,7 +463,8 @@ describe('planTrashRemoval：purge 的删除计划', () => {
       members: [],
       unarchive: ['session-a', 'session-k'],
       bytes: 140,
-      attachments: NO_ATTACHMENTS,
+      // 本组被删目录（附件候选来源）：批扫描的输入。
+      attachmentDirs: [trashDirOf(root.id, HOME), trashDirOf(kid.id, HOME)],
     })
     expect(deps.host.subagentMembersOf).toHaveBeenCalledTimes(1)
     expect(deps.host.subagentMembersOf).toHaveBeenCalledWith(['session-a', 'session-k'])
@@ -630,7 +628,8 @@ describe('planOrphanRemoval：orphan-clean 的删除计划', () => {
       members: [{ sessionId: 'session-root', dir: presentDir, bytes: 300, workspaceId: 'ws-1' }],
       unarchive: ['session-root', 'session-gone'],
       bytes: 300,
-      attachments: NO_ATTACHMENTS,
+      // 目录缺席的成员不进附件候选来源（没有日志可扫）。
+      attachmentDirs: [presentDir],
     })
     expect(deps.host.isLive).toHaveBeenCalledTimes(2)
     expect(deps.host.isLive).toHaveBeenCalledWith('session-root')
@@ -665,13 +664,13 @@ describe('planOrphanRemoval：orphan-clean 的删除计划', () => {
 
     const plan = await planOrphanRemoval(deps, [])
 
-    expect(plan).toEqual({ kind: 'orphan', trash: [], members: [], unarchive: [], bytes: 0, attachments: NO_ATTACHMENTS })
+    expect(plan).toEqual({ kind: 'orphan', trash: [], members: [], unarchive: [], bytes: 0, attachmentDirs: [] })
     expect(deps.host.isLive).not.toHaveBeenCalled()
   })
 })
 
 describe('附件连带清理：独占图片', () => {
-  it('purge 计划带上独占图片；执行在删目录之后删对象', async () => {
+  it('组计划吐被删目录，批计划带上独占图片；执行在删目录之后删对象', async () => {
     const root = entry('session-a')
     const dir = trashDirOf(root.id, HOME)
     const made = world({ rows: [root], sizes: { [dir]: 100 }, logMethods: [] })
@@ -688,19 +687,18 @@ describe('附件连带清理：独占图片', () => {
     made.fs.removeFile.mockImplementation(async (p: string) => { calls.push(`removeFile:${p}`) })
 
     const plan = await planTrashRemoval(made.deps, [root], [root])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: root.id, dirs: plan.attachmentDirs }])
     const stats = await executeRemoval(made.deps, plan)
+    const tail = await executeAttachmentTail(made.deps, batch)
 
-    expect(plan.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+    expect(batch.plan.entries.map((item) => item.id)).toEqual([IMAGE])
     expect(calls).toEqual([`removeDir:${dir}`, `removeFile:${imagePath(IMAGE)}`])
-    // 附件字节不进 freedBytes：那是会话目录的释放量，附件读数单独走回执的 attachments。
-    expect(stats).toEqual({
-      removed: 1,
-      freedBytes: 100,
-      attachments: { removed: 1, freedBytes: 7, failed: 0 },
-    })
+    // 附件字节不进 freedBytes：那是会话目录的释放量，附件读数单独走批尾的回执。
+    expect(stats).toEqual({ removed: 1, freedBytes: 100 })
+    expect(tail.run).toEqual({ removed: 1, freedBytes: 7, failed: 0 })
   })
 
-  it('共享图片被剩余会话引用 ⇒ 计划为空', async () => {
+  it('共享图片被剩余会话引用 ⇒ 批计划为空', async () => {
     const root = entry('session-a')
     const dir = trashDirOf(root.id, HOME)
     const sessionRoot = `${HOME}/sessions`
@@ -713,14 +711,15 @@ describe('附件连带清理：独占图片', () => {
     made.fs.readFile.mockImplementation(async () => imageLog())
 
     const plan = await planTrashRemoval(made.deps, [root], [root])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: root.id, dirs: plan.attachmentDirs }])
 
-    expect(plan.attachments.entries).toEqual([])
+    expect(batch.plan.entries).toEqual([])
     // 有剩余引用是**判定出来**的共享，不是读不出：不置 skipped（上屏的提示半句不出现）。
-    expect(plan.attachments.skipped).toBeUndefined()
+    expect(batch.plan.skipped).toBeUndefined()
   })
 
   // 计划之后、删对象之前新增的引用必须保住对象：计划是数据、会过期（ADR-0041）。
-  it('计划之后另一个会话引用同一张图 ⇒ 执行时复核剔除，对象不删', async () => {
+  it('计划之后另一个会话引用同一张图 ⇒ 尾复核剔除，对象不删', async () => {
     const root = entry('session-a')
     const dir = trashDirOf(root.id, HOME)
     const sessionRoot = `${HOME}/sessions`
@@ -733,7 +732,8 @@ describe('附件连带清理：独占图片', () => {
       p === `${dir}/session.v4.jsonl.zstd` ? imageLog() : Buffer.alloc(0))
     made.fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath(IMAGE) ? 7 : 0 }))
     const plan = await planTrashRemoval(made.deps, [root], [root])
-    expect(plan.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: root.id, dirs: plan.attachmentDirs }])
+    expect(batch.plan.entries.map((item) => item.id)).toEqual([IMAGE])
 
     // 计划之后：另一个会话也引用了同一张图（内容寻址 ⇒ 同一个 sha256 id）。
     made.fs.listDirs.mockImplementation(async (p: string) =>
@@ -743,14 +743,18 @@ describe('附件连带清理：独占图片', () => {
     made.fs.readFile.mockImplementation(async () => imageLog())
 
     const stats = await executeRemoval(made.deps, plan)
+    const tail = await executeAttachmentTail(made.deps, batch)
 
     expect(made.fs.removeFile).not.toHaveBeenCalled()
-    expect(stats.attachments).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(stats).toEqual({ removed: 1, freedBytes: 100 })
+    // 复核剔除的对象不进任何组读数（没删就没读数）。
+    expect(tail.run).toEqual({ removed: 0, freedBytes: 0, failed: 0 })
+    expect([...tail.byGroupRun]).toEqual([])
   })
 
   // 复核必须排在删目录之后：被删目录自己的引用在那时已经不在了，扫到的才是真正的剩余。
   // 复核若提前，目录里的引用会把候选全判成共享，这一趟就白留一个孤儿（ADR-0041）。
-  it('执行期复核在删目录之后：被删目录自己的引用不再算剩余', async () => {
+  it('批尾复核在删目录之后：被删目录自己的引用不再算剩余', async () => {
     const root = entry('session-a')
     const dir = trashDirOf(root.id, HOME)
     const made = world({ rows: [root], sizes: { [dir]: 100 } })
@@ -762,15 +766,19 @@ describe('附件连带清理：独占图片', () => {
     made.fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath(IMAGE) ? 7 : 0 }))
 
     const plan = await planTrashRemoval(made.deps, [root], [root])
-    expect(plan.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: root.id, dirs: plan.attachmentDirs }])
+    expect(batch.plan.entries.map((item) => item.id)).toEqual([IMAGE])
 
     const stats = await executeRemoval(made.deps, plan)
+    const tail = await executeAttachmentTail(made.deps, batch)
 
     expect(made.fs.removeFile).toHaveBeenCalledWith(imagePath(IMAGE))
-    expect(stats.attachments).toEqual({ removed: 1, freedBytes: 7, failed: 0 })
+    expect(stats).toEqual({ removed: 1, freedBytes: 100 })
+    expect(tail.run).toEqual({ removed: 1, freedBytes: 7, failed: 0 })
+    expect(tail.byGroupRun.get(root.id)).toEqual({ removed: 1, freedBytes: 7, failed: 0 })
   })
 
-  it('剩余清册行引用同一图片 ⇒ 计划为空、不置 skipped', async () => {
+  it('剩余清册行引用同一图片 ⇒ 批计划为空、不置 skipped', async () => {
     const target = entry('session-a')
     const remaining = entry('session-b')
     const targetDir = trashDirOf(target.id, HOME)
@@ -787,15 +795,16 @@ describe('附件连带清理：独占图片', () => {
     }))
 
     const plan = await planTrashRemoval(made.deps, [target, remaining], [target])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: target.id, dirs: plan.attachmentDirs }])
 
     // 不删的那一行仍算剩余引用源（附件域扫整个 session-trash，排除本次被删目录）：图片保留、不跳过。
     expect(made.fs.listFiles).toHaveBeenCalledWith(remainingDir)
-    expect(plan.attachments.entries).toEqual([])
-    expect(plan.attachments.skipped).toBeUndefined()
+    expect(batch.plan.entries).toEqual([])
+    expect(batch.plan.skipped).toBeUndefined()
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
-  it('剩余引用源读不出 ⇒ 空计划 + skipped，会话删除仍然成功', async () => {
+  it('剩余引用源读不出 ⇒ 空批计划 + skipped，会话删除仍然成功', async () => {
     const root = entry('session-a')
     const dir = trashDirOf(root.id, HOME)
     const sessionRoot = `${HOME}/sessions`
@@ -811,13 +820,16 @@ describe('附件连带清理：独占图片', () => {
     })
 
     const plan = await planTrashRemoval(made.deps, [root], [root])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: root.id, dirs: plan.attachmentDirs }])
     const stats = await executeRemoval(made.deps, plan)
+    const tail = await executeAttachmentTail(made.deps, batch)
 
-    expect(plan.attachments).toMatchObject({ entries: [], bytes: 0 })
-    expect(plan.attachments.skipped).toMatch(/无法证明独占/)
+    expect(batch.plan).toMatchObject({ entries: [], bytes: 0 })
+    expect(batch.plan.skipped).toMatch(/无法证明独占/)
     expect(stats).toMatchObject({ removed: 1, freedBytes: 100 })
-    expect(stats.attachments).toMatchObject({ removed: 0, freedBytes: 0, failed: 0 })
-    expect(stats.attachments.skipped).toBe(plan.attachments.skipped)
+    // skipped 原文从计划一路带到尾的回执（fail-closed 的用户可见落点）。
+    expect(tail.run).toMatchObject({ removed: 0, freedBytes: 0, failed: 0 })
+    expect(tail.run.skipped).toBe(batch.plan.skipped)
     expect(made.fs.removeDir).toHaveBeenCalledWith(dir)
     expect(await made.manifest.list()).toEqual([])
   })
@@ -838,10 +850,12 @@ describe('附件连带清理：独占图片', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     try {
       const plan = await planTrashRemoval(made.deps, [root], [root])
+      const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: root.id, dirs: plan.attachmentDirs }])
       const stats = await executeRemoval(made.deps, plan)
+      const tail = await executeAttachmentTail(made.deps, batch)
 
       expect(stats).toMatchObject({ removed: 1, freedBytes: 100 })
-      expect(stats.attachments).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      expect(tail.run).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
       expect(made.fs.removeDir).toHaveBeenCalledWith(dir)
       expect(await made.manifest.list()).toEqual([])
       expect(warn).toHaveBeenCalledTimes(1)
@@ -865,13 +879,167 @@ describe('附件连带清理：独占图片', () => {
     }))
 
     const exclusive = await planOrphanRemoval(made.deps, [member('session-root')])
-    expect(exclusive.attachments.entries.map((item) => item.id)).toEqual([IMAGE])
+    const exclusiveBatch = await planBatchImageAttachmentRemoval(made.deps, [{ id: 'root', dirs: exclusive.attachmentDirs }])
+    expect(exclusiveBatch.plan.entries.map((item) => item.id)).toEqual([IMAGE])
 
     // 清册行所在的目录也是剩余引用源：把它列出来，扫描就会读它并保留 IMAGE。
     made.fs.listDirs.mockImplementation(async (p: string) => p === '/h/session-trash' ? [row.id] : [])
     const shared = await planOrphanRemoval(made.deps, [member('session-root')])
-    expect(shared.attachments.entries).toEqual([])
-    expect(shared.attachments.skipped).toBeUndefined()
+    const sharedBatch = await planBatchImageAttachmentRemoval(made.deps, [{ id: 'root', dirs: shared.attachmentDirs }])
+    expect(sharedBatch.plan.entries).toEqual([])
+    expect(sharedBatch.plan.skipped).toBeUndefined()
+  })
+})
+
+// ADR-0070 / ADR-0041：附件尾提到批级之后，尾只带走**真删掉的目录**的独占副本——
+// 失败组没删掉的目录仍在剩余引用扫描面里，它的独占图片必须留下（附件红线「附件只随永久删除清」）；
+// 复核（ADR-0041）与删除的顺序照旧：先复核后删，一格不换。
+describe('批级附件尾：只带走真删掉的目录的独占副本', () => {
+  const IMAGE_B = `sha256:${'b'.repeat(64)}`
+  /** 按 id 出图的会话日志（与 `imageLog` 同形状，id 由用例点名，可多张）。 */
+  const logWith = (...ids: string[]) => zlib.zstdCompressSync(Buffer.from(
+    `${JSON.stringify({ type: 'session', version: 4, id: 'session-x', createdAt: 1, cwd: 'C:/p' })}\n` +
+    `${JSON.stringify({
+      type: 'user/message',
+      time: 2,
+      data: {
+        source: { kind: 'user' },
+        content: ids.map((id) => ({ type: 'image', attachment: { attachmentId: id, mediaType: 'image/png', bytes: 3, width: 1, height: 1 } })),
+      },
+    })}\n`,
+    'utf8',
+  ))
+
+  it('失败组没删掉的目录里的独占图片不许被批尾清掉；成功组删掉的照清', async () => {
+    const rowA = entry('session-a')
+    const rowB = entry('session-b')
+    const dirA = trashDirOf(rowA.id, HOME)
+    const dirB = trashDirOf(rowB.id, HOME)
+    const made = world({ rows: [rowA, rowB], sizes: { [dirA]: 100, [dirB]: 40 }, logMethods: [] })
+    // 盘上引用源 = 这两条回收站目录（各引用一张独占图）；目录删掉引用才消失。
+    const logs: Record<string, string> = {
+      [`${dirA}/session.v4.jsonl.zstd`]: IMAGE,
+      [`${dirB}/session.v4.jsonl.zstd`]: IMAGE_B,
+    }
+    let deleted = ''
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === `${HOME}/session-trash` ? [rowA.id, rowB.id].filter((id) => `${HOME}/session-trash/${id}` !== deleted) : [])
+    made.fs.listFiles.mockImplementation(async (p: string) => (logs[`${p}/session.v4.jsonl.zstd`] === undefined ? [] : ['session.v4.jsonl.zstd']))
+    made.fs.readFile.mockImplementation(async (p: string) => logWith(logs[p] ?? IMAGE))
+    made.fs.statFile.mockImplementation(async (p: string) => ({
+      size: p === imagePath(IMAGE) ? 7 : p === imagePath(IMAGE_B) ? 8 : 0,
+    }))
+    made.fs.removeDir.mockImplementation(async (p: string) => {
+      // 组 A：删目录抛错 ⇒ 目录还在；组 B：真删掉。
+      if (p === dirA) throw new Error('boom')
+      deleted = p
+    })
+
+    const planA = await planTrashRemoval(made.deps, [rowA, rowB], [rowA])
+    const planB = await planTrashRemoval(made.deps, [rowA, rowB], [rowB])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [
+      { id: rowA.id, dirs: planA.attachmentDirs },
+      { id: rowB.id, dirs: planB.attachmentDirs },
+    ])
+    // 一次扫描：两组的独占图都进了同一份批计划（候选 → 组的映射各归各组）。
+    expect(batch.plan.entries.map((e) => e.id)).toEqual([IMAGE, IMAGE_B])
+    expect(batch.byGroup.get(rowA.id)).toEqual(new Set([IMAGE]))
+    expect(batch.byGroup.get(rowB.id)).toEqual(new Set([IMAGE_B]))
+
+    await expect(executeRemoval(made.deps, planA)).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    const statsB = await executeRemoval(made.deps, planB)
+    const tail = await executeAttachmentTail(made.deps, batch)
+
+    // executeRemoval 的回执不再带 attachments（成功回执就这两格）。
+    expect(statsB).toEqual({ removed: 1, freedBytes: 40 })
+    // 红线：组 A 没删掉的目录仍引用它的图 ⇒ 复核保留、对象不删；组 B 删掉的目录的独占图随尾清掉。
+    expect(made.fs.removeFile).not.toHaveBeenCalledWith(imagePath(IMAGE))
+    expect(made.fs.removeFile).toHaveBeenCalledWith(imagePath(IMAGE_B))
+    // 复核保留的对象压根没删：它不进任何组读数，也不算失败。
+    expect(tail.byGroupRun.has(rowA.id)).toBe(false)
+    expect(tail.byGroupRun.get(rowB.id)).toEqual({ removed: 1, freedBytes: 8, failed: 0 })
+  })
+
+  it('删失败的对象按组计入 byGroupRun.failed（读数照对象实况归组）', async () => {
+    const row = entry('session-a')
+    const dir = trashDirOf(row.id, HOME)
+    const made = world({ rows: [row], sizes: { [dir]: 100 }, logMethods: [] })
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) => (p === dir ? ['session.v4.jsonl.zstd'] : []))
+    made.fs.readFile.mockImplementation(async () => logWith(IMAGE))
+    made.fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath(IMAGE) ? 7 : 0 }))
+    made.fs.removeFile.mockImplementation(async () => { throw new Error('EBUSY') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const plan = await planTrashRemoval(made.deps, [row], [row])
+      const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: row.id, dirs: plan.attachmentDirs }])
+      await executeRemoval(made.deps, plan)
+      const tail = await executeAttachmentTail(made.deps, batch)
+
+      expect(tail.byGroupRun.get(row.id)).toEqual({ removed: 0, freedBytes: 0, failed: 1 })
+      expect(tail.run).toMatchObject({ removed: 0, freedBytes: 0, failed: 1 })
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  // skipped 原文是 fail-closed 的用户可见落点（ADR-0041）：复核读不出时原因必须随尾带回，不许丢。
+  it('复核读不出 ⇒ 尾 run.skipped 带原文（计划期与复核两段原因都保留）', async () => {
+    const row = entry('session-a')
+    const dir = trashDirOf(row.id, HOME)
+    const made = world({ rows: [row], sizes: { [dir]: 100 }, logMethods: [] })
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) => (p === dir ? ['session.v4.jsonl.zstd'] : []))
+    // 两张图：IMAGE_B 的对象 stat 读不出（非 ENOENT）⇒ 计划期就有一段 skipped；IMAGE 照常进计划。
+    made.fs.readFile.mockImplementation(async () => logWith(IMAGE, IMAGE_B))
+    made.fs.statFile.mockImplementation(async (p: string) => {
+      if (p === imagePath(IMAGE_B)) throw new Error('EACCES: permission denied')
+      return { size: p === imagePath(IMAGE) ? 7 : 0 }
+    })
+    const plan = await planTrashRemoval(made.deps, [row], [row])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: row.id, dirs: plan.attachmentDirs }])
+    expect(batch.plan.entries.map((item) => item.id)).toEqual([IMAGE])
+    expect(batch.plan.skipped).toMatch(/附件对象读不出/)
+
+    // 计划之后：剩余引用源读不出（fail closed），复核必须整体放弃删除。
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === `${HOME}/sessions` ? ['--p--'] : p === `${HOME}/sessions/--p--` ? ['session-b'] : [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === `${HOME}/sessions/--p--/session-b` ? ['session.v4.jsonl.zstd'] : [])
+    made.fs.readFile.mockImplementation(async () => { throw new Error('EACCES: permission denied') })
+
+    await executeRemoval(made.deps, plan)
+    const tail = await executeAttachmentTail(made.deps, batch)
+
+    expect(made.fs.removeFile).not.toHaveBeenCalled()
+    expect(tail.run).toMatchObject({ removed: 0, freedBytes: 0, failed: 0 })
+    // 两段原因都在：计划期那段 + 复核那段（合成一句、按序拼接）。
+    expect(tail.run.skipped).toMatch(/附件对象读不出/)
+    expect(tail.run.skipped).toMatch(/无法复核独占/)
+  })
+
+  // tick 所有权（口径裁定）：'attachments' 跟尾走——尾进门 tick 一次；在飞删对象时读到的仍是这一步。
+  it("附件尾的 tick 跟尾走：尾进门 tick 'attachments'，删对象在飞时 mid-action 读到的还是它", async () => {
+    resetWriteProgress()
+    const row = entry('session-a')
+    const dir = trashDirOf(row.id, HOME)
+    const made = world({ rows: [row], sizes: { [dir]: 100 }, logMethods: [] })
+    made.fs.listDirs.mockImplementation(async () => [])
+    made.fs.listFiles.mockImplementation(async (p: string) => (p === dir ? ['session.v4.jsonl.zstd'] : []))
+    made.fs.readFile.mockImplementation(async () => logWith(IMAGE))
+    made.fs.statFile.mockImplementation(async (p: string) => ({ size: p === imagePath(IMAGE) ? 7 : 0 }))
+    const plan = await planTrashRemoval(made.deps, [row], [row])
+    const batch = await planBatchImageAttachmentRemoval(made.deps, [{ id: row.id, dirs: plan.attachmentDirs }])
+    await executeRemoval(made.deps, plan)
+
+    writeProgress.begin('purge', [row.id], 1)
+    const held = holdCalls(made.fs.removeFile)
+    const tail = executeAttachmentTail(made.deps, batch)
+    await vi.waitFor(() => { expect(held.waiting).toBe(1) })
+    expect(readWriteProgress()).toMatchObject({ status: 'running', step: 'attachments' })
+    held.release()
+    await tail
+    writeProgress.finish()
   })
 })
 
@@ -898,7 +1066,7 @@ describe('executeRemoval：执行器', () => {
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 4, freedBytes: 170, attachments: NOTHING_CLEANED })
+    expect(result).toEqual({ removed: 4, freedBytes: 170 })
     expect(result.freedBytes).toBe(plan.bytes)
     expect(calls).toEqual([
       'unarchive(session-p)', 'unarchive(session-k)', 'unarchive(session-x)', 'unarchive(session-y)',
@@ -915,6 +1083,99 @@ describe('executeRemoval：执行器', () => {
     expect(await manifest.list()).toEqual([])
     // 执行器只认计划：不再回头问盘上目录在不在（计划就是执行前的闸）。
     expect(deps.fs.exists).not.toHaveBeenCalled()
+  })
+
+  // 步骤级 tick（写入进度）：映射住 `src/verbs/write-progress.ts`，这里钉成可观察的序列——放行闸挂在各动作点
+  // 的替身上，放行点读 `readWriteProgress().step`（不给记录器加测试专用状态）。
+  it('步骤序列：measuring（计划）→ checking（复查后）→ deleting（退归档集）→ ledger（摘账本）→ deleting（删目录）→ ledger（摘清册行）→ finishing（清缓存）→ attachments（批尾入口）', async () => {
+    resetWriteProgress()
+    const root = entry('session-p')
+    const x = member('session-x')
+    const { deps, manifest } = execWorld({
+      rows: [root],
+      sizes: { [trashDirOf(root.id, HOME)]: 100, [sessionDirOf('--p--', 'session-x', HOME)]: 20 },
+      members: { 'session-p': [x] },
+      workspaceOf: (id) => (id === 'session-x' ? 'ws-1' : undefined),
+    })
+    // 假件的 `manifest.remove` 不是 `vi.fn`，包一层原实现才挂得上放行闸。
+    const remove = vi.fn(manifest.remove)
+    manifest.remove = remove
+    const heldMeasure = holdCalls(deps.host.subagentMembersOf)
+    const heldCheck = holdCalls(deps.host.isArchived)
+    const heldUnarchive = holdCalls(deps.host.unarchive)
+    const heldDetach = holdCalls(deps.host.detach)
+    const heldRemoveDir = holdCalls(deps.fs.removeDir)
+    const heldRowRemove = holdCalls(remove)
+    const heldCache = holdCalls(deps.host.dropProjectionCache)
+    const { observed, at } = stepProbe()
+    writeProgress.begin('purge', [root.id], 1)
+    const planned = planTrashRemoval(deps, [root], [root])
+    await at(heldMeasure)       // 计划期量目录进门：measuring
+    const plan = await planned
+    const run = executeRemoval(deps, plan)
+    await at(heldCheck, 2)      // 首笔写前复查后的归档预读（名单两人）：checking
+    await at(heldUnarchive, 2)  // 退归档集段：deleting
+    await at(heldDetach)        // 摘账本：ledger
+    await at(heldRemoveDir)     // 回收站行删目录：deleting
+    await at(heldRowRemove)     // 摘清册行：ledger
+    await at(heldCache)         // 行的清缓存：finishing
+    await at(heldRemoveDir)     // 盘上成员删目录：deleting
+    await at(heldCache)         // 成员的清缓存：finishing
+    await run
+    // 附件尾提到批级：尾进门 tick 一次，空计划也进这一步（唯一映射，执行器里不再有这一步）。
+    const batch = await planBatchImageAttachmentRemoval(deps, [{ id: root.id, dirs: plan.attachmentDirs }])
+    await executeAttachmentTail(deps, batch)
+    const settled = readWriteProgress()
+    observed.push(settled.status === 'running' ? settled.step : 'idle')
+    writeProgress.finish()
+    expectSteps(observed, ['measuring', 'checking', 'deleting', 'ledger', 'deleting', 'ledger', 'finishing', 'attachments'])
+  })
+
+  // `/empty` 的 k/N 按行（口径裁定）：每条**回收站行**的目录删除 + 清册摘除 + 通告完成后回调一次；
+  // `plan.members` 的盘上成员循环不调（`/empty` 的 total 只数行）。
+  it('onRowDone 每条回收站行一次、紧跟该行通告之后；盘上成员不调', async () => {
+    const root = entry('session-p')
+    const kid = entry('session-k', { parentEntryId: root.id })
+    const x = member('session-x')
+    const { deps, calls } = execWorld({
+      rows: [root, kid],
+      sizes: {
+        [trashDirOf(root.id, HOME)]: 100,
+        [trashDirOf(kid.id, HOME)]: 40,
+        [sessionDirOf('--p--', 'session-x', HOME)]: 20,
+      },
+      members: { 'session-p': [x] },
+      workspaceOf: () => undefined,
+    })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
+    let rows = 0
+    await executeRemoval(deps, plan, { onRowDone: () => { rows += 1; calls.push('rowDone') } })
+
+    expect(rows).toBe(2)
+    expect(calls).toEqual([
+      'unarchive(session-p)', 'unarchive(session-k)', 'unarchive(session-x)',
+      `removeDir(${shortPath(trashDirOf(root.id, HOME))})`,
+      'evictLive(session-p)', 'announceRemoved(session-p)', 'rowDone',
+      `removeDir(${shortPath(trashDirOf(kid.id, HOME))})`,
+      'evictLive(session-k)', 'announceRemoved(session-k)', 'rowDone',
+      `removeDir(${shortPath(sessionDirOf('--p--', 'session-x', HOME))})`,
+      'evictLive(session-x)', 'announceRemoved(session-x)',
+    ])
+  })
+
+  it('onRowDone 对失败行也恰好一次：done 计已处理条数，不是成功条数', async () => {
+    const root = entry('session-p')
+    const kid = entry('session-k', { parentEntryId: root.id })
+    const rootDir = trashDirOf(root.id, HOME)
+    const kidDir = trashDirOf(kid.id, HOME)
+    const { deps } = execWorld({ rows: [root, kid], sizes: { [rootDir]: 100, [kidDir]: 40 } })
+    const plan = await planTrashRemoval(deps, [root, kid], [root, kid])
+    deps.fs.removeDir.mockImplementation(async (p: string) => {
+      if (p === kidDir) throw new Error('EBUSY')
+    })
+    let rows = 0
+    await failureOf(executeRemoval(deps, plan, { onRowDone: () => { rows += 1 } }))
+    expect(rows).toBe(2)
   })
 
   // 归档态不是"删了就是删了"：unarchive 排在所有删除之前，中途失败时条目还在回收站、
@@ -1059,12 +1320,12 @@ describe('executeRemoval：执行器', () => {
       members: [],
       unarchive: [root.sessionId],
       bytes: 999,
-      attachments: NO_ATTACHMENTS,
+      attachmentDirs: [],
     }
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 1, freedBytes: 999, attachments: NOTHING_CLEANED })
+    expect(result).toEqual({ removed: 1, freedBytes: 999 })
   })
 
   it('回收站目录缺席的行：不删目录、仍摘清册行、计 1 条 0 字节', async () => {
@@ -1078,7 +1339,7 @@ describe('executeRemoval：执行器', () => {
     const result = await executeRemoval(deps, plan)
 
     expect(plan.trash.map((row) => row.present)).toEqual([true, false])
-    expect(result).toEqual({ removed: 2, freedBytes: 100, attachments: NOTHING_CLEANED })
+    expect(result).toEqual({ removed: 2, freedBytes: 100 })
     expect(deps.fs.removeDir).toHaveBeenCalledTimes(1)
     expect(deps.fs.removeDir).toHaveBeenCalledWith(rootDir)
     expect(await manifest.list()).toEqual([])
@@ -1170,7 +1431,7 @@ describe('executeRemoval：执行器', () => {
       members: [],
       unarchive: [root.sessionId],
       bytes: 100,
-      attachments: NO_ATTACHMENTS,
+      attachmentDirs: [],
     }
     deps.fs.removeDir.mockImplementation(async () => { throw new Error('boom') })
 
@@ -1334,7 +1595,7 @@ describe('executeRemoval：执行器', () => {
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 1, freedBytes: 5, attachments: NOTHING_CLEANED })
+    expect(result).toEqual({ removed: 1, freedBytes: 5 })
     expect(deps.host.evictLive).toHaveBeenCalledWith('session-p')
     expect(deps.host.announceRemoved).not.toHaveBeenCalled()
   })
@@ -1345,7 +1606,7 @@ describe('executeRemoval：执行器', () => {
 
     const result = await executeRemoval(deps, plan)
 
-    expect(result).toEqual({ removed: 0, freedBytes: 0, attachments: NOTHING_CLEANED })
+    expect(result).toEqual({ removed: 0, freedBytes: 0 })
     expect(deps.fs.removeDir).not.toHaveBeenCalled()
     expect(deps.host.unarchive).not.toHaveBeenCalled()
   })
@@ -1421,7 +1682,7 @@ describe('executeRemoval：执行器', () => {
     const plan = await planTrashRemoval(deps, [root], [root])
 
     await expect(executeRemoval(deps, plan)).resolves.toEqual({
-      removed: 1, freedBytes: 5, attachments: NOTHING_CLEANED,
+      removed: 1, freedBytes: 5,
     })
     expect(warn).toHaveBeenCalled()
     warn.mockRestore()

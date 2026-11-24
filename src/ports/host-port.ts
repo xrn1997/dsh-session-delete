@@ -337,8 +337,9 @@ async function descendantsByParent(
   roots: readonly string[],
 ): Promise<Map<string, SubagentMember[]>> {
   const children = new Map<string, SubagentMember[]>()
-  const seen = new Set(roots.map(bareSessionId))
-  let frontier = [...seen]
+  // 请求根也要能被父根发现：预先把所有根塞进 seen 会把「父+子同批」的子根从父闭包里抹掉。
+  const seen = new Set<string>()
+  let frontier = [...new Set(roots.map(bareSessionId))]
   while (frontier.length > 0) {
     const values: string[] = []
     for (const bare of frontier) {

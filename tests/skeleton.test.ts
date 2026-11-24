@@ -372,7 +372,7 @@ describe('浏览器半平台模块表', () => {
 describe('抄本表点名的自造差异（界面保真复核门：除 ui.css 文件头点名的那些外一律与官方明文逐属性一致）', () => {
   const css = readFileSync(fileURLToPath(new URL('../src/client/ui/ui.css', import.meta.url)), 'utf8')
 
-  it('文件头点名的七条自造规则真在表里（声明与实现对上）', () => {
+  it('文件头点名的九条自造规则真在表里（声明与实现对上）', () => {
     expect(css).toContain('.sd-resizing {')
     // 2026-10-16 补的第二条：清单行是 role="row" 的可聚焦 div，键盘焦点必须有可见描边
     expect(css).toContain('.sd-session-row:focus-visible {')
@@ -387,7 +387,12 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     expect(css).toContain('.sd-batch-pick-leading {')
     // 第七条：撤销横幅在飞时那颗动作要有禁用档（Toast 的 action 自带 color，UA 默认置灰不生效）
     expect(css).toContain('.sd-toast-action:disabled {')
-    expect(/七处不是抄本/.test(css)).toBe(true)
+    // 第八条：忙碌主按钮的转圈（宿主没有 spinner 这件控件）；reduced-motion 下必须关掉动画
+    expect(css).toContain('.sd-spinner {')
+    expect(css).toMatch(/prefers-reduced-motion:\s*reduce[^}]*\.sd-spinner[^}]*animation:\s*none/)
+    // 第九条：忙碌确认框的关闭钮保留焦点，但视觉与辅助技术都声明不可关闭
+    expect(css).toContain('.sd-modal-close[aria-disabled="true"] {')
+    expect(/九处不是抄本/.test(css)).toBe(true)
     // 组头 reset 是文件头点名的例外，七项必须全在**组头那一块**的 inline 样式里（不能只 reset text-align）。
     // 组头的 DOM 现在只由 `session-list.tsx` 拼一次（两档共用），所以钉那一处的配方。
     const list = readFileSync(fileURLToPath(new URL('../src/client/session-list.tsx', import.meta.url)), 'utf8')
@@ -396,7 +401,7 @@ describe('抄本表点名的自造差异（界面保真复核门：除 ui.css �
     for (const prop of ["background: 'none'", "border: 'none'", 'padding: 0', "font: 'inherit'", "textAlign: 'start'", "'1 1 auto'", 'gap: 6']) {
       expect(headStyle, `组头 reset 缺 ${prop}`).toContain(prop)
     }
-    expect(css.split('本插件自造的第').length - 1).toBe(7)
+    expect(css.split('本插件自造的第').length - 1).toBe(9)
   })
 
   it('批量浮条按内容展开：width:max-content + max-width，避免左半屏收缩把按钮挤到第二行', () => {

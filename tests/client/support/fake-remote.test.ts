@@ -14,6 +14,7 @@ it('FakeRemote 是完整的 SessionDeleteRemote，默认安静成功', async () 
   })
   await expect(remote.detail('e1')).resolves.toMatchObject({ ok: true, value: { entryId: 'fake' } })
   await expect(remote.emptyTrash()).resolves.toEqual({ ok: true, value: { removed: 0, freedBytes: 0 } })
+  await expect(remote.progress()).resolves.toEqual({ ok: true, value: { status: 'idle' } })
   await expect(remote.applyOutcomes('delete', [])).resolves.toEqual({ ok: true, value: [] })
   await expect(remote.scanAttachmentOrphans()).resolves.toEqual({ ok: true, value: { count: 0, totalBytes: 0, items: [] } })
   await expect(remote.cleanAttachmentOrphans()).resolves.toEqual({

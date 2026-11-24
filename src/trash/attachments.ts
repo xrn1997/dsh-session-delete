@@ -3,6 +3,11 @@
  * 普通文件、tmp、v2、cache 一律不碰，源文件（$DSH_HOME 之外）没有进入路径拼接的入口。② 只要剩余引用源读不出来，就整体跳过（fail closed）——宁可留孤儿，不许删共享；
  * "读不出来"包括：读失败、目录非空却没有规范 zstd 日志（明文/陌生布局）、JSON 超出扫描上限、日志有坏行或尾巴被截断。
  * 宿主的内核写锁 `session.lock` 例外：恒为 0 字节时既不算读不懂、也不算"目录里有东西"；非空才回落到上面的 fail closed（判据见 `imageIdsOfDir`）。
+ *
+ * **批级扫描（一次批一扫）**：一批被删目录的独占计划走 `planBatchImageAttachmentRemoval`——候选按组收集（每组被删目录的
+ * `imageIdsOfDir`），剩余引用**全批只扫一趟**（排除面 = 全部被删目录），候选 → 组的映射（`byGroup`）只收进计划的对象、
+ * 且对象**单归属**（同批多组候选命中同一个对象时只归第一组，按组序先到先得）——批尾按组拆回逐条读数时相加才不双计。
+ * 附件尾只带走**真删掉的目录**的独占副本（判据与顺序住 `verbs/permanent-removal.ts` 的 `executeAttachmentTail`）。
  */
 import path from 'node:path'
 import { isAbsentPath } from '../ports/fs-port.js'
@@ -178,6 +183,14 @@ async function unreadableExtraFile(
   return undefined
 }
 
+interface ImageDirRead {
+  ids: Set<string>
+  /** 有值 = 日志不完整（坏行 / 截断尾巴），它的引用集合不可信。 */
+  unreadable?: string
+  /** 本次扫描确认目录在场；缺席或探测失败都算 false，批级补跑守卫据此 fail closed。 */
+  present: boolean
+}
+
 /** 一个会话目录里的图片引用；`unreadable` 有值 = 这一组不可知（调用方按"跳过它"处理）。
  *
  *  **没有规范 zstd 日志 ≠ 没有引用**：明文日志、别的版本/布局、以及子目录都可能藏着引用。**有规范日志但还有子目录也不够**：日志只覆盖本目录。
@@ -186,11 +199,10 @@ async function unreadableExtraFile(
  *  **宿主的内核写锁不是会话内容**：0 字节的锁在判目录形状之前先剥掉——不然每个已实体化的会话目录都会被读成"读不懂"，整份引用扫描在真机上恒跳过；
  *  非空的锁说明我们对这个文件的理解失效，仍按不可读处理。
  */
-export async function imageIdsOfDir(
+async function imageIdsOfPresentDir(
   deps: AttachmentReadDeps,
   dir: string,
-): Promise<{ ids: Set<string>; unreadable?: string }> {
-  if (!(await deps.fs.exists(dir))) return { ids: new Set() }
+): Promise<Omit<ImageDirRead, 'present'>> {
   let names: string[]
   try {
     names = await deps.fs.listFiles(dir)
@@ -258,6 +270,17 @@ export async function imageIdsOfDir(
   } catch (error) {
     return { ids: new Set(), unreadable: String(error) }
   }
+}
+
+export async function imageIdsOfDir(deps: AttachmentReadDeps, dir: string): Promise<ImageDirRead> {
+  let present: boolean
+  try {
+    present = await deps.fs.exists(dir)
+  } catch (error) {
+    return { ids: new Set(), unreadable: String(error), present: false }
+  }
+  if (!present) return { ids: new Set(), present: false }
+  return { present: true, ...await imageIdsOfPresentDir(deps, dir) }
 }
 
 interface RemainingImageRefs {
@@ -366,37 +389,126 @@ export interface ImageRemovalPlan {
   skipped?: string
 }
 
+/** 候选日志读不出的 skip 原因句：计划面的合计与批驱动的 per-group 拆分（`src/verbs/batch.ts` 的读数合成）都念它——
+ *  同一句只许一个家，两处各写各的措辞会让同一批回执里长出两种说法。 */
+export function unreadableCandidatesReason(count: number): string {
+  return `${count} 个被删会话日志读不出`
+}
+
+/** 附件对象 stat 读不出的 skip 原因句：同上，合计（计划面）与逐组（批驱动合成）共用这一家。 */
+export function unreadableObjectsReason(count: number): string {
+  return `${count} 个附件对象读不出`
+}
+
+/** 执行期复核读不出剩余引用源的 fail-closed 原因：复核结果按 `recheckSkipped` 结构化交回，
+ *  批驱动合成 per-id 读数**不拿原文子串当判据**（认不出就等于把 fail-closed 的用户可见落点丢了，ADR-0041）。 */
+const RECHECK_SKIP_REASON = '读不到剩余引用源，无法复核独占'
+
+/** 批级附件计划的一组：`id` 是这一组在批里的身份（purge 按条目 id、orphan-clean 按根 id），`dirs` 是本组被删目录。 */
+export interface BatchAttachmentGroup {
+  readonly id: string
+  readonly dirs: readonly string[]
+}
+
+/** 一批一份的独占计划：`plan` 全批一份（候选 ∪ + **一次**剩余引用扫描），`byGroup` 是候选 → 组的映射——
+ *  只收进 `plan.entries` 的对象，且对象单归属（一个对象只出现在一个组的集合里）。 */
+export interface BatchAttachmentPlan {
+  readonly plan: ImageRemovalPlan
+  readonly byGroup: ReadonlyMap<string, ReadonlySet<string>>
+  /** 每组候选日志读不出的次数：skipped 按组归因——只落真正执行成功组的回执，不串台（ADR-0070 边界）。 */
+  readonly unreadableCandidatesByGroup: ReadonlyMap<string, number>
+  /** 每组 stat 读不出的附件对象数（按 `owner` 的单归属记）：同样是逐组归因，不进 `sharedSkipped`。 */
+  readonly unreadableObjectsByGroup: ReadonlyMap<string, number>
+  /** 全批共享的 skip 原因：只有「剩余引用证明失败」这一种——候选与对象的读不出都逐组记。 */
+  readonly sharedSkipped?: string
+  /** 扫描时确认在场的目录；第二波只按路径 membership 放行不够，缺席时读成空集不算扫过。 */
+  readonly presentDirs: ReadonlySet<string>
+}
+
 /**
- * 独占计划：候选 = 本次被删会话日志里的图片 id；剩余引用 = 活动会话 + 全部未删 `session-trash` 目录 + storages/cache。
- * 剩余引用源读不出 ⇒ 整体跳过；候选日志读不出 / 附件对象 stat 失败 ⇒ 只跳过那一部分，其余照常。
+ * 批级独占计划：候选 = 各组被删目录日志里的图片 id（逐组 `imageIdsOfDir`）；剩余引用 = 活动会话 + 全部未删
+ * `session-trash` 目录 + storages/cache，**全批只扫一趟**（排除面 = 全部被删目录）。剩余引用源读不出 ⇒ 整体跳过；
+ * 候选日志读不出 / 附件对象 stat 失败 ⇒ 只跳过那一部分，其余照常。
+ * 对象单归属：一个对象被多组候选命中时只归**第一组**（组序先到先得）——批尾拆回逐条读数时批内相加才不双计。
+ * 同 id 的两组按**并集**合并候选（调用点保证 id 唯一；重复时丢后一组等于静默漏删，宁可合并不静默）。
  */
-export async function planImageAttachmentRemoval(
+export async function planBatchImageAttachmentRemoval(
   deps: AttachmentReadDeps,
-  removedDirs: readonly string[],
-): Promise<ImageRemovalPlan> {
-  const candidates = new Set<string>()
+  groups: readonly BatchAttachmentGroup[],
+): Promise<BatchAttachmentPlan> {
+  const candidatesByGroup = new Map<string, Set<string>>()
+  const unreadableCandidatesByGroup = new Map<string, number>()
+  const presentDirs = new Set<string>()
+  const readsByDir = new Map<string, Awaited<ReturnType<typeof imageIdsOfDir>>>()
   let unreadableCandidates = 0
-  for (const dir of removedDirs) {
-    const read = await imageIdsOfDir(deps, dir)
-    if (read.unreadable !== undefined) {
-      unreadableCandidates += 1
-      continue
+  for (const group of groups) {
+    const ids = new Set<string>()
+    let groupUnreadable = 0
+    for (const dir of new Set(group.dirs)) {
+      let read = readsByDir.get(dir)
+      const firstRead = read === undefined
+      if (read === undefined) {
+        read = await imageIdsOfDir(deps, dir)
+        readsByDir.set(dir, read)
+      }
+      if (read.present) presentDirs.add(dir)
+      if (read.unreadable !== undefined) {
+        if (firstRead) unreadableCandidates += 1
+        groupUnreadable += 1
+        continue
+      }
+      for (const id of read.ids) ids.add(id)
     }
-    for (const id of read.ids) candidates.add(id)
+    if (groupUnreadable > 0) {
+      unreadableCandidatesByGroup.set(group.id, (unreadableCandidatesByGroup.get(group.id) ?? 0) + groupUnreadable)
+    }
+    const previous = candidatesByGroup.get(group.id)
+    if (previous === undefined) candidatesByGroup.set(group.id, ids)
+    else for (const id of ids) previous.add(id)
   }
 
   const skipReasons: string[] = []
-  if (unreadableCandidates > 0) skipReasons.push(`${unreadableCandidates} 个被删会话日志读不出`)
+  if (unreadableCandidates > 0) skipReasons.push(unreadableCandidatesReason(unreadableCandidates))
 
+  const unreadableObjectsByGroup = new Map<string, number>()
+  const candidates = new Set<string>()
+  for (const ids of candidatesByGroup.values()) for (const id of ids) candidates.add(id)
   if (candidates.size === 0) {
-    return { entries: [], bytes: 0, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) }
+    return {
+      plan: { entries: [], bytes: 0, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) },
+      byGroup: new Map(),
+      unreadableCandidatesByGroup,
+      unreadableObjectsByGroup,
+      presentDirs,
+    }
   }
 
-  const scanned = await remainingRefsFailClosed(deps, removedDirs, '读不到剩余引用源，无法证明独占')
-  if (!scanned.ok) return { entries: [], bytes: 0, skipped: scanned.reason }
+  const excludeDirs = groups.flatMap((group) => [...group.dirs])
+  const scanned = await remainingRefsFailClosed(deps, excludeDirs, '读不到剩余引用源，无法证明独占')
+  if (!scanned.ok) {
+    // 计划期候选读不出与证明失败说的不是同一件事，合计句都保留（ADR-0041 决定 4）。
+    const skipped = [...skipReasons, scanned.reason].join('；')
+    return {
+      plan: { entries: [], bytes: 0, skipped },
+      byGroup: new Map(),
+      unreadableCandidatesByGroup,
+      unreadableObjectsByGroup,
+      presentDirs,
+      sharedSkipped: scanned.reason,
+    }
+  }
   const remaining = scanned.refs
 
+  // 对象单归属（组序先到先得）：一个对象多组候选命中时只有第一个组拿得到它的读数。
+  const owner = new Map<string, string>()
+  for (const group of groups) {
+    for (const id of candidatesByGroup.get(group.id) ?? []) {
+      if (!owner.has(id)) owner.set(id, group.id)
+    }
+  }
+
   const entries: PlannedImageRemoval[] = []
+  const byGroup = new Map<string, Set<string>>()
   let bytes = 0
   let unreadableObjects = 0
   for (const id of candidates) {
@@ -406,13 +518,39 @@ export async function planImageAttachmentRemoval(
       const stat = await deps.fs.statFile(path)
       entries.push({ id, path, bytes: stat.size })
       bytes += stat.size
+      const groupId = owner.get(id)
+      if (groupId !== undefined) {
+        const owned = byGroup.get(groupId) ?? new Set<string>()
+        owned.add(id)
+        byGroup.set(groupId, owned)
+      }
     } catch (error) {
-      // 对象已经不在：没有可删的字节，也不算失败。别的 stat 失败（权限/盘挂）**不是"不在"**：这一件这次没敢删，记进 `skipped`，其余读得出的条目照常计划。
-      if (!isMissing(error)) unreadableObjects += 1
+      // 对象已经不在：没有可删的字节，也不算失败。别的 stat 失败（权限/盘挂）**不是"不在"**：这一件这次没敢删，
+      // 按单归属记进**它自己的组**（`unreadableObjectsByGroup`），合计句进 `skipped`——逐组归因不串台（ADR-0070）。
+      if (!isMissing(error)) {
+        unreadableObjects += 1
+        const groupId = owner.get(id)
+        if (groupId !== undefined) {
+          unreadableObjectsByGroup.set(groupId, (unreadableObjectsByGroup.get(groupId) ?? 0) + 1)
+        }
+      }
     }
   }
-  if (unreadableObjects > 0) skipReasons.push(`${unreadableObjects} 个附件对象读不出`)
-  return { entries, bytes, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) }
+  if (unreadableObjects > 0) skipReasons.push(unreadableObjectsReason(unreadableObjects))
+  return {
+    plan: { entries, bytes, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) },
+    byGroup,
+    unreadableCandidatesByGroup,
+    unreadableObjectsByGroup,
+    presentDirs,
+  }
+}
+
+/** 复核结果：`plan` 是这一刻仍无引用的那一份；`recheckSkipped` 只在**复核读不出**剩余引用源时给——
+ *  批驱动合成 per-id 读数按这格结构化地认领原因，不拿 `skipped` 原文子串当判据。 */
+export interface RecheckedRemovalPlan {
+  readonly plan: ImageRemovalPlan
+  readonly recheckSkipped?: string
 }
 
 /**
@@ -425,46 +563,52 @@ export async function planImageAttachmentRemoval(
 export async function recheckImageRemovalExclusivity(
   deps: AttachmentReadDeps,
   plan: ImageRemovalPlan,
-): Promise<ImageRemovalPlan> {
-  if (plan.entries.length === 0) return plan
-  const scanned = await remainingRefsFailClosed(deps, [], '读不到剩余引用源，无法复核独占')
+): Promise<RecheckedRemovalPlan> {
+  if (plan.entries.length === 0) return { plan }
+  const scanned = await remainingRefsFailClosed(deps, [], RECHECK_SKIP_REASON)
   if (!scanned.ok) {
     // 计划期的 `skipped` 不丢：两条原因说的不是同一件事（候选日志读不出 / 复核读不出），上屏时二选一等于替用户藏掉一条（ADR-0041 决定 4）。
     const skipped = plan.skipped === undefined ? scanned.reason : `${plan.skipped}；${scanned.reason}`
-    return { entries: [], bytes: 0, skipped }
+    return { plan: { entries: [], bytes: 0, skipped }, recheckSkipped: scanned.reason }
   }
   const remaining = scanned.refs
   const entries = plan.entries.filter((entry) => !remaining.ids.has(entry.id))
   const bytes = entries.reduce((total, entry) => total + entry.bytes, 0)
   return {
-    entries,
-    bytes,
-    ...(plan.skipped === undefined ? {} : { skipped: plan.skipped }),
+    plan: {
+      entries,
+      bytes,
+      ...(plan.skipped === undefined ? {} : { skipped: plan.skipped }),
+    },
   }
 }
 
 /**
  * 逐文件删；ENOENT 由端口的 `force` 吞掉；其他错误计数并继续。删除动作只认「`home` + `id` 自己推导出来的那一条路径」：
  * 计划是数据，手搭的/被改过的条目只要路径与推导不一致就拒绝（计数为失败，不删），源文件因此没有删除入口。
+ * `failedIds` 逐个点名失败对象：批尾按组归失败读数要用（`failed` 计数保留）。
  */
 export async function executeImageAttachmentRemoval(
   deps: AttachmentRemovalDeps,
   plan: ImageRemovalPlan,
-): Promise<{ removed: number; freedBytes: number; failed: number }> {
+): Promise<{ removed: number; freedBytes: number; failed: number; failedIds: readonly string[] }> {
   let removed = 0
   let freedBytes = 0
   let failed = 0
+  const failedIds: string[] = []
   for (const entry of plan.entries) {
     let derived: string
     try {
       derived = attachmentPathOf(deps.home, 'image', entry.id)
     } catch (error) {
       failed += 1
+      failedIds.push(entry.id)
       console.warn(`附件清理拒绝：计划条目的 id 形状不对：${entry.id}`, error)
       continue
     }
     if (derived !== entry.path) {
       failed += 1
+      failedIds.push(entry.id)
       console.warn(`附件清理拒绝：计划路径与 id 推导不一致：${entry.id}`, entry.path)
       continue
     }
@@ -474,10 +618,11 @@ export async function executeImageAttachmentRemoval(
       freedBytes += entry.bytes
     } catch (error) {
       failed += 1
+      failedIds.push(entry.id)
       console.warn(`附件清理失败：${entry.id}`, error)
     }
   }
-  return { removed, freedBytes, failed }
+  return { removed, freedBytes, failed, failedIds }
 }
 
 /* ── 孤儿附件：对象还在，但任何引用源都不再引用它 ─────────────────────────── */
@@ -521,9 +666,11 @@ export async function scanOrphanImageAttachments(deps: AttachmentReadDeps): Prom
   return { entries, bytes }
 }
 
-/** 清掉扫描那一刻无引用的图片对象；扫描跳过 ⇒ 零删，并原样带回跳过的原因。 */
+/** 清掉扫描那一刻无引用的图片对象；扫描跳过 ⇒ 零删，并原样带回跳过的原因。
+ *  线上读数就 `AttachmentCleanupWire` 那三格（外加可选 `skipped`）：执行回执的 `failedIds` 是批尾的内部读数，不过线。 */
 export async function cleanOrphanImageAttachments(deps: AttachmentRemovalDeps): Promise<AttachmentCleanupWire> {
   const plan = await scanOrphanImageAttachments(deps)
   if (plan.skipped !== undefined) return { removed: 0, freedBytes: 0, failed: 0, skipped: plan.skipped }
-  return executeImageAttachmentRemoval(deps, plan)
+  const run = await executeImageAttachmentRemoval(deps, plan)
+  return { removed: run.removed, freedBytes: run.freedBytes, failed: run.failed }
 }

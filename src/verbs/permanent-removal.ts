@@ -2,15 +2,21 @@
  * 永久删除的测量、计划与执行：先记录目录/字节/账本归属，再按计划动盘。计划函数只读；活体准入在计划阶段、任何写之前完成，
  * 执行器动第一笔写前再查一次（ADR-0027）。
  * 测量与补账本归属**分家**：`/list` 的只读计划只吃 `measureMembers`（零账本读）；`workspaceOf` 只有 purge / orphan-clean 的删除计划才付。
+ *
+ * **批级扫描 + 尾只带走真删掉的目录**：独占图片的候选与剩余引用扫描提到**批级**（`planBatchImageAttachmentRemoval`，
+ * 全批两趟读：计划一趟、复核一趟），逐组计划只吐本组被删目录（`attachmentDirs`）；附件尾 `executeAttachmentTail`
+ * 在**全部组执行完之后**统一复核（ADR-0041）并删除——引用扫描以盘上剩余引用源为判据，失败组没删掉的目录仍在
+ * 扫描面里，它们的图片自动保留（附件红线「附件只随永久删除清」，失败路径不再泄漏孤儿）。逐组执行管线
+ * （活体准入复查 → 摘归档集 → 摘账本 → 删目录 → 摘清册行 → 通告离场 → 清缓存）顺序与回滚语义一格不动。
  */
 import { sessionDirForId, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import type { TrashGroupView } from '../trash/groups.js'
 import {
   executeImageAttachmentRemoval,
   isMissing,
-  planImageAttachmentRemoval,
   recheckImageRemovalExclusivity,
-  type ImageRemovalPlan,
+  type AttachmentRemovalDeps,
+  type BatchAttachmentPlan,
 } from '../trash/attachments.js'
 import type { HostCorpusPort, SubagentMember } from '../ports/host-port.js'
 import { mapLimit } from '../trash/session-rows.js'
@@ -20,6 +26,7 @@ import { isSessionDeleteCodeError, type AttachmentCleanupWire } from '../shared/
 import { dropDeletedSessionCache } from '../trash/projection-cache.js'
 import { verbError, rollbackReason, withRollbackFailures } from '../errors.js'
 import { assertNoLive } from './live-admission.js'
+import { writeProgress } from './write-progress.js'
 
 export interface MeasuredMemberDir {
   readonly dir: string
@@ -218,9 +225,9 @@ export interface RemovalPlan {
   readonly unarchive: readonly string[]
   /** 计划量到的合计；成功回执的 freedBytes 只念它。 */
   readonly bytes: number
-  /** 这一次要连带清掉的独占图片对象（空计划 = 没有可删的、或剩余引用源读不出而整体跳过——原因在 `skipped`）。
-   *  附件字节**不进** `bytes`（那是会话目录的释放量）；附件读数单独走回执的 `attachments`。 */
-  readonly attachments: ImageRemovalPlan
+  /** 本组被删目录（附件候选来源）：批驱动拿它喂 `planBatchImageAttachmentRemoval`（一次批一扫）。
+   *  附件字节**不进** `bytes`（那是会话目录的释放量）；附件读数单独走批尾的回执。 */
+  readonly attachmentDirs: readonly string[]
 }
 
 function totalBytes(items: readonly { readonly bytes: number }[]): number {
@@ -233,7 +240,7 @@ function totalBytes(items: readonly { readonly bytes: number }[]): number {
  *
  * - `trash` 按 targets 原序逐个实测（目录缺席的行 `present:false` / 0 字节，但清册行仍要摘）；盘上后代经 `selectStrandedMembers` 选出。
  * - `members` 只收盘上还有目录的成员；`unarchive` = targets + 这些成员（只摘真要碰的 id）。
- * - `attachments` 由被删目录里的图片引用与全部剩余引用源算独占；共享的保留、剩余引用源读不出就整体跳过（判据住 `attachments.ts`）。
+ * - `attachmentDirs` = 本组被删目录（附件候选来源），独占判定提到批级（`planBatchImageAttachmentRemoval` 一次扫描）。
  * - 活体准入在量目录与任何写之前逐个查 targets 与**全部枚举到的**盘上后代；没有跳过它的开关（执行器首笔写前还会复查）。
  * - `sessionQuery` 缺席 ⇒ members 为空、不抛（盘上残留留给 `GET /orphans` 兜底）。
  */
@@ -242,6 +249,9 @@ export async function planTrashRemoval(
   rows: readonly TrashEntry[],
   targets: readonly TrashEntry[],
 ): Promise<RemovalPlan> {
+  // 步骤 tick（只加观测）：计划期量目录进门报 measuring。**只在写路径计划函数进门处报**——
+  // `planVisibleTrash` 与 `loadOrphanGroups` 是读路径共用面，读也在别人的在飞写记录上 tick 就是假进度。
+  writeProgress.step('measuring')
   const candidates = (await selectStrandedMembers(deps.host, rows, targets.map((entry) => entry.sessionId))).flat()
   // 准入住在计划里、量目录与任何写之前（判据与那句原文住 `verbs/live-admission.ts`）。
   await assertNoLive(deps.host, [
@@ -251,18 +261,38 @@ export async function planTrashRemoval(
   // 批量 purge 的 targets 可能一次上百条：盘上测量同样走那份有界预算，不拿宿主并发换自己的省事。
   const trash = await mapLimit(targets, VISIBLE_MEASURE_CONCURRENCY, (entry) => measureTrashRow(deps, entry))
   const members = await planMemberRemovals(deps, candidates)
-  // 剩余引用源由附件域自己扫（活动会话 + 除本次被删目录外的全部 session-trash + storages/cache）。
-  const attachments = await planImageAttachmentRemoval(
-    deps,
-    [...trash.map((row) => row.dir), ...members.map((member) => member.dir)],
-  )
+  // 独占判定提到批级：这里只吐本组被删目录（附件候选来源），一次批一扫由批驱动做。
+  const attachmentDirs = [...trash.map((row) => row.dir), ...members.map((member) => member.dir)]
   return {
     kind: 'trash',
     trash,
     members,
     unarchive: [...targets.map((entry) => entry.sessionId), ...members.map((member) => member.sessionId)],
     bytes: totalBytes(trash) + totalBytes(members),
-    attachments,
+    attachmentDirs,
+  }
+}
+
+/**
+ * 第二波补跑面的附件候选目录（ADR-0070 决定 5）：一组**未来会删**的目录 = 行目录 + 盘上残离子会话目录。
+ * 与 `planTrashRemoval` 的区别只是不过闸、不补账本：计划期被活体准入拒掉的组，它的挂起条目仍可能在第二波
+ * 补跑成功；批级扫描必须提前把这批目录喂进去，否则它们的独占图片永远进不了尾的候选面。多喂不会多删——
+ * 尾的复核以盘上剩余引用为准，没删掉的目录自动保留（附件红线不靠预测兜）。
+ * 盘上后代读不出时 `complete: false`、只交行目录：调用方要据此把该组的第二波补跑判失败（留着让人重试），
+ * 不能让它删掉一批没进过扫描面的目录——那才是孤儿附件的来源。
+ */
+export async function plannedAttachmentDirs(
+  deps: CoreDeps,
+  rows: readonly TrashEntry[],
+  targets: readonly TrashEntry[],
+): Promise<{ readonly dirs: readonly string[]; readonly complete: boolean }> {
+  const dirs = targets.map((entry) => trashDirOf(entry.id, deps.home))
+  try {
+    const candidates = (await selectStrandedMembers(deps.host, rows, targets.map((entry) => entry.sessionId))).flat()
+    const members = await measureMembers(deps, candidates)
+    return { dirs: [...dirs, ...members.map((member) => member.dir)], complete: true }
+  } catch {
+    return { dirs, complete: false }
   }
 }
 
@@ -270,34 +300,32 @@ export async function planTrashRemoval(
  * orphan-clean 的删除计划：成员是调用方扫出来的传递闭包（`orphanGroupsOf`）。
  * - `members` 只收盘上还有目录的成员，`bytes` 只算这些实测值；`unarchive` 覆盖**全部传入成员**（含目录缺席）——
  *   它们可能还挂在归档集里，重试时不会再长出一条幽灵 id。
- * - live 准入覆盖**全部传入成员**（含目录缺席）：任一在跑就整组拒绝。`attachments` 的剩余引用源由附件域自己扫，共享图片保留。
+ * - live 准入覆盖**全部传入成员**（含目录缺席）：任一在跑就整组拒绝。`attachmentDirs` = 本组被删目录，独占判定在批级做。
  * - 回执由 `kind:'orphan'` 派生：删目录阶段失败时执行器交回 `{removed, freedBytes, failedSessionId}`。
  */
 export async function planOrphanRemoval(
   deps: CoreDeps,
   members: readonly { readonly sessionId: string; readonly projectDir: string }[],
 ): Promise<RemovalPlan> {
+  // 同 `planTrashRemoval`：写路径计划函数进门报 measuring（读路径扫描面不报，理由见那里）。
+  writeProgress.step('measuring')
   await assertNoLive(deps.host, members.map((member) => member.sessionId))
   const present = await planMemberRemovals(deps, members)
-  const attachments = await planImageAttachmentRemoval(
-    deps,
-    present.map((member) => member.dir),
-  )
   return {
     kind: 'orphan',
     trash: [],
     members: present,
     unarchive: members.map((member) => member.sessionId),
     bytes: totalBytes(present),
-    attachments,
+    attachmentDirs: present.map((member) => member.dir),
   }
 }
 
-/** 一次永久删除的成功回执：条数、计划合计字节与附件读数（purge 与 orphan-clean 共用这一形状）。 */
+/** 一次永久删除的成功回执：条数与计划合计字节（purge 与 orphan-clean 共用这一形状）。
+ *  附件读数不在这里——那是批级尾的读数，由批驱动合成进逐条回执。 */
 export interface RemovalStats {
   readonly removed: number
   readonly freedBytes: number
-  readonly attachments: AttachmentCleanupWire
 }
 
 /**
@@ -310,12 +338,12 @@ export type RemovalExecutor = (plan: RemovalPlan) => Promise<RemovalStats>
  * 按计划执行一次永久删除：不再量，回执的字节念计划（`plan.bytes`）。**准入查两遍**（ADR-0027）：计划期证明成立时没人在跑；
  * 执行器首笔写前用计划里的同一份名单（`plan.unarchive`）复查，补上附件扫描撑开的窗口——失败仍零写入。
  *
- * 顺序：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行（在才删目录 → 摘清册行 → 通告离场）→ 逐条盘上成员（删目录 → 通告离场）
- * → 逐条附件对象。目录删掉就没有"退回去"这回事，中途失败**不回滚目录**；已删的由计数器如实交回。
+ * 顺序：整批摘归档集 → 摘有账本的成员的账本 → 逐条回收站行（在才删目录 → 摘清册行 → 通告离场）→ 逐条盘上成员（删目录 → 通告离场）。
+ * 目录删掉就没有"退回去"这回事，中途失败**不回滚目录**；已删的由计数器如实交回。附件对象不在这条管线里——
+ * 归批级尾（`executeAttachmentTail`），见文件头注的口径。
  *
  * **归档态回滚**：`unarchive` 排在所有删除之前，所以失败时目录还在、归档位却已摘。失败出口把**目录还在**的那些按删除前的读数
  * 重新归档（预读 `isArchived`，不按 `wasArchived` 猜），目录不在的跳过——否则会造幽灵 id。回滚失败走 `details.rollbackFailures`（ADR-0040）。
- * **附件计划在执行期复核**：删对象前用同一套剩余引用扫描重判，只删这一刻仍无引用的对象（ADR-0041）。
  *
  * 失败形状：`kind:'orphan'` ⇒ `io` + `{removed, freedBytes, failedSessionId}`，不伪装成整组没动；`kind:'trash'` ⇒ 同一个标签、不带 details；
  * orphan-clean 的归档实况预读 / unarchive / detach 原样抛出；归档回滚不干净时原错误带 `details.rollbackFailures`。
@@ -324,9 +352,14 @@ export type RemovalExecutor = (plan: RemovalPlan) => Promise<RemovalStats>
 export async function executeRemoval(
   deps: RemovalDeps,
   plan: RemovalPlan,
+  /** `/empty` 的 k/N 按行：每条**回收站行**处理完（成功或失败）调一次；盘上成员不调
+   *  （`/empty` 的 total 只数行）。批驱动按 id tick 自己的条目级进度、不传这一格，杜绝双计。 */
+  options?: { onRowDone?: () => void },
 ): Promise<RemovalStats> {
   // 计划→执行的窗口由附件引用扫描撑开；动第一笔写前重查同一份名单（理由见函数头注）。
   await assertNoLive(deps.host, plan.unarchive)
+  // 步骤 tick（只加观测，下同）：首笔写前的复查成了，进执行段。
+  writeProgress.step('checking')
   const presence = deps.presence
   let removed = 0
   /** 删到这一刻已经腾出的**进度**：只喂 `orphan` 的部分回执；成功回执念计划的合计。 */
@@ -376,41 +409,53 @@ export async function executeRemoval(
     // 归档集与账本在**任何删除之前**退掉：失败时目录还在，重试还能清；也不会留下"会话没了、归档集还挂着"的幽灵 id。
     for (const sessionId of plan.unarchive) {
       unarchived.push(sessionId)
+      // 归档摘除属于删除准备，与删目录同码（不单设码）。
+      writeProgress.step('deleting')
       await step('取消归档失败', sessionId, () => deps.host.unarchive(sessionId))
     }
     for (const member of plan.members) {
       const workspaceId = member.workspaceId
       if (workspaceId === undefined) continue
+      writeProgress.step('ledger')
       await step('摘账本失败', member.sessionId, () => deps.host.detach(member.sessionId, workspaceId))
     }
 
     // 回收站行：计划里 `present:false` 的行没有目录可删（执行期也不再问盘），但清册行仍要摘。
     for (const row of plan.trash) {
-      if (row.present) {
-        try {
-          await deps.fs.removeDir(row.dir)
-        } catch (error) {
-          fail('删除回收站目录失败', error, row.entry.sessionId)
-        }
-        deleted.add(row.entry.sessionId)
-        freedSoFar += row.bytes
-      }
       try {
-        await deps.ledger.remove(row.entry.id)
-      } catch (error) {
-        fail('摘除回收站条目失败', error, row.entry.sessionId)
+        if (row.present) {
+          try {
+            writeProgress.step('deleting')
+            await deps.fs.removeDir(row.dir)
+          } catch (error) {
+            fail('删除回收站目录失败', error, row.entry.sessionId)
+          }
+          deleted.add(row.entry.sessionId)
+          freedSoFar += row.bytes
+        }
+        try {
+          writeProgress.step('ledger')
+          await deps.ledger.remove(row.entry.id)
+        } catch (error) {
+          fail('摘除回收站条目失败', error, row.entry.sessionId)
+        }
+        removed += 1
+        await presence.memberGone(row.entry.sessionId)
+        // 只有这一行的目录/清册行确实处理完，才删**这一条会话**的投影缓存：删到一半失败时已删的照清、
+        // 没删成的不动；缓存删除失败只留 warning，不翻删除。
+        writeProgress.step('finishing')
+        await dropDeletedSessionCache(deps, row.entry.sessionId)
+      } finally {
+        // 成功与失败都算这条已处理；`/empty` 的 done 不是成功条数。
+        options?.onRowDone?.()
       }
-      removed += 1
-      await presence.memberGone(row.entry.sessionId)
-      // 只有这一行的目录/清册行确实处理完，才删**这一条会话**的投影缓存：删到一半失败时已删的照清、
-      // 没删成的不动；缓存删除失败只留 warning，不翻删除。
-      await dropDeletedSessionCache(deps, row.entry.sessionId)
     }
 
     // 盘上成员：标签按调用方区分（purge 说的是"盘上后代"，orphan-clean 说的是"会话目录"）。
     const memberLabel = plan.kind === 'trash' ? '删除盘上后代目录失败' : '删除会话目录失败'
     for (const member of plan.members) {
       try {
+        writeProgress.step('deleting')
         await deps.fs.removeDir(member.dir)
       } catch (error) {
         fail(memberLabel, error, member.sessionId)
@@ -420,21 +465,12 @@ export async function executeRemoval(
       freedSoFar += member.bytes
       await presence.memberGone(member.sessionId)
       // 同回收站行：这一条成员目录真的删掉了，才删这一条会话的缓存。
+      writeProgress.step('finishing')
       await dropDeletedSessionCache(deps, member.sessionId)
     }
 
-    // 附件对象最后动：会话目录已经真的没了，失败只计数、不回滚，也不改会话删除的字节。
-    // 删之前再复核一次独占：计划到这一刻窗口里新增的引用（同图再贴一次 / 派生存储新写一条）必须保住对象（ADR-0041）。
-    const attachmentPlan = await recheckImageRemovalExclusivity(deps, plan.attachments)
-    const attachments = await executeImageAttachmentRemoval(deps, attachmentPlan)
-    return {
-      removed,
-      freedBytes: plan.bytes,
-      attachments: {
-        ...attachments,
-        ...(attachmentPlan.skipped === undefined ? {} : { skipped: attachmentPlan.skipped }),
-      },
-    }
+    // 附件对象归批级尾（`executeAttachmentTail`）：全部组执行完之后统一复核 + 删除，尾只带走真删掉的目录的独占副本。
+    return { removed, freedBytes: plan.bytes }
   } catch (error) {
     // 目录不回滚（删了就是删了）；归档态不是——条目还在回收站、目录也还在的那些，用户随后恢复时
     // 恢复路径不会替他补归档（它只按 `wasArchived` 迁移旧条目），所以这里必须放回去（ADR-0040）。
@@ -448,5 +484,77 @@ export async function executeRemoval(
       }
     }
     throw rollbackFailures.length === 0 ? error : withRollbackFailures(error, rollbackFailures)
+  }
+}
+
+/** 批尾按组归出的附件读数（对象实况，不含 `skipped`——那是批级一句话，不拆）。 */
+export interface AttachmentGroupReading {
+  readonly removed: number
+  readonly freedBytes: number
+  readonly failed: number
+}
+
+/** 批级附件尾的回执：`run` 是全批合计（含 `skipped` 原文），`byGroupRun` 供批驱动拆回逐条读数
+ *  （失败对象已经按组记在它的 `failed` 格里，不另开一张表）；`recheckSkipped` 只在执行期复核读不出时给——
+ *  per-id 合成按这格结构化地挂原因，不拿合计句的子串当判据（判据的家只有一个，文案改一个字都不该改语义）。 */
+export interface AttachmentTailResult {
+  readonly run: AttachmentCleanupWire
+  readonly byGroupRun: ReadonlyMap<string, AttachmentGroupReading>
+  readonly recheckSkipped?: string
+}
+
+/** 归组读数的累加形（只在尾内部变；交出去按只读看）。 */
+interface TallyGroupReading {
+  removed: number
+  freedBytes: number
+  failed: number
+}
+
+/**
+ * 批级附件尾：整批**一次**复核（ADR-0041）+ 删除，在**全部组执行完之后**跑。
+ * **尾只带走真删掉的目录的独占副本**：引用扫描以盘上剩余引用源为判据 ⇒ 失败组没删掉的目录仍在扫描面里，
+ * 它们的图片自动保留；已删掉的目录的独占图片随尾清掉——附件红线「附件只随永久删除清」在失败路径上不再漏成孤儿。
+ * 复核与删除的顺序一格不换：先 `recheckImageRemovalExclusivity` 再 `executeImageAttachmentRemoval`；
+ * 复核剔除的对象不进任何组读数（没删就没读数），删除失败的按组计入 `byGroupRun.failed`（只记失败对象）。
+ * 对象单归属沿用计划期的 `byGroup`（先到先得）⇒ 批内各组读数相加 = `run` 的合计，不双计。
+ * `run.skipped` 原样带回计划期与复核两段原因——skipped 原文是 fail-closed 的用户可见落点（ADR-0041），不许丢。
+ */
+export async function executeAttachmentTail(
+  deps: AttachmentRemovalDeps,
+  batch: BatchAttachmentPlan,
+): Promise<AttachmentTailResult> {
+  // 步骤 tick（只加观测）：'attachments' 跟尾走——批级尾进门 tick 一次（唯一映射，执行器里不再有这一步）。
+  writeProgress.step('attachments')
+  const rechecked = await recheckImageRemovalExclusivity(deps, batch.plan)
+  const attachmentPlan = rechecked.plan
+  const run = await executeImageAttachmentRemoval(deps, attachmentPlan)
+
+  const groupOf = new Map<string, string>()
+  for (const [groupId, ids] of batch.byGroup) {
+    for (const id of ids) if (!groupOf.has(id)) groupOf.set(id, groupId)
+  }
+  const failedIds = new Set(run.failedIds)
+  const byGroupRun = new Map<string, TallyGroupReading>()
+  for (const entry of attachmentPlan.entries) {
+    const groupId = groupOf.get(entry.id)
+    if (groupId === undefined) continue
+    const slot = byGroupRun.get(groupId) ?? { removed: 0, freedBytes: 0, failed: 0 }
+    byGroupRun.set(groupId, slot)
+    if (failedIds.has(entry.id)) {
+      slot.failed += 1
+    } else {
+      slot.removed += 1
+      slot.freedBytes += entry.bytes
+    }
+  }
+  return {
+    run: {
+      removed: run.removed,
+      freedBytes: run.freedBytes,
+      failed: run.failed,
+      ...(attachmentPlan.skipped === undefined ? {} : { skipped: attachmentPlan.skipped }),
+    },
+    byGroupRun,
+    ...(rechecked.recheckSkipped === undefined ? {} : { recheckSkipped: rechecked.recheckSkipped }),
   }
 }

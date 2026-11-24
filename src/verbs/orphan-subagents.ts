@@ -1,10 +1,16 @@
 import { bareSessionId, orphanRootsOf } from '../domain/closure.js'
 import type { SessionIdentity } from '../ports/host-port.js'
 import type { TrashEntry } from '../trash/entry.js'
-import type { OrphanCleanStatsWire, OrphanReportWire } from '../shared/wire.js'
+import type { OrphanReportWire } from '../shared/wire.js'
 import type { CoreDeps, RemovalDeps } from '../deps.js'
 import { verbError } from '../errors.js'
-import { executeRemoval, measureMemberDir, planOrphanRemoval } from './permanent-removal.js'
+import {
+  executeRemoval,
+  measureMemberDir,
+  planOrphanRemoval,
+  type RemovalPlan,
+  type RemovalStats,
+} from './permanent-removal.js'
 
 /** 组里一个人的盘上身份（字节是**扫描那一刻**量的，清理时按目录重量一次，不拿这份快照冒充准数）。 */
 export interface OrphanMember {
@@ -114,16 +120,20 @@ export function reportOrphans(groups: readonly OrphanGroup[]): OrphanReportWire 
 }
 
 /**
- * 清一组：`planOrphanRemoval`（只读计划，整组 live 准入在一切写之前）→ `executeRemoval`（只写）。量目录、摘归档集与账本、
- * 删目录与成员通告的顺序和失败形状都住 `permanent-removal.ts`；这里只把这一组接上去。顺序与删除那一半**对偶**
- * 但不照抄：
+ * 清一组的**计划**（只读，整组 live 准入在一切写之前）：计划与测量住 `permanent-removal.ts`，这里只把这一组接上。
+ * 批驱动先逐组计划（一次批一扫要吃各组的 `attachmentDirs`）、后逐组执行——两步分家，别在这里合成一步。
+ */
+export async function planOrphanGroup(deps: CoreDeps, group: OrphanGroup): Promise<RemovalPlan> {
+  return await planOrphanRemoval(deps, group.members)
+}
+
+/**
+ * 清一组的**执行**（只写）：量目录、摘归档集与账本、删目录与成员通告的顺序和失败形状都住 `permanent-removal.ts`，
+ * 这里只把这一组的计划递上去。顺序与删除那一半**对偶**但不照抄：
  * - 删除那一半不碰归档（ADR-0008）；这里目录是**删掉**不是搬走 ⇒ 归档集**在写之前整批摘掉**：失败时目录还在可重试，
  *   不留"会话没了却还在归档集里挂着"的幽灵 id（`unarchive` 对未归档会话本就是幂等 no-op，无需那次 `wasArchived` 读）。
- * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 未分组，不是故障）；独占图片的剩余引用源由附件域自己扫。
+ * - 摘账本只在账本真记着它时做（`workspaceOf` 未命中 = 未分组，不是故障）；独占图片的剩余引用源由附件域在批级扫。
  */
-export async function cleanOrphanGroup(
-  deps: RemovalDeps,
-  group: OrphanGroup,
-): Promise<OrphanCleanStatsWire> {
-  return await executeRemoval(deps, await planOrphanRemoval(deps, group.members))
+export async function runOrphanGroup(deps: RemovalDeps, plan: RemovalPlan): Promise<RemovalStats> {
+  return await executeRemoval(deps, plan)
 }

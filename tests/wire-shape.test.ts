@@ -20,8 +20,10 @@ import {
   TRASH_DIR_NAME,
   VERB_CODES,
   WIRE_VALUE_GUARDS,
+  WRITE_PROGRESS_STEPS,
   isDSHRemoteError,
   isRemoteResult,
+  isWriteProgressWire,
   type TrashRowWire,
 } from '../src/shared/wire.js'
 import type { PurgeResultLike, TrashDetailLike, TrashEntryLike } from '../src/client/remote.js'
@@ -335,6 +337,7 @@ describe('线上值的轻量判形（WIRE_VALUE_GUARDS）', () => {
     projectionClean: { removed: 0, failed: 0 },
     archiveList: { available: false },
     archiveDetail: { ...DETAIL_VALUE, sessionId: 'session-a', archived: true },
+    progress: { status: 'idle' },
   }
 
   const guardsOf = (): Record<string, (value: unknown) => boolean> => WIRE_VALUE_GUARDS
@@ -363,6 +366,7 @@ describe('线上值的轻量判形（WIRE_VALUE_GUARDS）', () => {
       projectionClean: { removed: 0 },
       archiveList: { available: true, rows: [{}] },
       archiveDetail: { ...DETAIL_VALUE, sessionId: 'session-a' },
+      progress: { status: 'running' },
     }
     for (const [name, value] of Object.entries(invalid)) {
       expect(`${name}:${guardsOf()[name]?.(value) === true}`, `${name} 应拒绝不合法值`).toBe(`${name}:false`)
@@ -403,6 +407,61 @@ describe('线上值的轻量判形（WIRE_VALUE_GUARDS）', () => {
       kind: 'tool', callId: 'c', name: 'n', status: 'ok', args: '', result: '',
       argsTruncated: false, resultTruncated: false,
     })))).toBe(true)
+  })
+})
+
+describe('写入进度的判形（isWriteProgressWire）', () => {
+  // 进度形状不走 `/apply` 值那套 schema DSL：它是遥测快照，判形与 `list`/`ping` 同法手写。
+  // 表里那一格就是这枚谓词（浏览器半判形只问 `WIRE_VALUE_GUARDS`），钉住别名防止两处各长各的。
+  const RUNNING = {
+    status: 'running',
+    action: 'purge',
+    ids: ['a', 'b'],
+    done: 1,
+    total: 2,
+    step: 'deleting',
+    startedAt: 1_760_000_000_000,
+  }
+
+  it('idle 与 running 两臂的完整形状都放行；表里那一格就是这枚谓词', () => {
+    expect(isWriteProgressWire({ status: 'idle' })).toBe(true)
+    expect(isWriteProgressWire(RUNNING)).toBe(true)
+    expect(WIRE_VALUE_GUARDS.progress).toBe(isWriteProgressWire)
+  })
+
+  it('缺 ids、step 不在 WRITE_PROGRESS_STEPS、status:running 却没有 done 都回 false', () => {
+    expect(isWriteProgressWire({ ...RUNNING, ids: undefined })).toBe(false)
+    // 在册的每个 step 都放行（名单与判形同源），名单外的一律拒。
+    for (const step of WRITE_PROGRESS_STEPS) {
+      expect(isWriteProgressWire({ ...RUNNING, step })).toBe(true)
+    }
+    expect(isWriteProgressWire({ ...RUNNING, step: 'nope' })).toBe(false)
+    expect(isWriteProgressWire({ ...RUNNING, done: undefined })).toBe(false)
+  })
+
+  it('计数必须是安全非负整数且 done 不越过 total，起点时间必须是非负安全整数', () => {
+    const invalid = [
+      { done: -1 },
+      { done: 0.5 },
+      { total: -1 },
+      { total: 1.5 },
+      { done: 3 },
+      { done: Number.MAX_SAFE_INTEGER + 1 },
+      { total: Number.MAX_SAFE_INTEGER + 1 },
+      { startedAt: -1 },
+      { startedAt: 0.5 },
+      { startedAt: Number.MAX_SAFE_INTEGER + 1 },
+    ]
+    for (const patch of invalid) {
+      expect(isWriteProgressWire({ ...RUNNING, ...patch }), JSON.stringify(patch)).toBe(false)
+    }
+    expect(isWriteProgressWire({ ...RUNNING, done: 0, total: 0, startedAt: 0 })).toBe(true)
+  })
+
+  // `resuming` 不在册：步骤码→动作点的映射表里没有「冷 resume」这个动作点（ADR-0008 的冷 resume 归宿主
+  // 按需自己做，动词不碰）——码只表达动作点，不给既有事实挪造第二个名字；这是未发布契约的收窄。
+  it('步骤码名单收窄：resuming 不在册（映射表没有它的动作点）', () => {
+    expect(WRITE_PROGRESS_STEPS).not.toContain('resuming')
   })
 })
 

@@ -57,4 +57,19 @@ describe('createShrinkingView：收缩视图的持有机制（entry 适配与清
     expect(view.claim('p').verdict).toBe('fresh')
     expect(ids(view.view())).toEqual(['p', 'k', 'solo'])
   })
+
+  // 批预裁决的演化循环（entry 适配与清册作用域共用的那一份）：裁决只动本地那份视图，
+  // 执行视图要等 take——第二波补跑「失败组重新认领得到」的前提就钉在这里。
+  it('claimAll 输入序演化：同组后来者 carried、幽灵 absent，执行视图不动', () => {
+    const view = createShrinkingView(rows)
+    const claims = view.claimAll(['p', 'k', 'ghost'])
+    expect(claims.map((claim) => claim.verdict)).toEqual(['fresh', 'carried', 'absent'])
+    // 裁决没动手：同名单再走一遍 verdict 不变（执行视图还在），take 之后才换脸。
+    expect(view.claimAll(['p', 'k', 'ghost']).map((claim) => claim.verdict)).toEqual(['fresh', 'carried', 'absent'])
+    expect(ids(view.view())).toEqual(['p', 'k', 'solo'])
+    view.takeRows(['k'])
+    // 执行视图里没了、原始快照认得 ⇒ carried；父行自己还在 ⇒ fresh（摘子不扩组）。
+    expect(view.claimAll(['k'])[0]?.verdict).toBe('carried')
+    expect(view.claimAll(['p'])[0]?.verdict).toBe('fresh')
+  })
 })

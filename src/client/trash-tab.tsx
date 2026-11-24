@@ -281,7 +281,7 @@ export function TrashTabView({ tab, layout, t }: TrashTabViewProps) {
             style={BULK_DANGER}
             icon={<IconTrashOutlineRegular size={13} />}
             disabled={controller.busy}
-            onClick={() => controller.request({ kind: 'all' })}
+            onClick={() => controller.request({ kind: 'all', ids: entries.map((entry) => entry.id) })}
           >
             {t('trash.emptyAll')}
           </Button>

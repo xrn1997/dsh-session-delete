@@ -31,7 +31,7 @@ import { purgeFromPanel, restoreFromPanel, type WriteOutcome } from './write-sea
 /** 待确认的动作：一条、整个回收站、或多选一批（`ids` 已按清单顺序排好）；类型归状态机。 */
 export type PendingAction =
   | { kind: 'entry'; entry: TrashEntryLike }
-  | { kind: 'all' }
+  | { kind: 'all'; ids: readonly string[] }
   | { kind: 'entries'; ids: readonly string[] }
   | { kind: 'restore'; ids: readonly string[] }
 
@@ -40,7 +40,8 @@ export type PendingAction =
  * 输入的引用**不需稳定**：reload 回调经 `useLatest` 读最新那一份（判据住 `store.ts`）。
  */
 export interface TrashPanelControllerInput {
-  deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes'>
+  /** `progress` 不在这里读：slice 按「自己读或向下转发的」收——座位吃 `OneShotDeps`（含认领轮询那一格）。 */
+  deps: Pick<SessionDeleteRemote, 'detail' | 'applyOutcomes' | 'progress'>
   gate: BusyGate
   query: Pick<TrashQuery, 'list' | 'reload' | 'emptyTrash' | 'noteAttachmentCleanup'>
   ordered: readonly TrashEntryLike[]
@@ -300,11 +301,13 @@ export function useTrashPanelController(input: TrashPanelControllerInput): Trash
     if (target.kind === 'entry') return confirmApply('purge', [target.entry.id])
     if (target.kind === 'entries') return confirmApply('purge', target.ids)
     if (target.kind === 'restore') return confirmApply('restore', target.ids)
+    // 开框后清单可能已换版：发起清空这一拍重新冻结当前行身份，别拿开框时的旧名单认领服务端进度。
+    setPending({ kind: 'all', ids: (entries ?? []).map((entry) => entry.id) })
     const run = await emptyTrash()
     // blocked = 闸挡回（连点第二下）：框不收，界面后果全归在飞那一趟；控制器只负责收框。
     if (run.kind === 'blocked') return
     setPending(null)
-  }, [confirmApply, emptyTrash, pending])
+  }, [confirmApply, emptyTrash, entries, pending])
 
   return {
     busy: gate.busy,

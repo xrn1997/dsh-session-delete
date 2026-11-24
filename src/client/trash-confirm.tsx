@@ -7,11 +7,13 @@ import type { CSSProperties } from 'react'
 import { ConfirmDialog } from './confirm-dialog.js'
 import { absoluteText, splitOn, type Translate } from './copy.js'
 import type { OrphanReportWire } from '../shared/wire.js'
-import type { TrashEntryLike } from './remote.js'
+import type { OneShotDeps, TrashEntryLike } from './remote.js'
+import { useWriteProgress } from './use-write-progress.js'
 import { fileSizeText } from './ui/format.js'
 import { ELLIPSIS } from './ui/recipe.js'
 import { CARD, projectLabel } from './trash-view.js'
 import type { PendingAction } from './use-trash-panel-controller.js'
+import { WriteProgressLine } from './write-progress.js'
 
 /** 弹出的一批卡片（逐条说清这一批有哪些）：长清单在框内滚，标题与动作行留在框里。 */
 const CARD_LIST: CSSProperties = {
@@ -26,6 +28,7 @@ const CARD_LIST: CSSProperties = {
 /** 两种批量动作共用确认框壳：批量恢复把条目列成卡片（去向是每条各自的旧项目目录）；批量彻底删除
  *  只给条数——"不可恢复"那句警告才是要读的。 */
 export function TrashConfirm({
+  deps,
   pending,
   restoreEntries,
   busy,
@@ -34,6 +37,7 @@ export function TrashConfirm({
   onConfirmPurge,
   onConfirmRestore,
 }: {
+  deps: OneShotDeps
   pending: PendingAction
   restoreEntries: readonly TrashEntryLike[]
   busy: boolean
@@ -42,6 +46,13 @@ export function TrashConfirm({
   onConfirmPurge: () => void
   onConfirmRestore: (ids: readonly string[]) => void
 }) {
+  // 写身份认领（ADR-0069 决定 4）：k/N 只认这一趟在写的；清空用 pending 冻结的发起时行名单。
+  const own = pending.kind === 'restore' ? { action: 'restore' as const, ids: pending.ids }
+    : pending.kind === 'all' ? { action: 'empty' as const, ids: pending.ids }
+    : pending.kind === 'entries' ? { action: 'purge' as const, ids: pending.ids }
+    : { action: 'purge' as const, ids: [pending.entry.id] }
+  const face = useWriteProgress(deps, own, busy)
+
   if (pending.kind === 'restore') {
     return (
       <ConfirmDialog
@@ -50,6 +61,7 @@ export function TrashConfirm({
         cancelLabel={t('common.cancel')}
         confirmLabel={t('trash.confirm.restoreNow')}
         busy={busy}
+        busyLabel={t('progress.action.restore')}
         onCancel={onCancel}
         onConfirm={() => onConfirmRestore(pending.ids)}
       >
@@ -74,6 +86,7 @@ export function TrashConfirm({
           </div>
         )}
         <p>{t('trash.confirm.restore.body')}</p>
+        <WriteProgressLine face={face} t={t} />
       </ConfirmDialog>
     )
   }
@@ -91,6 +104,7 @@ export function TrashConfirm({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('trash.confirm.purge')}
       busy={busy}
+      busyLabel={pending.kind === 'all' ? t('progress.action.empty') : t('progress.action.purge')}
       onCancel={onCancel}
       onConfirm={onConfirmPurge}
       danger
@@ -126,24 +140,29 @@ export function TrashConfirm({
         <b style={{ color: 'var(--dsw-alias-state-error-primary)' }}>{body[1]}</b>
         {body[2]}
       </p>
+      <WriteProgressLine face={face} t={t} />
     </ConfirmDialog>
   )
 }
 
 /** 无主子会话的清理确认框。载荷是刚扫出来的那份报告，界面不重算。 */
 export function OrphanConfirm({
+  deps,
   report,
   busy,
   t,
   onCancel,
   onConfirm,
 }: {
+  deps: OneShotDeps
   report: OrphanReportWire
   busy: boolean
   t: Translate
   onCancel: () => void
   onConfirm: () => void
 }) {
+  // 进度认领按根 id（`orphan-clean` 的记录就是这些根）：k/N 是这一趟在清的。
+  const face = useWriteProgress(deps, { action: 'orphan-clean', ids: report.roots }, busy)
   return (
     <ConfirmDialog
       title={t('trash.orphans.confirm', { count: report.totalSessions })}
@@ -151,6 +170,7 @@ export function OrphanConfirm({
       cancelLabel={t('common.cancel')}
       confirmLabel={t('trash.orphans.clean')}
       busy={busy}
+      busyLabel={t('progress.action.orphanClean')}
       onCancel={onCancel}
       onConfirm={onConfirm}
       danger
@@ -179,6 +199,7 @@ export function OrphanConfirm({
       <p style={{ fontSize: 12, lineHeight: '17px', color: 'var(--sd-label-tertiary)' }}>
         {t('trash.orphans.cacheNote')}
       </p>
+      <WriteProgressLine face={face} t={t} />
     </ConfirmDialog>
   )
 }

@@ -9,9 +9,9 @@ import type { TrashEntry } from '../trash/entry.js'
 import { applyActions } from '../verbs/batch.js'
 import { configPatchOf, readOrSaveConfig } from '../verbs/config.js'
 import { routeError } from '../errors.js'
+import { runEmptyBatch } from '../verbs/empty-batch.js'
 import { reportOrphans, loadOrphanGroups } from '../verbs/orphan-subagents.js'
-import { createTrashScope } from '../verbs/trash-scope.js'
-import { executeRemoval } from '../verbs/permanent-removal.js'
+import { readWriteProgress } from '../verbs/write-progress.js'
 import { readTrashDetail } from '../trash/detail.js'
 import { readArchiveDetail } from '../trash/archive-detail.js'
 import { cleanOrphanImageAttachments } from '../trash/attachments.js'
@@ -361,10 +361,18 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = createRouteTable({
     response: 'json',
     // 清空回收站：聚合回执，不按条回——这是它单独一段的理由。**先对账再清**：手工搬进
     // `session-trash/` 的那一格清册里还没有行，只按 raw 索引清会留下点不开的目录。
-    run: async (deps, _body, read) => {
-      // 直接把这一份当快照交进清册作用域，一次 purgeAll() 清空；删除能力按调用点注入。
-      return await createTrashScope(deps, await read.rows(), (plan) => executeRemoval(deps, plan)).purgeAll()
-    },
+    // 批的驱动序（计划 → 一次批一扫 → 执行 → 批尾）归 `verbs/empty-batch.ts`：路由只声明怎么处理。
+    run: async (deps, _body, read) => await runEmptyBatch(deps, await read.rows()),
+  }),
+  progress: defineRoute('progress', {
+    slice: 'core',
+    // 纯读：写在飞时轮询也要立刻回，进链就等于被自己要观测的那趟写堵住。
+    purity: 'pure',
+    read: 'none',
+    response: 'json',
+    // 进度记录不进 deps（遥测不是世界依赖），处理就是把单例快照交出去。
+    // eslint-disable-next-line @typescript-eslint/require-await -- `run` 的契约面是 Promise（路由处理器统一 await）；读快照是同步的，为一条写法规则把这一格改成同步值等于改契约。
+    run: async () => readWriteProgress(),
   }),
   detail: defineRoute('detail', {
     slice: 'core',

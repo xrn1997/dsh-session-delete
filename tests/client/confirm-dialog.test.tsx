@@ -8,6 +8,7 @@ import { zhTranslate } from '../../src/client/copy.js'
 import type { OrphanReportWire } from '../../src/shared/wire.js'
 import type { TrashEntryLike } from '../../src/client/remote.js'
 import { OrphanConfirm, TrashConfirm } from '../../src/client/trash-confirm.js'
+import { createFakeRemote } from './support/fake-remote.js'
 
 const entry: TrashEntryLike = {
   id: 'a',
@@ -31,11 +32,12 @@ const report: OrphanReportWire = {
 
 const noop = (): void => {}
 
-/** 现成的壳：四件文案与正文钉死，只留 `busy` / `onCancel` / `danger` 三个旋钮。 */
+/** 现成的壳：四件文案与正文钉死，只留 `busy` / `onCancel` / `danger` / `busyLabel` 四个旋钮。 */
 function shell(props: {
   readonly danger?: boolean
   readonly busy?: boolean
   readonly onCancel?: () => void
+  readonly busyLabel?: string
 } = {}): ReactElement {
   return (
     <ConfirmDialog
@@ -47,6 +49,7 @@ function shell(props: {
       onCancel={props.onCancel ?? noop}
       onConfirm={noop}
       {...(props.danger === undefined ? {} : { danger: props.danger })}
+      {...(props.busyLabel === undefined ? {} : { busyLabel: props.busyLabel })}
     >
       <p>壳里的正文</p>
     </ConfirmDialog>
@@ -57,6 +60,8 @@ describe('确认框的关闭规则', () => {
   it('busy 时关闭无效且取消键置灰；空闲时才交回 onCancel', () => {
     const onCancel = vi.fn()
     const view = render(shell({ busy: true, onCancel }))
+    expect(screen.getByRole('dialog')).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('button', { name: '关闭对话框' })).toHaveAttribute('aria-disabled', 'true')
     expect(screen.getByRole('button', { name: '取消这一次' })).toBeDisabled()
     fireEvent.click(screen.getByRole('button', { name: '取消这一次' }))
     fireEvent.click(screen.getByRole('button', { name: '关闭对话框' }))
@@ -64,6 +69,8 @@ describe('确认框的关闭规则', () => {
     expect(onCancel).not.toHaveBeenCalled()
 
     view.rerender(shell({ busy: false, onCancel }))
+    expect(screen.getByRole('dialog')).not.toHaveAttribute('aria-busy')
+    expect(screen.getByRole('button', { name: '关闭对话框' })).not.toHaveAttribute('aria-disabled')
     expect(screen.getByRole('button', { name: '取消这一次' })).toBeEnabled()
     fireEvent.click(screen.getByRole('button', { name: '关闭对话框' }))
     expect(onCancel).toHaveBeenCalledTimes(1)
@@ -75,6 +82,7 @@ describe('各张确认框都走同一条关框规则', () => {
     const onCancel = vi.fn()
     const view = render(
       <TrashConfirm
+        deps={createFakeRemote()}
         pending={{ kind: 'restore', ids: ['a'] }}
         restoreEntries={[entry]}
         busy
@@ -91,6 +99,7 @@ describe('各张确认框都走同一条关框规则', () => {
 
     view.rerender(
       <TrashConfirm
+        deps={createFakeRemote()}
         pending={{ kind: 'restore', ids: ['a'] }}
         restoreEntries={[entry]}
         busy={false}
@@ -108,6 +117,7 @@ describe('各张确认框都走同一条关框规则', () => {
     const onCancel = vi.fn()
     const view = render(
       <TrashConfirm
+        deps={createFakeRemote()}
         pending={{ kind: 'entry', entry }}
         restoreEntries={[]}
         busy
@@ -124,6 +134,7 @@ describe('各张确认框都走同一条关框规则', () => {
 
     view.rerender(
       <TrashConfirm
+        deps={createFakeRemote()}
         pending={{ kind: 'entry', entry }}
         restoreEntries={[]}
         busy={false}
@@ -141,6 +152,7 @@ describe('各张确认框都走同一条关框规则', () => {
     const onCancel = vi.fn()
     const view = render(
       <OrphanConfirm
+        deps={createFakeRemote()}
         report={report}
         busy
         t={zhTranslate}
@@ -155,6 +167,7 @@ describe('各张确认框都走同一条关框规则', () => {
 
     view.rerender(
       <OrphanConfirm
+        deps={createFakeRemote()}
         report={report}
         busy={false}
         t={zhTranslate}
@@ -223,5 +236,34 @@ describe('共用的确认框页脚壳', () => {
     view.rerender(shell({ busy: false, onCancel }))
     fireEvent.click(document.querySelector('.sd-modal-mask') as Element)
     expect(onCancel).toHaveBeenCalledTimes(1)
+  })
+})
+
+// 忙碌面（spinner + 动作文案）：给了 `busyLabel` 才换文案，缺省时维持现状只置灰。
+describe('共用的忙碌面', () => {
+  it('busy + busyLabel ⇒ 确认钮换 spinner + 动作文案、仍 disabled、关框照旧拦住', () => {
+    const onCancel = vi.fn()
+    render(shell({ busy: true, busyLabel: '正在删除', onCancel }))
+    const button = screen.getByRole('button', { name: '正在删除' })
+    expect(button).toBeDisabled()
+    expect(button.querySelector('.sd-spinner')).not.toBeNull()
+    // 换的是文案不是叠加：原确认文案不该再出现在按钮上。
+    expect(screen.queryByRole('button', { name: '确认这一次' })).not.toBeInTheDocument()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByRole('button', { name: '取消这一次' })).toBeDisabled()
+    expect(onCancel).not.toHaveBeenCalled()
+  })
+
+  it('busy 但没给 busyLabel ⇒ 维持现状：确认钮还叫确认这一次、只置灰，没有 spinner', () => {
+    render(shell({ busy: true }))
+    const button = screen.getByRole('button', { name: '确认这一次' })
+    expect(button).toBeDisabled()
+    expect(button.querySelector('.sd-spinner')).toBeNull()
+  })
+
+  it('空闲时 busyLabel 不上屏（它只属于忙碌面）', () => {
+    render(shell({ busy: false, busyLabel: '正在删除' }))
+    expect(screen.getByRole('button', { name: '确认这一次' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: '正在删除' })).not.toBeInTheDocument()
   })
 })

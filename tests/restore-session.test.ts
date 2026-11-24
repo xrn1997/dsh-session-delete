@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import { applyActions } from '../src/verbs/batch.js'
 import { attachableWorkspaceId, isWorkspaceMissing, restoreSession } from '../src/verbs/restore-session.js'
+import { resetWriteProgress } from '../src/verbs/write-progress.js'
 import { makeEntryId, sessionDirOf, trashDirOf, type TrashEntry } from '../src/trash/entry.js'
 import { groupOf } from '../src/trash/groups.js'
 import type { HostIdentityPort } from '../src/ports/host-port.js'
 import { createFakeDeps, type FakeDeps, type FakeFs, type FakeHost } from './support/fake-deps.js'
-import { createLogWorld, failureOf, trashEntry } from './support/world.js'
+import { createLogWorld, expectSteps, failureOf, holdCalls, stepProbe, trashEntry } from './support/world.js'
 
 const HOME = '/h'
 const entry: TrashEntry = trashEntry('20260930T130500Z-session-abc', {
@@ -307,5 +309,33 @@ describe('恢复动词 · 整组（父回则孩子一起回）', () => {
       'evictLive(session-kidA)', 'announceRemoved(session-kidA)',
       'evictLive(session-parent)', 'announceRemoved(session-parent)',
     ])
+  })
+})
+
+// 步骤级 tick（写入进度）：映射住 `src/verbs/write-progress.ts`。恢复的收尾步是**批尾通告**（动词自己不发
+// 通告，ADR-0002），所以这条走 `applyActions` 整条动作，批尾那一格也钉进序列。放行点读记录器，不加测试专用状态。
+describe('恢复动词 · 步骤级 tick', () => {
+  it('moving（搬回）→ ledger（挂账本）→ ledger（旧条目取消归档）→ ledger（摘清册行）→ finishing（批尾通告）', async () => {
+    resetWriteProgress()
+    const { d, fs, host, manifest } = deps()
+    // 旧清单条目：迁移式取消归档那一步也走，序列里三种「元数据写」同码。
+    await manifest.add({ ...entry, wasArchived: false })
+    // 假件的 `manifest.remove` 不是 `vi.fn`，包一层原实现才挂得上放行闸。
+    const remove = vi.fn(manifest.remove)
+    manifest.remove = remove
+    const heldRename = holdCalls(fs.rename)
+    const heldAttach = holdCalls(host.attach)
+    const heldUnarchive = holdCalls(host.unarchive)
+    const heldRemove = holdCalls(remove)
+    const heldAnnounce = holdCalls(host.announceRestored)
+    const { observed, at } = stepProbe()
+    const run = applyActions(d, 'restore', [entry.id])
+    await at(heldRename)
+    await at(heldAttach)
+    await at(heldUnarchive)
+    await at(heldRemove)
+    await at(heldAnnounce)
+    await run
+    expectSteps(observed, ['moving', 'ledger', 'ledger', 'ledger', 'finishing'])
   })
 })

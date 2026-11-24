@@ -26,6 +26,7 @@ import {
   type TrashDetailWire,
   type TrashRowWire,
   type WireValueGuard,
+  type WriteProgressWire,
 } from '../shared/wire.js'
 import { apiPath } from './api-base.js'
 import { CLIENT_UNKNOWN_CODE, missingOutcomeMessage, readSingleReceipt } from './receipt.js'
@@ -73,13 +74,19 @@ export interface SessionDeleteRemote {
   /** 一组 id 上的同一动作：顶层 `ok:false` 只表示整次调用没办成，单条成败住在 `ApplyOutcome` 里。 */
   applyOutcomes(action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>>
   emptyTrash(): Promise<RemoteOutcome<PurgeResultLike>>
+  /** 纯读：在飞写入的进度快照（`idle` = 没写在飞，是成功值不是失败）。进度是小读，走独立短上限。 */
+  progress(signal?: AbortSignal): Promise<RemoteOutcome<WriteProgressWire>>
 }
 
 /** 插件设置页「可调项」卡只要这两件。 */
 export type ConfigDeps = Pick<SessionDeleteRemote, 'config' | 'saveConfig'>
 
-/** 需要那一段 `/apply` 的组件只要这一段 deps（单条非写调用见 {@link applyOne}，写动作走 `./write-seats.ts` 的六个座位）。 */
-export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes'>
+/** 只做写身份认领轮询的组件只要这一格（窄切片的口径同 {@link ConfigDeps}）：它自己不发起写。 */
+export type ProgressDeps = Pick<SessionDeleteRemote, 'progress'>
+
+/** 需要那一段 `/apply` 的组件只要这一段 deps（单条非写调用见 {@link applyOne}，写动作走 `./write-seats.ts` 的六个座位）；
+ *  `progress` 随身是因为写身份认领轮询（`./use-write-progress.ts`）跟写动作同一批组件进出，共用一份 deps。 */
+export type OneShotDeps = Pick<SessionDeleteRemote, 'applyOutcomes' | 'progress'>
 
 type RouteSeg = (typeof ROUTES)[keyof typeof ROUTES]
 
@@ -108,6 +115,9 @@ export const REQUEST_TIMEOUT_MS = 30_000
 
 /** 聚合读 / 批量写 / 清空的上限：工作量随盘上全量数据线性变长，共用 30s 会把「宿主还在干活」误判成超时。 */
 export const SLOW_REQUEST_TIMEOUT_MS = 120_000
+
+/** 进度是 300ms 轮询的遥测小读：半开连接最多冻结两秒，不能占满普通请求的 30 秒。 */
+export const PROGRESS_TIMEOUT_MS = 2_000
 
 /** 超时的固定中文原文：通道诊断是协议原文，不随 locale（见 `docs/architecture.md` §3）。 */
 export const REQUEST_TIMEOUT_MESSAGE = '取数通道超时：宿主没有在时限内回应'
@@ -263,6 +273,9 @@ export function createHttpRemote(options: HttpRemoteOptions = {}): SessionDelete
       [PARAMS.ids]: [...ids],
     }, WIRE_VALUE_GUARDS.apply, APPLY_ACTION_INDEX[action].slow ? slowTimeoutMs : timeoutMs),
     emptyTrash: () => requestOutcome<PurgeResultLike>(ROUTES.empty, {}, WIRE_VALUE_GUARDS.empty, slowTimeoutMs),
+    // 进度是遥测小读：独立短上限，半开连接不把 300ms 轮询的脸冻在旧帧。
+    progress: (signal) => requestOutcome<WriteProgressWire>(
+      ROUTES.progress, {}, WIRE_VALUE_GUARDS.progress, PROGRESS_TIMEOUT_MS, signal),
   }
 }
 
