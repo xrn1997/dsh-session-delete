@@ -136,6 +136,62 @@ describe('选择面 · 清单换了', () => {
   })
 })
 
+describe('选择面 · 范围勾选（Shift+点）', () => {
+  it('rangeCheck 勾上 ordered 序整段（含中间行）', () => {
+    const { result } = mount()
+    act(() => { result.current.toggleCheck('a2') })
+    act(() => { result.current.rangeCheck('b1') })
+    expect(result.current.checkedIds).toEqual(['a2', 'a1', 'b1'])
+  })
+
+  it('锚点缺失退化 toggleCheck（只勾目标一条）', () => {
+    const { result } = mount()
+    act(() => { result.current.rangeCheck('a1') })
+    expect(result.current.checkedIds).toEqual(['a1'])
+  })
+
+  it('exitSelect 清锚：重新进模式后 rangeCheck 退化单条', () => {
+    const { result } = mount()
+    act(() => { result.current.toggleCheck('a2') })
+    act(() => { result.current.exitSelect() })
+    act(() => { result.current.enterSelect() })
+    act(() => { result.current.rangeCheck('b1') })
+    expect(result.current.checkedIds).toEqual(['b1'])
+  })
+
+  it('锚点被折叠出 ordered ⇒ 退化单条（范围只跨可见行）', () => {
+    const { result } = mount()
+    act(() => { result.current.toggleCheck('a2') })
+    act(() => { result.current.toggleGroup('--A--') })
+    act(() => { result.current.rangeCheck('b1') })
+    // a2 还勾着（折叠行照算），但范围无从谈起 ⇒ 只多勾 b1、不捎上 a1
+    expect(result.current.checkedIds).toEqual(['a2', 'b1'])
+  })
+
+  it('反向 rangeCheck、取消勾选立锚、连续 range 不移锚', () => {
+    const { result } = mount()
+    act(() => { result.current.toggleCheck('b1') })
+    act(() => { result.current.rangeCheck('a2') })
+    expect(result.current.checkedIds).toEqual(['a2', 'a1', 'b1'])
+    // 取消勾选 a1 后锚点落在 a1，再 Shift+点 a2 只勾 a2..a1（不重勾已被取消的 b1）
+    act(() => { result.current.toggleCheck('b1') })
+    act(() => { result.current.toggleCheck('a1') })
+    act(() => { result.current.rangeCheck('a2') })
+    expect(result.current.checkedIds).toEqual(['a2', 'a1'])
+  })
+
+  it('清单更新删掉锚点行后，rangeCheck 退化为单条', () => {
+    const { result, rerender } = renderHook(
+      ({ rows: list }) => useListSelection({ rows: list, groups: groupByProject(list, zhTranslate, trashKeys), idOf }),
+      { initialProps: { rows } },
+    )
+    act(() => { result.current.toggleCheck('a2') })
+    rerender({ rows: rows.filter((entry) => entry.id !== 'a2') })
+    act(() => { result.current.rangeCheck('b1') })
+    expect(result.current.checkedIds).toEqual(['b1'])
+  })
+})
+
 describe('选择面 · 实例独立', () => {
   it('两台实例互不干扰（折叠集与勾选集按实例独立）', () => {
     // 回收站档与归档档各一台实例：同一个 id 打到两台上也不许串味（折叠/勾选都按实例走）。

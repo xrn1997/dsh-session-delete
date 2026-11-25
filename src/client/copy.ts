@@ -275,6 +275,9 @@ const ZH = {
 
   'menu.delete': '删除',
   'menu.live': '会话正在运行，先停止再删除',
+  'drop.refuseLive': '运行中的会话不能删除',
+  'drop.release': '松手删除',
+  'drop.deleting': '正在删除…',
   // 0.2.2+ 数据动作没有 disabledReason：禁用时直接把这个短句当 label。
   'menu.deleteLive': '删除（运行中）',
 
@@ -587,6 +590,9 @@ const EN: Record<CopyKey, string> = {
 
   'menu.delete': 'Delete',
   'menu.live': 'This session is running. Stop it first.',
+  'drop.refuseLive': 'A running session cannot be deleted',
+  'drop.release': 'Release to delete',
+  'drop.deleting': 'Deleting…',
   'menu.deleteLive': 'Delete (running)',
 
   'dialog.title': 'Delete this session?',

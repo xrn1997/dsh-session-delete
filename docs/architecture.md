@@ -123,6 +123,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 | 选中面 / 选择面 / 批量选中集与整行点击守卫 | `src/client/use-panel-selection.ts` · `src/client/use-list-selection.ts` · `src/client/batch-selection-store.ts` · `src/client/batch-pick.ts` |
 | 批量删除的呈现件（浮条 / 确认框 / 勾选控件 / 菜单行） | `src/client/batch-bar.tsx` · `src/client/batch-confirm.tsx` · `src/client/batch-select.tsx` · `src/client/batch-menu-item.tsx` |
 | 宿主行可见登记（行组件挂载登记，渲染侧只读快照） | `src/client/host-rows.ts` |
+| 拖放投放目标 / 拖放判定 / 状态机 | `src/client/trash-entry.tsx` · `src/client/trash-drop.ts` · `src/client/drop-machine.ts` |
 | 清单 DOM / 键盘契约 / 顶层浮层名单 | `src/client/session-list.tsx` · `src/client/trash-nav.ts` · `src/client/ui/top-layer.ts` |
 | 详情壳与块 / 详情读路 / 详情帧 / 子会话段 | `src/client/session-detail.tsx` · `src/client/detail-blocks.ts` · `src/client/use-detail-reader.ts` · `src/client/use-detail-frame.ts` · `src/client/subagent-section.tsx` |
 | 提问轨（画 + 补页落位） | `src/client/prompt-rail.tsx` · `src/client/use-prompt-rail.ts` |

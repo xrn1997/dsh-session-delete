@@ -5,12 +5,13 @@
  * **主勾选在行首**：宿主对行尾 `.rowActions` 是 `display:none`，只有行尾悬停/菜单打开才出现（app.asar 0.2.0-rc.2 的 `Rows` 渲染）；
  * 有状态点与归档行不渲染行首格，走行尾兜底（两条不会同时出现，靠 `ui.css` 的 `:has` 隐藏规则）。
  */
-import type { ReactElement } from 'react'
+import { useRef, type ReactElement } from 'react'
 import { zhTranslate, type Translate } from './copy.js'
 import { useHostRowRegistration } from './host-rows.js'
 import { type SessionDeleteRemote } from './remote.js'
 import { readReceipt } from './receipt.js'
 import { togglePick, useSelection } from './batch-selection-store.js'
+import { rangePick } from './batch-pick.js'
 import { Checkbox } from './ui/Checkbox.js'
 import { IconCheckOutlineRegular } from './ui/icons.js'
 import { Tooltip } from './ui/Tooltip.js'
@@ -55,6 +56,9 @@ export function BatchPickCheckbox({
   const { selecting, picks } = useSelection()
   // 行首槽也登记：只有行首槽渲染的宿主代次也不必单独兜底（ADR-0034 决定 1）。
   useHostRowRegistration(sessionId, { title, live })
+  // Shift 只在 click 上有、onChange 带不出来 ⇒ click 记一笔、change 分派（键盘点空格也走 click）。
+  // 必须在早退之前：hook 顺序不许随渲染分支变。
+  const shiftRef = useRef(false)
   const on = picks.some((candidate) => candidate.sessionId === sessionId)
   if (!selecting) return null
   const name = title === '' ? t('common.untitled') : title
@@ -68,7 +72,16 @@ export function BatchPickCheckbox({
       <Checkbox
         checked={on}
         label={t('batch.row.pick', { title: name })}
-        onChange={() => { togglePick({ sessionId, title }) }}
+        onClick={(event) => { shiftRef.current = event.shiftKey }}
+        onChange={() => {
+          const item = { sessionId, title }
+          if (shiftRef.current) {
+            shiftRef.current = false
+            rangePick(item)
+            return
+          }
+          togglePick(item)
+        }}
       />
     </span>
   )
@@ -112,7 +125,14 @@ export function BatchPickButton({
           aria-pressed={on}
           aria-label={t('batch.row.pick', { title: name })}
           disabled={live}
-          onClick={() => togglePick({ sessionId, title })}
+          onClick={(event) => {
+            const item = { sessionId, title }
+            if (event.shiftKey) {
+              rangePick(item)
+              return
+            }
+            togglePick(item)
+          }}
         >
           <IconCheckOutlineRegular size={14} />
         </button>

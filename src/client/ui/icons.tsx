@@ -1,18 +1,20 @@
 /**
- * 本插件 UI 层要用的图标。除**恢复箭头**外逐条抄自 `@deepseek-ai/dsh-client-ui-primitives`
- * 的明文产物（出处与改写规则见 `ui.css` 头注）。
+ * 本插件 UI 层要用的图标。除**两枚自绘字形**（恢复箭头与开盖垃圾桶）外逐条抄自
+ * `@deepseek-ai/dsh-client-ui-primitives` 的明文产物（出处与改写规则见 `ui.css` 头注）。
  *
- * 只留本插件用到的：垃圾桶、警示、文件夹（开盖填充 / 闭盒描边）、**实心三角**（分组头悬停时的
- * 折叠指示）、关闭叉、圆圈对勾、对勾、下折/右折 chevron、恢复（本插件自绘的回退箭头）、
+ * 只留本插件用到的：垃圾桶（常规与开盖）、警示、文件夹（开盖填充 / 闭盒描边）、**实心三角**（分组头悬停时的
+ * 折叠指示）、关闭叉、圆圈对勾、对勾、下折/右折 chevron、恢复（自绘回退箭头）、
  * 解除归档（`unarchive-outline`）、子会话分支（branch）。
  * **官方字形几何、`viewBox`、`strokeWidth` 逐字不动**——改了就不再与宿主同屏同形。
  * 官方每个字形自带自己的格子：多数 16×16，`unarchive-outline` 是 20×20（官方默认 `size` 也跟着格子走），
  * 所以共用外框 `IconFrame` 的 `viewBox` 可覆盖，默认仍是 16×16。
  *
- * **唯一的自绘字形是 `IconRestoreOutlineRegular`**（回收站行的「恢复」）：官方 `unarchive-outline` 说的是
- * "从归档里放出来"，对"把删掉的会话放回去"不表意、轮廓又与归档动作的"箱子"太近，`refresh-outline`
- * （顺时针圆箭头）读起来是"刷新"。归档档的「解除归档」则正用官方 `unarchive-outline`——宿主工作区行的
- * 同名动作就是那一枚（同为 `size={14}`）。自绘的 ↩ 沿用宿主 16×16 / 1px 描边的一族几何，不伪装成官方图标。
+ * **两枚自绘字形**：
+ * - `IconRestoreOutlineRegular`（回收站行的「恢复」）：官方 `unarchive-outline` 说的是
+ *   "从归档里放出来"，对"把删掉的会话放回去"不表意、轮廓又与归档动作的"箱子"太近，`refresh-outline`
+ *   （顺时针圆箭头）读起来是"刷新"。归档档的「解除归档」则正用官方 `unarchive-outline`——宿主工作区行的
+ *   同名动作就是那一枚（同为 `size={14}`）。自绘的 ↩ 沿用宿主 16×16 / 1px 描边的一族几何，不伪装成官方图标。
+ * - `IconTrashOpen`（拖放投放悬停/提交时的开盖垃圾桶）：宿主原语库没有开盖字形，按同一 16×16 / 1px 描边自绘。
  *
  * 两条与官方实现的差异（都是减法，不是改写）：
  * - 只暴露 `size`：调用处只传 `size`，不摊开官方整个图标 API。
@@ -62,6 +64,27 @@ export function IconTrashOutlineRegular({ size }: IconProps): ReactElement {
       />
       <path d="M6.44946 6.98926V11.1238" stroke="currentColor" />
       <path d="M9.55054 6.98926V11.1238" stroke="currentColor" />
+    </IconFrame>
+  )
+}
+
+/**
+ * 开盖垃圾桶（自绘，只在拖放悬停与提交态且可删时用——「张嘴等吞」是可删性的图标表达）。
+ * 与 `IconTrashOutlineRegular` 同一 16 网格与线宽，只换几何：桶口敞开（无顶沿横线），
+ * 盖子掀到左上（盖板 + 盖柄两笔）。宿主原语库无对应字形，故自绘。
+ */
+export function IconTrashOpen({ size }: IconProps): ReactElement {
+  return (
+    <IconFrame size={size}>
+      <path
+        d="M3.25 4.35L3.87 13.3C3.9 13.55 4.02 13.78 4.21 13.95C4.4 14.12 4.65 14.21 4.9 14.2H11.1C11.35 14.21 11.6 14.12 11.79 13.95C11.98 13.78 12.1 13.55 12.13 13.3L12.75 4.35"
+        stroke="currentColor"
+      />
+      <path d="M4.55 3.1L12.9 1.35" stroke="currentColor" />
+      <path
+        d="M7.9 2.42V1.35C7.9 1.16 8.06 1 8.25 1C8.44 1 8.6 1.16 8.6 1.35V2.13"
+        stroke="currentColor"
+      />
     </IconFrame>
   )
 }

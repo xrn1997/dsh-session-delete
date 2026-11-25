@@ -34,6 +34,9 @@ export interface BatchSelectionScene {
   exit(): void
   /** 翻转一条：没选过就排队尾，选过就摘掉（列表里永远不会有重复 id）。 */
   toggle(item: PickItem): void
+  /** Shift+点：按 `rows` 序勾上「锚点→item」整段（等价 add，去重保序）；锚点缺失或段内任一端不在
+   *  `rows` 里 ⇒ 退化为 `toggle` 并立锚（范围无从谈起）。锚点 = 最近一次 `toggle` 的那条；范围不移锚。 */
+  toggleRange(item: PickItem, rows: readonly PickItem[]): void
   /** 清空名单但**留在多选态**（「取消全选」那颗）；已经空了就不发通告。 */
   clear(): void
   /** 只追加还没选过的条目；原有选中在前、新条目按传入序接在后面。 */
@@ -44,6 +47,33 @@ export interface BatchSelectionScene {
 
 export function createBatchSelectionScene(): BatchSelectionScene {
   const selectionStore = createStore(INITIAL)
+  /** 范围勾选的锚点（Shift+点的起点）；只活在场景内部，不进 SelectionState 快照。exit/clear/reset 或被收缩剔除时清掉。 */
+  let anchor: string | null = null
+  /** `add` 的去重追加逻辑（`toggleRange` 与 `add` 共用一份判据）。 */
+  const appendNew = (current: SelectionState, items: readonly PickItem[]): SelectionState => {
+    const chosen = new Set(current.picks.map((item) => item.sessionId))
+    const additions: PickItem[] = []
+    for (const item of items) {
+      if (chosen.has(item.sessionId)) continue
+      chosen.add(item.sessionId)
+      additions.push(item)
+    }
+    return additions.length === 0 ? current : { ...current, picks: [...current.picks, ...additions] }
+  }
+  /** 单条翻转（`toggle` 与 `toggleRange` 的退化支共用）：翻哪条，锚点就落在哪条。 */
+  const flip = (item: PickItem): void => {
+    anchor = item.sessionId
+    selectionStore.update((current) => {
+      const at = current.picks.findIndex((candidate) => candidate.sessionId === item.sessionId)
+      return {
+        ...current,
+        picks:
+          at === -1
+            ? [...current.picks, item]
+            : current.picks.filter((candidate) => candidate.sessionId !== item.sessionId),
+      }
+    })
+  }
   return {
     get: (): SelectionState => selectionStore.get(),
     picks: (): readonly PickItem[] => selectionStore.get().picks,
@@ -55,41 +85,36 @@ export function createBatchSelectionScene(): BatchSelectionScene {
       selectionStore.update((current) => (current.selecting ? current : { ...current, selecting: true }))
     },
     exit(): void {
+      anchor = null
       selectionStore.update((current) =>
         current.selecting || current.picks.length > 0 ? INITIAL : current,
       )
     },
     toggle(item: PickItem): void {
-      selectionStore.update((current) => {
-        const at = current.picks.findIndex((candidate) => candidate.sessionId === item.sessionId)
-        return {
-          ...current,
-          picks:
-            at === -1
-              ? [...current.picks, item]
-              : current.picks.filter((candidate) => candidate.sessionId !== item.sessionId),
-        }
-      })
+      flip(item)
+    },
+    toggleRange(item: PickItem, rows: readonly PickItem[]): void {
+      const from = anchor === null ? -1 : rows.findIndex((candidate) => candidate.sessionId === anchor)
+      const to = rows.findIndex((candidate) => candidate.sessionId === item.sessionId)
+      if (from === -1 || to === -1) {
+        flip(item)
+        return
+      }
+      const [lo, hi] = from <= to ? [from, to] : [to, from]
+      selectionStore.update((current) => appendNew(current, rows.slice(lo, hi + 1)))
     },
     clear(): void {
+      anchor = null
       selectionStore.update((current) =>
         current.picks.length === 0 ? current : { ...current, picks: [] },
       )
     },
     add(items: readonly PickItem[]): void {
-      selectionStore.update((current) => {
-        const chosen = new Set(current.picks.map((item) => item.sessionId))
-        const additions: PickItem[] = []
-        for (const item of items) {
-          if (chosen.has(item.sessionId)) continue
-          chosen.add(item.sessionId)
-          additions.push(item)
-        }
-        return additions.length === 0 ? current : { ...current, picks: [...current.picks, ...additions] }
-      })
+      selectionStore.update((current) => appendNew(current, items))
     },
     shrinkToFailures(failedSessionIds: readonly string[]): void {
       const keep = new Set(failedSessionIds)
+      if (anchor !== null && !keep.has(anchor)) anchor = null
       // 保持既有语义：哪怕一条都没被剔掉也发一次通告（收缩发生在一次执行之后，订阅方按"执行完了"重读）。
       selectionStore.update((current) => ({
         ...current,
@@ -97,6 +122,7 @@ export function createBatchSelectionScene(): BatchSelectionScene {
       }))
     },
     reset(): void {
+      anchor = null
       selectionStore.reset()
     },
   }
@@ -129,6 +155,10 @@ export function exitSelection(): void {
 
 export function togglePick(item: PickItem): void {
   getDefaultClientScene().batchSelection.toggle(item)
+}
+
+export function toggleRangePick(item: PickItem, rows: readonly PickItem[]): void {
+  getDefaultClientScene().batchSelection.toggleRange(item, rows)
 }
 
 export function clearPicks(): void {

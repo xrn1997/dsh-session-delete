@@ -50,7 +50,11 @@ function makeSelection(over: {
   selectMode?: boolean
   checked?: readonly string[]
   collapsed?: readonly string[]
-}): ListSelection<TestRow> & { toggleCheck: ReturnType<typeof vi.fn>; toggleGroupCheck: ReturnType<typeof vi.fn> } {
+}): ListSelection<TestRow> & {
+  toggleCheck: ReturnType<typeof vi.fn>
+  toggleGroupCheck: ReturnType<typeof vi.fn>
+  rangeCheck: ReturnType<typeof vi.fn>
+} {
   const checked = new Set(over.checked ?? [])
   const collapsed = new Set(over.collapsed ?? [])
   const fully = (group: { rows: readonly TestRow[] }): boolean =>
@@ -69,6 +73,7 @@ function makeSelection(over: {
     toggleAllGroups: vi.fn(),
     toggleCheck: vi.fn(),
     toggleGroupCheck: vi.fn(),
+    rangeCheck: vi.fn(),
     groupFullyChecked: fully,
     groupPartiallyChecked: (group) => !fully(group) && group.rows.some((r) => checked.has(r.id)),
   }
@@ -217,5 +222,47 @@ describe('分组列 · 组头与失败落点', () => {
     expect(status).toHaveTextContent('原项目目录已不存在')
     expect(status.closest('[data-entry-id]')).toBe(screen.getByRole('row', { name: /标题 a1/ }))
     expect(document.querySelectorAll('[data-entry-id]')).toHaveLength(3)
+  })
+})
+
+describe('多选态的 Shift+点范围勾选', () => {
+  it('Shift+点行走 rangeCheck，普通点行仍走 toggleCheck', () => {
+    const { selection } = renderList({ selectMode: true })
+    fireEvent.click(screen.getByRole('row', { name: /标题 a2/ }), { shiftKey: true })
+    expect(selection.rangeCheck).toHaveBeenCalledWith('a2')
+    expect(selection.toggleCheck).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('row', { name: /标题 a2/ }))
+    expect(selection.toggleCheck).toHaveBeenCalledWith('a2')
+  })
+
+  it('勾选框 Shift+click 同样走 rangeCheck（且不冒泡到行）', () => {
+    const { selection } = renderList({ selectMode: true })
+    fireEvent.click(screen.getByLabelText('勾选「a2」这条会话'), { shiftKey: true })
+    expect(selection.rangeCheck).toHaveBeenCalledTimes(1)
+    expect(selection.rangeCheck).toHaveBeenCalledWith('a2')
+    expect(selection.toggleCheck).not.toHaveBeenCalled()
+  })
+
+  it('Ctrl+点行走 toggleCheck；多选态 Shift+mousedown 阻止选字，普通与非多选态不拦', () => {
+    const { selection } = renderList({ selectMode: true })
+    const row = screen.getByRole('row', { name: /标题 a2/ })
+    fireEvent.click(row, { ctrlKey: true })
+    expect(selection.toggleCheck).toHaveBeenCalledWith('a2')
+    expect(selection.rangeCheck).not.toHaveBeenCalled()
+
+    const plainDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    row.dispatchEvent(plainDown)
+    expect(plainDown.defaultPrevented).toBe(false)
+
+    const shiftDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, shiftKey: true })
+    row.dispatchEvent(shiftDown)
+    expect(shiftDown.defaultPrevented).toBe(true)
+
+    renderList({ selectMode: false })
+    const nonSelectRow = screen.getAllByRole('row', { name: /标题 a2/ }).at(-1)
+    if (nonSelectRow === undefined) throw new Error('未找到非多选态行')
+    const nonSelectShiftDown = new MouseEvent('mousedown', { bubbles: true, cancelable: true, shiftKey: true })
+    nonSelectRow.dispatchEvent(nonSelectShiftDown)
+    expect(nonSelectShiftDown.defaultPrevented).toBe(false)
   })
 })

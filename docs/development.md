@@ -58,7 +58,8 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`（`.github/w
 - **通道**：`ConnectionFetchRoute`（本仓窄镜像 `ConnectionFetchRouteLike`）的形状与宿主 `/api` 的 owner / 鉴权行为；锚点 `src/api/connection-route.ts`、ADR-0033。
 - **槽位**：贡献表点名的槽位仍是宿主已声明的官方槽位；名单与出处住 `src/client/index.tsx` 头注。
 - **主题**：用 `Theme.listTokens` 对照公开 token 面；新 token 的落法与已知差异见 `src/client/ui/ui.css` 头注，`tests/skeleton.test.ts` 钉别名层。
-- **行归属**：`data-row-key` 仍以 `session:` 前缀命名；锚点 `src/client/batch-pick.ts`、ADR-0034。
+- **行归属**：`data-row-key` 仍以 `session:` 前缀命名（点击守卫、范围勾选与拖放起拖都读它）；锚点 `src/client/batch-pick.ts`、`src/client/trash-entry.tsx`、ADR-0034 / ADR-0071。
+- **面板行结构**：`sidebar.panellist` 的行仍是包含 glyph 的 `<button>`（拖放命中与红色高亮按它收口）；锚点 `src/client/trash-entry.tsx`、ADR-0071。
 - **维护卡**：`plugins.bundle.config` 仍是宿主提供的 bundle 配置槽；理由住 ADR-0021。
 
 ## 真机验证（硬约束，别跳）
@@ -91,6 +92,8 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`（`.github/w
 
 - **Windows 沙箱下 node 的子进程 spawn 一律 EPERM**：vitest 起 esbuild 服务会撞上——那不是本仓代码的问题，换个不受限的执行环境即可。
 - **npm cache EPERM**：`npm view` 偶尔撞 `AppData\Local\npm-cache` 临时文件锁，重试或换查询方式。
+- **浏览器会缓存插件的 `lib/client.js`**（产物 URL 无哈希）：改浏览器半后，宿主重启、插件重装都可能仍在跑旧 bundle，**硬刷新页面**（Ctrl+Shift+R）才换新——「build 了没生效」先查这里。
+- **同版本 tarball 重装会被 pnpm 静默跳过**：`dsh plugin add` 对同版本号视为已满足；真机台架换包要先 `remove` 再 `add`，装完用 `grep` 构建产物里的新符号确认。
 - 回收站的运行时数据不在本仓：`$DSH_HOME/session-trash/`（本体）与 `$DSH_HOME/storages/`（内部索引，别手碰）；`DSH_HOME` 缺省是 `~/.dsh`。
 - 会话文件是**多帧** zstd，Node 自带 API 只给第一帧——读法与用例住 `src/log/zstd-frames.ts` 与 `tests/zstd-frames.test.ts`。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。

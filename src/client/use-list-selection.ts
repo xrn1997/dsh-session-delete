@@ -3,7 +3,7 @@
  * 两条承重规矩：**勾选顺序 = 清单从上往下**（不是点击顺序，折叠组里的行也算）；**清单换了就把已不
  * 存在的勾选剔掉**（清单未知 ≠ 没了）。行身份由 `idOf` 取，`groups` 由面板算好传进来。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLatest } from './store.js'
 import type { ProjectGroup } from './trash-view.js'
 
@@ -26,6 +26,9 @@ export interface ListSelection<R> {
   toggleGroup: (projectDir: string) => void
   toggleAllGroups: () => void
   toggleCheck: (id: string) => void
+  /** Shift+点：按 `ordered`（可见行）序勾上「锚点→id」整段；锚点缺失/不在 `ordered` ⇒ 退化
+   *  `toggleCheck(id)`（范围只跨可见行）。锚点 = 最近一次 `toggleCheck` 的那条；`exitSelect` 清锚。 */
+  rangeCheck: (id: string) => void
   /** 组头那颗：说的是"这个项目的全部会话"，折叠起来的行也算。勾满再点 = 整组取消。 */
   toggleGroupCheck: (group: { rows: readonly R[] }) => void
   groupFullyChecked: (group: { rows: readonly R[] }) => boolean
@@ -51,14 +54,17 @@ export function useListSelection<R>({
    * 不透明的 `null`，`localStorage` 那条路在真机上大概率直接抛。
    */
   const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set())
+  /** 范围勾选的锚点（Shift+点的起点）；`exitSelect` 清掉。 */
+  const anchorRef = useRef<string | null>(null)
 
   // 清单换了 ⇒ 勾着的那条可能已不存在（别处删了 / 恢复了）：剔掉它。清单未知（null）不算“没了”：
   // 这一拍只是不知道，勾选留着；读数回来 effect 会再跑一次，把真不在的行剔掉。
   useEffect(() => {
     if (rows === null) return
+    const alive = new Set(rows.map(keyOf))
+    if (anchorRef.current !== null && !alive.has(anchorRef.current)) anchorRef.current = null
     setChecked((current) => {
       if (current.size === 0) return current
-      const alive = new Set(rows.map(keyOf))
       const next = new Set([...current].filter((id) => alive.has(id)))
       return next.size === current.size ? current : next
     })
@@ -85,6 +91,17 @@ export function useListSelection<R>({
   const groupPartiallyChecked = (group: { rows: readonly R[] }): boolean =>
     !groupFullyChecked(group) && group.rows.some((row) => checked.has(keyOf(row)))
 
+  /** 单条翻转（`toggleCheck` 与 `rangeCheck` 的退化支共用）：翻哪条，锚点就落在哪条。 */
+  const flipCheck = (id: string): void => {
+    anchorRef.current = id
+    setChecked((current) => {
+      const next = new Set(current)
+      if (next.delete(id)) return next
+      next.add(id)
+      return next
+    })
+  }
+
   return {
     selectMode,
     checked,
@@ -96,6 +113,7 @@ export function useListSelection<R>({
     enterSelect: () => { setSelectMode(true) },
     /** 退出模式并清空名单：多选态和选中集是同一次交互的两半，退出后不该留下看不见的名单。 */
     exitSelect: () => {
+      anchorRef.current = null
       setSelectMode(false)
       setChecked(new Set())
     },
@@ -111,12 +129,19 @@ export function useListSelection<R>({
       setCollapsedGroups(allCollapsed ? new Set() : new Set(groups.map((group) => group.projectDir)))
     },
     toggleCheck: (id) => {
-      setChecked((current) => {
-        const next = new Set(current)
-        if (next.delete(id)) return next
-        next.add(id)
-        return next
-      })
+      flipCheck(id)
+    },
+    rangeCheck: (id) => {
+      const order = ordered.map(keyOf)
+      const from = anchorRef.current === null ? -1 : order.indexOf(anchorRef.current)
+      const to = order.indexOf(id)
+      if (from === -1 || to === -1) {
+        // 锚点缺失/不可见或目标不可见：范围无从谈起，退化单条（退化本身照旧立锚）。
+        flipCheck(id)
+        return
+      }
+      const [lo, hi] = from <= to ? [from, to] : [to, from]
+      setChecked((current) => new Set([...current, ...order.slice(lo, hi + 1)]))
     },
     toggleGroupCheck: (group) => {
       const ids = group.rows.map(keyOf)

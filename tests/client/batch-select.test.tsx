@@ -129,3 +129,44 @@ describe('多选态行尾兜底勾选开关', () => {
     expect(await screen.findByText('会话正在运行，先停止再删除')).toBeInTheDocument()
   })
 })
+
+describe('Shift+点范围勾选（控件面）', () => {
+  const ids = (): string[] => getPicks().map((item) => item.sessionId)
+
+  it('勾选框 Shift+click 走范围勾选：锚点到目标整段勾上', () => {
+    enterSelection()
+    render(
+      <>
+        <BatchPickCheckbox sessionId="a" title="A" />
+        <BatchPickCheckbox sessionId="b" title="B" />
+        <BatchPickCheckbox sessionId="c" title="C" />
+      </>,
+    )
+    fireEvent.click(screen.getByLabelText('勾选「A」以批量删除'))
+    fireEvent.click(screen.getByLabelText('勾选「C」以批量删除'), { shiftKey: true })
+    expect(ids()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('勾选框普通 click 仍切换单条', () => {
+    enterSelection()
+    render(<BatchPickCheckbox sessionId="a" title="A" />)
+    fireEvent.click(screen.getByLabelText('勾选「A」以批量删除'))
+    expect(ids()).toEqual(['a'])
+    fireEvent.click(screen.getByLabelText('勾选「A」以批量删除'))
+    expect(ids()).toEqual([])
+  })
+
+  it('行尾兜底开关同样吃 Shift+click', () => {
+    enterSelection()
+    render(
+      <>
+        <BatchPickButton sessionId="a" title="A" />
+        <BatchPickButton sessionId="b" title="B" />
+        <BatchPickButton sessionId="c" title="C" />
+      </>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: '勾选「A」以批量删除' }))
+    fireEvent.click(screen.getByRole('button', { name: '勾选「C」以批量删除' }), { shiftKey: true })
+    expect(ids()).toEqual(['a', 'b', 'c'])
+  })
+})

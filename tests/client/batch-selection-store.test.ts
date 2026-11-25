@@ -16,6 +16,7 @@ import {
   resetSelection,
   shrinkPicksToFailures,
   togglePick,
+  toggleRangePick,
   useSelection,
 } from '../../src/client/batch-selection-store.js'
 
@@ -131,6 +132,72 @@ describe('清空与追加', () => {
     addPicks([])
     addPicks([{ sessionId: 'a', title: 'A' }])
     expect(getSelection()).toBe(snapshot)
+  })
+})
+
+describe('范围勾选（Shift+点）', () => {
+  const item = (sessionId: string): { sessionId: string; title: string } =>
+    ({ sessionId, title: sessionId.toUpperCase() })
+  const rows = ['a', 'b', 'c', 'd'].map(item)
+
+  it('toggleRange 勾上锚点到目标整段：原勾选在前、新条目按 rows 序接后', () => {
+    togglePick(item('a'))
+    toggleRangePick(item('c'), rows)
+    expect(ids()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('toggleRange 无锚点时退化为 toggle 并立锚', () => {
+    toggleRangePick(item('b'), rows.slice(0, 2))
+    expect(ids()).toEqual(['b'])
+    toggleRangePick(item('d'), rows)
+    expect(ids()).toEqual(['b', 'c', 'd'])
+  })
+
+  it('exit 清锚点：重新进模式后 toggleRange 退化单条', () => {
+    togglePick(item('a'))
+    exitSelection()
+    enterSelection()
+    toggleRangePick(item('c'), rows.slice(0, 3))
+    expect(ids()).toEqual(['c'])
+  })
+
+  it('反向 Shift+点：从下方锚点上选到上方目标', () => {
+    togglePick(item('d'))
+    toggleRangePick(item('b'), rows)
+    expect(ids()).toEqual(['d', 'b', 'c'])
+  })
+
+  it('取消勾选某条也以它立锚，且连续 Shift+点不移锚', () => {
+    togglePick(item('a'))
+    togglePick(item('b'))
+    // 取消 b，锚点落在 b
+    togglePick(item('b'))
+    toggleRangePick(item('d'), rows)
+    expect(ids()).toEqual(['a', 'b', 'c', 'd'])
+    // 锚点仍是 b，不因上一次 range 移走：清掉 d 后再 Shift+点 a 应勾上 a..b，不把 c/d 重勾回来
+    togglePick(item('d'))
+    // 重新以 b 立锚验证连续 range 不移锚
+    clearPicks()
+    togglePick(item('b'))
+    toggleRangePick(item('d'), rows)
+    expect(ids()).toEqual(['b', 'c', 'd'])
+    toggleRangePick(item('a'), rows)
+    expect(ids()).toEqual(['b', 'c', 'd', 'a'])
+  })
+
+  it('clearPicks 与 shrinkPicksToFailures 会清理失效锚点', () => {
+    togglePick(item('a'))
+    clearPicks()
+    toggleRangePick(item('c'), rows)
+    expect(ids()).toEqual(['c'])
+
+    togglePick(item('a'))
+    togglePick(item('b'))
+    // b 留存、a 被剔除 ⇒ 退化单条只勾 c，但若锚点留在失败集里则仍可起算
+    togglePick(item('a'))
+    shrinkPicksToFailures(['b'])
+    toggleRangePick(item('d'), rows)
+    expect(ids()).toEqual(['b', 'd'])
   })
 })
 

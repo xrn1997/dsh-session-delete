@@ -467,3 +467,28 @@ describe('写入进度文案键', () => {
     expect(en('progress.working')).toContain('…')
   })
 })
+
+describe('拖放删除文案键', () => {
+  const DROP_KEYS = ['drop.refuseLive', 'drop.release', 'drop.deleting'] as const
+
+  it('zh 与 en 逐键镜像：不是键名、en 不带中文', () => {
+    expect(zhTranslate('drop.refuseLive')).toBe('运行中的会话不能删除')
+    expect(zhTranslate('drop.release')).toBe('松手删除')
+    expect(zhTranslate('drop.deleting')).toBe('正在删除…')
+
+    const service = fakeLocale()
+    createTranslate(contextWith(service))
+    const [, dicts] = service.register.mock.calls[0] as [
+      string,
+      { zh: Record<string, string>; en: Record<string, string> },
+    ]
+    for (const key of DROP_KEYS) {
+      expect(dicts.en[key], key).toBeDefined()
+      expect(dicts.en[key], key).not.toBe(key)
+      expect(dicts.en[key], key).not.toMatch(/[\u4e00-\u9fff]/)
+    }
+    expect(dicts.en['drop.refuseLive']).toBe('A running session cannot be deleted')
+    expect(dicts.en['drop.release']).toBe('Release to delete')
+    expect(dicts.en['drop.deleting']).toBe('Deleting…')
+  })
+})

@@ -96,7 +96,7 @@ const DEAD_NAMES: ReadonlyArray<readonly [RegExp, string]> = [
   [/设计稿\s*§|稿\s*§/, '「设计稿 §N」指向已删的批次日志；改指还活着的家'],
   [/复核候选|候选\s*[0-9一二三四五六七八九十百零]+/, '候选编号随批次日志一起删了；要指裁决就指 ADR 篇号，要指判据就指文件或测试'],
   [/`docs\/adr\/\d{4}/, 'ADR 互引统一写 `ADR-NNNN`；文件路径只写 `docs/adr/` 或 `docs/adr/README.md`'],
-  [/\.superpowers\/[A-Za-z0-9_-]+\/?[A-Za-z0-9_.-]*\.(?:md|json|ts|js|cjs|mjs)/, '本机过程产物不是可回查的出处'],
+  [/\.superpowers\/[A-Za-z0-9_-]+\/?[A-Za-z0-9_.-]*\.(?:md|json|ts|tsx|js|cjs|mjs|html|css)/, '本机过程产物不是可回查的出处'],
 ]
 
 /** 每个 `§N` 指路必须点名一个还活着的家（本节内部则写「本文 §N」）。 */

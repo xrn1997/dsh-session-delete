@@ -2,7 +2,7 @@
 
 Status: accepted
 
-批量浮条要知道「页面上此刻有哪些可勾选的会话行」。ADR-0015 让 `src/client/host-rows.ts` 用 `MutationObserver` + `data-row-key` 扫描宿主 DOM 来回答；这违反 DSH 官方插件实践（框架驱动、插件不自己 rescan DOM），也把宿主行结构当成事实源。现在改成：**每个会话行的插件槽位组件在挂载时登记自己、卸载时注销**，批量浮条订阅这份登记；DOM 只剩一处——整行点击守卫用它把指针下的 `data-row-key` 映射成会话 id，不再用于枚举可见行。
+批量浮条要知道「页面上此刻有哪些可勾选的会话行」。ADR-0015 让 `src/client/host-rows.ts` 用 `MutationObserver` + `data-row-key` 扫描宿主 DOM 来回答；这违反 DSH 官方插件实践（框架驱动、插件不自己 rescan DOM），也把宿主行结构当成事实源。现在改成：**每个会话行的插件槽位组件在挂载时登记自己、卸载时注销**，批量浮条订阅这份登记；DOM 只剩受约束的读取——整行点击守卫把指针下的 `data-row-key` 映射成会话 id，不再用于枚举可见行；拖放与范围勾选后来新增的读取见 ADR-0071。
 
 本文取代 ADR-0015：可见行的数据源从 DOM 观察换成槽位登记；ADR-0015 的渲染快照订阅骨架（`createLazyStore`）继续沿用。
 
@@ -32,7 +32,7 @@ Status: accepted
 - `src/client/host-rows.ts` 从「DOM 观察 + 行登记」缩成「可见行 registry + 行查找」；`useVisibleSelectableRows` 的订阅骨架保留，数据源换成 registry。
 - 批量浮条的「已选 / 可见」计数与全选不再依赖 MutationObserver；DOM 变更不会触发整条浮条重算。
 - 宿主行的标题/live 从槽位 props 来，不再有第二份 DOM 读数。
-- 受约束偏离只剩一处，且写在 `batch-pick.ts` 头注与本文边界里；不会随下一次重构再长出第二处。
+- 受约束偏离不止一处：批量选择这一面的点击守卫住 `batch-pick.ts` 头注与本文边界；拖放投放与范围勾选新增的宿主 DOM 读取是另一面，逐条登记在 ADR-0071，不并入本文。
 
 ## 被否掉的替代
 

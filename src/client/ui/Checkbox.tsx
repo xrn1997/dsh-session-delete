@@ -12,7 +12,7 @@
  * **`stopPropagation` 不是可有可无的**：清单整行是个点击目标（多选态下"点行=切换勾选"），
  * 勾选框住在行里。不拦住冒泡，点框这一下会被行再处理一次 ⇒ 勾上又立刻取消，看起来像"点不动"。
  */
-import { useEffect, useRef, type ReactElement } from 'react'
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react'
 
 export interface CheckboxProps {
   checked: boolean
@@ -26,6 +26,9 @@ export interface CheckboxProps {
   /** 只给读屏的名字（视觉上这一格没有文字）。 */
   label: string
   disabled?: boolean
+  /** 原生 input 的 onClick 原样透传（可选）：鼠标修饰键（Shift+点范围勾选）只在 click 上有，
+   *  `onChange` 带不出来。不传时行为与旧面完全一致。 */
+  onClick?: (event: ReactMouseEvent<HTMLInputElement>) => void
 }
 
 export function Checkbox({
@@ -34,6 +37,7 @@ export function Checkbox({
   onChange,
   label,
   disabled = false,
+  onClick,
 }: CheckboxProps): ReactElement {
   const input = useRef<HTMLInputElement | null>(null)
   useEffect(() => {
@@ -49,6 +53,7 @@ export function Checkbox({
         aria-label={label}
         aria-checked={indeterminate ? 'mixed' : checked}
         onChange={(event) => { onChange(event.target.checked) }}
+        onClick={onClick}
       />
     </span>
   )

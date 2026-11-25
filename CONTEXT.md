@@ -244,3 +244,13 @@ _Avoid_: 下钻（那专指窄档清单→详情）。
 同一类异步读里只有最新发起的那次允许落地；只做 compare-and-set。重读节奏与清单读路都投影它。
 _唯一实现_: `src/client/store.ts` 的 `createLatestWins`；消费者 `src/client/use-gated-refresh.ts` / `src/client/use-panel-list-read.ts`。
 _Avoid_: 防抖、节流（它不改变发起时机）。
+
+**拖放删除（drag delete）**:
+会话行拖到侧栏「回收站」入口松手即删：不弹确认框，撤销横幅兜底；payload 是宿主拖拽写进 `text/plain` 的 session id，未登记 id 静默忽略；拒收（运行中的行、写入被拒）是**动效**不是状态——抖动 + 原因胶囊，「删不动」只有一套视觉；拖的行在多选勾选集里时一拖删整集。
+_唯一实现_: `src/client/trash-drop.ts` 的 `DropPlan` / `resolveDropPlan`；状态机 `src/client/drop-machine.ts` 的 `createDropTargetMachine`；投放面 `src/client/trash-entry.tsx` 的 `TrashPanelIcon`。
+_Avoid_: 拖拽回收（是删除不是归档）、拖拽彻底删除（永久删除永远走确认框）。
+
+**范围勾选（range check）**:
+多选模式内 Shift+点把「锚点→目标」整段并入勾选（不替换、不反勾）；锚点 = 最近一次单条勾 / 取消的那条，锚点缺失或不可见就退化成单条；范围只跨可见行。
+_唯一实现_: `src/client/batch-selection-store.ts` 的 `toggleRange` / `toggleRangePick`；`src/client/use-list-selection.ts` 的 `rangeCheck`；宿主列表的分派 `src/client/batch-pick.ts` 的 `rangePick`。
+_Avoid_: 范围选择（与「选中看详情」的「选中」撞词）。

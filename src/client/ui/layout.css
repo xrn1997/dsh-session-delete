@@ -421,3 +421,100 @@
     opacity: 1;
   }
 }
+
+/*
+ * 拖放删除（`docs/ui-spec.md` §1、`ADR-0071`）：
+ * 全链红色、4 态 × ok/blk 两档、拒收是动效不是状态。高亮圈**宿主行本体**——`:has` 认行内投放标记
+ * 上的 `data-dst-*` attr（不认宿主哈希类名，跟着宿主换代会漂）；outline 不占布局，-2px 内移防裁边。
+ * 时长：档位过渡 140ms、吞入回弹 240ms、抖动 220ms×2、胶囊 1600ms 自灭（计时在组件）；prefers-reduced-motion 全瞬切。
+ */
+button:has([data-dsh-session-delete='trash-drop']) {
+  transition: background-color 140ms ease-out, outline-color 140ms ease-out;
+}
+
+button:has([data-dsh-session-delete='trash-drop'][data-dst-state='armed']) {
+  outline: 2px solid color-mix(in srgb, var(--dsw-alias-state-error-primary) 55%, transparent);
+  outline-offset: -2px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 7%, transparent);
+}
+
+button:has([data-dsh-session-delete='trash-drop'][data-dst-state='over']),
+button:has([data-dsh-session-delete='trash-drop'][data-dst-state='committing']) {
+  outline: 2px solid var(--dsw-alias-state-error-primary);
+  outline-offset: -2px;
+  background: var(--sd-interactive-bg-hover-danger);
+}
+
+[data-dsh-session-delete='trash-drop'][data-dst-state='committing'] [data-dst-icon] {
+  animation: sd-drop-swallow 240ms ease-out 1;
+}
+
+@keyframes sd-drop-swallow {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  40% {
+    transform: translateY(2px) scale(0.88);
+  }
+}
+
+button:has([data-dsh-session-delete='trash-drop'][data-dst-shake='true']) {
+  animation: sd-drop-shake 220ms ease-in-out 2;
+}
+
+@keyframes sd-drop-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+
+  25% {
+    transform: translateX(-3px);
+  }
+
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+/* 拖放胶囊（「松手删除」/「正在删除…」/拒收原因）：portal 到 body、fixed 锚在宿主行下缘，
+   不占布局、不参与命中（pointer-events: none）。红底白字 = 反白文本走 on-fill token 并带安全兜底。 */
+.sd-drop-pill {
+  position: fixed;
+  z-index: 1100;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(320px, calc(100vw - 24px));
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--dsw-alias-state-error-primary);
+  /* 反白文本用宿主「有色底上的文字」token（两主题都是近白），并兜底纯白固定色。 */
+  color: var(--dsw-alias-label-on-color, var(--dsw-static-neutral-bluish-00, #fff));
+  /* 排版照 `.sd-tooltip-bubble`（ui.css 抄本）逐字对齐：13/20、字重继承。 */
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+  overflow-wrap: break-word;
+  box-shadow: var(--sd-elevation-prominent);
+  pointer-events: none;
+  animation: sd-drop-pill-in 140ms ease-out;
+}
+
+@keyframes sd-drop-pill-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button:has([data-dsh-session-delete='trash-drop']),
+  button:has([data-dsh-session-delete='trash-drop'][data-dst-shake='true']),
+  [data-dsh-session-delete='trash-drop'][data-dst-state='committing'] [data-dst-icon],
+  .sd-drop-pill {
+    transition: none;
+    animation: none;
+  }
+}

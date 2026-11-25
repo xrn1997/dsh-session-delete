@@ -60,6 +60,8 @@ export interface UndoNoticeScene {
   owns(current: UndoNotice): boolean
   /** 撤销失败：把原因换到同一条横幅上；横幅已经不在了就献给待显示队。 */
   fail(current: UndoNotice, message: string): void
+  /** 裸失败：没有落点横幅的失败（拖放被拒一类）直接进待显示失败队，无横幅时顶上、有横幅时排队。 */
+  publishFailure(message: string): void
   /** 场景收场：两份现场与 seq 归零。 */
   reset(): void
 }
@@ -119,6 +121,9 @@ export function createUndoNoticeScene(): UndoNoticeScene {
       }
       noticeStore.publish((seq) => ({ ...current, seq, failure: message }))
     },
+    publishFailure(message: string): void {
+      failureStore.publish((seq) => ({ seq, failure: message }))
+    },
     reset(): void {
       noticeStore.reset()
       failureStore.reset()
@@ -171,4 +176,9 @@ export function ownsNotice(current: UndoNotice): boolean {
 
 export function failNotice(current: UndoNotice, message: string): void {
   getDefaultClientScene().undo.fail(current, message)
+}
+
+/** 裸失败提示（无落点横幅的失败）：拖放被拒一类的短句直接上屏。 */
+export function publishFailureNotice(message: string): void {
+  getDefaultClientScene().undo.publishFailure(message)
 }

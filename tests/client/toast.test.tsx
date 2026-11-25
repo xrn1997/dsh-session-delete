@@ -1,6 +1,13 @@
 import { act, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Toast } from '../../src/client/ui/Toast.js'
+import { UndoToast } from '../../src/client/undo-toast.js'
+import {
+  clearUndoNotice,
+  publishFailureNotice,
+  publishUndoNotice,
+} from '../../src/client/undo-notices.js'
+import { createFakeRemote } from './support/fake-remote.js'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -47,5 +54,22 @@ describe('Toast 正文与副行', () => {
     const button = screen.getByRole('button', { name: '撤销' })
     const status = screen.getByRole('status')
     expect(button.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+})
+
+describe('裸失败提示（publishFailure：拖放被拒等无落点失败）', () => {
+  it('无横幅时失败原文由 undo-toast 顶上', () => {
+    render(<UndoToast deps={createFakeRemote()} />)
+    act(() => { publishFailureNotice('运行中的会话不能删除') })
+    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能删除')
+  })
+
+  it('有横幅时失败排队不被吞：横幅熄掉后顶上', () => {
+    render(<UndoToast deps={createFakeRemote()} />)
+    act(() => { publishUndoNotice({ entryId: 'e1', title: 'T' }) })
+    act(() => { publishFailureNotice('运行中的会话不能删除') })
+    expect(screen.getByRole('alert')).toHaveTextContent('已移入回收站')
+    act(() => { clearUndoNotice() })
+    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能删除')
   })
 })

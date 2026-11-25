@@ -211,6 +211,9 @@ export function SessionList<R>({
                 const view = rowOf(row)
                 const checked = selection.checked.has(view.id)
                 const selected = view.id === activeId
+                // Shift 只在 click 上有、onChange 带不出来 ⇒ click 记一笔、change 分派。
+                // map 里不能用 hook，用每行一个闭包标志（与 BatchPickCheckbox 的 ref 同一判据）。
+                let rowShift = false
                 return (
                   <div
                     key={view.id}
@@ -223,9 +226,18 @@ export function SessionList<R>({
                     {...{ [dom.idAttr]: view.id }}
                     style={selected ? ROW_SELECTED : ROW}
                     {...intentPrefetchHandlers(prefetch, row)}
-                    onClick={() => {
+                    onMouseDown={(event) => {
+                      // 浏览器原生 Shift+点选字发生在 mousedown；多选态拦住它以免拉出大面积文字选中。
+                      if (selection.selectMode && event.shiftKey) event.preventDefault()
+                    }}
+                    onClick={(event) => {
                       // 多选态下点行是「勾上/取消这一条」，不再切详情（`docs/ui-spec.md` §2 ④）。
+                      // Shift+点 = 范围勾选（锚点→本行整段）。
                       if (selection.selectMode) {
+                        if (event.shiftKey) {
+                          selection.rangeCheck(view.id)
+                          return
+                        }
                         selection.toggleCheck(view.id)
                         return
                       }
@@ -237,7 +249,15 @@ export function SessionList<R>({
                         <Checkbox
                           checked={checked}
                           label={view.checkLabel}
-                          onChange={() => { selection.toggleCheck(view.id) }}
+                          onClick={(event) => { rowShift = event.shiftKey }}
+                          onChange={() => {
+                            if (rowShift) {
+                              rowShift = false
+                              selection.rangeCheck(view.id)
+                              return
+                            }
+                            selection.toggleCheck(view.id)
+                          }}
                         />
                       </div>
                     ) : null}

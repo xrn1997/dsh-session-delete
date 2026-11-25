@@ -97,7 +97,7 @@ type DepsTComponent =
   | ComponentType<ComponentProps<typeof BatchConfirmHost>>
   | ComponentType<ComponentProps<typeof TrashPanel>>
   | ComponentType<ComponentProps<typeof SettingsCards>>
-type NoneComponent = ComponentType<ComponentProps<typeof TrashPanelIcon>>
+  | ComponentType<ComponentProps<typeof TrashPanelIcon>>
 
 interface SlotContributionBase {
   readonly slot: string
@@ -109,7 +109,6 @@ interface SlotContributionBase {
 type SlotContribution =
   | (SlotContributionBase & { readonly payload: 't'; readonly component: TComponent })
   | (SlotContributionBase & { readonly payload: 'deps+t'; readonly component: DepsTComponent })
-  | (SlotContributionBase & { readonly payload: 'none'; readonly component: NoneComponent })
 
 /** 表本身就是注册顺序（测试里的 `injected` 数组也按它）。 */
 function contributions(t: Translate): readonly SlotContribution[] {
@@ -133,12 +132,12 @@ function contributions(t: Translate): readonly SlotContribution[] {
     // 批量浮条与确认框：浮条跟着勾选重绘，确认框必须脱离行子树的生命周期
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-bar` }, payload: 'deps+t', component: BatchBar },
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-confirm` }, payload: 'deps+t', component: BatchConfirmHost },
-    // 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们只出一个 glyph；名字走 thunk（宿主每次重读时求值、
-    // 语言变化时重读）。
+    // 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们出 glyph + 拖放投放目标（`trash-entry.tsx`）；
+    // 名字走 thunk（宿主每次重读时求值、语言变化时重读）。
     {
       slot: PANEL_SLOT,
       spec: { name: PANEL_SLOT, id: PANEL_ID, order: 900, label: () => t('trash.title') },
-      payload: 'none',
+      payload: 'deps+t',
       component: TrashPanelIcon,
     },
     // 中央面板：同字 key；清单本体（自带页面骨架与滚动）。
@@ -148,7 +147,7 @@ function contributions(t: Translate): readonly SlotContribution[] {
   ]
 }
 
-/** 一个循环登记整张表；payload 的三种形状在这里收口，调用点不再各写一段 inject。 */
+/** 一个循环登记整张表；payload 的两种形状在这里收口，调用点不再各写一段 inject。 */
 function registerContributions(
   client: ClientContextLike,
   deps: SessionDeleteRemote,
@@ -156,15 +155,13 @@ function registerContributions(
   scene: ClientScene,
 ): void {
   for (const row of contributions(t)) {
-    const inject = row.payload === 'none'
-      ? undefined
-      : row.payload === 'deps+t' ? () => ({ deps, t }) : () => ({ t })
+    const inject = row.payload === 'deps+t' ? () => ({ deps, t }) : () => ({ t })
     // 每条贡献各自一颗错误边界：一条渲染崩了只收起它自己那一块（宿主那一格不许被连坐成空白）。
     // Props 形状由宿主按座位派发、彼此不同，边界这一层只关心"包住它"，所以擦成 `never` 面再包；
     // 场景实例随贡献进子树：宿主各槽位是独立 React 树，跨槽位共享靠同一个实例（不是树）。
     const guard = withErrorBoundary(row.component as ComponentType<never>, t('common.renderFailed'), scene)
     client.slots.inject(row.slot, () => client.slots.register(
-      inject === undefined ? row.spec : { ...row.spec, inject },
+      { ...row.spec, inject },
       guard,
     ))
   }

@@ -27,9 +27,10 @@ describe('指针模态监听器', () => {
 // 浮层层级是**用户能看见的规矩**：确认框开着时底下的撤销横幅 / 浮条不许还抢得到点击。
 // 这里直接读样式表文本（与 skeleton 的读法同源）；数值不在文档里抄，断言的只是相对次序。
 describe('浮层层级', () => {
-  const css = readFileSync(join(process.cwd(), 'src/client/ui/ui.css'), 'utf8')
+  const uiCss = readFileSync(join(process.cwd(), 'src/client/ui/ui.css'), 'utf8')
+  const layoutCss = readFileSync(join(process.cwd(), 'src/client/ui/layout.css'), 'utf8')
 
-  const zIndexOf = (selector: string): number => {
+  const zIndexOf = (css: string, selector: string): number => {
     const start = css.indexOf(`${selector} {`)
     expect(start, `没找到 ${selector}`).toBeGreaterThanOrEqual(0)
     const match = /z-index:\s*(\d+)/.exec(css.slice(start))
@@ -37,10 +38,13 @@ describe('浮层层级', () => {
     return Number(match[1])
   }
 
-  it('确认框压过撤销横幅与批量浮条：框打开时撤销动作不许还能点', () => {
-    const modal = zIndexOf('.sd-modal-root')
-    expect(zIndexOf('.sd-toast')).toBeLessThan(modal)
-    expect(zIndexOf('.sd-batch-bar')).toBeLessThan(modal)
+  it('确认框压过撤销横幅、批量浮条与拖放胶囊：框打开时底层浮层不许盖过它', () => {
+    const modal = zIndexOf(uiCss, '.sd-modal-root')
+    const batchBar = zIndexOf(uiCss, '.sd-batch-bar')
+    expect(zIndexOf(uiCss, '.sd-toast')).toBeLessThan(modal)
+    expect(batchBar).toBeLessThan(modal)
+    expect(zIndexOf(layoutCss, '.sd-drop-pill')).toBeLessThan(modal)
+    expect(zIndexOf(layoutCss, '.sd-drop-pill')).toBeGreaterThanOrEqual(batchBar)
   })
 })
 
