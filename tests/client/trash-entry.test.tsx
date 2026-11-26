@@ -89,17 +89,17 @@ describe('拖到回收站入口 · 状态与视觉', () => {
     expect(m.ok()).toBe('false')
   })
 
-  it('dragover 整块面板行 ⇒ over：ok 源开盖 +「松手删除」', () => {
+  it('dragover 整块面板行 ⇒ over：ok 源开盖 +「松手移入回收站」', () => {
     registerHostRowInfo('a', { title: 'A', live: false })
     const m = mount()
     fireEvent.dragStart(m.sessionRow, { dataTransfer: {} })
     fireEvent.dragOver(m.row, { dataTransfer: { dropEffect: '' } })
     expect(m.state()).toBe('over')
     expect(m.iconKind()).toBe('open')
-    expect(pillText()).toBe('松手删除')
+    expect(pillText()).toBe('松手移入回收站')
   })
 
-  it('live 源 over ⇒ 不开盖 +「运行中的会话不能删除」', () => {
+  it('live 源 over ⇒ 不开盖 +「运行中的会话不能移入回收站」', () => {
     registerHostRowInfo('run', { title: 'R', live: true })
     const m = mount({ sessionId: 'run' })
     fireEvent.dragStart(m.sessionRow, { dataTransfer: {} })
@@ -107,17 +107,17 @@ describe('拖到回收站入口 · 状态与视觉', () => {
     expect(m.state()).toBe('over')
     expect(m.ok()).toBe('false')
     expect(m.iconKind()).toBe('closed')
-    expect(pillText()).toBe('运行中的会话不能删除')
+    expect(pillText()).toBe('运行中的会话不能移入回收站')
   })
 
-  it('drop ok ⇒ committing 胶囊「正在删除…」→ 座位落地 ⇒ idle', async () => {
+  it('drop ok ⇒ committing 胶囊「正在移入回收站…」→ 座位落地 ⇒ idle', async () => {
     registerHostRowInfo('a', { title: 'A', live: false })
     const m = mount()
     fireEvent.dragStart(m.sessionRow, { dataTransfer: {} })
     fireEvent.dragOver(m.row, { dataTransfer: { dropEffect: '' } })
     drop(m.row, 'a')
     expect(m.state()).toBe('committing')
-    expect(pillText()).toBe('正在删除…')
+    expect(pillText()).toBe('正在移入回收站…')
     expect(m.applyOutcomes).toHaveBeenCalledWith('delete', ['a'])
     await waitFor(() => {
       expect(m.state()).toBe('idle')
@@ -145,7 +145,7 @@ describe('拖到回收站入口 · 批量（回归）', () => {
     expect(getPicks()).toEqual([])
   })
 
-  it('批量拖放部分失败 ⇒ 勾选集只留失败条、1.6s 后红胶囊自灭、排队失败提示在撤销横幅后顶上', async () => {
+  it('批量拖放部分失败 ⇒ 勾选集只留失败条、1.6s 后红胶囊自灭、失败原文立即可见于撤销横幅', async () => {
     vi.useFakeTimers()
     registerHostRowInfo('a', { title: 'A', live: false })
     registerHostRowInfo('b', { title: 'B', live: false })
@@ -168,11 +168,12 @@ describe('拖到回收站入口 · 批量（回归）', () => {
     expect(m.shaking()).toBe('true')
     expect(pillText()).toBe('会话在跑')
     expect(screen.getByRole('alert')).toHaveTextContent('1 条会话已移入回收站')
+    expect(screen.getByRole('alert')).toHaveTextContent('1 条未能移入回收站：会话在跑')
     act(() => { vi.advanceTimersByTime(1600) })
     expect(m.shaking()).toBeNull()
     expect(pill()).toBeNull()
     act(() => { clearUndoNotice() })
-    expect(screen.getByRole('alert')).toHaveTextContent('会话在跑')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('批量拖放全失败多原因 ⇒ 原因用 · 去重拼接进胶囊与失败提示', async () => {
@@ -213,13 +214,13 @@ describe('拖到回收站入口 · 拒收动效（不是状态）', () => {
     drop(m.row, 'run')
     expect(m.applyOutcomes).not.toHaveBeenCalled()
     expect(m.shaking()).toBe('true')
-    expect(pillText()).toBe('运行中的会话不能删除')
-    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能删除')
+    expect(pillText()).toBe('运行中的会话不能移入回收站')
+    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能移入回收站')
     // 真实序：drop 后紧随源行的 dragend——状态回 idle，拒收尾巴（胶囊 + 抖动）再挂 1.6s。
     fireEvent.dragEnd(m.sessionRow, { dataTransfer: {} })
     expect(m.state()).toBe('idle')
     expect(m.shaking()).toBe('true')
-    expect(pillText()).toBe('运行中的会话不能删除')
+    expect(pillText()).toBe('运行中的会话不能移入回收站')
     act(() => { vi.advanceTimersByTime(1600) })
     expect(m.shaking()).toBeNull()
     expect(pill()).toBeNull()
@@ -363,7 +364,7 @@ describe('拖放视觉素材（layout.css 钉子）', () => {
   })
 
   it('文案 drop.release / drop.deleting 在位（zh）', () => {
-    expect(zhTranslate('drop.release')).toBe('松手删除')
-    expect(zhTranslate('drop.deleting')).toBe('正在删除…')
+    expect(zhTranslate('drop.release')).toBe('松手移入回收站')
+    expect(zhTranslate('drop.deleting')).toBe('正在移入回收站…')
   })
 })

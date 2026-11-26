@@ -6,6 +6,7 @@ import { attempt, createJournal, stepUndo, type Journal, type JournalStep } from
 import { assertNoLive } from './live-admission.js'
 import { withPresenceTail } from './member-presence.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
+import { moveDirectoryWithRetry } from './move-directory.js'
 import { moveGroup } from './move-group.js'
 import { writeProgress } from './write-progress.js'
 
@@ -23,7 +24,7 @@ interface Member {
 }
 
 /**
- * 删除 = 移入回收站，**按组走**：用户点掉一条父会话时宿主把 `origin:"subagent"` 的孩子整排藏了 ⇒ 那些目录既看不见也继续占字节，
+ * **移入回收站**（线上动作名仍是 `delete`），**按组走**：用户点掉一条父会话时宿主把 `origin:"subagent"` 的孩子整排藏了 ⇒ 那些目录既看不见也继续占字节，
  * 所以父在盘上的孩子一起搬进来，各自一行，清册用 `parentEntryId` 记归属。
  *
  * 三段，顺序承重（成员循环与整组回滚住 `verbs/move-group.ts`）：
@@ -62,7 +63,7 @@ export function deleteSession(deps: DeleteSessionDeps) {
 
     const deletedAt = deps.now()
     // 相反顺序退回去（执行的最后一件先退）；某一步退不干净时**不能**让原错误独走——
-    // 客户端只看 code 会以为已经回到删除前，实际半组还挂在回收站里。
+    // 客户端只看 code 会以为已经回到移入回收站前，实际半组还挂在回收站里。
     const rootEntry = await moveGroup<Member, TrashEntry>({
       root: parent,
       followers: members.slice(1),
@@ -79,7 +80,7 @@ export function deleteSession(deps: DeleteSessionDeps) {
 
 /**
  * 一个成员的步骤（顺序承重）：读现场 → 摘账本 → 搬目录 → 写清册行；搬完由 `memberGone` 关掉活体（session + agent）。
- * **删除不碰归档**——回收站与归档是两套状态，归档只在用户自己归档过时保留。
+ * **移入回收站不碰归档**——回收站与归档是两套状态，归档只在用户自己归档过时保留。
  *
  * **已知窗口**：摘账本之后、`memberGone` 之前活体短暂无主；这是 ADR-0008 去掉归档后的已知代价。`memberGone` 不能提前到
  * 文件/清册写成功之前，否则一次失败回滚会留下"文件在、agent 已关"的半个世界。
@@ -143,7 +144,7 @@ async function memberMove(
       run: async () => {
         writeProgress.step('moving')
         await deps.fs.ensureDir(`${deps.home}/${TRASH_DIR_NAME}`)
-        await deps.fs.rename(sessionDir, trashDir)
+        await moveDirectoryWithRetry(deps.fs.rename, sessionDir, trashDir)
         moved = true
         try {
           // 同一步里两格是两个动作点：搬完目录后写清册行前回到 ledger。
@@ -156,7 +157,7 @@ async function memberMove(
       },
       undo: async () => {
         if (!moved) return { restored: true, failures: [] }
-        const directory = await stepUndo('目录搬回失败', () => deps.fs.rename(trashDir, sessionDir))
+        const directory = await stepUndo('目录搬回失败', () => moveDirectoryWithRetry(deps.fs.rename, trashDir, sessionDir))
         const failures: string[] = [...directory.failures]
         if (directory.restored) {
           failures.push(...await attempt('清册行摘除失败', () => deps.ledger.remove(entry.id)))

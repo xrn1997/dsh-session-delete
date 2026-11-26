@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Toast } from '../../src/client/ui/Toast.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
-  clearUndoNotice,
   publishFailureNotice,
   publishUndoNotice,
 } from '../../src/client/undo-notices.js'
@@ -60,16 +59,16 @@ describe('Toast 正文与副行', () => {
 describe('裸失败提示（publishFailure：拖放被拒等无落点失败）', () => {
   it('无横幅时失败原文由 undo-toast 顶上', () => {
     render(<UndoToast deps={createFakeRemote()} />)
-    act(() => { publishFailureNotice('运行中的会话不能删除') })
-    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能删除')
+    act(() => { publishFailureNotice('运行中的会话不能移入回收站') })
+    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能移入回收站')
   })
 
-  it('有横幅时失败排队不被吞：横幅熄掉后顶上', () => {
+  it('有横幅时新动作失败立即可见，取代上一条成功横幅', () => {
     render(<UndoToast deps={createFakeRemote()} />)
     act(() => { publishUndoNotice({ entryId: 'e1', title: 'T' }) })
-    act(() => { publishFailureNotice('运行中的会话不能删除') })
     expect(screen.getByRole('alert')).toHaveTextContent('已移入回收站')
-    act(() => { clearUndoNotice() })
-    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能删除')
+    act(() => { publishFailureNotice('运行中的会话不能移入回收站') })
+    expect(screen.getByRole('alert')).toHaveTextContent('运行中的会话不能移入回收站')
+    expect(screen.queryByText(/已移入回收站/)).not.toBeInTheDocument()
   })
 })

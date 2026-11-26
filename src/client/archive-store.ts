@@ -1,6 +1,6 @@
 /**
  * 归档档的**失效通告台**：动过归档可见性的动作戳一下（递增修订号），归档档据此重新取数。
- * 删除/撤销不戳这里——那条链由 `useArchiveQuery` 直接订阅 `useTrashRevision()`；消费者只有它。
+ * 移入回收站/撤销不戳这里——那条链由 `useArchiveQuery` 直接订阅 `useTrashRevision()`；消费者只有它。
  */
 import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'

@@ -68,7 +68,7 @@ describe('多选态行首勾选框', () => {
   it('勾上/取消都进出选中集，并带 CSS 认的座位标记', () => {
     enterSelection()
     const { container } = render(<BatchPickCheckbox sessionId="s1" title="重构日志读取代次" />)
-    const box = screen.getByRole('checkbox', { name: '勾选「重构日志读取代次」以批量删除' })
+    const box = screen.getByRole('checkbox', { name: '勾选「重构日志读取代次」以批量移入回收站' })
     expect(box).not.toBeChecked()
     const seat = container.querySelector('[data-dsh-session-delete="batch-pick"]')
     expect(seat).toHaveAttribute('data-seat', 'leading')
@@ -87,7 +87,7 @@ describe('多选态行首勾选框', () => {
   it('选中集被别处改动时跟着翻转（浮条里逐条移除走同一条路）', () => {
     enterSelection()
     render(<BatchPickCheckbox sessionId="s1" title="A" />)
-    const box = screen.getByRole('checkbox', { name: '勾选「A」以批量删除' })
+    const box = screen.getByRole('checkbox', { name: '勾选「A」以批量移入回收站' })
     act(() => { togglePick({ sessionId: 's1', title: 'A' }) })
     expect(box).toBeChecked()
     act(() => { togglePick({ sessionId: 's1', title: 'A' }) })
@@ -106,7 +106,7 @@ describe('多选态行尾兜底勾选开关', () => {
   it('点一下 aria-pressed 翻转，并进/出选中集；座位标记是 action', () => {
     enterSelection()
     render(<BatchPickButton sessionId="s1" title="重构日志读取代次" />)
-    const button = screen.getByRole('button', { name: '勾选「重构日志读取代次」以批量删除' })
+    const button = screen.getByRole('button', { name: '勾选「重构日志读取代次」以批量移入回收站' })
     expect(button).toHaveAttribute('aria-pressed', 'false')
     expect(button).toHaveAttribute('data-dsh-session-delete', 'batch-pick')
     expect(button).toHaveAttribute('data-seat', 'action')
@@ -123,10 +123,10 @@ describe('多选态行尾兜底勾选开关', () => {
   it('会话在跑时置灰点不动，悬停把原因摆出来', async () => {
     enterSelection()
     render(<BatchPickButton sessionId="s" title="t" live />)
-    expect(screen.getByRole('button', { name: '勾选「t」以批量删除' })).toBeDisabled()
-    fireEvent.focus(screen.getByRole('button', { name: '勾选「t」以批量删除' }))
+    expect(screen.getByRole('button', { name: '勾选「t」以批量移入回收站' })).toBeDisabled()
+    fireEvent.focus(screen.getByRole('button', { name: '勾选「t」以批量移入回收站' }))
     // Tooltip 走 portal 异步渲染 ⇒ findByText（预裁记档）
-    expect(await screen.findByText('会话正在运行，先停止再删除')).toBeInTheDocument()
+    expect(await screen.findByText('会话正在运行，先停止再移入回收站')).toBeInTheDocument()
   })
 })
 
@@ -142,17 +142,17 @@ describe('Shift+点范围勾选（控件面）', () => {
         <BatchPickCheckbox sessionId="c" title="C" />
       </>,
     )
-    fireEvent.click(screen.getByLabelText('勾选「A」以批量删除'))
-    fireEvent.click(screen.getByLabelText('勾选「C」以批量删除'), { shiftKey: true })
+    fireEvent.click(screen.getByLabelText('勾选「A」以批量移入回收站'))
+    fireEvent.click(screen.getByLabelText('勾选「C」以批量移入回收站'), { shiftKey: true })
     expect(ids()).toEqual(['a', 'b', 'c'])
   })
 
   it('勾选框普通 click 仍切换单条', () => {
     enterSelection()
     render(<BatchPickCheckbox sessionId="a" title="A" />)
-    fireEvent.click(screen.getByLabelText('勾选「A」以批量删除'))
+    fireEvent.click(screen.getByLabelText('勾选「A」以批量移入回收站'))
     expect(ids()).toEqual(['a'])
-    fireEvent.click(screen.getByLabelText('勾选「A」以批量删除'))
+    fireEvent.click(screen.getByLabelText('勾选「A」以批量移入回收站'))
     expect(ids()).toEqual([])
   })
 
@@ -165,8 +165,8 @@ describe('Shift+点范围勾选（控件面）', () => {
         <BatchPickButton sessionId="c" title="C" />
       </>,
     )
-    fireEvent.click(screen.getByRole('button', { name: '勾选「A」以批量删除' }))
-    fireEvent.click(screen.getByRole('button', { name: '勾选「C」以批量删除' }), { shiftKey: true })
+    fireEvent.click(screen.getByRole('button', { name: '勾选「A」以批量移入回收站' }))
+    fireEvent.click(screen.getByRole('button', { name: '勾选「C」以批量移入回收站' }), { shiftKey: true })
     expect(ids()).toEqual(['a', 'b', 'c'])
   })
 })

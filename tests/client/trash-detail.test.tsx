@@ -191,12 +191,12 @@ describe('回收站详情块 · 有内容', () => {
   })
 })
 
-describe('回收站详情块 · 删除时间不进详情', () => {
-  it('删除于只在清单行；详情表里没有它（相对/绝对都不重复）', () => {
+describe('回收站详情块 · 移入回收站时间不进详情', () => {
+  it('移入回收站时间只在清单行；详情表里没有它（相对/绝对都不重复）', () => {
     at({ kind: 'ready', subject: entry, detail })
     expect(document.querySelector('dt')?.textContent).toBe('项目')
     expect(screen.queryByText(/前（/)).not.toBeInTheDocument()
-    expect(screen.queryByText('删除于')).not.toBeInTheDocument()
+    expect(screen.queryByText(/移入回收站/)).not.toBeInTheDocument()
   })
 })
 

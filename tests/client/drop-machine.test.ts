@@ -49,10 +49,10 @@ describe('drop-machine · 拒收动效（不是状态）', () => {
     const m = createDropTargetMachine()
     m.send('dragStart', { ok: false })
     m.send('dragEnter')
-    m.send('dropBlocked', { text: '运行中的会话不能删除' })
+    m.send('dropBlocked', { text: '运行中的会话不能移入回收站' })
     expect(m.view().state).toBe('over')
     expect(m.view().shake).toBe(true)
-    expect(m.view().shakeText).toBe('运行中的会话不能删除')
+    expect(m.view().shakeText).toBe('运行中的会话不能移入回收站')
   })
 
   it('writeRejected 回 idle 且 shake=true 带原因', () => {

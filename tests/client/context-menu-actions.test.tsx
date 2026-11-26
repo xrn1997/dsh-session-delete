@@ -7,7 +7,7 @@ import {
   ICON_DELETE,
 } from '../../src/client/context-menu-actions.js'
 import { zhTranslate } from '../../src/client/copy.js'
-import { useDeleteRequest } from '../../src/client/delete-confirm.js'
+import { useDeleteActionRequest } from '../../src/client/delete-action.js'
 
 const TARGET = { sessionId: 'session-a', displayTitle: '/code-review' }
 
@@ -31,8 +31,8 @@ function bench(options: { sessions?: boolean } = {}) {
   }
 }
 
-function DeleteRequestProbe() {
-  const request = useDeleteRequest()
+function DeleteActionProbe() {
+  const request = useDeleteActionRequest()
   return <div data-testid="request">{request?.sessionId ?? 'none'}</div>
 }
 
@@ -54,7 +54,7 @@ describe('0.2.2 contextMenus 数据动作', () => {
       icon: { key: ICON_BATCH },
     })
     expect(actions[1]).toMatchObject({
-      label: '删除',
+      label: '移入回收站',
       disabled: false,
       danger: true,
       afterContent: true,
@@ -80,12 +80,12 @@ describe('0.2.2 contextMenus 数据动作', () => {
     expect(isSelecting()).toBe(false)
   })
 
-  it('删除动作 run 写入确认框现场；运行中改文案并置灰', async () => {
+  it('删除动作 run 发布即删动作；运行中改文案并置灰', async () => {
     const b = bench()
     const actions = await b.contribution.resolve(TARGET)
     const deleteAction = actions[1]
     if (deleteAction === undefined) throw new Error('缺少删除动作')
-    render(<DeleteRequestProbe />)
+    render(<DeleteActionProbe />)
     act(() => {
       void deleteAction.run()
     })
@@ -93,14 +93,14 @@ describe('0.2.2 contextMenus 数据动作', () => {
 
     b.setRunning(true)
     const live = await b.contribution.resolve(TARGET)
-    expect(live[1]).toMatchObject({ label: '删除（运行中）', disabled: true })
+    expect(live[1]).toMatchObject({ label: '移入回收站（运行中）', disabled: true })
   })
 
   it('缺 sessions 服务时不 observe，删除保持可用', async () => {
     const b = bench({ sessions: false })
     expect(b.contribution.observe?.(TARGET)).toBeUndefined()
     const actions = await b.contribution.resolve(TARGET)
-    expect(actions[1]).toMatchObject({ label: '删除', disabled: false })
+    expect(actions[1]).toMatchObject({ label: '移入回收站', disabled: false })
   })
 
   it('resolve 里抛错：吞成「这两行这次不出现」，原文进 console，不把整张菜单打空', async () => {

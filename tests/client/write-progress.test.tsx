@@ -30,7 +30,7 @@ afterEach(() => {
 describe('WriteProgressLine · 三种认领脸', () => {
   it('own ⇒ 「正在{动作} {done}/{total} · {步骤} · 已用 {s} 秒」（动作与步骤各按自己的键出词）', () => {
     render(<WriteProgressLine face={ownFace(3500)} t={zhTranslate} />)
-    expect(screen.getByRole('status')).toHaveTextContent('正在删除 2/5 · 移动中 · 已用 3 秒')
+    expect(screen.getByRole('status')).toHaveTextContent('正在移入回收站 2/5 · 移动中 · 已用 3 秒')
   })
 
   it('动作键认 wire 的连字符码：orphan-clean 出「正在清理孤儿会话」，步骤键同屏出词', () => {

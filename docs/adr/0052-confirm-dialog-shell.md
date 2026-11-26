@@ -2,11 +2,11 @@
 
 Status: accepted
 
-各张确认框（单删、批量删除、清空/批量彻底删除、批量恢复、孤儿会话清理、孤儿附件清理、投影缓存清理）只共用页脚与关框规则：一个 `ConfirmDialog` 壳负责「描边取消 / 主按钮确认」、关框规则与危险层级；各框的标题、正文、列什么、确认键文案与状态机仍归各自。共壳的边界只到这一层，不再往上收。
+各张确认框（清空/批量彻底删除、批量恢复、孤儿会话清理、孤儿附件清理、投影缓存清理）只共用页脚与关框规则：一个 `ConfirmDialog` 壳负责「描边取消 / 主按钮确认」、关框规则与危险层级；各框的标题、正文、列什么、确认键文案与状态机仍归各自。共壳的边界只到这一层，不再往上收。
 
 ## 背景
 
-这几张框从两张一路长起来，页脚、`closeLabel`、关框规则与「未命名」兜底逐份复制；差异只有标题、一到三段正文、列什么、确认键文案、危险层级与 `busy` 来源。`batch-confirm.tsx` 的头注曾明确否过共壳，但那次否的是把单删的 `busy` / 失败面拖进批量形——否的是**业务合并**，不是页脚这一层。
+这几张框从两张一路长起来，页脚、`closeLabel`、关框规则与「未命名」兜底逐份复制；差异只有标题、一到三段正文、列什么、确认键文案、危险层级与 `busy` 来源。批量确认框的头注曾明确否过共壳，但那次否的是把单删的 `busy` / 失败面拖进批量形——否的是**业务合并**，不是页脚这一层。
 
 ## 决定
 
@@ -29,4 +29,4 @@ Status: accepted
 - **继续逐框复制页脚**：差异只有几个旋钮，页脚与关框规则却各写一份；改一处危险层级或按钮材质要逐张动。
 - **把这些框合成一张「通用确认框」**：状态机、失败面与正文结构差异太大，合成会把不相干的判据绑在一起，正是上一轮否掉的那种共壳。
 
-锚点：`src/client/confirm-dialog.tsx` 的 `ConfirmDialog`；`src/client/delete-confirm.tsx`；`src/client/batch-confirm.tsx`；`src/client/trash-confirm.tsx` 的 `TrashConfirm` / `OrphanConfirm`；`src/client/maintenance-settings.tsx` 的 `AttachmentConfirm` / `ProjectionConfirm`；`tests/client/confirm-dialog.test.tsx`；`docs/ui-spec.md` 的危险层级；`tests/client/delete-menu-item.test.tsx`；`tests/client/batch-confirm.test.tsx`；`tests/client/trash-panel.test.tsx`；`tests/client/maintenance-settings.test.tsx`。
+锚点：`src/client/confirm-dialog.tsx` 的 `ConfirmDialog`；`src/client/trash-confirm.tsx` 的 `TrashConfirm` / `OrphanConfirm`；`src/client/maintenance-settings.tsx` 的 `AttachmentConfirm` / `ProjectionConfirm`；`tests/client/confirm-dialog.test.tsx`；`docs/ui-spec.md` 的危险层级；`tests/client/trash-panel.test.tsx`；`tests/client/maintenance-settings.test.tsx`。

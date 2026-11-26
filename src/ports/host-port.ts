@@ -15,7 +15,7 @@ export interface HostIdentityPort {
   /** 会话落盘的**项目目录名**（`<sessions>/<projectKey(cwd)>`）；账本里没有这个会话 ⇒ `undefined`。header 走公开 live/持久化读面；
    *  与 `workspaceOf` 同一口径：**未命中是正常的 no-op，不是故障**（存储真故障照抛）。 */
   projectDirOf(sessionId: string): Promise<string | undefined>
-  /** 删除时**尽力**取的会话显示名，**与宿主工作中同名**：子会话（`subagent` 投影有 label）取 label，其余取 `title` 投影；取不到返回空串，
+  /** 移入回收站时**尽力**取的会话显示名，**与宿主工作中同名**：子会话（`subagent` 投影有 label）取 label，其余取 `title` 投影；取不到返回空串，
    *  绝不因此让删除失败。子会话不按 `title` 起名：同批子会话会撞成同名分不清（ADR-0058）。名字只存在于宿主自己的账本/缓存里 ⇒ 取数面归宿主端口。 */
   titleOf(sessionId: string): Promise<string>
   /** 子会话显示名的**投影 label 本体**（`subagent` 行的 `label`）：空串 = 没有，**不回落标题**——回落是 {@link HostIdentityPort.titleOf} 的口径。 */
@@ -567,12 +567,12 @@ export function createHostPort(ctx: unknown): HostPort {
      * 通告客户端这个会话没了：发宿主自己转发的 `api-session/removed`，客户端当场删行。冷会话没有 `session/disposed`，不发这条就只能等重连。
      * 只在宿主列表确实已不含它时调用（调用方按 {@link EvictionOutcome} 判）；不发假通告。
      */
-    // eslint-disable-next-line @typescript-eslint/require-await -- `host.emit` 是同步派发，没有要等的一问；下面的 catch 只收成「监听者抛错不翻掉已完成的删除」。
+    // eslint-disable-next-line @typescript-eslint/require-await -- `host.emit` 是同步派发，没有要等的一问；下面的 catch 只收成「监听者抛错不翻掉已完成的移入回收站」。
     async announceRemoved(sessionId) {
       try {
         host.emit('api-session/removed', sessionId)
       } catch {
-        // 通告是收尾：某个监听者抛错不该把已经完成的删除翻成失败
+        // 通告是收尾：某个监听者抛错不该把已经完成的移入回收站翻成失败
       }
     },
 

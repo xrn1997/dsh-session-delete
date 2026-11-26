@@ -52,7 +52,7 @@ export function createPendingOpen(giveUpMs = DEFAULT_GIVE_UP_MS): PendingOpen {
         try {
           stop()
         } catch {
-          // 宿主 store 换代 / 形状不符：退订失败不能让一次界面收尾把删除/恢复结果染红。
+          // 宿主 store 换代 / 形状不符：退订失败不能让一次界面收尾把移入回收站/恢复结果染红。
         }
       }
 

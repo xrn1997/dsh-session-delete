@@ -33,7 +33,7 @@ function componentsFor(t: Translate): Components {
 
 /**
  * `memo` 是必需的而不是优化：`react-markdown@10.1.0` 里**一处 memoization 都没有**，面板任何一次重渲
- * （悬停、↑↓、「刚刚删除」那句要读 `Date.now()`）都会走到这里 ⇒ 不按住就是每条助手回复每拍重解析一遍。
+ * （悬停、↑↓、「刚刚移入回收站」那句要读 `Date.now()`）都会走到这里 ⇒ 不按住就是每条助手回复每拍重解析一遍。
  * 按住条件是 `text` 与探针 `probe`（按当前 locale 现算的译文，专给 comparator 当「换语言了没」的读数；
  * 「借哪句」的知识住 `copy.ts` 的 `localeProbe`，调用方一律 `probe={localeProbe(t)}`）。
  */

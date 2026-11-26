@@ -1,7 +1,7 @@
 /**
  * `ctx.agents`（宿主 Agent 服务）的窄面：`resume` / `create` 返回的 **AgentHandle** 带一具 dispose，正是会关写句柄、摘 agent/session 的
  * 外层 teardown。`SessionController` 只取 `.agent`、把 handle 丢掉；本模块在服务实例上包一层，把 handle 按会话 id 记下来供 `evictLive`
- * 在删除时**真正把 agent 也关掉**。不是公开契约（见 `evictLive` 的注释）。
+ * 在移入回收站时**真正把 agent 也关掉**。不是公开契约（见 `evictLive` 的注释）。
  */
 interface AgentHandleLike {
   readonly agent?: { readonly id?: unknown }
@@ -41,7 +41,7 @@ export interface AgentHandleStore {
 
 /** 在 `ctx.agents` 上包一层 `resume` / `create`，把返回的 agent handle 的 dispose 按会话 id 记下。
  *  服务缺席时走 `ctx.inject(['agents'])` **等服务挂上再装**——live profile 的激活顺序可能早于 `agents` 就绪；只在 apply 时 `get`
- *  一次会让捕获静默缺席（真机症状：刚删除的会话恢复后旧 agent 拦住 prompt）。形状不符 / 属性不可写都只是**不捕获**，不影响激活。
+ *  一次会让捕获静默缺席（真机症状：刚移入回收站的会话恢复后旧 agent 拦住 prompt）。形状不符 / 属性不可写都只是**不捕获**，不影响激活。
  *
  *  **symbol 表**：句柄表挂在服务实例上；同一个 agents 服务上的第二次安装看见它就直接共用，不把 wrapper 套第二层。
  *  **安装者拥有 wrapper**：包装记录先在闭包里留一份，同时挂到 symbol；第一次成功安装时经 `ctx.effect` 注册卸载恢复——

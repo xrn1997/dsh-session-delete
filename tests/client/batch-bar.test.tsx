@@ -1,11 +1,11 @@
-// 批量删除浮条（2026-10-17）：多选模式、计数、已选清单、行点击选择与确认框。
+// 批量移入回收站浮条（2026-10-17）：多选模式、计数、已选清单与行点击选择。
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { BatchPickButton } from '../../src/client/batch-select.js'
 import { BatchBar } from '../../src/client/batch-bar.js'
-import { BatchConfirmHost } from '../../src/client/batch-confirm.js'
 import type { RemoteOutcome } from '../../src/client/remote.js'
 import type { ApplyOutcome } from '../../src/shared/wire.js'
+import { UndoToast } from '../../src/client/undo-toast.js'
 import { createFakeRemote, remoteFail, remoteOk } from './support/fake-remote.js'
 import {
   enterSelection,
@@ -13,12 +13,14 @@ import {
   isSelecting,
   togglePick,
 } from '../../src/client/batch-selection-store.js'
-import { countOutcomes } from './support/outcomes.js'
+import { countOutcomes, deleteOutcomes } from './support/outcomes.js'
 import { pick } from '../support/fixture.js'
 
 
+const fakeRows: HTMLElement[] = []
+
 afterEach(() => {
-  document.body.replaceChildren()
+  for (const row of fakeRows.splice(0)) row.remove()
 })
 
 function countOnly(): { applyOutcomes: ReturnType<typeof vi.fn> } {
@@ -40,6 +42,7 @@ function fakeRow(sessionId: string, titleText = 'A'): {
   title.textContent = titleText
   row.appendChild(title)
   document.body.appendChild(row)
+  fakeRows.push(row)
   let count = 0
   row.addEventListener('click', () => { count += 1 })
   return { row, title, opened: () => count }
@@ -237,22 +240,89 @@ describe('浮条', () => {
     expect(opened()).toBe(0)
   })
 
-  it('点「移入回收站 N 条」进确认框；取消后取消全选、退出多选', async () => {
-    const { applyOutcomes } = countOnly()
+  it('同一拍连点只发一次批量移入回收站，按钮在飞时置灰并展示忙碌态、锁定选择修改', async () => {
+    let release: (value: RemoteOutcome<ApplyOutcome[]>) => void = () => {}
+    const applyOutcomes = vi.fn((action: string, ids: readonly string[]) =>
+      action === 'count'
+        ? Promise.resolve(remoteOk(countOutcomes(ids)))
+        : new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve }))
     enterSelection()
     togglePick({ sessionId: 'a', title: 'A' })
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
+    fireEvent.click(screen.getByRole('button', { name: '查看已选' }))
+    const button = screen.getByRole('button', { name: '移入回收站 1 条' })
+
+    act(() => {
+      fireEvent.click(button)
+      fireEvent.click(button)
+    })
+
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledWith('delete', ['a']))
+    expect(applyOutcomes.mock.calls.filter(([action]) => action === 'delete')).toHaveLength(1)
+    expect(button).toBeDisabled()
+    expect(button).toHaveTextContent('正在移入回收站')
+    expect(screen.getByRole('button', { name: '取消全选' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '取消勾选「A」' })).toBeDisabled()
+    release(remoteOk(deleteOutcomes(['a'])))
+    await waitFor(() => expect(button).not.toBeDisabled())
+    expect(screen.getByRole('button', { name: '移入回收站 0 条' })).toBeDisabled()
+  })
+
+  it('部分失败时勾选收缩到失败项，原文立即可见于同一撤销横幅，可再点重试', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids, ['b'], '乙条失败')))
+    const deps = createFakeRemote({ applyOutcomes })
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    togglePick({ sessionId: 'b', title: 'B' })
     render(
       <>
-        <BatchBar deps={createFakeRemote({ applyOutcomes })} />
-        <BatchConfirmHost deps={createFakeRemote({ applyOutcomes })} />
+        <BatchBar deps={deps} />
+        <UndoToast deps={deps} />
       </>,
     )
-    fireEvent.click(screen.getByRole('button', { name: '移入回收站 1 条' }))
-    expect(await screen.findByText('删除这个会话？')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    await waitFor(() => expect(screen.queryByText('删除这个会话？')).not.toBeInTheDocument())
 
-    fireEvent.click(screen.getByRole('button', { name: '取消全选' }))
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站 2 条' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('1 条会话已移入回收站')
+    expect(alert).toHaveTextContent('1 条未能移入回收站：乙条失败')
+    await waitFor(() => expect(getPicks().map((item) => item.sessionId)).toEqual(['b']))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站 1 条' }))
+    await waitFor(() => expect(applyOutcomes).toHaveBeenLastCalledWith('delete', ['b']))
+  })
+
+  it('批量移入在飞期间新勾选的会话不被成功结算误删', async () => {
+    let release!: (value: RemoteOutcome<ApplyOutcome[]>) => void
+    const applyOutcomes = vi.fn((action: string, ids: readonly string[]) =>
+      action === 'count'
+        ? Promise.resolve(remoteOk(countOutcomes(ids)))
+        : new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { release = resolve }))
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站 1 条' }))
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledWith('delete', ['a']))
+
+    act(() => { togglePick({ sessionId: 'c', title: 'C' }) })
+    await act(async () => { release(remoteOk(deleteOutcomes(['a']))) })
+    expect(getPicks()).toEqual([{ sessionId: 'c', title: 'C' }])
+  })
+
+  it('点「移入回收站 N 条」即执行，不弹确认框；退出多选仍独立可用', async () => {
+    const applyOutcomes = vi.fn(async (action: string, ids: readonly string[]) =>
+      remoteOk(action === 'count' ? countOutcomes(ids) : deleteOutcomes(ids)),
+    )
+    enterSelection()
+    togglePick({ sessionId: 'a', title: 'A' })
+    render(<BatchBar deps={createFakeRemote({ applyOutcomes })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: '移入回收站 1 条' }))
+
+    await waitFor(() => expect(applyOutcomes).toHaveBeenCalledWith('delete', ['a']))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(getPicks()).toEqual([])
     expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
 

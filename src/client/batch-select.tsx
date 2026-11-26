@@ -1,5 +1,5 @@
 /**
- * 宿主列表批量删除的**控件面**：行首勾选框、行尾兜底开关，以及计数问句 `fetchCounts`。
+ * 宿主列表批量移入回收站的**控件面**：行首勾选框、行尾兜底开关，以及计数问句 `fetchCounts`。
  * 入口在「⋯」菜单：按下才进入多选模式，模式内才渲染勾选框并把整行点击变成勾/取消；退出模式清空名单。
  * 选中集只住 `batch-selection-store.ts`；可见行住 `host-rows.ts`；点行算不算选中住 `batch-pick.ts`。
  * **主勾选在行首**：宿主对行尾 `.rowActions` 是 `display:none`，只有行尾悬停/菜单打开才出现（app.asar 0.2.0-rc.2 的 `Rows` 渲染）；
@@ -90,7 +90,7 @@ export function BatchPickCheckbox({
 export interface BatchPickButtonProps {
   sessionId: string
   title: string
-  /** 会话在跑：置灰 + 悬停原因（与单删菜单行同款——级联遇在跑成员整组拒绝，先说清再让人点不动）。 */
+  /** 会话在跑：置灰 + 悬停原因（与单条移入的菜单行同款——级联遇在跑成员整组拒绝，先说清再让人点不动）。 */
   live?: boolean
   /** 文案（缺省 = 内置 zh，见 `copy.ts`：这不是"忘了传"，而是"这次没有 locale 服务"）。 */
   t?: Translate

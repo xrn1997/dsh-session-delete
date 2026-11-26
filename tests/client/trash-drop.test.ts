@@ -17,7 +17,7 @@ describe('resolveDropPlan', () => {
     expect(resolveDropPlan('')).toEqual({ kind: 'ignore' })
   })
 
-  it('未登记 id（随手拖的文字）⇒ ignore：任何文本拖放都不许变成删除', () => {
+  it('未登记 id（随手拖的文字）⇒ ignore：任何文本拖放都不许变成移入回收站', () => {
     expect(resolveDropPlan('一段随手拖的文字')).toEqual({ kind: 'ignore' })
   })
 

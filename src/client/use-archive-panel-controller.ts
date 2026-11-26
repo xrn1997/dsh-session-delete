@@ -1,16 +1,14 @@
 /**
- * 归档档面板控制器：详情读路、解除归档、删除座位，以及从面板搬回来的接线（键盘光标 / 下钻包装 /
+ * 归档档面板控制器：详情读路、解除归档、移入座位，以及从面板搬回来的接线（键盘光标 / 下钻包装 /
  * 活动行 / 孩子分派 / 导航面）——面板只剩布局。选中面走 `use-panel-selection.ts` 的归档那一台；
  * 与回收站控制器各持一份状态（ADR-0060 决定第 4 条），但读同一份实现。
- * 失效：自救动作只戳 `invalidateArchive()`（不直呼 reload）；归档删除走既有删除座位，归档查询
+ * 失效：自救动作只戳 `invalidateArchive()`（不直呼 reload）；归档的移入回收站走既有移入座位，归档查询
  * 订阅同一条修订；详情账本作废挂在选中面的 `onGone` 上。
  */
 import { useCallback, useEffect, useState } from 'react'
 import type { ArchiveRowWire, ArchiveSubagentWire } from '../shared/wire.js'
 import type { BusyGate } from './busy-gate.js'
 import type { Translate } from './copy.js'
-import { requestDelete } from './delete-confirm.js'
-import { requestDeleteBatch } from './batch-confirm.js'
 import type { ArchiveDetailLike, SessionDeleteRemote } from './remote.js'
 import { invalidateArchive } from './archive-store.js'
 import { displayNameOf } from './trash-view.js'
@@ -20,7 +18,7 @@ import { archiveRowsOf, type ArchiveQuery } from './use-archive-query.js'
 import { usePanelSelection } from './use-panel-selection.js'
 import { useGuardedLoadOlder, type PanelTabController } from './use-panel-tab.js'
 import { usePanelChildView } from './use-panel-child-view.js'
-import { unarchiveFromArchiveTab } from './write-seats.js'
+import { deleteSessionFromMenu, deleteSessionsFromBatch, unarchiveFromArchiveTab } from './write-seats.js'
 
 /** 归档档离清单的孩子视图：父仍是清单选中那条已归档行，看的却是它的一个子会话。 */
 export interface ArchiveChildView {
@@ -39,9 +37,9 @@ export interface ArchivePanelController
   prefetch: (sessionId: string) => void
   /** 单条/批量解除归档：`/apply` 的 `unarchive`，无确认框（幂等）、无撤销座位。 */
   unarchive: (ids: readonly string[]) => Promise<void>
-  /** 单删：`requestDelete({ sessionId, title: 显示名 })` → `DeleteConfirmHost`。 */
-  requestDeleteOne: (row: ArchiveRowWire) => void
-  requestDeleteMany: (items: readonly { sessionId: string; title: string }[]) => void
+  /** 单条/批量移入回收站：即执行，成功发撤销，失败按行落原文。 */
+  deleteOne: (row: ArchiveRowWire) => Promise<void>
+  deleteMany: (ids: readonly string[]) => Promise<void>
 }
 
 export function useArchivePanelController(input: {
@@ -58,6 +56,7 @@ export function useArchivePanelController(input: {
   t: Translate
 }): ArchivePanelController {
   const { deps, gate, query, ordered, active, split, t } = input
+  const { reload } = query
   const canAutoSelect = active && split
   const rows = archiveRowsOf(query.list)
   const [childView, setChildView] = useState<ArchiveChildView | null>(null)
@@ -134,7 +133,7 @@ export function useArchivePanelController(input: {
 
   const loadOlder = useGuardedLoadOlder(canNavigate, loadOlderDetail)
 
-  /** 父行被清单换版收走（解除归档 / 删除 / 语料消失）⇒ 孩子视图失去只读根：关掉并丢账本。 */
+  /** 父行被清单换版收走（解除归档 / 移入回收站 / 语料消失）⇒ 孩子视图失去只读根：关掉并丢账本。 */
   useEffect(() => {
     if (childView === null || rows === null) return
     if (rows.some((row) => row.sessionId === childView.parentSessionId)) return
@@ -185,9 +184,29 @@ export function useArchivePanelController(input: {
     if (run.kind === 'blocked') return
   }, [deps, gate, clearRowFailures, setRowFailures])
 
-  const requestDeleteOne = useCallback((row: ArchiveRowWire): void => {
-    requestDelete({ sessionId: row.sessionId, title: displayNameOf(row, t) })
-  }, [t])
+  const deleteOne = useCallback(async (row: ArchiveRowWire): Promise<void> => {
+    await deleteSessionFromMenu(
+      deps,
+      {
+        sessionId: row.sessionId,
+        title: displayNameOf(row, t),
+        failureSink: { clear: clearRowFailures, set: setRowFailures },
+        // 将清单重读包进同一枚闸，免得新清单还没落地时按钮先亮起导致重按撞 already-gone。
+        refresh: () => reload(),
+      },
+      gate,
+    )
+  }, [deps, gate, t, clearRowFailures, setRowFailures, reload])
+
+  const deleteMany = useCallback(async (ids: readonly string[]): Promise<void> => {
+    await deleteSessionsFromBatch(
+      deps,
+      ids,
+      gate,
+      { clear: clearRowFailures, set: setRowFailures },
+      () => reload(),
+    )
+  }, [deps, gate, clearRowFailures, setRowFailures, reload])
 
   return {
     busy: gate.busy,
@@ -209,7 +228,7 @@ export function useArchivePanelController(input: {
     loadOlder,
     retry,
     unarchive,
-    requestDeleteOne,
-    requestDeleteMany: requestDeleteBatch,
+    deleteOne,
+    deleteMany,
   }
 }

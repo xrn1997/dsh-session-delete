@@ -64,6 +64,37 @@ describe('恢复动词', () => {
     expect(host.archive).not.toHaveBeenCalled()
   })
 
+  // 与删除侧对称（ADR-0073）：Windows 目录被占用时 rename 回 EPERM，恢复同样按小步重试；
+  // 成功落地不触发回滚，账本照挂。
+  it('放回目录遇瞬态 EPERM：重试一次后恢复完成', async () => {
+    const { d, calls, fs } = deps()
+    const realRename = fs.rename
+    let left = 1
+    fs.rename = vi.fn(async (from: string, to: string) => {
+      if (left-- > 0) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      return realRename(from, to)
+    })
+    await restore(d, entry.id)
+    expect(fs.rename).toHaveBeenCalledTimes(2)
+    expect(calls).toEqual(['rename', 'attach'])
+  })
+
+  it('挂账本失败回滚退回回收站时遇瞬态占用：重试后仍退回并报 io', async () => {
+    const { d, calls, fs } = deps()
+    d.host.attach = vi.fn(async () => { throw new Error('storage table write failed') })
+    const realRename = fs.rename
+    let n = 0
+    fs.rename = vi.fn(async (from: string, to: string) => {
+      n += 1
+      // 第 2 次调用是回滚那一次：失败一次后由重试补上。
+      if (n === 2) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      return realRename(from, to)
+    })
+    await expect(restore(d, entry.id)).rejects.toThrow(/挂回账本失败/)
+    expect(fs.rename).toHaveBeenCalledTimes(3)
+    expect(calls).toEqual(['rename', 'rename'])
+  })
+
   it('原本已归档的：恢复后仍处归档态，不动归档集', async () => {
     const { d, calls } = deps()
     await restore(d, entry.id)

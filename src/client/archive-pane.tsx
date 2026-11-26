@@ -2,10 +2,10 @@
  * 归档档的三个纯视图件（清单列 / 工具行 / 页脚）与 adapter：状态面来自 `useArchiveQuery`，
  * 装配线住 `use-panel-tab.ts`、四格版面住 `panel-tab.tsx`；这里只回答归档档与回收站不同的那几格。
  */
-import type { RefObject } from 'react'
+import { useState, type RefObject } from 'react'
 import { absoluteText, agoText, type Translate } from './copy.js'
 import type { ArchiveRowWire } from '../shared/wire.js'
-import { BULK_DANGER, displayNameOf, groupByProject, type ProjectGroup } from './trash-view.js'
+import { displayNameOf, groupByProject, type ProjectGroup } from './trash-view.js'
 import { ListEmpty, ListLoading, ListNotice, SessionList, type ListDom, type SessionRowView } from './session-list.js'
 import type { ArchiveDetailLike } from './remote.js'
 import type { ArchiveDetailSubject } from './use-archive-detail-reader.js'
@@ -42,7 +42,7 @@ export interface ArchiveListProps {
   query: ArchiveQuery
   selection: ListSelection<ArchiveRowWire>
   groups: readonly ProjectGroup<ArchiveRowWire>[]
-  controller: Pick<ArchivePanelController, 'selectRow' | 'unarchive' | 'requestDeleteOne' | 'actionFailure' | 'busy'>
+  controller: Pick<ArchivePanelController, 'selectRow' | 'unarchive' | 'deleteOne' | 'actionFailure' | 'busy'>
   prefetch: DelayedPrefetch<ArchiveRowWire>
   listRef: RefObject<HTMLDivElement>
   /** 键盘契约（导航状态住档的装配线，窄档下钻时清单卸载也不丢 Esc 与焦点交还）。 */
@@ -123,7 +123,7 @@ export function ArchiveList({ query, selection, groups, controller, prefetch, li
             disabled={controller.busy}
             onClick={(event) => {
               event.stopPropagation()
-              controller.requestDeleteOne(row)
+              void controller.deleteOne(row)
             }}
           >
             <IconTrashOutlineRegular size={14} />
@@ -181,15 +181,24 @@ export function ArchiveToolbar({ selection, groups, t }: ArchiveToolbarProps) {
 
 export interface ArchiveFooterProps {
   selection: ListSelection<ArchiveRowWire>
-  controller: Pick<ArchivePanelController, 'unarchive' | 'requestDeleteMany' | 'busy'>
+  controller: Pick<ArchivePanelController, 'unarchive' | 'deleteMany' | 'busy'>
   t: Translate
 }
 
-/** 页脚随档位：多选态 = 「解除所选」（无确认框）/「删除所选」（实心红，确认框同批量删除）。
- *  危险那颗必须是这一排的最后一个（整页唯一实心红的位置契约）；勾中行读 `checkedRows` 派生，不从 groups 重算。 */
+/** 页脚随档位：多选态 = 「解除所选」（无确认框）/「移入回收站所选」（普通主按钮，可恢复动作不用实心红）。
+ *  勾中行读 `checkedRows` 派生，不从 groups 重算。 */
 export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) {
+  const [moving, setMoving] = useState(false)
   if (!selection.selectMode) return null
   const checkedRows = selection.checkedRows
+  const runDelete = async (): Promise<void> => {
+    setMoving(true)
+    try {
+      await controller.deleteMany(checkedRows.map((row) => row.sessionId))
+    } finally {
+      setMoving(false)
+    }
+  }
   return (
     <div
       style={{
@@ -218,14 +227,20 @@ export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) 
             <Button
               variant="primary"
               size="sm"
-              style={BULK_DANGER}
-              icon={<IconTrashOutlineRegular size={13} />}
+              icon={moving ? undefined : <IconTrashOutlineRegular size={13} />}
               disabled={checkedRows.length === 0 || controller.busy}
               onClick={() => {
-                controller.requestDeleteMany(checkedRows.map((row) => ({ sessionId: row.sessionId, title: displayNameOf(row, t) })))
+                void runDelete()
               }}
             >
-              {t('archive.select.delete', { count: checkedRows.length })}
+              {moving ? (
+                <>
+                  <span className="sd-spinner" aria-hidden="true" />
+                  {t('progress.action.delete')}
+                </>
+              ) : (
+                t('archive.select.delete', { count: checkedRows.length })
+              )}
             </Button>
           </span>
         </Tooltip>

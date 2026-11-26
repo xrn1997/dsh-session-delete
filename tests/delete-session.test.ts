@@ -60,6 +60,39 @@ describe('删除动词', () => {
     expect(calls).toEqual(['detach', 'rename', 'attach'])
   })
 
+  // 真机 2026-11-26 复现的形态：Windows 目录里有打开的句柄时 rename 回 EPERM；一次批量里一条成员被占用、
+  // 另一条正常。这里钉住"瞬态占用由动词层小步重试吞掉，成功落地且不触发回滚"（ADR-0073）。
+  it('目录搬移遇瞬态 EPERM：重试后成功落地，不回滚账本', async () => {
+    const { deps: d, calls, fs, manifest } = deps()
+    const realRename = fs.rename
+    let left = 2
+    fs.rename = vi.fn(async (from: string, to: string) => {
+      if (left-- > 0) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      return realRename(from, to)
+    })
+    const { entry } = await deleteSession(d)('session-abc')
+    expect(fs.rename).toHaveBeenCalledTimes(3)
+    expect(calls).toEqual(['detach', 'rename', 'evictLive', 'announceRemoved'])
+    expect(entry.sessionId).toBe('session-abc')
+    expect(await manifest.list()).toHaveLength(1)
+  })
+
+  it('清单失败回滚搬回目录时遇瞬态占用：同一搬回重试后再挂回账本', async () => {
+    const { deps: d, calls, fs, manifest } = deps()
+    manifest.add = vi.fn(async () => { throw new Error('storage boom') })
+    const realRename = fs.rename
+    let n = 0
+    fs.rename = vi.fn(async (from: string, to: string) => {
+      n += 1
+      // 第 2 次调用是回滚那一次：失败一次后由重试补上。
+      if (n === 2) throw Object.assign(new Error('EPERM'), { code: 'EPERM' })
+      return realRename(from, to)
+    })
+    await expect(deleteSession(d)('session-abc')).rejects.toMatchObject({ code: 'sessiondelete/io' })
+    expect(fs.rename).toHaveBeenCalledTimes(3)
+    expect(calls).toEqual(['detach', 'rename', 'rename', 'attach'])
+  })
+
   // 清单登记是最后一件写：它失败也必须把账本 / 文件全部退回去，否则会话就成了
   // 「文件在回收站里、面板却看不见」的孤儿（判据住 `src/verbs/delete-session.ts`：清册行是最后一件写，
   // 它失败就把前几步全退回去）。

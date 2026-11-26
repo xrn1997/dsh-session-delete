@@ -1,5 +1,5 @@
 /** `GET /archive-list` 那一行的装配：registry 归档集 ∩ 会话语料 → `ArchiveListWire`。
- *  与 `trash-rows.ts` 同层同责，但归档行念持久化日志字节与最后活动，回收站行念清册目录实测与删除时间
+ *  与 `trash-rows.ts` 同层同责，但归档行念持久化日志字节与最后活动，回收站行念清册目录实测与移入回收站时间
  *  ——两个 sizeBytes 不是一个数（ADR-0060 决定第 3 条）。
  *  缺席口径住 `src/trash/session-rows.ts`；交集按 id 原样，ghost id 宁可少显示也不显示死行（ADR-0008）。 */
 import type { CoreDeps } from '../deps.js'

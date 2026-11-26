@@ -97,7 +97,7 @@ describe('删除/恢复时主视图的收尾', () => {
     }
   })
 
-  it('新的删除取消旧的重开等待：删的不是当前会话也一样', () => {
+  it('新的移入回收站取消旧的重开等待：移入的不是当前会话也一样', () => {
     vi.useFakeTimers()
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }
@@ -145,7 +145,7 @@ describe('删除/恢复时主视图的收尾', () => {
     }
   })
 
-  it('空名单不打断旧的重开等待：整批失败没有真正删除', () => {
+  it('空名单不打断旧的重开等待：整批失败没有真正移入回收站', () => {
     vi.useFakeTimers()
     try {
       let selected: { sessionId?: string } = { sessionId: 'session-a' }

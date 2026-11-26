@@ -23,7 +23,7 @@ Status: accepted
 ## 边界
 
 - 点击守卫仍是 DOM 依赖：宿主改掉 `data-row-key` 或行的点击结构，「点整行选中」会失效；行首/行尾勾选框仍可用。守卫住 `src/client/batch-pick.ts`，`tests/client/host-rows.test.ts` 钉住当前形状，宿主换代先复核。
-- 不改变选择集合语义（`src/client/batch-selection-store.ts`）与确认框/撤销的现有路径。
+- 不改变选择集合语义（`src/client/batch-selection-store.ts`）与移入回收站/撤销的现有路径。
 - 不引入新槽位：只用已经注册的 `sidebar.session.row.leading` 与 `sidebar.workspaces.session.row.action`。
 - 上游请求：给第三方一个「行选择/多选」的官方 API；拿到后删掉守卫里的最后一次 DOM 读取。
 

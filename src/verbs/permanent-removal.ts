@@ -72,7 +72,7 @@ export async function measureMemberDir(
   return probe.present ? { dir, bytes: probe.bytes } : undefined
 }
 
-/** 一条成员的**测量**读数：身份两格 + 目录 + 实测字节；没有账本归属格（归属只有删除动词才读）。 */
+/** 一条成员的**测量**读数：身份两格 + 目录 + 实测字节；没有账本归属格（归属只有 `delete` 动词才读）。 */
 export interface MeasuredMember {
   readonly sessionId: string
   readonly projectDir: string

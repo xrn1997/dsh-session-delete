@@ -57,6 +57,26 @@ describe('选中集', () => {
     expect(getPicks()).toEqual([])
   })
 
+  it('shrinkPicksToFailures 传入 submittedSessionIds 时只剔除本批成功项，保留失败与在飞期间新勾项', () => {
+    togglePick({ sessionId: 'a', title: 'A' })
+    togglePick({ sessionId: 'b', title: 'B' })
+    // 假定在飞期间用户新勾了 c；提交时名单只有 a、b，落地后 a 成功、b 失败。
+    togglePick({ sessionId: 'c', title: 'C' })
+    shrinkPicksToFailures(['b'], ['a', 'b'])
+    expect(ids()).toEqual(['b', 'c'])
+    // c 的锚点不受影响（只有被剔除成功的锚点才清空）。
+    toggleRangePick(
+      { sessionId: 'd', title: 'D' },
+      [
+        { sessionId: 'a', title: 'A' },
+        { sessionId: 'b', title: 'B' },
+        { sessionId: 'c', title: 'C' },
+        { sessionId: 'd', title: 'D' },
+      ],
+    )
+    expect(ids()).toEqual(['b', 'c', 'd'])
+  })
+
   it('shrinkPicksToFailures 保持既有语义：一条都没剔掉也发一次通告（执行后订阅方重读）', () => {
     togglePick({ sessionId: 'a', title: 'A' })
     const before = getSelection()

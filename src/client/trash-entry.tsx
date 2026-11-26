@@ -25,7 +25,7 @@ import type { OneShotDeps } from './remote.js'
 import { useLatest } from './store.js'
 import { shrinkPicksToFailures } from './batch-selection-store.js'
 import { resolveDropPlan, type DropPlan } from './trash-drop.js'
-import { publishFailureNotice } from './undo-notices.js'
+import { attachUndoPartialFailure, publishFailureNotice } from './undo-notices.js'
 import { deleteSessionFromMenu, deleteSessionsFromBatch } from './write-seats.js'
 import { IconTrashOpen, IconTrashOutlineRegular } from './ui/icons.js'
 
@@ -34,7 +34,7 @@ export interface TrashPanelIconProps {
   // 槽位宿主显式传 undefined（`{ size }: { size?: number }` 直转）：props 面可选即含 undefined。
   size?: number | undefined
   active?: boolean
-  /** 拖放删除的写入链；glyph 本身不读它。 */
+  /** 拖放移入回收站的写入链；glyph 本身不读它。 */
   deps: OneShotDeps
   /** 文案（缺省 = 内置 zh，见 `copy.ts`）。 */
   t?: Translate
@@ -58,18 +58,23 @@ function runDrop(
     settle('writeRejected', message)
   }
   if (plan.kind === 'batch') {
-    void deleteSessionsFromBatch(deps, plan.items.map((item) => item.sessionId), gate).then((run) => {
+    const submittedIds = plan.items.map((item) => item.sessionId)
+    void deleteSessionsFromBatch(deps, submittedIds, gate).then((run) => {
       if (run.kind === 'blocked') {
         settle('settled')
         return
       }
-      shrinkPicksToFailures([...run.value.keys()])
+      shrinkPicksToFailures([...run.value.keys()], submittedIds)
       if (run.value.size === 0) {
         settle('settled')
         return
       }
       const text = [...new Set(run.value.values())].join(' · ')
-      publishFailureNotice(text)
+      if (run.value.size < submittedIds.length) {
+        attachUndoPartialFailure({ count: run.value.size, reasons: text })
+      } else {
+        publishFailureNotice(text)
+      }
       settle('writeRejected', text)
     }, rejectUnhandled)
     return

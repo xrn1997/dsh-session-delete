@@ -72,7 +72,7 @@ describe('文案接线', () => {
     expect(en('trash.summary', { count: 3, size: '22KB' })).toBe('3 sessions · 22KB reclaimable')
     expect(en('detail.image.alt', { alt: 'shot' })).toBe('[Image · shot]')
     expect(en('detail.subagents.label')).toBe('Subagent sessions')
-    expect(en('detail.subagents.note')).toBe('Restored or deleted with this session')
+    expect(en('detail.subagents.note')).toBe('Restored or permanently deleted with this session')
     expect(en('detail.subagents.jump')).toBe('Expand and jump to subagent sessions')
     expect(en('detail.subagents.note')).not.toMatch(/[\u4e00-\u9fff（）]/)
     expect(en('menu.live')).not.toBe('menu.live')
@@ -90,7 +90,7 @@ describe('文案接线', () => {
 
     const withNone = createTranslate(contextWith(undefined))
     expect(withNone).toBe(zhTranslate)
-    expect(withNone('menu.delete')).toBe('删除')
+    expect(withNone('menu.delete')).toBe('移入回收站')
   })
 
   // 宿主 `ctx.get` 可以回 null（同一条读法见 main-view.ts）：只判 undefined 会让下一句
@@ -409,6 +409,8 @@ describe('归档档文案键', () => {
     expect(zhTranslate('archive.detail.status')).toBe('已归档')
     expect(zhTranslate('undo.movedArchived', { title: '会话' }))
       .toBe('会话 已移入回收站；撤销后回到「归档」')
+    expect(zhTranslate('undo.partialFailure', { n: 2, reasons: '会话正在运行' }))
+      .toBe('2 条未能移入回收站：会话正在运行')
   })
 })
 
@@ -425,7 +427,7 @@ describe('写入进度文案键', () => {
   ] as const
 
   it('zh：动作句带「正在」（进度行与忙碌按钮共用同一枚键），步骤是进行态短语', () => {
-    expect(zhTranslate('progress.action.delete')).toBe('正在删除')
+    expect(zhTranslate('progress.action.delete')).toBe('正在移入回收站')
     expect(zhTranslate('progress.action.restore')).toBe('正在恢复')
     expect(zhTranslate('progress.action.purge')).toBe('正在彻底删除')
     expect(zhTranslate('progress.action.unarchive')).toBe('正在解除归档')
@@ -472,9 +474,9 @@ describe('拖放删除文案键', () => {
   const DROP_KEYS = ['drop.refuseLive', 'drop.release', 'drop.deleting'] as const
 
   it('zh 与 en 逐键镜像：不是键名、en 不带中文', () => {
-    expect(zhTranslate('drop.refuseLive')).toBe('运行中的会话不能删除')
-    expect(zhTranslate('drop.release')).toBe('松手删除')
-    expect(zhTranslate('drop.deleting')).toBe('正在删除…')
+    expect(zhTranslate('drop.refuseLive')).toBe('运行中的会话不能移入回收站')
+    expect(zhTranslate('drop.release')).toBe('松手移入回收站')
+    expect(zhTranslate('drop.deleting')).toBe('正在移入回收站…')
 
     const service = fakeLocale()
     createTranslate(contextWith(service))
@@ -487,8 +489,8 @@ describe('拖放删除文案键', () => {
       expect(dicts.en[key], key).not.toBe(key)
       expect(dicts.en[key], key).not.toMatch(/[\u4e00-\u9fff]/)
     }
-    expect(dicts.en['drop.refuseLive']).toBe('A running session cannot be deleted')
-    expect(dicts.en['drop.release']).toBe('Release to delete')
-    expect(dicts.en['drop.deleting']).toBe('Deleting…')
+    expect(dicts.en['drop.refuseLive']).toBe('A running session cannot be moved to the trash')
+    expect(dicts.en['drop.release']).toBe('Release to move to trash')
+    expect(dicts.en['drop.deleting']).toBe('Moving to trash…')
   })
 })

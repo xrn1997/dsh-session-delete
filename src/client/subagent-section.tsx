@@ -164,7 +164,7 @@ export interface SubagentChild {
   readonly name: string
   /** 已知字节数；`undefined` ⇒ 摆 `sizeAbsentText` 给的那句（不给就摆「—」）。 */
   readonly sizeBytes: number | undefined
-  /** 时间读数（回收站 = 删除时间，归档 = 最后活动）；`undefined` ⇒ 这一格不画。 */
+  /** 时间读数（回收站 = 移入回收站时间，归档 = 最后活动）；`undefined` ⇒ 这一格不画。 */
   readonly at: number | undefined
   /** 有可打开的详情才可点；归档里未归档的孩子只读。 */
   readonly navigable: boolean
@@ -180,7 +180,7 @@ export interface SubagentSectionInput {
   readonly totalSizeBytes: number | undefined
   /** 单行大小缺席时念什么（归档交自己键上的那句，与它的清单行同一个字符）；不给 ⇒ 「—」。 */
   readonly sizeAbsentText?: string
-  /** 展开体里那句「它们跟谁走」；两档各自给（回收站=随组恢复/删除，归档=按自己的归档状态）。 */
+  /** 展开体里那句「它们跟谁走」；两档各自给（回收站=随组恢复/彻底删除，归档=按自己的归档状态）。 */
   readonly note: string
   readonly onOpenChild?: (id: string) => void
   readonly onPrefetchChild?: (id: string) => void

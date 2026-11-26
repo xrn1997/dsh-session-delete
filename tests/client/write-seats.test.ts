@@ -120,7 +120,7 @@ describe('删除座位', () => {
     expect(failure).toEqual({ kind: 'ran', value: null })
   })
 
-  it('批量删除：撤销名单只收 ok 条目的 entryId，失败表按 id 回', async () => {
+  it('批量移入回收站：撤销名单只收 ok 条目的 entryId，失败表按 id 回', async () => {
     const deps = {
       applyOutcomes: vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
         valueOf('delete', 's1', trashRow('e1', 's1')),
@@ -239,7 +239,7 @@ describe('restoreFromUndo 拥有整趟', () => {
     expect(readCachedTrashDetail('e2')).toBeDefined()
   })
 
-  it('成功但期间被新删除覆盖：不动别人的横幅（ownsNotice 判据）', async () => {
+  it('成功但期间被新的移入回收站覆盖：不动别人的横幅（ownsNotice 判据）', async () => {
     const view = renderHook(() => useUndoNotice())
     act(() => { publishUndoNotice({ entryId: 'e1', title: '标题' }) })
     const old = view.result.current
@@ -335,7 +335,7 @@ describe('座位 · 闸在飞时这一趟不跑', () => {
     await expect(unarchiveFromArchiveTab({
       deps: applyDeps(deps.applyOutcomes), ids: ['s1'], gate: g, refresh,
     })).resolves.toEqual({ kind: 'blocked' })
-    // 单删座位不许把「没跑」折成「跑了、这条没有失败」（那会让确认框据此收框）。
+    // 单条移入座位不许把「没跑」折成「跑了、这条没有失败」（那会替在飞那一趟宣布成功）。
     await expect(deleteSessionFromMenu(applyDeps(deps.applyOutcomes), { sessionId: 's1', title: 'T' }, g)).resolves.toEqual({ kind: 'blocked' })
 
     expect(applyOutcomes).not.toHaveBeenCalled()
@@ -347,7 +347,7 @@ describe('座位 · 闸在飞时这一趟不跑', () => {
 })
 
 describe('删除/撤销座位 · 归档档的接线', () => {
-  it('撤销横幅带 archived 事实：已归档会话删除后，文案说「回到归档」', async () => {
+  it('撤销横幅带 archived 事实：已归档会话移入回收站后，文案说「回到归档」', async () => {
     const g = gate()
     const archivedRow = { ...trashRow('e1', 's1'), wasArchived: true }
     const deps = { applyOutcomes: vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([valueOf('delete', 's1', archivedRow)])) }
@@ -521,8 +521,6 @@ describe('写入生命周期（apply → 判读 → 收尾 → refresh）', () =
     expect(run).toEqual({ kind: 'ran', value: '删不动' })
 
     // 半二（运行期 · refresh 半）：接 refresh 的座位全失败 ⇒ refresh 恰好交一回、呈现钩子一个不碰。
-    // delete 座位不接 refresh 回调——生产 delete 的重读走 invalidate → 修订订阅，batch-confirm 只传
-    // deps / ids / gate；「delete 材质 + refresh」同一趟在公开座位面上构造不出来，故分两半钉。
     const panel = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
       outcomes('purge', ['e1'], { e1: { message: '删不动' } })))
     const refreshAfterWrite = vi.fn(async () => {})
@@ -533,6 +531,17 @@ describe('写入生命周期（apply → 判读 → 收尾 → refresh）', () =
     expect(refreshAfterWrite).toHaveBeenCalledTimes(1)
     expect(mocks.dismissUndoNotice).not.toHaveBeenCalled()
     expect(writeSucceeded).not.toHaveBeenCalled()
+
+    // delete 座位接可选 refresh 时也把 refresh 包进闸并在结算后调用一次。
+    const deleteRefresh = vi.fn(async () => {})
+    const gDelete = gate()
+    await deleteSessionFromMenu(
+      applyDeps(menu),
+      { sessionId: 's1', title: 'T', refresh: deleteRefresh },
+      gDelete,
+    )
+    expect(gDelete.around).toHaveBeenCalledTimes(1)
+    expect(deleteRefresh).toHaveBeenCalledTimes(1)
 
     // 顶层失败（信封都没成）也交 refresh 一次：那一趟没有逐条回执，失败原文已铺进 failures。
     const down = vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> =>

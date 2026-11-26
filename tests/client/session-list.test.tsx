@@ -38,7 +38,7 @@ const rowOf = (r: TestRow): SessionRowView => ({
   id: r.id,
   title: `标题 ${r.id}`,
   titleTip: `全文 ${r.id}`,
-  meta: '删除于 1天前 · 10 KB',
+  meta: '1天前移入回收站 · 10 KB',
   metaTip: '2026-01-01 00:00:00',
   checkLabel: `勾选「${r.id}」这条会话`,
   failure: r.id === 'a1' ? '原项目目录已不存在' : null,

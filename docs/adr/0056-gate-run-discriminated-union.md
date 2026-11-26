@@ -16,7 +16,7 @@ Status: accepted
 ## 决定
 
 1. **`GateRun<T>` 收在 `src/client/busy-gate.ts`，与闸同一处**：`{kind:'blocked'}` 与 `{kind:'ran',value}` 两支判别联合。`around` 交回 `Promise<GateRun<T>>`，挡回仍发生在同步侧（`busy` 是 state、要等下一拍，同一 tick 的连点拦不住）。
-2. **调用方一律按 `kind` 分派**：写入座位（`write-seats.ts`）、整趟写入（`write-seats.ts` 的 `runWrite`，模块私有）、清空（`use-trash-query.ts` 的 `emptyTrash`）、确认框与控制器（`delete-confirm.tsx` / `batch-confirm.tsx` / `use-trash-panel-controller.ts`）拿到 `blocked` 时这一趟什么都不落地——框不收、不追加失败、不清快照，界面后果等在飞那一趟的结论。
+2. **调用方一律按 `kind` 分派**：写入座位（`write-seats.ts`）、整趟写入（`write-seats.ts` 的 `runWrite`，模块私有）、清空（`use-trash-query.ts` 的 `emptyTrash`）、动作宿主与控制器（`delete-action.tsx` / `batch-bar.tsx` / `use-trash-panel-controller.ts`）拿到 `blocked` 时这一趟什么都不落地——框不收、不追加失败、不清快照，界面后果等在飞那一趟的结论。
 3. **失败原文与 `blocked` 不混**：`false` / `value` 只说「跑过、结果如何」，`blocked` 只说「没跑」；`emptyTrash` 的两支判别（清了 / 没清成）因此不需要再借 `undefined`。
 
 ## 边界

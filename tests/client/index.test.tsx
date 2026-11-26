@@ -3,7 +3,7 @@
 // 这一层用**假的 `ctx`**（只给槽位注册表）与**假的 `fetch`**（我们自己的前缀路由）跑真的 `apply`，
 // 再把注册表里的贡献按**真宿主的形状**装起来（`Scene`：菜单槽的行渲染在一个假 `Menu` 里，
 // overlay 槽的贡献全挂上）。钉住四件事：
-// 1. **取数通道的探测是注册的前提**：探测通过才十一次 `slots.inject`（槽位名、插件专属 id、order、
+// 1. **取数通道的探测是注册的前提**：探测通过才十次 `slots.inject`（槽位名、插件专属 id、order、
 //    以及 `main` 的 key 与 `sidebar.panellist` 的 id 同字）；探测不过 ⇒ 零注册、零抛错、`apply` 正常返回；
 // 2. **deps 装配**：HTTP 回的是我们的信封（`{ ok: true, value }` / `{ ok: false, error }`，与官方
 //    unary 面同形），浏览器半把它解析成 `RemoteOutcome`；《remote.test.ts》钉形状，这里钉**端到端的
@@ -13,9 +13,9 @@
 //    `main` 的同字 key 出面板本体。两条**必须同一拍注册**：官方 `ctx.layout.selectPanel` 逐字
 //    `if (panelId !== null && !this.hasMainPanel(panelId)) throw new Error(...)`，只有行没有面板时
 //    点一下就是运行期抛错；
-// 4. **菜单收起的门**：`open === false` ⇒ 槽位行子树不渲染（真产物 `Menu` 逐字如此）。确认框必须脱离
-//    这棵子树，否则按下「删除」的那一帧它就被连坐卸载——真机上「移入回收站」永远点不到。
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+// 4. **菜单收起的门**：`open === false` ⇒ 槽位行子树不渲染（真产物 `Menu` 逐字如此）。移入请求的宿主必须脱离
+//    这棵子树，否则按下「移入回收站」的那一帧它就被连坐卸载——那条请求就再也发不出去。
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { type ComponentType, type ReactElement, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { apply, inject } from '../../src/client/index.js'
@@ -42,7 +42,7 @@ beforeEach(() => {
 
 
 const MENU_SLOT = 'sidebar.workspaces.session.menu.item'
-/** 会话行首 16px 格（状态点缺席时归第三方装饰）；批量删除的主勾选框住这里。 */
+/** 会话行首 16px 格（状态点缺席时归第三方装饰）；批量移入回收站的主勾选框住这里。 */
 const LEADING_SLOT = 'sidebar.session.row.leading'
 /** 会话行尾悬停排的座位（状态点/归档行的兜底勾选开关住这里，宿主自己的归档/置顶也在这里）。 */
 const ROW_ACTION_SLOT = 'sidebar.workspaces.session.row.action'
@@ -171,7 +171,7 @@ function installFetch(raw: EnvelopeRemote, channel: Channel = 'up'): { calls: Fe
     // 可调项：空体读、带字段写（与 Node 半 `/config` 的判据同形）
     [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.config.path]: async (body) =>
       Object.keys(body).length === 0 ? raw.config() : raw.saveConfig(body as never),
-    // 两条纯读要有座位：面板挂载读详情、确认框打开那一刻问一次计数
+    // 两条纯读要有座位：面板挂载读详情、批量浮条防抖问一次计数
     [OFFICIAL_SESSION_DELETE_API_PREFIX + ROUTES.detail.path]: async (body) =>
       raw.detail(body['entryId'] as string, body['before'] as number | undefined),
     // 写动词一段收口：`/apply` 按 body 里的动作与 ids 分派（与 Node 半那张路由表同形）
@@ -302,7 +302,7 @@ async function bootstrap(
  *   `const list = open && jsxs(MenuSurface, { … children: [items.map(renderEntry), children] })`
  *   （asar @22074291 逐字），`open === false` 时槽位行（`children`）**根本不渲染**——行连同它的
  *   子树一起卸载。**替身原来缺的正是这条落差**（假 hook 只把 `open=false` 记进局部变量，行还在），
- *   所以「先关菜单、再开确认框」在旧实现上看起来通过、真机上永远点不到「移入回收站」。
+ *   所以「先关菜单、再执行删除」在旧实现上看起来通过，真机上却可能点不到。
  * - overlay 槽的**全部**贡献都挂上（宿主就是这样渲染 `shell.overlay` 的）。
  */
 function Scene({
@@ -386,16 +386,15 @@ function Scene({
 }
 
 describe('apply 的装配面', () => {
-  it('取数通道可用时：菜单槽两行、行首格与行尾排各一次、overlay 槽四次（提示 + 单删框 + 浮条 + 批量框）、面板行与中央面板各一次、设置页一次；面板 id 与 main 的 key 同字', async () => {
+  it('取数通道可用时：菜单槽两行、行首格与行尾排各一次、overlay 槽三次（提示 + 单删动作 + 浮条）、面板行与中央面板各一次、设置页一次；面板 id 与 main 的 key 同字', async () => {
     const { injected, registered } = await bootstrap()
     // 同一个槽位 key 多次 `slots.inject` 是官方写法本身（宿主对 `conversation.chat.node`
-    // 就连写十几次 inject，每次一个贡献），overlay 上的四样东西各是各的贡献。
+    // 就连写十几次 inject，每次一个贡献），overlay 上的三样东西各是各的贡献。
     expect(injected).toEqual([
       MENU_SLOT,
       MENU_SLOT,
       LEADING_SLOT,
       ROW_ACTION_SLOT,
-      OVERLAY_SLOT,
       OVERLAY_SLOT,
       OVERLAY_SLOT,
       OVERLAY_SLOT,
@@ -409,9 +408,8 @@ describe('apply 的装配面', () => {
       '@xrn1997/dsh-session-delete.batch-pick-leading',
       '@xrn1997/dsh-session-delete.batch-pick',
       '@xrn1997/dsh-session-delete.undo-toast',
-      '@xrn1997/dsh-session-delete.delete-confirm',
+      '@xrn1997/dsh-session-delete.delete-action',
       '@xrn1997/dsh-session-delete.batch-bar',
-      '@xrn1997/dsh-session-delete.batch-confirm',
       PANEL_ID,
       undefined,
       undefined,
@@ -510,7 +508,7 @@ describe('apply 的装配面', () => {
     const batchKey = (batchIcon as { key?: unknown }).key
     expect(typeof batchKey).toBe('string')
     expect(actions[1]).toMatchObject({
-      label: '删除',
+      label: '移入回收站',
       disabled: false,
       danger: true,
       afterContent: true,
@@ -518,7 +516,7 @@ describe('apply 的装配面', () => {
 
     running = true
     const live = await contribution.resolve({ sessionId: 'session-a', displayTitle: '/code-review' })
-    expect(live[1]).toMatchObject({ label: '删除（运行中）', disabled: true })
+    expect(live[1]).toMatchObject({ label: '移入回收站（运行中）', disabled: true })
   })
 
   it('ctx.get 抛错按服务缺席处理：legacy 菜单行照注册，拖不垮其余座位', async () => {
@@ -532,7 +530,6 @@ describe('apply 的装配面', () => {
         MENU_SLOT,
         LEADING_SLOT,
         ROW_ACTION_SLOT,
-        OVERLAY_SLOT,
         OVERLAY_SLOT,
         OVERLAY_SLOT,
         OVERLAY_SLOT,
@@ -572,24 +569,21 @@ describe('apply 的装配面', () => {
     expect(injected.filter((key) => key === 'contextMenu.icon')).toHaveLength(2)
   })
 
-  it('探测走 GET /ping（不碰清单）；每个动作各发一次 POST /apply（计数排在删除之前）', async () => {
+  it('探测走 GET /ping（不碰清单）；删除与撤销各发一次 POST /apply', async () => {
     const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
     const { registered, fetchCalls } = await bootstrap(rawRemote({ apply }))
     // 探测那一次：最便宜的在/不在
     expect(fetchCalls[0]).toEqual({ path: `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.ping.path}`, method: 'GET', body: {} })
 
     render(<Scene registered={registered} />)
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
-    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
     await waitFor(() => expect(apply).toHaveBeenCalledWith('delete', ['session-a']))
     fireEvent.click(await screen.findByRole('button', { name: '撤销' }))
     await waitFor(() => expect(apply).toHaveBeenCalledWith('restore', ['a']))
 
     const posted = fetchCalls.filter((c) => c.method === 'POST')
-    // 一段管所有动作：三次请求都打同一条路径，**动作住在 body 里**；
-    // 计数排在删除**之前**：那半句「含 N 个子会话」要在点下去之前就摆出来（那一刻这条会话还不在回收站里）
+    // 一段管所有动作：两次请求都打同一条路径，**动作住在 body 里**。
     expect(posted).toEqual([
-      { path: `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`, method: 'POST', body: { action: 'count', ids: ['session-a'] } },
       { path: `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`, method: 'POST', body: { action: 'delete', ids: ['session-a'] } },
       { path: `${OFFICIAL_SESSION_DELETE_API_PREFIX}${ROUTES.apply.path}`, method: 'POST', body: { action: 'restore', ids: ['a'] } },
     ])
@@ -612,16 +606,15 @@ describe('apply 的装配面', () => {
     const { registered } = await bootstrap(rawRemote({ apply }), 'up', uiWorkspace)
     render(<Scene registered={registered} />)
 
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
-    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
     await waitFor(() => expect(clearMain).toHaveBeenCalledTimes(1))
 
     fireEvent.click(await screen.findByRole('button', { name: '撤销' }))
     await waitFor(() => expect(openSession).toHaveBeenCalledWith('session-a'))
   })
 
-  // 批量删除走的是另一条成功路径（`batch-confirm.tsx` 自己发撤销提示）——同一条主视图收尾也要接上。
-  it('批量删除当前主视图 → 关掉它；批量撤销恢复 → 重开它', async () => {
+  // 批量移入回收站走另一条写入座位——同一条主视图收尾也要接上。
+  it('批量移入回收站当前主视图 → 关掉它；批量撤销恢复 → 重开它', async () => {
     let selected: { sessionId?: string } = { sessionId: 'session-a' }
     const clearMain = vi.fn(() => { selected = {} })
     const openSession = vi.fn()
@@ -636,37 +629,30 @@ describe('apply 的装配面', () => {
     render(<Scene registered={registered} />)
 
     fireEvent.click(screen.getByRole('menuitem', { name: '多选' }))
-    fireEvent.click(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量删除' }))
+    fireEvent.click(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量移入回收站' }))
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: '移入回收站 1 条' }))
     await waitFor(() => expect(clearMain).toHaveBeenCalledTimes(1))
 
     fireEvent.click(await screen.findByRole('button', { name: '撤销' }))
     await waitFor(() => expect(openSession).toHaveBeenCalledWith('session-a'))
   })
 
-  // 2026-10-17：宿主列表批量删除的端到端形状。「⋯ → 多选」进入模式 → 行首勾选 → 浮条 → 批量确认框
-  // 都是注册出来的真组件。
-  it('⋯ 多选 → 行首勾选 → 浮条 → 批量确认 → 一次 delete → 批量撤销横幅 → 撤销发一次批量 restore', async () => {
+  // 宿主列表批量移入回收站的端到端形状：「⋯ → 多选」进入模式 → 行首勾选 → 浮条即执行。
+  it('⋯ 多选 → 行首勾选 → 浮条即删 → 批量撤销横幅 → 撤销发一次批量 restore', async () => {
     const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({ ok: true as const, value: okOutcomes(action, ids) }))
     const { registered, fetchCalls } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)
     fireEvent.click(screen.getByRole('menuitem', { name: '多选' }))
     expect(screen.getByText('点击会话行选择')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量删除' }))
-    // 浮条那颗（此刻对话框还没开，全页只此一颗）
+    fireEvent.click(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量移入回收站' }))
+    // 浮条点击即移入回收站。
     fireEvent.click(await screen.findByRole('button', { name: '移入回收站 1 条' }))
-    // 确认框里那颗（与浮条同句同键 ⇒ 只能在 role="dialog" 里找）
-    const dialog = await screen.findByRole('dialog')
-    fireEvent.click(within(dialog).getByRole('button', { name: '移入回收站 1 条' }))
     await waitFor(() => expect(apply).toHaveBeenCalledWith('delete', ['session-a']))
     expect(screen.getByText('1 条会话已移入回收站')).toBeInTheDocument()
     const posted = fetchCalls
       .filter((c) => c.method === 'POST')
       .map((c) => (c.body as { action: string }).action)
-    // 序只钉"含 count 且发过 delete"：浮条的防抖 count 与开框的 count 谁先落地不定（预裁记档）
-    expect(posted).toContain('count')
+    expect(posted).toContain('delete')
     fireEvent.click(screen.getByRole('button', { name: '撤销' }))
     await waitFor(() => expect(apply).toHaveBeenLastCalledWith('restore', ['a']))
   })
@@ -695,8 +681,7 @@ describe('apply 的装配面', () => {
     // 一次：面板挂载那一次（探测走 `/ping`，不再读清单——2026-10-17）
     expect(list).toHaveBeenCalledTimes(1)
 
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
-    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
 
     // 第二次 = 删除成功后的那次重读（本轮修的就是它）
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
@@ -756,7 +741,7 @@ describe('取数通道探测不过（路由缺席态）', () => {
 })
 
 describe('deps 装配：信封的失败支落到界面上的后果', () => {
-  it('delete 回 { ok: false, error } 时原文上屏、确认框留着——不走「已移入回收站」那条成功路径', async () => {
+  it('delete 回 { ok: false, error } 时原文上屏——不走「已移入回收站」那条成功路径', async () => {
     const { registered } = await bootstrap(
       rawRemote({
         apply: async () => ({ ok: false, error: { code: 'sessiondelete/live', message: '会话正在运行' } }) as const,
@@ -764,11 +749,10 @@ describe('deps 装配：信封的失败支落到界面上的后果', () => {
     )
     render(<Scene registered={registered} />)
 
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
-    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
 
     expect(await screen.findByText(/会话正在运行/)).toBeInTheDocument()
-    expect(screen.getByRole('dialog', { name: '删除这个会话？' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByText(/已移入回收站/)).not.toBeInTheDocument()
   })
 
@@ -793,8 +777,7 @@ describe('deps 装配：信封的失败支落到界面上的后果', () => {
     }))
     const { registered } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
-    fireEvent.click(screen.getByRole('button', { name: '移入回收站' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
     expect(await screen.findByText(/\/code-review 已移入回收站/)).toBeInTheDocument()
 
     // 展开前 `outcome.value` 是 `{ ok, value }`，拿 `.id` 会得到 undefined——撤销会去打 restore(undefined)。
@@ -834,18 +817,18 @@ describe('live selector（MenuRow 的 props 桥）', () => {
     const { unmount } = render(
       <Component {...row} useSessions={evaluate({ byId: { 'session-a': { running: true } } })} />,
     )
-    expect(screen.getByRole('menuitem', { name: '删除' })).toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: '移入回收站' })).toBeDisabled()
     unmount()
 
     render(<Component {...row} useSessions={evaluate({ byId: { 'session-a': { running: false } } })} />)
-    expect(screen.getByRole('menuitem', { name: '删除' })).not.toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: '移入回收站' })).not.toBeDisabled()
   })
 
   it('槽位 hook 缺失时兜底成「永不 live」，不炸', async () => {
     const { seat } = await bootstrap()
     const { Component, props } = seat(MENU_SLOT)
     render(<Component {...props} sessionId="session-a" displayTitle="t" />)
-    expect(screen.getByRole('menuitem', { name: '删除' })).not.toBeDisabled()
+    expect(screen.getByRole('menuitem', { name: '移入回收站' })).not.toBeDisabled()
   })
 })
 
@@ -857,7 +840,7 @@ describe('行首勾选的 props 桥（槽位只投 sessionId）', () => {
     const useSessions = (select: (state: RowState) => unknown): unknown =>
       select({ byId: { 'session-a': { title: '/code-review' } } })
     render(<Component {...props} sessionId="session-a" useSessions={useSessions} />)
-    expect(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量删除' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '勾选「/code-review」以批量移入回收站' })).toBeInTheDocument()
   })
 
   it('root hook 缺失时也不炸：多选态里勾选框照样出来，标题按空串处理', async () => {
@@ -875,12 +858,12 @@ describe('菜单收起 = 行子树卸载（真 Menu 的那条门）', () => {
     const closes: boolean[] = []
     render(<Scene registered={registered} onMenuClose={(next) => closes.push(next)} />)
 
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
 
     expect(closes).toEqual([false])
   })
 
-  it('按下这一行后菜单关掉、行没了——确认框仍在、且「移入回收站」点得到', async () => {
+  it('按下这一行后菜单关掉、行没了——移入回收站仍执行，不弹确认框', async () => {
     const apply = vi.fn(async (action: ApplyAction, ids: readonly string[]) => ({
       ok: true as const,
       value: okOutcomes(action, ids),
@@ -888,15 +871,12 @@ describe('菜单收起 = 行子树卸载（真 Menu 的那条门）', () => {
     const { registered } = await bootstrap(rawRemote({ apply }))
     render(<Scene registered={registered} />)
 
-    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '移入回收站' }))
 
     // 门确实关了：行随菜单一起卸载（真机上是同一个门）。
-    expect(screen.queryByRole('menuitem', { name: '删除' })).not.toBeInTheDocument()
-    // 确认框不住在行里，所以这次卸载带不走它。
-    expect(screen.getByRole('dialog', { name: '删除这个会话？' })).toBeInTheDocument()
-    const confirmButton = screen.getByRole('button', { name: '移入回收站' })
-    expect(confirmButton).not.toBeDisabled()
-    fireEvent.click(confirmButton)
+    expect(screen.queryByRole('menuitem', { name: '移入回收站' })).not.toBeInTheDocument()
+    // 动作宿主不住在行里，所以这次卸载带不走它。
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     await waitFor(() => expect(apply).toHaveBeenCalledWith('delete', ['session-a']))
   })
 })

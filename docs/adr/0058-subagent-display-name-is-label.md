@@ -27,7 +27,7 @@ Status: accepted
 ## 被否方案
 
 - **label 与 title 并排都显示**：撞名的两串都摆出来并没有让子会话变可分，还给出「哪一串是真名」的第二份抄本。
-- **只做读时兜底、不改起名规则**：新删进来的条目仍按 `title` 投影起名；单独删掉的子会话没有父详情可兜，清单行、确认框与撤销横幅都是撞名的那串。
+- **只做读时兜底、不改起名规则**：新删进来的条目仍按 `title` 投影起名；单独删掉的子会话没有父详情可兜，清单行、彻底删除确认框与撤销横幅都是撞名的那串。
 - **迁移/回写存量清册行**：清册是删除那一刻的快照，回写把它改写成另一时刻的事实；自动回写还与「维护动作只在设置页手动触发」（ADR-0021）相抵。
 - **每条孩子行读它自己的日志取 label**：子会话段最多 200 行，逐行开日志是读放大；父日志的 `subagent/catalog` 逐孩子记着同一个 label，一次走帧就都拿到。读放大只留给没有 catalog 登记且标题已经撞名的 fork 行。
 
@@ -35,6 +35,6 @@ Status: accepted
 
 - `src/ports/host-port.ts` 的 `titleOf` 多读一格 `subagent` 投影；`src/trash/detail.ts` 的走帧多折 `subagent/catalog` 与 `subagent/descriptor`；`src/trash/display-name.ts` 是「从子会话自己的日志取显示名」的唯一实现（独立子会话与撞名 fork 行共用）。
 - `src/shared/wire.ts` 的 `TrashEntryWire` 多一格可选 `label`（详情 `subagents` 行；父 catalog label 或撞名 fork 自己的日志标题），`TrashDetailWire` 多一格可选 `label`（详情自己日志的 descriptor label / fork 日志标题）；`src/client/subagent-section.tsx` 的 `rowName` 与 `src/client/trash-detail.tsx` 的 `headerName` 统一显示名。
-- 存量条目在组里（父详情的子会话段可读到父日志）时按 catalog label 显示；没有 catalog 的 fork 子在标题撞名时按自己的日志标题显示；独立子会话打开详情后按自己的 label/日志标题显示。清单行与确认框仍显示清册快照。
+- 存量条目在组里（父详情的子会话段可读到父日志）时按 catalog label 显示；没有 catalog 的 fork 子在标题撞名时按自己的日志标题显示；独立子会话打开详情后按自己的 label/日志标题显示。清单行与彻底删除确认框仍显示清册快照。
 
 锚点：`src/ports/host-port.ts`（`titleOf` / `subagentLabelOf`）；`src/trash/detail.ts`（`subagentLabels`、`ownLabel` / `ownParentSession`、`childDisplayNameOf`）；`src/trash/display-name.ts`（`displayNameOfLog` / `descriptorLabelOf`）；`src/log/session-log.ts`（`SessionRecord.parentSession`）；`src/shared/wire.ts`（`TrashEntryWire.label` / `TrashDetailWire.label`）；`src/client/subagent-section.tsx`（`rowName`）、`src/client/trash-view.ts`（`detailNameOf`：两档详情标题排共用的四源次序）与 `src/client/trash-detail.tsx`（`headerName`，回收站那一档的薄包装）；`tests/assembly.test.ts`；`tests/trash-detail.test.ts`；`tests/client/trash-detail.test.tsx`；`docs/ui-spec.md` §2（⑥）；ADR-0029（`subagents` 行的清册投影，现由 `0055` 沿用）；ADR-0055（子会话段）；ADR-0038（组员判据）。

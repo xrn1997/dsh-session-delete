@@ -53,12 +53,22 @@ export interface FailureSink {
   set(failures: ReadonlyMap<string, string>): void
 }
 
-/** 会话行菜单的单删座位：一条会话、`single` 读法、成功发单条撤销横幅。被挡回时框不收——先收就会把
- *  在飞那一趟的失败原文落在已卸载的确认框上；`value` 是这条的失败原文，`null` = 跑了且无失败。 */
+/** 一条待移入回收站的会话：宿主投影的会话 id + 移入回收站那一刻的显示名。请求现场、单条座位、批量选中集
+ *  （`batch-selection-store.ts` 的 `PickItem`）与撤销横幅共用这组同行字段；`title` 只用于已选清单与
+ *  撤销/失败原文，不参与请求。 */
+export interface TrashMoveTarget {
+  /** 宿主槽位投影的会话 id，原样透给 `/apply`（浏览器半不自己拼 id）。 */
+  readonly sessionId: string
+  /** 移入回收站那一刻的显示名（投影的 `displayTitle`）。 */
+  readonly title: string
+}
+
+/** 会话行菜单的单条移入座位：一条会话、`single` 读法、成功发单条撤销横幅。`value` 是这条的失败原文，
+ *  `null` = 跑了且无失败；调用方据此发布裸失败提示。 */
 export async function deleteSessionFromMenu(
   deps: OneShotDeps,
-  input: { sessionId: string; title: string; failureSink?: FailureSink },
-  gate: BusyGate,
+  input: TrashMoveTarget & { failureSink?: FailureSink; refresh?: () => void | Promise<void> },
+  gate: Pick<BusyGate, 'around'>,
 ): Promise<GateRun<string | null>> {
   const run = await runWrite({
     deps,
@@ -71,20 +81,22 @@ export async function deleteSessionFromMenu(
       publishUndo: ({ entryIds, archived }) => publishUndoNotice({ entryId: entryIds[0], title: input.title, archived }),
     },
     gate,
+    refresh: input.refresh,
     failureSink: input.failureSink,
   })
-  // 挡回来的一趟不伪造「这条没有失败」：原样交回 blocked，让框留在原地。
+  // 挡回来的一趟不伪造「这条没有失败」：原样交回 blocked，界面后果归在飞那一趟。
   if (run.kind === 'blocked') return run
   return { kind: 'ran', value: run.value.failures.get(input.sessionId) ?? null }
 }
 
-/** 批量删除座位（多选浮条与归档档页脚共用）：撤销名单只收 ok 支的条目 id；被挡回时浮条与确认框都
- *  不许照着它收缩名单或关框——那会吞掉在飞那一趟的结果。 */
+/** 批量移入座位（多选浮条与归档档页脚共用）：撤销名单只收 ok 支的条目 id；被挡回时调用方
+ *  不许照着它收缩名单——那会吞掉在飞那一趟的结果。 */
 export async function deleteSessionsFromBatch(
   deps: OneShotDeps,
   ids: readonly string[],
-  gate: BusyGate,
+  gate: Pick<BusyGate, 'around'>,
   failureSink?: FailureSink,
+  refresh?: () => void | Promise<void>,
 ): Promise<GateRun<ReadonlyMap<string, string>>> {
   const outcome = await runWrite({
     deps,
@@ -95,6 +107,7 @@ export async function deleteSessionsFromBatch(
       publishUndo: ({ entryIds, n, archived }) => publishUndoBatchNotice({ entryIds, n, archived }),
     },
     gate,
+    refresh,
     failureSink,
   })
   return outcome.kind === 'blocked' ? outcome : { kind: 'ran', value: outcome.value.failures }
@@ -131,7 +144,7 @@ export async function restoreFromUndo(deps: OneShotDeps, notice: UndoNotice, t: 
       : failure)
     return
   }
-  // 成功只收掉自己那条：期间发布的新删除横幅不能被顺手清掉。
+  // 成功只收掉自己那条：期间发布的新移入回收站横幅不能被顺手清掉。
   if (ownsNotice(notice)) clearUndoNotice()
 }
 
@@ -323,17 +336,18 @@ interface WriteInput<A extends SeatedAction> {
   readonly sessionIdOfEntry?: (entryId: string) => string | undefined
   /** 信封成功时交给 settlement 的呈现材质；按 action 的收尾顺序住本模块的 `settleWrite`。 */
   readonly presentation?: WritePresentation<A>
-  /** 这一趟的闸：给了就把 apply → settle → refresh 整趟包进 busy。refresh 不许落在闸外。 */
-  readonly gate?: BusyGate
+  /** 这一趟的闸：给了就把 apply → settle → refresh 整趟包进 busy。refresh 不许落在闸外。
+   *  整趟只用得到 `around` 这一格，调用方不必为了过闸伪造整枚 `BusyGate`。 */
+  readonly gate?: Pick<BusyGate, 'around'>
   /** 写完全程（无论成败）后的重读策略；是否真的重读由调用方决定。 */
-  readonly refresh?: (outcome: WriteOutcome<A>) => void | Promise<void>
+  readonly refresh?: ((outcome: WriteOutcome<A>) => void | Promise<void>) | undefined
   /** 逐条失败的落点；不给 = 这一面没有行级失败要铺（外部撤销座位把失败写回横幅）。见 {@link FailureSink}。 */
   readonly failureSink?: FailureSink | undefined
 }
 
 /** 签名上的分岔就是判据：没传闸 ⇒ 这一趟一定跑；传了闸 ⇒ 可能被同一枚闸的在飞那一趟挡回，回
  *  blocked、什么都没做。第二支把 `gate` 钉成 `undefined`，否则类型会把挡回漏成 `WriteOutcome`。 */
-function runWrite<A extends SeatedAction>(input: WriteInput<A> & { readonly gate: BusyGate }): Promise<GateRun<WriteOutcome<A>>>
+function runWrite<A extends SeatedAction>(input: WriteInput<A> & { readonly gate: Pick<BusyGate, 'around'> }): Promise<GateRun<WriteOutcome<A>>>
 function runWrite<A extends SeatedAction>(input: WriteInput<A> & { readonly gate?: undefined }): Promise<WriteOutcome<A>>
 async function runWrite<A extends SeatedAction>(input: WriteInput<A>): Promise<GateRun<WriteOutcome<A>> | WriteOutcome<A>> {
   // 请求 id 去重保序在闸外一次算好：失败落点的 `clear` 也按这一份（被挡回也要清）。

@@ -24,14 +24,14 @@ const ZH = {
   'trash.loading': '正在读回收站…',
   'trash.readFailed': '回收站读不到',
   'trash.empty.title': '回收站是空的',
-  'trash.empty.hint': '在会话条目的「…」菜单里选「删除」，会话会先进到这里，随时可以恢复。',
+  'trash.empty.hint': '在会话条目的「…」菜单里选「移入回收站」，会话会先进到这里，随时可以恢复。',
   'trash.summary': '{count} 个会话 · 可释放 {size}',
   'trash.project.unknown': '未记录项目',
-  'trash.row.deletedNow': '刚刚删除',
-  'trash.row.deletedAgo': '删除于 {n}{unit}前',
+  'trash.row.deletedNow': '刚刚移入回收站',
+  'trash.row.deletedAgo': '{n}{unit}前移入回收站',
   'trash.row.subagents': '含 {n} 个子会话',
   'trash.row.strandedSubagents': '盘上还剩 {n} 个子会话',
-  // 删除时记下的工作区已不在账本里（宿主「删除工作区」只删注册、保留日志）：恢复照常回盘但落在「未分组」；
+  // 移入回收站时记下的工作区已不在账本里（宿主「删除工作区」只删注册、保留日志）：恢复照常回盘但落在「未分组」；
   // 这句话只留给批量恢复确认框逐条说，行上不重复。
   'trash.row.workspaceGone': '原工作区已不存在，恢复后归入未分组',
   'trash.unit.minutes': '分钟',
@@ -47,7 +47,7 @@ const ZH = {
   'trash.emptyAll': '清空回收站…',
   'trash.confirm.all': '清空回收站？',
   'trash.confirm.one': '彻底删除 1 个会话？',
-  'trash.confirm.one.meta': '{project} · 删除于 {at} · {size}',
+  'trash.confirm.one.meta': '{project} · 移入回收站于 {at} · {size}',
   // 只清 `.dsh` 里的独占副本与这些会话自己的缓存记录：源文件不进任何删除链路（ADR-0020）。
   'trash.confirm.body':
     '这会从回收站移除文件，{strong}。只清理会话独占的图片附件副本（共享副本保留）；这些会话自己的投影缓存记录也会一并清理，其他会话的缓存与你磁盘上的原图不受影响。',
@@ -188,12 +188,12 @@ const ZH = {
   'archive.row.created': '创建于',
   'archive.row.timeAbsent': '时间未知',
   'archive.row.unarchive': '解除归档',
-  'archive.row.delete': '删除',
+  'archive.row.delete': '移入回收站',
   'archive.row.subagent': '子代理',
-  // 行右那颗垃圾桶画的是「删除」，可恢复这件事要说出口：与回收站档同位置的图标（彻底删除）不是一个后果。
-  'archive.row.deleteHint': '删除后进入回收站，可恢复。',
+  // 行右那颗垃圾桶画的是「移入回收站」，可恢复这件事要说出口：与回收站档同位置的图标（彻底删除）不是一个后果。
+  'archive.row.deleteHint': '移入回收站后可恢复。',
   'archive.select.unarchive': '解除所选 {count} 条',
-  'archive.select.delete': '删除所选 {count} 条',
+  'archive.select.delete': '移入回收站所选 {count} 条',
   'archive.size.absent': '—',
   'archive.detail.lastEvent': '日志末条',
   'archive.detail.statusLabel': '状态',
@@ -262,7 +262,7 @@ const ZH = {
   'detail.attachment.saveFailed': '保存失败：{message}',
   'detail.back': '← 返回清单',
   'detail.subagents.label': '子会话',
-  'detail.subagents.note': '随本条一起恢复或删除',
+  'detail.subagents.note': '随本条一起恢复或彻底删除',
   'detail.subagents.expand': '展开子会话列表',
   'detail.subagents.collapse': '收起子会话列表',
   'detail.subagents.jump': '展开并跳到子会话段',
@@ -273,21 +273,16 @@ const ZH = {
   'detail.role.user': '你',
   'detail.role.assistant': '助手',
 
-  'menu.delete': '删除',
-  'menu.live': '会话正在运行，先停止再删除',
-  'drop.refuseLive': '运行中的会话不能删除',
-  'drop.release': '松手删除',
-  'drop.deleting': '正在删除…',
+  'menu.delete': '移入回收站',
+  'menu.live': '会话正在运行，先停止再移入回收站',
+  'drop.refuseLive': '运行中的会话不能移入回收站',
+  'drop.release': '松手移入回收站',
+  'drop.deleting': '正在移入回收站…',
   // 0.2.2+ 数据动作没有 disabledReason：禁用时直接把这个短句当 label。
-  'menu.deleteLive': '删除（运行中）',
+  'menu.deleteLive': '移入回收站（运行中）',
 
-  'dialog.title': '删除这个会话？',
-  'dialog.subagents': '含 {n} 个子会话，将一起移入回收站。',
-  'dialog.hint': '会话会移入回收站，之后可以随时恢复。彻底删除是回收站里的另一个动作。',
-  'dialog.confirm': '移入回收站',
-
-  // 宿主列表批量删除。子会话、n=1 标题、运行中原因、多选两句都复用既有键，不造第二句。
-  'batch.row.pick': '勾选「{title}」以批量删除',
+  // 宿主列表批量移入回收站。子会话计数与运行中原因复用既有键，不造第二句。
+  'batch.row.pick': '勾选「{title}」以批量移入回收站',
   'batch.bar.count': '已选 {n} 条',
   'batch.bar.pickHint': '点击会话行选择',
   'batch.bar.kids': '含 {k} 个子会话，跟着整组走',
@@ -297,15 +292,13 @@ const ZH = {
   'batch.bar.selectAll': '全选',
   'batch.bar.selectNone': '取消全选',
   'batch.run': '移入回收站 {n} 条',
-  'dialog.batch.title': '删除这些 {n} 个会话？',
-  'dialog.batch.retry': '重试这 {n} 条',
   'undo.movedBatch': '{n} 条会话已移入回收站',
 
   // 写入进度面（进度行 + 忙碌按钮）：动作键**自带「正在」**——进度行与忙碌按钮共用同一枚键，
   // 行文只再拼 k/N、步骤与秒数三段（各自独立刷新，整句一个键会让任一段变化都重写整句模板）。
   // 认领不上只说排队中，别人的 k/N 一个字都不上屏（假进度是反目标，ADR-0069 决定 4）。
   // `working` 是不走 `/progress` 的确认框（附件 / 投影清理）唯一那句兜底忙碌文案。
-  'progress.action.delete': '正在删除',
+  'progress.action.delete': '正在移入回收站',
   'progress.action.restore': '正在恢复',
   'progress.action.purge': '正在彻底删除',
   'progress.action.unarchive': '正在解除归档',
@@ -329,6 +322,8 @@ const ZH = {
   'undo.undo': '撤销',
   // 逐条失败且不止一条：条数 + 各条原因（去重后由调用方拼进 {reasons}）——只显第一条会把其余原因折没。
   'undo.failedBatch': '{n} 条会话未能撤销：{reasons}',
+  // 批量移入部分失败：在同一条撤销横幅里同屏展示，不等横幅过期后再顶上。
+  'undo.partialFailure': '{n} 条未能移入回收站：{reasons}',
 } as const
 
 export type CopyKey = keyof typeof ZH
@@ -350,11 +345,11 @@ const EN: Record<CopyKey, string> = {
   'trash.readFailed': 'Could not read the trash',
   'trash.empty.title': 'The trash is empty',
   'trash.empty.hint':
-    'Pick Delete in a session’s “…” menu; the session lands here first and can be restored at any time.',
+    'Choose “Move to trash” in a session’s “…” menu; the session lands here first and can be restored at any time.',
   'trash.summary': '{count} sessions · {size} reclaimable',
   'trash.project.unknown': 'Unrecorded project',
-  'trash.row.deletedNow': 'Deleted just now',
-  'trash.row.deletedAgo': 'Deleted {n}{unit} ago',
+  'trash.row.deletedNow': 'Moved to trash just now',
+  'trash.row.deletedAgo': 'Moved to trash {n}{unit} ago',
   'trash.row.subagents': 'has {n} subagent sessions',
   'trash.row.strandedSubagents': '{n} subagent sessions still on disk',
   'trash.row.workspaceGone': 'Its workspace no longer exists; it will be restored under “Ungrouped”',
@@ -371,7 +366,7 @@ const EN: Record<CopyKey, string> = {
   'trash.emptyAll': 'Empty the trash…',
   'trash.confirm.all': 'Empty the trash?',
   'trash.confirm.one': 'Delete this session permanently?',
-  'trash.confirm.one.meta': '{project} · deleted {at} · {size}',
+  'trash.confirm.one.meta': '{project} · moved to trash {at} · {size}',
   'trash.confirm.body':
     'This removes the files from the trash; {strong}. Only session-exclusive image attachment copies are cleaned (shared copies are kept); these sessions’ own projection-cache records are cleaned up too, while other sessions’ caches and your original files are untouched.',
   'trash.confirm.body.strong': 'no copy remains to restore it',
@@ -505,11 +500,11 @@ const EN: Record<CopyKey, string> = {
   'archive.row.created': 'Created',
   'archive.row.timeAbsent': 'Time unknown',
   'archive.row.unarchive': 'Unarchive',
-  'archive.row.delete': 'Delete',
+  'archive.row.delete': 'Move to trash',
   'archive.row.subagent': 'Subagent',
-  'archive.row.deleteHint': 'Deletion moves it to the trash; restorable.',
+  'archive.row.deleteHint': 'Moves it to the trash; restorable.',
   'archive.select.unarchive': 'Unarchive {count} selected',
-  'archive.select.delete': 'Delete {count} selected',
+  'archive.select.delete': 'Move {count} selected to trash',
   'archive.size.absent': '—',
   'archive.detail.lastEvent': 'Last log event',
   'archive.detail.statusLabel': 'Status',
@@ -577,7 +572,7 @@ const EN: Record<CopyKey, string> = {
   'detail.attachment.saveFailed': 'Save failed: {message}',
   'detail.back': '← Back to list',
   'detail.subagents.label': 'Subagent sessions',
-  'detail.subagents.note': 'Restored or deleted with this session',
+  'detail.subagents.note': 'Restored or permanently deleted with this session',
   'detail.subagents.expand': 'Expand subagent sessions',
   'detail.subagents.collapse': 'Collapse subagent sessions',
   'detail.subagents.jump': 'Expand and jump to subagent sessions',
@@ -588,20 +583,14 @@ const EN: Record<CopyKey, string> = {
   'detail.role.user': 'You',
   'detail.role.assistant': 'Assistant',
 
-  'menu.delete': 'Delete',
-  'menu.live': 'This session is running. Stop it first.',
-  'drop.refuseLive': 'A running session cannot be deleted',
-  'drop.release': 'Release to delete',
-  'drop.deleting': 'Deleting…',
-  'menu.deleteLive': 'Delete (running)',
+  'menu.delete': 'Move to trash',
+  'menu.live': 'This session is running. Stop it before moving it to the trash.',
+  'drop.refuseLive': 'A running session cannot be moved to the trash',
+  'drop.release': 'Release to move to trash',
+  'drop.deleting': 'Moving to trash…',
+  'menu.deleteLive': 'Move to trash (running)',
 
-  'dialog.title': 'Delete this session?',
-  'dialog.subagents': 'It also moves {n} subagent sessions to the trash.',
-  'dialog.hint':
-    'The session moves to the trash and can be restored at any time. Permanent deletion is a separate action in the trash.',
-  'dialog.confirm': 'Move to trash',
-
-  'batch.row.pick': 'Select “{title}” for batch delete',
+  'batch.row.pick': 'Select “{title}” for batch move to trash',
   'batch.bar.count': '{n} selected',
   'batch.bar.pickHint': 'Click a session row to select',
   'batch.bar.kids': '{k} subagent sessions come along',
@@ -611,11 +600,9 @@ const EN: Record<CopyKey, string> = {
   'batch.bar.selectAll': 'Select all',
   'batch.bar.selectNone': 'Deselect all',
   'batch.run': 'Move {n} to trash',
-  'dialog.batch.title': 'Delete these {n} sessions?',
-  'dialog.batch.retry': 'Retry these {n}',
   'undo.movedBatch': '{n} sessions were moved to the trash',
 
-  'progress.action.delete': 'Deleting',
+  'progress.action.delete': 'Moving to trash',
   'progress.action.restore': 'Restoring',
   'progress.action.purge': 'Deleting permanently',
   'progress.action.unarchive': 'Unarchiving',
@@ -637,6 +624,7 @@ const EN: Record<CopyKey, string> = {
   'undo.session': 'the session',
   'undo.undo': 'Undo',
   'undo.failedBatch': '{n} sessions could not be undone: {reasons}',
+  'undo.partialFailure': '{n} could not be moved to trash: {reasons}',
 }
 
 export type CopyParams = Readonly<Record<string, string | number>>

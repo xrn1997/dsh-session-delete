@@ -9,7 +9,9 @@ import type { ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
+  attachUndoPartialFailure,
   dismissUndoNotice,
+  publishFailureNotice,
   publishUndoBatchNotice,
   publishUndoNotice,
   UNDO_HOLD_MS,
@@ -134,7 +136,7 @@ describe('按条目熄灭撤销横幅', () => {
     expect(view.result.current).toBeNull()
   })
 
-  it('撤销在飞时来了新删除：旧撤销成功不清掉新横幅', async () => {
+  it('撤销在飞时来了新的移入回收站：旧撤销成功不清掉新横幅', async () => {
     let resolveApply!: (value: RemoteOutcome<ApplyOutcome[]>) => void
     const applyOutcomes = vi.fn(() => new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => {
       resolveApply = resolve
@@ -205,6 +207,42 @@ describe('撤销失败不静默（横幅先走一步）', () => {
     // 新横幅收掉后，旧失败顶上（它是用户仍该知道的结论）。
     act(() => { dismissUndoNotice(['e2']) })
     expect(await screen.findByText('旧撤销失败的原因')).toBeInTheDocument()
+  })
+
+  it('新动作失败（publishFailureNotice）立即可见，不被上一条 6 秒成功横幅压住；后续新成功也不回魂旧失败', () => {
+    vi.useFakeTimers()
+    try {
+      publishUndoNotice({ entryId: 'e1', title: '甲' })
+      render(<UndoToast deps={createFakeRemote()} />)
+      expect(screen.getByText(/甲 已移入回收站/)).toBeInTheDocument()
+
+      // 紧接着另一条移入失败：失败原文立即可见，旧成功横幅让位。
+      act(() => { publishFailureNotice('会话乙正在运行') })
+      expect(screen.getByText('会话乙正在运行')).toBeInTheDocument()
+      expect(screen.queryByText(/甲 已移入回收站/)).not.toBeInTheDocument()
+
+      // 之后丙移入成功并等 6 秒过期：之前已上屏过的旧失败不许回魂。
+      act(() => { publishUndoNotice({ entryId: 'e3', title: '丙' }) })
+      expect(screen.getByText(/丙 已移入回收站/)).toBeInTheDocument()
+      act(() => { vi.advanceTimersByTime(UNDO_HOLD_MS + 1100) })
+      expect(screen.queryByText('会话乙正在运行')).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('批量部分失败随撤销横幅同屏展示，点撤销成功后整条收起、不滞留假失败', async () => {
+    const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(restoreOutcomes(ids)))
+    publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
+    attachUndoPartialFailure({ count: 2, reasons: '会话在跑 · 目录被占用' })
+    render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
+
+    const alert = screen.getByRole('alert')
+    expect(alert).toHaveTextContent('1 条会话已移入回收站')
+    expect(alert).toHaveTextContent('2 条未能移入回收站：会话在跑 · 目录被占用')
+
+    fireEvent.click(screen.getByRole('button', { name: '撤销' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
   })
 })
 
@@ -368,7 +406,7 @@ describe('批量撤销横幅', () => {
     await waitFor(() => expect(screen.getByText('3 条会话未能撤销：会话正在运行 · 项目目录不在')).toBeInTheDocument())
   })
 
-  it('撤销在飞时来了新删除：新横幅的撤销不被旧那一趟按灰（闸按通知隔离）', async () => {
+  it('撤销在飞时来了新的移入回收站：新横幅的撤销不被旧那一趟按灰（闸按通知隔离）', async () => {
     let resolveOld!: (value: RemoteOutcome<ApplyOutcome[]>) => void
     const applyOutcomes = vi.fn((_action: string, ids: readonly string[]) => {
       if (ids[0] === 'e1') return new Promise<RemoteOutcome<ApplyOutcome[]>>((resolve) => { resolveOld = resolve })
@@ -405,7 +443,7 @@ describe('批量撤销横幅', () => {
 })
 
 describe('撤销横幅 · archived 句', () => {
-  it('已归档会话删除后撤销回到「归档」：横幅追加 archived 句，不提会话列表', () => {
+  it('已归档会话移入回收站后撤销回到「归档」：横幅追加 archived 句，不提会话列表', () => {
     publishUndoNotice({ entryId: 'e1', title: '标题', archived: true })
     render(<UndoToast deps={createFakeRemote()} />)
     // 单条形的主语就是那一条：整句直说「撤销后回到『归档』」，不用「其中」。
@@ -413,13 +451,13 @@ describe('撤销横幅 · archived 句', () => {
     expect(screen.queryByText(/会话列表/)).not.toBeInTheDocument()
   })
 
-  it('批量删除含已归档会话：批量句保留「其中已归档的」', () => {
+  it('批量移入回收站含已归档会话：批量句保留「其中已归档的」', () => {
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2, archived: true })
     render(<UndoToast deps={createFakeRemote()} />)
     expect(screen.getByText(/2 条会话已移入回收站；其中已归档的，撤销后回到「归档」/)).toBeInTheDocument()
   })
 
-  it('非归档删除不带这句', () => {
+  it('非归档的移入回收站不带这句', () => {
     publishUndoNotice({ entryId: 'e1', title: '标题' })
     render(<UndoToast deps={createFakeRemote()} />)
     expect(screen.queryByText(/撤销后回到「归档」/)).not.toBeInTheDocument()

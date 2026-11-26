@@ -99,7 +99,7 @@ export async function stepUndo(label: string, run: () => Promise<unknown>): Prom
 
 /**
  * **组级回滚**：把已经做成的成员按相反顺序退回；某一步退不干净时把失败并进原错误的
- * `details.rollbackFailures`，绝不让原错误独走。删除与恢复两个按组走的动词共用这一处。
+ * `details.rollbackFailures`，绝不让原错误独走。移入回收站与恢复两个按组走的动词共用这一处。
  */
 export async function rollbackJournals(journals: readonly Journal[], error: unknown): Promise<never> {
   const failures: string[] = []

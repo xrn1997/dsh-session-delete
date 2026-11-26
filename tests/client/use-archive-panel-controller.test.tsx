@@ -8,8 +8,6 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useArchivePanelController } from '../../src/client/use-archive-panel-controller.js'
 import { invalidateArchive, useArchiveRevision } from '../../src/client/archive-store.js'
-import { useDeleteRequest } from '../../src/client/delete-confirm.js'
-import { useDeleteBatchRequest } from '../../src/client/batch-confirm.js'
 import { useUndoNotice } from '../../src/client/undo-notices.js'
 import { useListSelection } from '../../src/client/use-list-selection.js'
 import { groupByProject } from '../../src/client/trash-view.js'
@@ -20,7 +18,7 @@ import type { ApplyAction, ApplyOutcome, WriteProgressWire } from '../../src/sha
 import type { ArchiveDetailLike, RemoteOutcome, SessionDeleteRemote } from '../../src/client/remote.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
 import { remoteOk } from './support/fake-remote.js'
-import { failed, ok } from './support/outcomes.js'
+import { deleteOutcomes, failed, ok } from './support/outcomes.js'
 
 
 const row = (sessionId: string, over: Partial<ArchiveRowWire> = {}): ArchiveRowWire => ({
@@ -59,6 +57,7 @@ function mountController(
     /** 点名的主体把这一趟读数挂住（不落地），用来造保持期。 */
     detailDelay?: (sessionId: string) => Promise<RemoteOutcome<ArchiveDetailLike>> | undefined
     applyFailIds?: readonly string[]
+    reload?: () => Promise<void>
   } = {},
 ) {
   const archiveDetail = vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<RemoteOutcome<ArchiveDetailLike>> => {
@@ -71,12 +70,11 @@ function mountController(
     return { ok: true, value: over.detailFor?.(sessionId) ?? detailOf(sessionId) }
   })
   const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> =>
-    ({
-      ok: true as const,
-      value: ids.map((id) => (over.applyFailIds?.includes(id) === true
+    action === 'delete'
+      ? remoteOk(deleteOutcomes(ids, over.applyFailIds ?? [], '移入回收站失败'))
+      : remoteOk(ids.map((id) => (over.applyFailIds?.includes(id) === true
         ? failed(action, id, '解除归档失败')
-        : ok('unarchive', id, 1))),
-    }))
+        : ok('unarchive', id, 1)))))
   const deps: Pick<SessionDeleteRemote, 'archiveDetail' | 'applyOutcomes' | 'progress'> = {
     archiveDetail,
     applyOutcomes,
@@ -92,7 +90,7 @@ function mountController(
       list: { status: 'ready', rows, totalBytes: 0, missingSizeCount: 0 },
       refreshing: false,
       count: rows.length,
-      reload: async () => {},
+      reload: over.reload ?? (async () => {}),
     }
     return useArchivePanelController({
       deps,
@@ -229,15 +227,53 @@ describe('归档档控制器', () => {
     })
   })
 
-  it('归档档删除：requestDelete/requestDeleteBatch 把显示名带给确认框（失效归座位用例）', () => {
+  it('归档档单条与批量移入回收站都即执行，并把显示名带进撤销提示', async () => {
     const m = mountController([row('session-a', { label: '子任务名' }), row('session-b')])
-    act(() => { m.result.current.requestDeleteOne(row('session-a', { label: '子任务名' })) })
-    const single = renderHook(() => useDeleteRequest())
-    expect(single.result.current).toMatchObject({ sessionId: 'session-a', title: '子任务名' })
+    const notice = renderHook(() => useUndoNotice())
 
-    act(() => { m.result.current.requestDeleteMany([{ sessionId: 'session-b', title: 'session-b-标题' }]) })
-    const batch = renderHook(() => useDeleteBatchRequest())
-    expect(batch.result.current?.items).toEqual([{ sessionId: 'session-b', title: 'session-b-标题' }])
+    await act(async () => { await m.result.current.deleteOne(row('session-a', { label: '子任务名' })) })
+    expect(m.applyOutcomes).toHaveBeenCalledWith('delete', ['session-a'])
+    expect(notice.result.current).toMatchObject({ kind: 'one', title: '子任务名' })
+
+    await act(async () => {
+      await m.result.current.deleteMany(['session-b'])
+    })
+    expect(m.applyOutcomes).toHaveBeenCalledWith('delete', ['session-b'])
+    expect(notice.result.current).toMatchObject({ kind: 'batch', n: 1 })
+  })
+
+  it('归档档删除失败按行落原文', async () => {
+    const m = mountController([row('session-a')], { applyFailIds: ['session-a'] })
+    await act(async () => { await m.result.current.deleteOne(row('session-a')) })
+    await waitFor(() => {
+      expect(m.result.current.actionFailure).toEqual({ 'session-a': '移入回收站失败' })
+    })
+  })
+
+  it('归档档 deleteOne 与 deleteMany 把 query.reload 包进闸（reload 完成前不释放闸）', async () => {
+    let releaseReload!: () => void
+    const reload = vi.fn(() => new Promise<void>((resolve) => { releaseReload = resolve }))
+    const m = mountController([row('session-a'), row('session-b')], { reload })
+
+    let settledOne = false
+    const onePromise = m.result.current.deleteOne(row('session-a')).then(() => { settledOne = true })
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1))
+    expect(settledOne).toBe(false)
+    await act(async () => {
+      releaseReload()
+      await onePromise
+    })
+    expect(settledOne).toBe(true)
+
+    let settledMany = false
+    const manyPromise = m.result.current.deleteMany(['session-b']).then(() => { settledMany = true })
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(2))
+    expect(settledMany).toBe(false)
+    await act(async () => {
+      releaseReload()
+      await manyPromise
+    })
+    expect(settledMany).toBe(true)
   })
 
   it('清单重取后选中行消失 ⇒ 丢详情账本、清选中（再选要重新读）', async () => {

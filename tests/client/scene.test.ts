@@ -20,8 +20,7 @@ import {
 } from '../../src/client/undo-notices.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { useSelection } from '../../src/client/batch-selection-store.js'
-import { useDeleteRequest } from '../../src/client/delete-confirm.js'
-import { useDeleteBatchRequest } from '../../src/client/batch-confirm.js'
+import { useDeleteActionRequest } from '../../src/client/delete-action.js'
 import { useVisibleSelectableRows } from '../../src/client/host-rows.js'
 
 const ROW: TrashEntryLike = {
@@ -41,15 +40,13 @@ function Probe(): ReactElement {
   const revision = useTrashRevision()
   const notice = useUndoNotice()
   const selection = useSelection()
-  const deleteRequest = useDeleteRequest()
-  const batchRequest = useDeleteBatchRequest()
+  const deleteAction = useDeleteActionRequest()
   const visibleRows = useVisibleSelectableRows(true)
   const state = [
     `rev:${revision}`,
     `notice:${notice === null ? '-' : notice.kind === 'one' ? notice.entryId : `batch:${notice.entryIds.join(',')}`}`,
     `selecting:${selection.selecting ? 'yes' : 'no'}`,
-    `delete:${deleteRequest?.sessionId ?? '-'}`,
-    `batch:${batchRequest?.items.length ?? 0}`,
+    `delete:${deleteAction?.sessionId ?? '-'}`,
     `rows:${visibleRows.length}`,
   ].join('|')
   return createElement('div', { 'data-testid': 'probe' }, state)
@@ -90,13 +87,13 @@ describe('场景实例 · 互不共享', () => {
     expect(getDefaultClientScene().snapshot.read()).toBeNull()
   })
 
-  it('撤销台 / 批量选中 / 两个请求现场：一份实例里的动作不出现在另一份', () => {
+  it('撤销台 / 批量选中 / 删除动作现场：一份实例里的动作不出现在另一份', () => {
     const a = createClientScene()
     const b = createClientScene()
     a.undo.publishOne({ entryId: 'e1', title: '标题' })
     a.batchSelection.enter()
     a.batchSelection.toggle({ sessionId: 'session-a', title: '标题' })
-    a.deleteRequest.request({ sessionId: 'session-a', title: '标题' })
+    a.deleteAction.request({ sessionId: 'session-a', title: '标题' })
 
     expect(a.undo.read()).toMatchObject({ kind: 'one', entryId: 'e1' })
     expect(a.batchSelection.get().selecting).toBe(true)
@@ -139,21 +136,20 @@ describe('场景实例 · Provider 下发', () => {
         createElement(Probe),
       ),
     )
-    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|batch:0|rows:0')
+    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|rows:0')
 
     act(() => {
       scene.trashRevisions.invalidate()
       scene.undo.publishOne({ entryId: 'e1', title: '标题' })
       scene.batchSelection.enter()
-      scene.deleteRequest.request({ sessionId: 'session-a', title: '标题' })
-      scene.batchConfirm.request([{ sessionId: 'session-a', title: '标题' }])
+      scene.deleteAction.request({ sessionId: 'session-a', title: '标题' })
       scene.hostRows.register('session-a', { title: '甲', live: false })
     })
-    expect(probeText()).toBe('rev:1|notice:e1|selecting:yes|delete:session-a|batch:1|rows:1')
+    expect(probeText()).toBe('rev:1|notice:e1|selecting:yes|delete:session-a|rows:1')
 
     // 默认场景（自由函数）里的公告不进这棵 Provider 树。
     act(() => { publishUndoBatchNotice({ entryIds: ['default-only'], n: 9 }) })
-    expect(probeText()).toBe('rev:1|notice:e1|selecting:yes|delete:session-a|batch:1|rows:1')
+    expect(probeText()).toBe('rev:1|notice:e1|selecting:yes|delete:session-a|rows:1')
   })
 
   it('无 Provider：回退进程场景，默认场景 reset 不动私有场景', () => {
@@ -162,24 +158,24 @@ describe('场景实例 · Provider 下发', () => {
     privateScene.undo.publishOne({ entryId: 'private', title: '标题' })
 
     render(createElement(Probe))
-    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|batch:0|rows:0')
+    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|rows:0')
 
     act(() => { publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 }) })
     expect(probeText()).toContain('notice:batch:e1,e2')
 
     act(() => { getDefaultClientScene().reset() })
-    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|batch:0|rows:0')
+    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|rows:0')
     // 默认场景被清，私有场景原样。
     expect(privateScene.snapshot.read()?.rows).toHaveLength(1)
   })
 
-  it('`scene.reset()` 收场：九份现场一起回初值', () => {
+  it('`scene.reset()` 收场：八份现场一起回初值', () => {
     const scene: ClientScene = createClientScene()
     scene.snapshot.reloadSucceeded([ROW])
     scene.undo.publishOne({ entryId: 'e1', title: '标题' })
     scene.batchSelection.enter()
     scene.hostRows.register('session-a', { title: '甲', live: false })
-    scene.batchConfirm.request([{ sessionId: 'session-a', title: '标题' }])
+    scene.deleteAction.request({ sessionId: 'session-a', title: '标题' })
 
     scene.reset()
 
@@ -187,9 +183,9 @@ describe('场景实例 · Provider 下发', () => {
     expect(scene.undo.read()).toBeNull()
     expect(scene.batchSelection.get()).toEqual({ selecting: false, picks: [] })
     expect(scene.hostRows.readVisible()).toEqual([])
-    // 请求现场只能经 hook 读；`reset` 后没有待确认请求 → Provider 里的读数回初值。
+    // 动作现场只能经 hook 读；`reset` 后没有待执行请求 → Provider 里的读数回初值。
     render(createElement(ClientSceneProvider, { scene }, createElement(Probe)))
-    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|batch:0|rows:0')
+    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|rows:0')
   })
 })
 
@@ -230,7 +226,7 @@ describe('场景安装 · 注册面', () => {
   it('用返回值建 Provider：自由函数写入与 Provider 读数是同一份账', () => {
     const installed = installClientScene(createClientScene())
     render(createElement(ClientSceneProvider, { scene: installed }, createElement(Probe)))
-    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|batch:0|rows:0')
+    expect(probeText()).toBe('rev:0|notice:-|selecting:no|delete:-|rows:0')
 
     act(() => { publishUndoBatchNotice({ entryIds: ['same-account'], n: 1 }) })
     expect(probeText()).toContain('notice:batch:same-account')

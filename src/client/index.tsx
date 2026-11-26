@@ -11,13 +11,12 @@
  */
 import type { ComponentProps, ComponentType } from 'react'
 import { BatchBar } from './batch-bar.js'
-import { BatchConfirmHost } from './batch-confirm.js'
 import { BatchPickButton, BatchPickCheckbox } from './batch-select.js'
 import { installSessionMenus } from './context-menu-actions.js'
 import { NEVER_SESSIONS, useSessionLive, type UseSessions } from './session-live.js'
 import { type ClientContextLike, type SlotRegistration } from './context.js'
 import { createTranslate, type Translate } from './copy.js'
-import { DeleteConfirmHost } from './delete-confirm.js'
+import { DeleteActionHost } from './delete-action.js'
 import { installArchiveHostWatch } from './host-archive-watch.js'
 import { bindMainView } from './main-view.js'
 import { PLUGIN_ID } from './plugin.js'
@@ -37,7 +36,7 @@ export const name = '@xrn1997/dsh-session-delete/client'
  *  ⇒ 宿主进程死。`contextMenus` 迟到时按 `ctx.inject` scoped 等待切过去，旧宿主没有就留 legacy 槽位。 */
 export const inject = ['slots']
 
-/** 会话行首 16px 格（无状态点时归第三方装饰）；批量删除的主勾选框落这里，多选模式内可见。 */
+/** 会话行首 16px 格（无状态点时归第三方装饰）；批量移入回收站的主勾选框落这里，多选模式内可见。 */
 const LEADING_SLOT = 'sidebar.session.row.leading'
 /** 会话行尾的悬停按钮排（宿主自己的归档(100)/置顶(200) 也在这排）；状态点/归档行的兜底勾选落这里。 */
 const ROW_ACTION_SLOT = 'sidebar.workspaces.session.row.action'
@@ -62,7 +61,7 @@ function PickLeadingRow({
   t: Translate
 }) {
   const select = typeof useSessions === 'function' ? useSessions : NEVER_SESSIONS
-  // 与宿主 `sessionTitle()` 同一口径（trim 后空串兜底），免得两颗入口给确认框的标题不一样。
+  // 与宿主 `sessionTitle()` 同一口径（trim 后空串兜底），免得勾选清单与撤销提示的标题不一样。
   const title = select((state) => state?.byId?.[sessionId]?.title?.trim() ?? '')
   const live = useSessionLive(useSessions, sessionId)
   return <BatchPickCheckbox sessionId={sessionId} title={title} live={live} t={t} />
@@ -90,11 +89,11 @@ function PickRow({
 type TComponent =
   | ComponentType<ComponentProps<typeof PickLeadingRow>>
   | ComponentType<ComponentProps<typeof PickRow>>
+type DepsComponent =
+  | ComponentType<ComponentProps<typeof DeleteActionHost>>
 type DepsTComponent =
   | ComponentType<ComponentProps<typeof UndoToast>>
-  | ComponentType<ComponentProps<typeof DeleteConfirmHost>>
   | ComponentType<ComponentProps<typeof BatchBar>>
-  | ComponentType<ComponentProps<typeof BatchConfirmHost>>
   | ComponentType<ComponentProps<typeof TrashPanel>>
   | ComponentType<ComponentProps<typeof SettingsCards>>
   | ComponentType<ComponentProps<typeof TrashPanelIcon>>
@@ -108,6 +107,7 @@ interface SlotContributionBase {
 /** 这几行只吃这几种注入面；多一种就加一格，不在注册循环里现拼。 */
 type SlotContribution =
   | (SlotContributionBase & { readonly payload: 't'; readonly component: TComponent })
+  | (SlotContributionBase & { readonly payload: 'deps'; readonly component: DepsComponent })
   | (SlotContributionBase & { readonly payload: 'deps+t'; readonly component: DepsTComponent })
 
 /** 表本身就是注册顺序（测试里的 `injected` 数组也按它）。 */
@@ -127,11 +127,9 @@ function contributions(t: Translate): readonly SlotContribution[] {
     },
     // 撤销提示的常驻宿主
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.undo-toast` }, payload: 'deps+t', component: UndoToast },
-    // 删除确认框必须脱离菜单子树的生命周期（见 delete-confirm.tsx）
-    { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-confirm` }, payload: 'deps+t', component: DeleteConfirmHost },
-    // 批量浮条与确认框：浮条跟着勾选重绘，确认框必须脱离行子树的生命周期
+    // 菜单动作脱离菜单子树的生命周期；宿主不画界面，只执行移入回收站并发布结果。
+    { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.delete-action` }, payload: 'deps', component: DeleteActionHost },
     { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-bar` }, payload: 'deps+t', component: BatchBar },
-    { slot: OVERLAY_SLOT, spec: { name: OVERLAY_SLOT, id: `${PLUGIN_ID}.batch-confirm` }, payload: 'deps+t', component: BatchConfirmHost },
     // 面板行：名字给宿主（`.panelTitle` 与折叠 tooltip），我们出 glyph + 拖放投放目标（`trash-entry.tsx`）；
     // 名字走 thunk（宿主每次重读时求值、语言变化时重读）。
     {
@@ -155,7 +153,11 @@ function registerContributions(
   scene: ClientScene,
 ): void {
   for (const row of contributions(t)) {
-    const inject = row.payload === 'deps+t' ? () => ({ deps, t }) : () => ({ t })
+    const inject = row.payload === 'deps+t'
+      ? () => ({ deps, t })
+      : row.payload === 'deps'
+        ? () => ({ deps })
+        : () => ({ t })
     // 每条贡献各自一颗错误边界：一条渲染崩了只收起它自己那一块（宿主那一格不许被连坐成空白）。
     // Props 形状由宿主按座位派发、彼此不同，边界这一层只关心"包住它"，所以擦成 `never` 面再包；
     // 场景实例随贡献进子树：宿主各槽位是独立 React 树，跨槽位共享靠同一个实例（不是树）。

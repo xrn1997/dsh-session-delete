@@ -42,7 +42,7 @@ export interface TrashPanelProps {
 const SPLIT_MIN_WIDTH = 900
 /** 左栏默认宽：为「行内有动作」设计——两颗 28px 图标按钮加间距与行内边距约 80px，剩下给标题与元信息。 */
 const LIST_COLUMN_DEFAULT = 420
-/** 左栏下限 330：再窄「删除于 … · 224KB」那行就会被省略号截断；按钮 flex:none，不参与这个下限。 */
+/** 左栏下限 330：再窄「3小时前移入回收站 · 224KB」那行就会被省略号截断；按钮 flex:none，不参与这个下限。 */
 const LIST_COLUMN_MIN = 330
 /** 拖到最右时给详情留的地板：正文 399 + 两道 gap 32 + 把手 10 + 页内边距 48 = 489。 */
 const DETAIL_RESERVE = 489

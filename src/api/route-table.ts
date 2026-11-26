@@ -280,7 +280,7 @@ export const ROUTE_TABLE: Record<RouteName, AnyRouteSpec> = createRouteTable({
   }),
   config: defineRoute('config', {
     slice: 'config',
-    // 空体是读，只有写才进到达序链（`configEditor.edit` 会让这一行重启，不能和删除交错）。
+    // 空体是读，只有写才进到达序链（`configEditor.edit` 会让这一行重启，不能和在飞的写交错）。
     purity: (body) => configPatchOf(body) === undefined ? 'pure' : 'chained',
     read: 'none',
     response: 'json',

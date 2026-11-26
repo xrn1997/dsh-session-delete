@@ -415,7 +415,7 @@ describe('取数编排 · 清空与撤销横幅', () => {
     expect(notice.result.current).toBeNull()
   })
 
-  it('清空在飞期间新删除发布的横幅不被这次清空误熄', async () => {
+  it('清空在飞期间新移入回收站发布的横幅不被这次清空误熄', async () => {
     let releaseEmpty!: (value: RemoteOutcome<PurgeStatsWire>) => void
     const emptyTrash = vi.fn(() => new Promise<RemoteOutcome<PurgeStatsWire>>((resolve) => { releaseEmpty = resolve }))
     const { result } = mount({ emptyTrash })

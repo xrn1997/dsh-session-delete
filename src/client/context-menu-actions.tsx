@@ -2,14 +2,14 @@
  * 会话菜单的两个面：0.2.2+ 的数据动作**定义**，以及旧宿主的 legacy 槽位行 + 双轨协商。
  * 条目注册的唯一落点仍是 `index.tsx`；**例外是会话菜单这两行**（`docs/architecture.md` §3 的双轨注册），
  * 由 `installSessionMenus` 注册。0.2.2 把内置动作迁到 contextMenus，legacy 行固定排在 Archive 之前，
- * 所以这两行也注册成 afterContent、order 700 以恢复 0.2.1 的顺序：Archive → 多选 → 删除。
+ * 所以这两行也注册成 afterContent、order 700 以恢复 0.2.1 的顺序：Archive → 多选 → 移入回收站。
  * 数据动作没有 `disabledReason`（MenuActionView 没透传），运行中禁用改 label；legacy 路径保留 tooltip。
  */
 import type { ComponentProps, ComponentType } from 'react'
 import { BatchSelectMenuItem } from './batch-menu-item.js'
 import { enterSelection, exitSelection, isSelecting } from './batch-selection-store.js'
 import type { ClientContextLike } from './context.js'
-import { requestDelete } from './delete-confirm.js'
+import { requestDelete } from './delete-action.js'
 import { DeleteMenuItem } from './delete-menu-item.js'
 import { PLUGIN_ID, PLUGIN_KEY_PREFIX } from './plugin.js'
 import type { Translate } from './copy.js'
@@ -66,7 +66,7 @@ function deleteLabel(t: Translate, live: boolean): string {
   return live ? t('menu.deleteLive') : t('menu.delete')
 }
 
-/** 会话是否在跑；服务缺席或读数抛错都按「不知道」处理（Node 半仍会拒绝 live 删除）。 */
+/** 会话是否在跑；服务缺席或读数抛错都按「不知道」处理（Node 半仍会拒绝活体会话的移入回收站）。 */
 function liveOf(sessionList: ObservableSnapshotLike<SessionsStateLike> | undefined, sessionId: string): boolean {
   try {
     return runningOf(sessionList?.getSnapshot(), sessionId)
@@ -150,7 +150,7 @@ function DeleteRow({ sessionId, displayTitle, useSessions, useMenuOpenState, t }
       sessionId={sessionId}
       title={displayTitle}
       live={live}
-      // 多选入口排在这一行前面并带发丝线；删除行不再重复画一条。
+      // 多选入口排在这一行前面并带发丝线；「移入回收站」行不再重复画一条。
       separatorBefore={false}
       t={t}
       dismissMenu={() => setMenuOpen(false)}

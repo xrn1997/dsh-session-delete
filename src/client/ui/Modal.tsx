@@ -10,7 +10,7 @@
  *
  * **砍掉的**（本插件用不到，砍掉是为了不摊开官方整个 Modal API）：
  * - `description` / `headless` / `className` / `contentClassName` / `onKeyDownCapture` /
- *   `backdropBlur` / `shortcutModal`：本插件两个确认框都是"标题 + 正文 + 两个按钮"的同一形状。
+ *   `backdropBlur` / `shortcutModal`：本插件各确认框都是"标题 + 正文 + 两个按钮"的同一形状。
  * - **官方的多层栈**（`layers` WeakMap + `closeTopModal` / `isBehindModal`）：那是给"对话框里还能再开
  *   对话框、且宿主菜单也在抢 Escape"的场景准备的。本插件同一时刻只会有一个确认框，所以这里只保留它
  *   的**判据本身**——Escape 只在"自己就是文档里最后一个 `[role="dialog"][aria-modal="true"]`

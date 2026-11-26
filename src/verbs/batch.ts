@@ -558,7 +558,7 @@ export async function runPurgeBatch(
   return receiptsOf('purge', wanted, slots, readings)
 }
 
-/** 删除确认框那句「含 N 个子会话」：一次问完整批（`subagentMembersOf` 本来就是批量口）。
+/** 批量已选清单的子会话计数：一次问完整批（`subagentMembersOf` 本来就是批量口）。
  *  宿主口缺席按 0；真读失败则整次调用失败，浏览器半按"读不到"把整句不说。**父+子同批时逐条相加会
  *  重复计子根**（预裁决放开了「请求根可被父根发现」，ADR-0070 边界）——这是显示级读数、不是信封，
  *  且界面选择只发可见根行，不为此加去重层。 */
@@ -569,7 +569,7 @@ async function applyCount(deps: CoreDeps, ids: readonly string[]): Promise<Apply
 }
 
 /**
- * 解除归档（归档档的显式动作，不是删除/恢复的副作用，ADR-0008 不翻案）：逐 id 调宿主 `unarchiveSession`
+ * 解除归档（归档档的显式动作，不是移入回收站/恢复的副作用，ADR-0008 不翻案）：逐 id 调宿主 `unarchiveSession`
  * （未归档是幂等 no-op）；成功值固定 `1`——「这条 id 被处理成功」，不是实际状态变化数（宿主不为此多读一次 `isArchived`）。
  */
 async function applyUnarchive(deps: CoreDeps, ids: readonly string[]): Promise<ApplyOutcome[]> {

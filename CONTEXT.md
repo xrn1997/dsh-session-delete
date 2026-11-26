@@ -4,7 +4,7 @@
 
 ## 这是什么
 
-在宿主里**删除会话**：删除 = 移入回收站（可恢复），另设显式永久删除；回收站之外还有三类手动维护的存量：无主子会话、孤儿附件、孤儿投影缓存。两半：Node 半（动盘、清册、宿主服务）与浏览器半（槽位界面）。
+在宿主里移除会话分两条路：可恢复的叫**移入回收站**，无恢复路径的叫**永久删除**（界面文案可说「彻底删除」）；「删除」只活在「永久删除」概念里（也作真实移除的泛指动词），不再用它称呼可恢复动作。回收站之外还有三类手动维护的存量：无主子会话、孤儿附件、孤儿投影缓存。两半：Node 半（动盘、清册、宿主服务）与浏览器半（槽位界面）。
 
 ## 名词
 
@@ -65,7 +65,7 @@ _唯一实现_: `src/shared/project-key.ts` 的 `escapeProjectKey` / `unescapePr
 _Avoid_: 项目路径、cwd（那是宿主的原始路径）。
 
 **会话目录段（session dir segment）**:
-`sessions/<项目目录>/<段>` 里那一段，宿主 `encodeSegment` 的逐字镜像；无损。删除把它写进条目 id，恢复照条目 id 原地回放，不从 `sessionId` 重编。
+`sessions/<项目目录>/<段>` 里那一段，宿主 `encodeSegment` 的逐字镜像；无损。移入回收站把它写进条目 id，恢复照条目 id 原地回放，不从 `sessionId` 重编。
 _唯一实现_: `src/shared/session-path.ts` 的 `encodeSessionSegment` / `decodeSessionSegment`；唯一调用点住 `src/trash/entry.ts` 的 `sessionDirForId` / `sessionDirSegmentOf`。
 _Avoid_: 会话 id（清册身份，不拼路径）。
 
@@ -75,11 +75,11 @@ _唯一实现_: `src/ports/fs-port.ts` 的 `isAbsentPath`。
 _Avoid_: 不存在（口语）、读不到（那恰恰不是缺席）。
 
 **回收站（trash）**:
-被删除会话的本体，住数据根 `session-trash/`，与 `sessions/` **同卷**（整目录 `rename`）；**不自动过期**。
+被移入回收站的会话本体，住数据根 `session-trash/`，与 `sessions/` **同卷**（整目录 `rename`）；**不自动过期**。
 _无单点实现_: 插件概念：清册、目录、快照与面板各司其职。
 
 **条目（trash entry）**:
-回收站里的一行。`id` = `<删除时刻 UTC>-<目录段>`，回收站目录名就是它；那一段是**会话目录段**，不是原始 session id。
+回收站里的一行。`id` = `<移入回收站时刻 UTC>-<目录段>`，回收站目录名就是它；那一段是**会话目录段**，不是原始 session id。
 _无单点实现_: 线上形状住 `src/shared/apply-values.ts` 的 `TRASH_ENTRY_SCHEMA`（`src/shared/wire.ts` 派生类型）、落地形状与路径闸住 `src/trash/entry.ts`。
 _Avoid_: 行、记录（太泛）。
 
@@ -150,7 +150,7 @@ _唯一实现_: `src/api/route-table.ts` 的 `RouteSpec.read` / `RouteRead`。
 _Avoid_: 纯度（纯度管是否进到达序链）。
 
 **组（group） / 组根（group root）**:
-一次删除搬进来的父会话与在盘上、进了回收站的孩子；孩子行记 `parentEntryId`。**接得住孩子的只有组根**。
+一次移入回收站带进来的父会话与在盘上、进了回收站的孩子；孩子行记 `parentEntryId`。**接得住孩子的只有组根**。
 _无单点实现_: 组语义的纯函数面住 `src/trash/groups.ts`。
 
 **会话闭包（session closure）**:
@@ -158,7 +158,7 @@ _无单点实现_: 组语义的纯函数面住 `src/trash/groups.ts`。
 _唯一实现_: `src/domain/closure.ts` 的 `closureOf` / `orphanRootsOf` / `firstByBare` / `bareSessionId` / `sessionIdShapes`。
 
 **盘上后代（stranded descendants）**:
-跟着父被删、但没进回收站、仍留在 `sessions/` 的后代；与组里带进来的孩子是两件事。
+跟着父被移入回收站、但没进成回收站、仍留在 `sessions/` 的后代；与组里带进来的孩子是两件事。
 _唯一实现_: `src/verbs/permanent-removal.ts` 的 `planVisibleTrash` 产出的 `VisibleTrashGroup`。
 
 **无主子会话（orphan subagent）**:
@@ -184,7 +184,7 @@ _Avoid_: 与「彻底删除」混用（界面文案可另说，仓内统一说�
 _唯一实现_: `src/verbs/member-presence.ts` 的 `createMemberPresence`；动词面形状住 `src/ports/presence-port.ts`。
 
 **归档（archive）**:
-宿主「从分组面藏掉」那一档，只反映用户自己的归档状态；**回收站不使用它**（删除不调 `archiveSession`，ADR-0008）。恢复时迁移式取消归档的旧条目判据：`wasArchived:false` 且当前仍归档；`wasArchived` 只记删除前的事实。
+宿主「从分组面藏掉」那一档，只反映用户自己的归档状态；**回收站不使用它**（移入回收站不调 `archiveSession`，ADR-0008）。恢复时迁移式取消归档的旧条目判据：`wasArchived:false` 且当前仍归档；`wasArchived` 只记移入回收站前的事实。
 _无单点实现_: 宿主的归档位；本插件只读 + 旁路观察。
 
 **通告（announce）**:
@@ -232,7 +232,7 @@ _唯一实现_: `src/client/receipt.ts` 的 `summarizeReceipt`。
 _唯一实现_: `src/client/ui/top-layer.ts` 的 `hasTopLayer` / `isTopLayer`。
 
 **重开等待（pending open）**:
-删除 / 恢复后等目标重新出现在清单里再打开：一张票、一条订阅、一个放弃 timer，不轮询。
+移入回收站 / 恢复后等目标重新出现在清单里再打开：一张票、一条订阅、一个放弃 timer，不轮询。
 _唯一实现_: `src/client/pending-open.ts` 的 `createPendingOpen`。
 
 **孩子视图（child view）**:
@@ -245,10 +245,10 @@ _Avoid_: 下钻（那专指窄档清单→详情）。
 _唯一实现_: `src/client/store.ts` 的 `createLatestWins`；消费者 `src/client/use-gated-refresh.ts` / `src/client/use-panel-list-read.ts`。
 _Avoid_: 防抖、节流（它不改变发起时机）。
 
-**拖放删除（drag delete）**:
-会话行拖到侧栏「回收站」入口松手即删：不弹确认框，撤销横幅兜底；payload 是宿主拖拽写进 `text/plain` 的 session id，未登记 id 静默忽略；拒收（运行中的行、写入被拒）是**动效**不是状态——抖动 + 原因胶囊，「删不动」只有一套视觉；拖的行在多选勾选集里时一拖删整集。
+**拖放移入回收站（drag to trash）**:
+会话行拖到侧栏「回收站」入口松手即移入回收站：不弹确认框，撤销横幅兜底；payload 是宿主拖拽写进 `text/plain` 的 session id，未登记 id 静默忽略；拒收（运行中的行、写入被拒）是**动效**不是状态——抖动 + 原因胶囊，「移不进回收站」只有一套视觉；拖的行在多选勾选集里时一拖把整集移入回收站。
 _唯一实现_: `src/client/trash-drop.ts` 的 `DropPlan` / `resolveDropPlan`；状态机 `src/client/drop-machine.ts` 的 `createDropTargetMachine`；投放面 `src/client/trash-entry.tsx` 的 `TrashPanelIcon`。
-_Avoid_: 拖拽回收（是删除不是归档）、拖拽彻底删除（永久删除永远走确认框）。
+_Avoid_: 拖拽回收（是移入回收站不是归档）、拖拽彻底删除（永久删除永远走确认框）。
 
 **范围勾选（range check）**:
 多选模式内 Shift+点把「锚点→目标」整段并入勾选（不替换、不反勾）；锚点 = 最近一次单条勾 / 取消的那条，锚点缺失或不可见就退化成单条；范围只跨可见行。

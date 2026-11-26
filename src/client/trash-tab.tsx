@@ -33,7 +33,7 @@ const TRASH_LIST_DOM: ListDom = { kind: 'trash', idAttr: 'data-entry-id' }
 
 const entryIdOf = (entry: TrashEntryWire): string => entry.id
 
-/** 行那句「删除于 3小时前」：整句模板住字典（两种语言各钉语序），单位词走 `unitWord` / `relativeTime`；
+/** 行那句「3小时前移入回收站」：整句模板住字典（两种语言各钉语序），单位词走 `unitWord` / `relativeTime`；
  *  `now` 桶不套模板。 */
 function deletedAgo(at: number, now: number, t: Translate): string {
   const { unit, n } = relativeTime(at, now)

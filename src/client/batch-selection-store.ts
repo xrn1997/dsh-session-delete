@@ -1,19 +1,17 @@
 /**
- * 宿主列表批量删除的**选中集现场**：多选模式 + 选中名单，一份合并快照。
- * 读写它有四个座位（菜单入口、行首勾选、行尾兜底、浮条与确认框），状态住一处；订阅/通告仍只住
+ * 宿主列表批量移入回收站的**选中集现场**：多选模式 + 选中名单，一份合并快照。
+ * 读写它有四个座位（菜单入口、行首勾选、行尾兜底、浮条），状态住一处；订阅/通告仍只住
  * `store.ts` 的 `createStore`。**合并快照**而非两个 store：两半成对变化，分两份会让「进模式那一帧」
  * 出现两次通告与不同步的缝。名单序 = 逐条勾选序，「全选」追加在登记序之后（`/apply` 吃的就是它）。
  * 形状是可实例化的现场（`createBatchSelectionScene`），聚合住 `scene.ts`；自由函数委托默认场景。
  */
 import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'
+import type { TrashMoveTarget } from './write-seats.js'
 
-export interface PickItem {
-  /** 宿主槽位投影的会话 id，原样透给 `applyOutcomes('delete', …)`。 */
-  readonly sessionId: string
-  /** 删除那一刻的会话名（投影的 `displayTitle`）：只用于文案与确认框，不参与请求。 */
-  readonly title: string
-}
+/** 选中集一条 = 一条待移入回收站的会话：与 `write-seats.ts` 的 `TrashMoveTarget` 同一形状、同一义，
+ *  `title` 是移入回收站那一刻的显示名（投影的 `displayTitle`），只用于已选清单与撤销/失败原文，不参与请求。 */
+export type PickItem = TrashMoveTarget
 
 export interface SelectionState {
   readonly selecting: boolean
@@ -41,7 +39,8 @@ export interface BatchSelectionScene {
   clear(): void
   /** 只追加还没选过的条目；原有选中在前、新条目按传入序接在后面。 */
   add(items: readonly PickItem[]): void
-  shrinkToFailures(failedSessionIds: readonly string[]): void
+  /** 按本批失败名单收缩选中集；传入 `submittedSessionIds` 时只剔除本批成功项，保留失败项及在飞期间新勾选的会话。 */
+  shrinkToFailures(failedSessionIds: readonly string[], submittedSessionIds?: readonly string[]): void
   reset(): void
 }
 
@@ -112,13 +111,22 @@ export function createBatchSelectionScene(): BatchSelectionScene {
     add(items: readonly PickItem[]): void {
       selectionStore.update((current) => appendNew(current, items))
     },
-    shrinkToFailures(failedSessionIds: readonly string[]): void {
-      const keep = new Set(failedSessionIds)
-      if (anchor !== null && !keep.has(anchor)) anchor = null
-      // 保持既有语义：哪怕一条都没被剔掉也发一次通告（收缩发生在一次执行之后，订阅方按"执行完了"重读）。
+    shrinkToFailures(failedSessionIds: readonly string[], submittedSessionIds?: readonly string[]): void {
+      const failed = new Set(failedSessionIds)
+      if (submittedSessionIds === undefined) {
+        if (anchor !== null && !failed.has(anchor)) anchor = null
+        // 保持既有语义：哪怕一条都没被剔掉也发一次通告（收缩发生在一次执行之后，订阅方按"执行完了"重读）。
+        selectionStore.update((current) => ({
+          ...current,
+          picks: current.picks.filter((item) => failed.has(item.sessionId)),
+        }))
+        return
+      }
+      const succeeded = new Set(submittedSessionIds.filter((id) => !failed.has(id)))
+      if (anchor !== null && succeeded.has(anchor)) anchor = null
       selectionStore.update((current) => ({
         ...current,
-        picks: current.picks.filter((item) => keep.has(item.sessionId)),
+        picks: current.picks.filter((item) => !succeeded.has(item.sessionId)),
       }))
     },
     reset(): void {
@@ -169,8 +177,11 @@ export function addPicks(items: readonly PickItem[]): void {
   getDefaultClientScene().batchSelection.add(items)
 }
 
-export function shrinkPicksToFailures(failedSessionIds: readonly string[]): void {
-  getDefaultClientScene().batchSelection.shrinkToFailures(failedSessionIds)
+export function shrinkPicksToFailures(
+  failedSessionIds: readonly string[],
+  submittedSessionIds?: readonly string[],
+): void {
+  getDefaultClientScene().batchSelection.shrinkToFailures(failedSessionIds, submittedSessionIds)
 }
 
 export function resetSelection(): void {

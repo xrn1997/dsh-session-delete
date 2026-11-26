@@ -70,7 +70,7 @@ export interface ProjectGroup<R> {
  *  （空 cwd 念「未记录项目」，两者不能撞键）。 */
 export const UNGROUPED_PROJECT_DIR = '__dsh-session-delete__ungrouped'
 
-/** 分组键：回收站传删除时间 + workspaceMissing⇒未分组；归档传 `updatedAt`、不传 `ungroupedOf`。 */
+/** 分组键：回收站传移入回收站时间 + workspaceMissing⇒未分组；归档传 `updatedAt`、不传 `ungroupedOf`。 */
 export interface GroupKeys<R> {
   /** 排序时间键（trash: `deletedAt`；archive: `updatedAt`）。组内、组间都按它倒序。 */
   timeOf: (row: R) => number
@@ -116,7 +116,7 @@ export function preferredNameOf(row: { readonly label?: string; readonly title: 
   return row.label !== undefined && row.label !== '' ? row.label : row.title
 }
 
-/** 归档行显示名：都空回落「未命名 · <短 id>」；清单行、详情标题、删除确认框共用这一条。 */
+/** 归档行显示名：都空回落「未命名 · <短 id>」；清单行、详情标题与撤销提示共用这一条。 */
 export function displayNameOf(row: { label?: string; title: string; sessionId: string }, t: Translate): string {
   const name = preferredNameOf(row)
   return name === '' ? t('archive.unnamed', { id: row.sessionId.slice(0, 8) }) : name

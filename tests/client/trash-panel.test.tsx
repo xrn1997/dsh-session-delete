@@ -8,7 +8,6 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { describe, expect, it, vi } from 'vitest'
 import { fileSizeText } from '../../src/client/ui/format.js'
 import { TrashPanel } from '../../src/client/trash-panel.js'
-import { DeleteConfirmHost } from '../../src/client/delete-confirm.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
   readCachedTrashDetail,
@@ -939,13 +938,13 @@ describe('回收站面板 · 分组卡片（2026-10-01 视觉改版的结构，�
     const at = Date.now() - (3 * 3600 + 60) * 1000
     render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...rows[0], deletedAt: at }])) })} />)
     const meta = await screen.findByTitle(new Date(at).toLocaleString())
-    expect(meta.textContent).toBe(`删除于 3小时前 · ${fileSizeText(pick(rows, 0).sizeBytes)}`)
+    expect(meta.textContent).toBe(`3小时前移入回收站 · ${fileSizeText(pick(rows, 0).sizeBytes)}`)
   })
 
-  it('now 桶说「刚刚删除」，不写出「删除于 刚刚前」', async () => {
+  it('now 桶说「刚刚移入回收站」，不写出「刚刚前移入回收站」', async () => {
     render(<TrashPanel deps={makeDeps({ list: vi.fn(async () => remoteOk([{ ...rows[0], deletedAt: Date.now() }])) })} />)
-    expect(await screen.findByText(/刚刚删除 · 224KB/)).toBeInTheDocument()
-    expect(screen.queryByText(/删除于 刚刚/)).not.toBeInTheDocument()
+    expect(await screen.findByText(/刚刚移入回收站 · 224KB/)).toBeInTheDocument()
+    expect(screen.queryByText(/刚刚前移入回收站/)).not.toBeInTheDocument()
   })
 
   // 宿主客户端把 `origin:"subagent"` 的行整排藏掉（连「未分组」那一桶也过同一个过滤器）⇒ 删了父会话之后
@@ -1947,7 +1946,7 @@ describe('归档档（平级分段）', () => {
     await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
     fireEvent.click(screen.getByRole('button', { name: '多选' }))
     for (const box of rowCheckboxes()) fireEvent.click(box)
-    await screen.findByRole('button', { name: '删除所选 2 条' })
+    await screen.findByRole('button', { name: '移入回收站所选 2 条' })
     fireEvent.click(screen.getByRole('button', { name: '回收站' }))
     await waitFor(() => { expect(rowCount(container, 'trash-row')).toBe(1) })
     fireEvent.click(archiveTab())
@@ -1977,7 +1976,7 @@ describe('归档档（平级分段）', () => {
     expect(renderedRows).toHaveLength(2)
     for (const rendered of renderedRows) expect(rendered.textContent).toContain('—')
     expect(screen.getAllByRole('button', { name: '解除归档' })).toHaveLength(2)
-    expect(screen.getAllByRole('button', { name: '删除' })).toHaveLength(2)
+    expect(screen.getAllByRole('button', { name: '移入回收站' })).toHaveLength(2)
   })
 
   it('归档清单是 grid：rowgroup/row/gridcell、aria-activedescendant 与 roving tabindex', async () => {
@@ -2093,7 +2092,7 @@ describe('归档档（平级分段）', () => {
     expect(screen.queryByText('没有已归档的会话')).not.toBeInTheDocument()
   })
 
-  it('归档档页脚 = 解除所选/删除所选；回收站档页脚不变', async () => {
+  it('归档档页脚 = 解除所选/移入回收站所选；回收站档页脚不变', async () => {
     const deps = makeArchiveDeps()
     const { container } = renderWide(deps)
     fireEvent.click(archiveTab())
@@ -2104,7 +2103,10 @@ describe('归档档（平级分段）', () => {
     fireEvent.click(must(boxes[0], '勾选框应在场'))
     fireEvent.click(must(boxes[1], '勾选框应在场'))
     expect(await screen.findByRole('button', { name: '解除所选 2 条' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '删除所选 2 条' })).toBeInTheDocument()
+    const moveButton = screen.getByRole('button', { name: '移入回收站所选 2 条' })
+    expect(moveButton).toBeInTheDocument()
+    // 移入回收站是可恢复动作，页脚按钮不用实心红。
+    expect(moveButton.style.background).toBe('')
     // 页脚那颗把**两条勾选 id** 一次交给 /apply 的 unarchive（不是逐条发、也不是只发第一条）。
     fireEvent.click(screen.getByRole('button', { name: '解除所选 2 条' }))
     await waitFor(() => { expect(deps.applyOutcomes).toHaveBeenCalled() })
@@ -2133,7 +2135,7 @@ describe('归档档（平级分段）', () => {
     expect(readCachedTrashDetail('session-x')).toBeUndefined()
   })
 
-  it('删除已归档会话后撤销横幅带归档句：面板 → 确认框 → 撤销提示整条链', async () => {
+  it('移入已归档会话后撤销横幅带归档句：面板即执行 → 撤销提示整条链', async () => {
     const deps = makeArchiveDeps({
       applyOutcomes: vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk(
         (action === 'delete'
@@ -2143,15 +2145,13 @@ describe('归档档（平级分段）', () => {
     const { container } = render(
       <>
         <TrashPanel deps={deps} />
-        <DeleteConfirmHost deps={deps} />
         <UndoToast deps={deps} />
       </>,
     )
     fireEvent.click(archiveTab())
     await waitFor(() => { expect(rowCount(container, 'archive-row')).toBe(2) })
     const archiveRow = must(container.querySelector<HTMLElement>('[data-dsh-session-delete="archive-row"]'), '归档行应已渲染')
-    fireEvent.click(within(archiveRow).getByRole('button', { name: '删除' }))
-    fireEvent.click(await screen.findByRole('button', { name: '移入回收站' }))
+    fireEvent.click(within(archiveRow).getByRole('button', { name: '移入回收站' }))
     await waitFor(() => {
       expect(screen.getByText(/撤销后回到「归档」/)).toBeInTheDocument()
     })

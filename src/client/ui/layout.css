@@ -423,7 +423,7 @@
 }
 
 /*
- * 拖放删除（`docs/ui-spec.md` §1、`ADR-0071`）：
+ * 拖放移入回收站（`docs/ui-spec.md` §1、`ADR-0071`）：
  * 全链红色、4 态 × ok/blk 两档、拒收是动效不是状态。高亮圈**宿主行本体**——`:has` 认行内投放标记
  * 上的 `data-dst-*` attr（不认宿主哈希类名，跟着宿主换代会漂）；outline 不占布局，-2px 内移防裁边。
  * 时长：档位过渡 140ms、吞入回弹 240ms、抖动 220ms×2、胶囊 1600ms 自灭（计时在组件）；prefers-reduced-motion 全瞬切。
@@ -479,7 +479,7 @@ button:has([data-dsh-session-delete='trash-drop'][data-dst-shake='true']) {
   }
 }
 
-/* 拖放胶囊（「松手删除」/「正在删除…」/拒收原因）：portal 到 body、fixed 锚在宿主行下缘，
+/* 拖放胶囊（「松手移入回收站」/「正在移入回收站…」/拒收原因）：portal 到 body、fixed 锚在宿主行下缘，
    不占布局、不参与命中（pointer-events: none）。红底白字 = 反白文本走 on-fill token 并带安全兜底。 */
 .sd-drop-pill {
   position: fixed;

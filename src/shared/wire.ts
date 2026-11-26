@@ -29,7 +29,7 @@ export const ROUTES = {
   config: { path: '/config', method: 'POST', body: 'config' },
   /** 单条详情（读回收站目录里那条会话自己的日志）。 */
   detail: { path: '/detail', method: 'POST', body: 'entry' },
-  /** 一组 id 上的同一个动作；删除确认框那句「含 N 个子会话」也走这里（`action: 'count'`，纯读语义）。 */
+  /** 一组 id 上的同一个动作；批量已选清单的子会话计数也走这里（`action: 'count'`，纯读语义）。 */
   apply: { path: '/apply', method: 'POST', body: 'apply' },
   /** 清空回收站。 */
   empty: { path: '/empty', method: 'POST', body: 'none' },
@@ -136,7 +136,7 @@ export type TrashRowWire = TrashEntryWire & {
   strandedSubagents?: number
   /** 那些盘上后代的实际字节合计；彻底删除/清空会一起释放。 */
   strandedBytes?: number
-  /** 删除时记下的工作区**已经不在账本里**（宿主的「删除工作区」只删注册、保留日志）。 */
+  /** 移入回收站时记下的工作区**已经不在账本里**（宿主的「删除工作区」只删注册、保留日志）。 */
   workspaceMissing?: boolean
 }
 

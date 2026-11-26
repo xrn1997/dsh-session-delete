@@ -1,5 +1,5 @@
 /**
- * 六个确认框共用的**一个壳**：`Modal` + 标题 + 关闭钮 + 「取消（描边） / 确认（主按钮）」页脚。
+ * 回收站与维护卡各确认框共用的**一个壳**：`Modal` + 标题 + 关闭钮 + 「取消（描边） / 确认（主按钮）」页脚。
  * 共用的只有页脚与关框规则（在飞时取消与关闭都按住），业务面各框自持；裁决见 ADR-0052。
  */
 import { useCallback, type ReactNode } from 'react'
@@ -15,7 +15,7 @@ export interface ConfirmDialogProps {
   readonly busy: boolean
   readonly onCancel: () => void
   readonly onConfirm: () => void
-  /** 危险层级：实心红主按钮；缺省是普通 primary（与「移入回收站」同款）。 */
+  /** 危险层级：实心红主按钮；缺省是普通 primary。 */
   readonly danger?: boolean
   /** 忙碌面的动作文案：busy 时主按钮换 `.sd-spinner` + 这句（缺省时维持现状，只置灰）。 */
   readonly busyLabel?: string

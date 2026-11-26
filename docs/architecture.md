@@ -54,7 +54,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 
 - **注册处只有一处**：`src/client/index.tsx` 的贡献表 + 一个注册循环；会话菜单两行与两个 icon key 是唯一例外（`src/client/context-menu-actions.tsx`，ADR-0059）。槽位只挂官方已声明的；每条贡献各自包 `src/client/ui/ErrorBoundary.tsx`。
 - **通道探测决定入口**：注册前先探 `/ping`，打不通就一个入口都不注册（ADR-0033）；失败原因留 console。
-- **场景 seam**：`src/client/scene.ts` 的 `ClientScene` 聚合九份跨槽位现场。注册面在激活期安装一份；各贡献经 `ClientSceneProvider` 读同一实例；未安装即抛错（ADR-0067）。九个现场模块仍导出自由函数，委托进程场景的实例。
+- **场景 seam**：`src/client/scene.ts` 的 `ClientScene` 聚合八份跨槽位现场。注册面在激活期安装一份；各贡献经 `ClientSceneProvider` 读同一实例；未安装即抛错（ADR-0067）。八个现场模块仍导出自由函数，委托进程场景的实例。
 - **失效 → 重读一条实现**：`src/client/use-gated-refresh.ts` 的 `useGatedRefresh` 管修订到达、active / demand 两道门、合并窗与单飞。**一次清单读的落地**也一条：`src/client/use-panel-list-read.ts` 的 `usePanelListRead`（latest-wins、挂载归属、三态 + 缺席、首帧初值）。
 - **档的装配线一条**：`src/client/use-panel-tab.ts` 的 `usePanelTab` 把清单读数 → 分组 → 选择面 → 控制器 → 键盘 → 预取 → 详情帧接成一份，两档差异全交 `PanelTabAdapter`；四格版面住 `src/client/panel-tab.tsx`；两档状态仍各一份（ADR-0060 第 4 条、ADR-0065）。
 - **孩子视图的收口一条**：`src/client/use-panel-child-view.ts` 的 `usePanelChildView` 管收尾顺序、返回两程与 `DetailNav` 装配；孩子怎么找、主体怎么投影归各档（ADR-0055 单级）。
@@ -96,6 +96,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 | 清空回收站的批驱动（`/empty` 的驱动序与失败面） | `src/verbs/empty-batch.ts` |
 | 写入进度记录与步骤 tick 面 | `src/verbs/write-progress.ts` |
 | 成员移动步骤与组回滚 / 离场归位通告 | `src/verbs/member-journal.ts` · `src/verbs/move-group.ts` · `src/verbs/member-presence.ts` |
+| 会话目录搬移与瞬态占用重试 | `src/verbs/move-directory.ts` |
 | 活体准入判据 | `src/verbs/live-admission.ts` 的 `assertNoLive` |
 | 永久删除的计划与执行 / 清册作用域（purge 拿目标） | `src/verbs/permanent-removal.ts` · `src/verbs/trash-scope.ts` |
 | 附件内容块、引用扫描、独占计划与复核、孤儿扫描 | `src/trash/attachments.ts` |
@@ -113,7 +114,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 | 语义 | 唯一主人 |
 | --- | --- |
 | 槽位贡献与注册 / 错误边界 | `src/client/index.tsx` · `src/client/ui/ErrorBoundary.tsx` |
-| 场景与九个现场 | `src/client/scene.ts` |
+| 场景与八个现场 | `src/client/scene.ts` |
 | 跨槽位现场脚手架（值 store / latest-wins / `useLatest`） | `src/client/store.ts` |
 | 面板骨架与两档互斥 / 档的装配线 / 四格版面 / 两档视图 | `src/client/trash-panel.tsx` · `src/client/use-panel-tab.ts` · `src/client/panel-tab.tsx` · `src/client/trash-tab.tsx` · `src/client/archive-pane.tsx` |
 | 清单读生命周期 / 失效节奏 | `src/client/use-panel-list-read.ts` · `src/client/use-gated-refresh.ts` |
@@ -121,7 +122,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 | 两档控制器 | `src/client/use-trash-panel-controller.ts` · `src/client/use-archive-panel-controller.ts` |
 | 孩子视图收口（收尾顺序 / 返回两程 / 导航面） | `src/client/use-panel-child-view.ts` |
 | 选中面 / 选择面 / 批量选中集与整行点击守卫 | `src/client/use-panel-selection.ts` · `src/client/use-list-selection.ts` · `src/client/batch-selection-store.ts` · `src/client/batch-pick.ts` |
-| 批量删除的呈现件（浮条 / 确认框 / 勾选控件 / 菜单行） | `src/client/batch-bar.tsx` · `src/client/batch-confirm.tsx` · `src/client/batch-select.tsx` · `src/client/batch-menu-item.tsx` |
+| 移入回收站动作 / 批量移入回收站呈现（动作宿主 / 浮条 / 勾选控件 / 菜单行） | `src/client/delete-action.tsx` · `src/client/batch-bar.tsx` · `src/client/batch-select.tsx` · `src/client/batch-menu-item.tsx` |
 | 宿主行可见登记（行组件挂载登记，渲染侧只读快照） | `src/client/host-rows.ts` |
 | 拖放投放目标 / 拖放判定 / 状态机 | `src/client/trash-entry.tsx` · `src/client/trash-drop.ts` · `src/client/drop-machine.ts` |
 | 清单 DOM / 键盘契约 / 顶层浮层名单 | `src/client/session-list.tsx` · `src/client/trash-nav.ts` · `src/client/ui/top-layer.ts` |
@@ -156,9 +157,9 @@ index.ts  组合根：装配 + exact Fetch 注册
 - 运行时数据全住数据根（`$DSH_HOME/`，默认 `~/.dsh/`）：会话 `sessions/<项目目录>/<会话目录>/`，回收站 `session-trash/<条目 id>/` 与清册（宿主 storage 域）。**回收站必须与 `sessions/` 同卷**（搬移靠 `rename`）。
 - `session-trash/` 是唯一需要手动动的地方：真相读（`list()`）先与目录对账；纯读面与投影缓存清理只读 `raw()`。
 - **清册只记文件里真有的事实**；随盘上随时变的数（还剩几个孩子、这次释放多少）现算现给。
-- **删除 = 移入回收站**（可恢复，不自动过期）；永久删除只有三条路：purge、清空回收站、无主子会话清理，都要二次确认。
-- **有成员在跑 ⇒ 整组拒绝、零副作用**（活体准入）；idle 活体允许删除。
-- **回收站与归档解耦**（ADR-0008）：删除不调 `archiveSession`；`unarchive` 是用户显式动作（ADR-0060）。工作区账本缺席不是恢复失败，归入未分组；`sessions/<projectDir>` 不在是硬拒绝。
+- **移入回收站可恢复，永久删除需确认**：移入回收站不自动过期、所有入口即执行（不弹确认框）；永久删除只有三条路：purge、清空回收站、无主子会话清理，都要二次确认。
+- **有成员在跑 ⇒ 整组拒绝、零副作用**（活体准入）；idle 活体允许移入回收站。
+- **回收站与归档解耦**（ADR-0008）：移入回收站不调 `archiveSession`；`unarchive` 是用户显式动作（ADR-0060）。工作区账本缺席不是恢复失败，归入未分组；`sessions/<projectDir>` 不在是硬拒绝。
 - **维护只走手动**：`/orphans`、`/attachment-orphans`、`/projection-orphans` 与各自的 clean 段都只由插件设置页维护卡发起（ADR-0021）。
 - **会话日志是多帧 zstd**：只读版本号最大的那代，绝不拼代。
 - **附件库在 `$DSH_HOME/attachments/v1`**：永久删除只清被删会话独占的图片副本；共享副本与源文件保留；删前复核（ADR-0041）。

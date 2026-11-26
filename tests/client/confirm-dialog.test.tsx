@@ -243,8 +243,8 @@ describe('共用的确认框页脚壳', () => {
 describe('共用的忙碌面', () => {
   it('busy + busyLabel ⇒ 确认钮换 spinner + 动作文案、仍 disabled、关框照旧拦住', () => {
     const onCancel = vi.fn()
-    render(shell({ busy: true, busyLabel: '正在删除', onCancel }))
-    const button = screen.getByRole('button', { name: '正在删除' })
+    render(shell({ busy: true, busyLabel: '正在彻底删除', onCancel }))
+    const button = screen.getByRole('button', { name: '正在彻底删除' })
     expect(button).toBeDisabled()
     expect(button.querySelector('.sd-spinner')).not.toBeNull()
     // 换的是文案不是叠加：原确认文案不该再出现在按钮上。
@@ -262,8 +262,8 @@ describe('共用的忙碌面', () => {
   })
 
   it('空闲时 busyLabel 不上屏（它只属于忙碌面）', () => {
-    render(shell({ busy: false, busyLabel: '正在删除' }))
+    render(shell({ busy: false, busyLabel: '正在彻底删除' }))
     expect(screen.getByRole('button', { name: '确认这一次' })).toBeEnabled()
-    expect(screen.queryByRole('button', { name: '正在删除' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '正在彻底删除' })).not.toBeInTheDocument()
   })
 })

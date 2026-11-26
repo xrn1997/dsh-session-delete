@@ -5,11 +5,12 @@ import { trashEmpty, verbError } from '../errors.js'
 import { createJournal, stepUndo, type Journal, type JournalStep } from './member-journal.js'
 import { withPresenceTail } from './member-presence.js'
 import type { PresenceCapability } from '../ports/presence-port.js'
+import { moveDirectoryWithRetry } from './move-directory.js'
 import { moveGroup } from './move-group.js'
 import { writeProgress } from './write-progress.js'
 
 /**
- * 恢复：把删除那次按原路退回，并按组走。预检整组（不写盘）：回收站目录与原项目目录必须在，账本缺席不算硬失败（归「未分组」）。
+ * 恢复：把移入回收站那次按原路退回，并按组走。预检整组（不写盘）：回收站目录与原项目目录必须在，账本缺席不算硬失败（归「未分组」）。
  * 逐个恢复：文件先回来 → 挂账本 →（旧条目）取消归档 → 摘清册行；中途失败由 journal 回滚当前成员，已恢复的兄弟按相反顺序退回。
  * 通告归批量层（ADR-0002）。
  */
@@ -52,14 +53,14 @@ export function restoreSession(deps: CoreDeps) {
   }
 }
 
-/** 放回哪儿：用 entryId 里删除时写下的**已编码目录段**原地回放，不从 sessionId 现编——宿主换编码算法也不影响旧条目回家
+/** 放回哪儿：用 entryId 里移入回收站时写下的**已编码目录段**原地回放，不从 sessionId 现编——宿主换编码算法也不影响旧条目回家
  *  （编码唯一实现住 `src/shared/session-path.ts`；本插件认的就是宿主编出来的那一段）。 */
 function restoreTargetDir(deps: CoreDeps, entry: TrashEntry): string {
   return sessionDirOf(entry.projectDir, parseEntryId(entry.id).sessionDirName, deps.home)
 }
 
 /**
- * 这一次恢复**到底挂不挂账本**：交出能挂的 `workspaceId`，挂不了就 `undefined`。两种缺席是同一件事：空串 = 删除时就没有账目；
+ * 这一次恢复**到底挂不挂账本**：交出能挂的 `workspaceId`，挂不了就 `undefined`。两种缺席是同一件事：空串 = 移入回收站时就没有账目；
  * 非空但账本里已没它 = 宿主的「删除工作区」只删注册、保留目录与日志，那些会话本来就在「未分组」下。
  * 判据**只有这一处**（`memberRestore` 与 `GET /list` 共用），两处各问一遍就会有一天一个说、一个不挂。
  */
@@ -68,7 +69,7 @@ export async function attachableWorkspaceId(host: Pick<HostIdentityPort, 'worksp
   return await host.workspaceExists(entry.workspaceId) ? entry.workspaceId : undefined
 }
 
-/** 这一条记着的工作区**是不是已经没了**（区别于删除时就没有账目的空串）——清单行据此决定说不说那句
+/** 这一条记着的工作区**是不是已经没了**（区别于移入回收站时就没有账目的空串）——清单行据此决定说不说那句
  *  「原工作区已不存在，恢复后归入未分组」。由 {@link attachableWorkspaceId} 派生，不另起判据（否则会一个说、一个不挂）。 */
 export async function isWorkspaceMissing(host: Pick<HostIdentityPort, 'workspaceExists'>, entry: TrashEntry): Promise<boolean> {
   return entry.workspaceId !== '' && (await attachableWorkspaceId(host, entry)) === undefined
@@ -100,9 +101,9 @@ async function memberRestore(
       run: async () => {
         // 步骤 tick（只加观测，下同）：搬回目录。
         writeProgress.step('moving')
-        await deps.fs.rename(trashDir, sessionDir)
+        await moveDirectoryWithRetry(deps.fs.rename, trashDir, sessionDir)
       },
-      undo: () => stepUndo('目录退回回收站失败', () => deps.fs.rename(sessionDir, trashDir)),
+      undo: () => stepUndo('目录退回回收站失败', () => moveDirectoryWithRetry(deps.fs.rename, sessionDir, trashDir)),
     },
     // ② 再挂账本（`workspaceId` 缺席 = 没有账本可挂）
     ...(workspaceId === undefined ? [] : [{

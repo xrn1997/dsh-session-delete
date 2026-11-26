@@ -1,14 +1,13 @@
 /**
- * 浏览器半的**场景 seam**：九份跨槽位现场聚成一个实例。进程场景必须由注册面安装（未装即接线错，不懒建第二份账）；
+ * 浏览器半的**场景 seam**：八份跨槽位现场聚成一个实例。进程场景必须由注册面安装（未装即接线错，不懒建第二份账）；
  * 测试每例换新；各槽位经 `ClientSceneProvider` 读同一实例（宿主槽位是互不相邻的 React 树）。
  *
- * **环内模块顶层只许字面量初始化**：本文件与九个现场模块互相 import，顶层读环内导出会踩 TDZ / `undefined`。
+ * **环内模块顶层只许字面量初始化**：本文件与八个现场模块互相 import，顶层读环内导出会踩 TDZ / `undefined`。
  */
 import { createContext, createElement, useContext, type ReactElement, type ReactNode } from 'react'
 import { createArchiveRevisionScene, type ArchiveRevisionScene } from './archive-store.js'
-import { createBatchConfirmScene, type BatchConfirmScene } from './batch-confirm.js'
 import { createBatchSelectionScene, type BatchSelectionScene } from './batch-selection-store.js'
-import { createDeleteRequestScene, type DeleteRequestScene } from './delete-confirm.js'
+import { createDeleteActionScene, type DeleteActionScene } from './delete-action.js'
 import { createHostRowsScene, type HostRowsScene } from './host-rows.js'
 import { createMainViewScene, type MainViewScene } from './main-view.js'
 import { createTrashRevisionScene, type TrashRevisionScene } from './trash-store.js'
@@ -23,9 +22,8 @@ export interface ClientScene {
   readonly mainView: MainViewScene
   readonly hostRows: HostRowsScene
   readonly batchSelection: BatchSelectionScene
-  readonly deleteRequest: DeleteRequestScene
-  readonly batchConfirm: BatchConfirmScene
-  /** 场景收场：九份现场一起回初值（测试收场只调这一条）。 */
+  readonly deleteAction: DeleteActionScene
+  /** 场景收场：八份现场一起回初值（测试收场只调这一条）。 */
   reset(): void
 }
 
@@ -38,8 +36,7 @@ export function createClientScene(): ClientScene {
     mainView: createMainViewScene(),
     hostRows: createHostRowsScene(),
     batchSelection: createBatchSelectionScene(),
-    deleteRequest: createDeleteRequestScene(),
-    batchConfirm: createBatchConfirmScene(),
+    deleteAction: createDeleteActionScene(),
     reset(): void {
       scene.trashRevisions.reset()
       scene.archiveRevisions.reset()
@@ -48,8 +45,7 @@ export function createClientScene(): ClientScene {
       scene.mainView.reset()
       scene.hostRows.reset()
       scene.batchSelection.reset()
-      scene.deleteRequest.reset()
-      scene.batchConfirm.reset()
+      scene.deleteAction.reset()
     },
   }
   return scene

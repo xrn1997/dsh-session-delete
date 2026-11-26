@@ -469,9 +469,9 @@ describe('路由层 · 段名契约（/apply 一段管所有动作，2026-10-17�
     expect(JSON.stringify(stored)).not.toContain('subagentCount')
   })
 
-  // 删除确认框要说「含 N 个子会话，将一起移入回收站」（issue #3）⇒ 那个数必须在**删除之前**问得到。
+  // 批量已选清单要显示子会话计数 ⇒ 那个数必须在批量操作前问得到。
   // 2026-10-17 批量重构后它挂在 `/apply` 的 `count` 上（一条一段退役了），纯读豁免跟着一起搬。
-  it('apply count 交回这条会话在盘上的后代数（确认框删除前取一次数）', async () => {
+  it('apply count 交回这条会话在盘上的后代数（批量已选清单取子会话数）', async () => {
     const { deps, host } = makeDeps({ subagents: { 'session-parent': 3 } })
     const base = await start(deps)
     const { status, body } = await call(base, ROUTES.apply.path, {
@@ -708,8 +708,8 @@ describe('路由层 · 到达序串行（对账与写动词不交错）', () => 
     expect(host.isLive).toHaveBeenCalledWith('session-abc') // 前一个一松开，它就接着跑完
   })
 
-  // 纯读不排队（`detail`、`ping` 早就在这条路上）：确认框那一句「含 N 个子会话」挂的是
-  // `/apply` 的 `action:'count'`，它不该被前面一次对账堵在身后——否则"打开菜单点删除"要等一次磁盘扫描才有回音。
+  // 纯读不排队（`detail`、`ping` 早就在这条路上）：批量已选清单的子会话计数挂的是
+  // `/apply` 的 `action:'count'`，它不该被前面一次对账堵在身后——否则"勾选完看已选"要等一次磁盘扫描才有回音。
   it('链被对账占住时，apply 的 count 照样立刻回（纯读豁免跟着段名一起搬进 /apply）', async () => {
     const { deps, fs } = makeDeps({ subagents: { 'session-parent': 2 } })
     let release!: () => void
