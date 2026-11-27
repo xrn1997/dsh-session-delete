@@ -7,7 +7,7 @@ function ctxWith(ui: unknown): ClientContextLike {
   return {
     slots: {} as never,
     get: (name: string) => (name === 'uiWorkspace' ? ui : undefined),
-  } as unknown as ClientContextLike
+  }
 }
 
 function uiWith(over: {
@@ -301,7 +301,7 @@ describe('删除/恢复时主视图的收尾', () => {
     bindMainView({
       slots: {} as never,
       get: () => { throw new Error('service boom') },
-    } as unknown as ClientContextLike)
+    })
     expect(() => afterDelete(['session-a'])).not.toThrow()
     expect(() => afterRestore(['session-a'])).not.toThrow()
     expect(openSession).not.toHaveBeenCalled()

@@ -149,6 +149,24 @@ describe('文案接线', () => {
     // HMR 重挂会撞 "locale namespace … already has locale …"。
     expect(disposer).toBe(dispose)
   })
+
+  it('老宿主缺 effect：字典照常注册，只缺卸载撤销（告警一句，不整套退回 zh）', () => {
+    const service = fakeLocale()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const ctx = {
+        slots: { inject: vi.fn(), register: vi.fn() },
+        get: () => service,
+      } as unknown as ClientContextLike
+      const t = createTranslate(ctx)
+      expect(service.register).toHaveBeenCalledTimes(1)
+      expect(t).not.toBe(zhTranslate)
+      expect(t('trash.title')).toBe('回收站')
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 // 附件视图与“只清 .dsh 副本”那两句：zh 是真源，en 必须逐键镜像（键集合由类型盯住，

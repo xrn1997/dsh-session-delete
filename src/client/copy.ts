@@ -662,13 +662,19 @@ function detectLocaleService(ctx: ClientContextLike): LocaleServiceLike | undefi
  *
  * **空值判据同时认 `undefined` 与 `null`**：宿主 `ctx.get` 可以回 null，只判 undefined 会让 `service.register`
  * 抛错——而本函数跑在任何槽位注册之前，抛出去等于整个客户端条目从页面消失。注册 / 绑定失败同样退回 zh。
- * 注册必须挂在 `ctx.effect` 上：`register` 返回的 disposer 是官方契约，且同一命名空间同一语言只能注册一次。
+ * `register` 返回的 disposer 是官方契约（同一命名空间同一语言只能注册一次），随插件卸载摘除归 `effect`；
+ * 缺那一格时注册照旧、只缺撤销——重挂撞名是缺 `effect` 的受约束代价（见 `context.ts` 头注的可缺性表）。
  */
 export function createTranslate(ctx: ClientContextLike): Translate {
   const service = detectLocaleService(ctx)
   if (service === undefined) return zhTranslate
   try {
-    ctx.effect(() => service.register(COPY_NS, { zh: ZH, en: EN }), 'session-delete: copy dictionaries')
+    const unregister = service.register(COPY_NS, { zh: ZH, en: EN })
+    if (typeof ctx.effect === 'function') {
+      ctx.effect(() => unregister, 'session-delete: copy dictionaries')
+    } else {
+      console.warn('[dsh-session-delete] 宿主没有 ctx.effect：字典已注册，但无法随插件卸载撤销')
+    }
     const bound = service.bind(COPY_NS)
     return (key, params) => bound(key, params)
   } catch (error) {

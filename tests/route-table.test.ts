@@ -5,7 +5,7 @@
  * 都在这里红——而不是等到真机上"删除按钮被一次探测堵在身后"或"写动作绕开了串行链"。
  */
 import { describe, expect, it } from 'vitest'
-import { APPLY_ACTIONS, ROUTE_TABLE, defineRoute, routeOf, type JsonBody, type JsonRouteSpec, type NoReadJsonRouteSpec, type RouteRead, type SliceDeps } from '../src/api/route-table.js'
+import { ROUTE_APPLY_ACTIONS, ROUTE_TABLE, defineRoute, routeOf, type JsonBody, type JsonRouteSpec, type NoReadJsonRouteSpec, type RouteRead, type SliceDeps } from '../src/api/route-table.js'
 import { resolveRoute } from '../src/api/dispatch.js'
 import { ROUTES } from '../src/shared/wire.js'
 import type { ApplyAction } from '../src/shared/wire.js'
@@ -130,7 +130,7 @@ describe('路由表 · 段名表逐行', () => {
     const of = purity as (body: Record<string, unknown> | null) => string
     expect(of({ action: 'count' })).toBe('pure')
     expect(of({ action: 'unarchive' })).toBe('chained')
-    for (const action of APPLY_ACTIONS.filter((item) => item !== 'count')) {
+    for (const action of ROUTE_APPLY_ACTIONS.filter((item) => item !== 'count')) {
       expect(`${action}:${of({ action })}`).toBe(`${action}:chained`)
     }
     // 没有动作（或动作不认识）也进链：认不得的动作由处理那一步响亮拒掉，绝不"什么都不做"地插队
@@ -197,20 +197,20 @@ describe('路由表 · 段名表逐行', () => {
 describe('路由表 · `/apply` 的动作表由类型派生', () => {
   it('运行期那六个动作就是 `ApplyAction` 的六项（少一个编译不过，多一个也是）', () => {
     const expected: ApplyAction[] = ['delete', 'restore', 'purge', 'count', 'orphan-clean', 'unarchive']
-    expect([...APPLY_ACTIONS].sort()).toEqual(expected.sort())
+    expect([...ROUTE_APPLY_ACTIONS].sort()).toEqual(expected.sort())
   })
 
   it('纯度与动作拒否是同一个识别器：每个动作一份判据，不认识的动作两处同一句话', async () => {
     const purity = routeOf(ROUTES.apply.path)?.purity
     expect(typeof purity).toBe('function')
     const of = purity as (body: Record<string, unknown> | null) => string
-    // 拒否原文从同一份名单（APPLY_ACTIONS）长出：测试不另抄一份动作名单，抄了就是第二份判据。
-    const reject = `批量动作不认识：需是 ${APPLY_ACTIONS.join(' / ')} 之一`
+    // 拒否原文从同一份名单（ROUTE_APPLY_ACTIONS）长出：测试不另抄一份动作名单，抄了就是第二份判据。
+    const reject = `批量动作不认识：需是 ${ROUTE_APPLY_ACTIONS.join(' / ')} 之一`
     // 逐动作两侧对齐：纯度说 count 是纯读、其余进链；run 那一侧认得同一个动作——
     // 它拒的不是「动作不认识」那句（下一格 ids 栅栏接住了它，说明动作已经过了识别器）。
     // 这个推断有前提：通用解析手按字段组描述的**声明序**逐格读（`apply` 组 `action` 在 `ids` 之前）；
     // 顺序反过来，ids 栅栏会先抛、本用例照样绿却不再证明「已过识别器」——改描述或读序时先回来核这句。
-    for (const action of APPLY_ACTIONS) {
+    for (const action of ROUTE_APPLY_ACTIONS) {
       expect(`${action}:${of({ action })}`).toBe(`${action}:${action === 'count' ? 'pure' : 'chained'}`)
       const error = await runApply({ action })
       expect(error, `${action} 应被 run 的识别器认下`).toBeInstanceOf(Error)
@@ -229,7 +229,7 @@ describe('路由表 · `/apply` 的动作表由类型派生', () => {
     // `apply` 组按 `action` → `ids` 的声明序读；这一格同时非法，报的是动作那一句。
     // 顺序若被改反，这里会先撞 ids 栅栏而红——上一段注释里的推断也就此有了直接证据。
     const error = (await runApply({ action: 'nope', ids: [] })) as Error & { httpStatus?: number }
-    expect(error.message).toBe(`批量动作不认识：需是 ${APPLY_ACTIONS.join(' / ')} 之一`)
+    expect(error.message).toBe(`批量动作不认识：需是 ${ROUTE_APPLY_ACTIONS.join(' / ')} 之一`)
     expect(error.httpStatus).toBe(400)
   })
 })

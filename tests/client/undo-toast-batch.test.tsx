@@ -336,7 +336,7 @@ describe('批量撤销横幅', () => {
     bindMainView({
       slots: {} as never,
       get: (name: string) => (name === 'uiWorkspace' ? uiWorkspace : undefined),
-    } as never)
+    })
     // 删除时关掉当前视图（main-view 由此记住 session-a）：全失败的撤销不许把它重开。
     afterDelete(['session-a'])
     publishUndoBatchNotice({ entryIds: ['session-a'], n: 1 })
@@ -381,7 +381,7 @@ describe('批量撤销横幅', () => {
     bindMainView({
       slots: {} as never,
       get: (name: string) => (name === 'uiWorkspace' ? uiWorkspace : undefined),
-    } as never)
+    })
     // 删除时关掉当前视图（main-view 由此记住 session-a）。
     afterDelete(['session-a'])
     publishUndoBatchNotice({ entryIds: ['e1', 'e2'], n: 2 })

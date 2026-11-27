@@ -18,7 +18,7 @@ Status: accepted
 - 该写的判成纯 ⇒ 写动作绕开到达序链，与对账交错，回收站出现「目录在、行是降级元数据」的世界；
 - body 该读没读 ⇒ 下游拿到 `null`；读了两遍 ⇒ 请求流已被消费（`dispatch.ts` 的注释专门强调过这一点）。
 
-此外 `APPLY_ACTIONS` 是 `ApplyAction` 联合在**运行期的手抄副本**，注释原文承认「必须同进同退」。
+此外动作名单曾是 `ApplyAction` 联合在**运行期的手抄副本**，注释原文承认「必须同进同退」。
 
 ## 决定
 
@@ -29,8 +29,9 @@ Status: accepted
 2. `dispatch()` 读这一条记录：方法、纯度、读面、body 的预读判定（`bodyOf` 投影 wire 那一格）、响应形态**只有一处定义**
    （原先分居 `dispatch()` 与 `purityOf()` 两处的判断已并进这张表）；响应形态同时决定 run 的形
    （JSON 段拿 body / read，二进制段拿 query），两者仍在同一条记录里；deps 切片见 ADR-0032。
-3. `APPLY_ACTIONS` 由 `ApplyAction` **派生**（`Record<ApplyAction, …>` + `satisfies`）：
-   少一个动作就编译不过，多一个动作也是。
+3. `ROUTE_APPLY_ACTIONS`（`route-table.ts`）由动作表 `APPLY_ACTION_TABLE` **派生**（`satisfies Record<ApplyAction, …>`）：
+   少一个动作就编译不过，多一个动作也是；规范动作序另住 `src/shared/apply-actions.ts` 的 `APPLY_ACTIONS`，
+   两处由 `tests/apply-actions-matrix.test.ts` 双向钉住（不各长第二份名单）。
 4. `/apply` 的「动作 → 纯度」（`count` 是纯读、其余进链）是 `route-table.ts` 里**唯一一张表**
    （`APPLY_ACTION_TABLE`：键由 `ApplyAction` 派生、`satisfies` 钉住——漏一个动作编译不过，多一个也是）。
    该路由 `purity` 的函数形式与动作拒否（通用解析手的 `action` 格）共用同一个识别器（`actionOf`：不抛，
@@ -53,6 +54,6 @@ Status: accepted
 
 - **把 handler 放进 `shared/wire.ts`**：值 import 会把 Node 半（`node:http`、`node:fs`）拖进浏览器半的
   bundle，正好撞上 `tsdown` 的纯度门。
-- **只把 `APPLY_ACTIONS` 从类型派生**：三处判断仍分居两处，最危险的那条（纯度）继续靠注释。
+- **只把 `ROUTE_APPLY_ACTIONS` 从类型派生**：三处判断仍分居两处，最危险的那条（纯度）继续靠注释。
 
 锚点：`CONTEXT.md`（路由表 / wire）；`src/api/route-table.ts`；`src/api/dispatch.ts`（`createDispatcher`）；`tests/route-table.test.ts`；ADR-0032。

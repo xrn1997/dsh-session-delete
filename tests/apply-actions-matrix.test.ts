@@ -20,7 +20,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { APPLY_ACTIONS, APPLY_ACTION_INDEX } from '../src/shared/apply-actions.js'
 import { APPLY_VALUE_SCHEMAS } from '../src/shared/apply-values.js'
-import { APPLY_ACTION_TABLE, APPLY_ACTIONS as ROUTE_APPLY_ACTIONS, routeOf } from '../src/api/route-table.js'
+import { APPLY_ACTION_TABLE, ROUTE_APPLY_ACTIONS, routeOf } from '../src/api/route-table.js'
 import { readReceipt, summarizeReceipt } from '../src/client/receipt.js'
 import {
   createHttpRemote,

@@ -191,7 +191,8 @@ export const APPLY_ACTION_TABLE = {
   unarchive: APPLY_ACTION_INDEX.unarchive.purity,
 } satisfies Record<ApplyAction, 'pure' | 'chained'>
 
-export const APPLY_ACTIONS = Object.keys(APPLY_ACTION_TABLE) as readonly ApplyAction[]
+/** 本表自认的动作序（与 `shared/apply-actions.ts` 的规范序等值，由 `apply-actions-matrix.test` 双向钉住；不另起同名导出）。 */
+export const ROUTE_APPLY_ACTIONS = Object.keys(APPLY_ACTION_TABLE) as readonly ApplyAction[]
 
 /** `/apply` 的动作：全仓唯一识别器，纯度函数与字段闸都从这里过。不抛：不认得一律回 `undefined`，
  *  抛不抛、抛哪句话归通用解析手（{@link parseBody}）。 */
@@ -241,7 +242,7 @@ function readField(body: JsonBody, field: string, kind: BodyFieldKind): unknown 
       // 认不认得只问识别器；认不得的一律点名拒掉，不折成「空批量」糊弄过去。
       const action = actionValueOf(value)
       if (action === undefined) {
-        throw routeError('bad-request', 400, `批量动作不认识：需是 ${APPLY_ACTIONS.join(' / ')} 之一`)
+        throw routeError('bad-request', 400, `批量动作不认识：需是 ${ROUTE_APPLY_ACTIONS.join(' / ')} 之一`)
       }
       return action
     }

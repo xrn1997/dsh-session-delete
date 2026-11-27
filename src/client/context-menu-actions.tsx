@@ -200,10 +200,13 @@ export function installSessionMenus(client: ClientContextLike, t: Translate): vo
     if (menus === null || menus === undefined || typeof menus.register !== 'function') return false
     const sessions = readOptional('sessions') as SessionsServiceLike | null | undefined
     try {
-      target.effect(
-        () => menus.register(createSessionMenuContribution(t, sessions?.list)),
-        'session-delete: context menu actions',
-      )
+      const unregister = menus.register(createSessionMenuContribution(t, sessions?.list))
+      // 注册照旧、撤销归 `effect`：缺那一格时只缺摘除能力（见 `context.ts` 头注的可缺性表），不回退 legacy。
+      if (typeof target.effect === 'function') {
+        target.effect(() => unregister, 'session-delete: context menu actions')
+      } else {
+        console.warn('[dsh-session-delete] 宿主没有 ctx.effect：菜单贡献已注册，但无法随插件卸载撤销')
+      }
     } catch (error) {
       console.warn('[dsh-session-delete] context menu 注册失败，回退 legacy 菜单行：', error)
       return false
@@ -231,7 +234,12 @@ export function installSessionMenus(client: ClientContextLike, t: Translate): vo
           { name: SESSION_MENU_SLOT, id: `${PLUGIN_ID}.${row.suffix}`, order: row.order, inject: () => ({ t }) },
           guard,
         ))
-      if (typeof dispose === 'function') disposers.push(dispose as () => void)
+      if (typeof dispose === 'function') {
+        disposers.push(dispose as () => void)
+      } else {
+        // 宿主不交回 disposer 时这两行摘不掉：迟到切换成功后菜单会并存两组，是受约束偏离，先出声再记账。
+        console.warn('[dsh-session-delete] 槽位注册没有交回 disposer：legacy 菜单行卸载时摘不掉，可能与数据动作双轨并存')
+      }
     }
     return disposers
   }

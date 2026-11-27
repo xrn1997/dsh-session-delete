@@ -5,8 +5,10 @@ import {
   createSessionMenuContribution,
   ICON_BATCH,
   ICON_DELETE,
+  installSessionMenus,
 } from '../../src/client/context-menu-actions.js'
 import { zhTranslate } from '../../src/client/copy.js'
+import type { ClientContextLike } from '../../src/client/context.js'
 import { useDeleteActionRequest } from '../../src/client/delete-action.js'
 
 const TARGET = { sessionId: 'session-a', displayTitle: '/code-review' }
@@ -114,5 +116,35 @@ describe('0.2.2 contextMenus 数据动作', () => {
     await expect(Promise.resolve(b.contribution.resolve(hostile))).resolves.toEqual([])
     expect(warn.mock.calls.some((call) => String(call[0]).includes('会话菜单动作解析失败'))).toBe(true)
     warn.mockRestore()
+  })
+})
+
+describe('菜单装配 · effect 可缺', () => {
+  it('老宿主缺 effect：数据贡献照常注册，legacy 两行不装（告警一句）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const registered: unknown[] = []
+      const menus = {
+        register(contribution: unknown): () => void {
+          registered.push(contribution)
+          return () => undefined
+        },
+      }
+      const injected: string[] = []
+      const client = {
+        slots: {
+          inject: (name: string) => { injected.push(name) },
+          register: () => undefined,
+        },
+        get: (name: string): unknown => (name === 'contextMenus' ? menus : undefined),
+      } as unknown as ClientContextLike
+      installSessionMenus(client, zhTranslate)
+      expect(registered).toHaveLength(1)
+      // 数据装配成功就不再走 legacy 槽位：只有两枚 `contextMenu.icon` 贡献经 slots 挂上去。
+      expect(injected).toEqual(['contextMenu.icon', 'contextMenu.icon'])
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

@@ -1336,7 +1336,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
         clearMain: () => { selected = {} },
         openSession,
       } : undefined,
-    } as never)
+    })
     afterDelete(['session-a'])
     publishUndoNotice({ entryId: 'a', title: 'A' })
     const notice = renderHook(() => useUndoNotice())
@@ -1363,7 +1363,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
         clearMain: () => { selected = {} },
         openSession,
       } : undefined,
-    } as never)
+    })
     afterDelete(['session-a'])
     publishUndoNotice({ entryId: 'a', title: 'A' })
     const notice = renderHook(() => useUndoNotice())
@@ -1392,7 +1392,7 @@ describe('面板控制器 · 恢复与确认动作', () => {
         clearMain: () => { selected = {} },
         openSession,
       } : undefined,
-    } as never)
+    })
     afterDelete(['session-a'])
     publishUndoBatchNotice({ entryIds: ['a', 'b'], n: 2 })
     const notice = renderHook(() => useUndoNotice())
