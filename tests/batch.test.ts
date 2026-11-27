@@ -9,6 +9,8 @@ import zlib from 'node:zlib'
 import { describe, expect, it, vi } from 'vitest'
 import { applyActions } from '../src/verbs/batch.js'
 import { readWriteProgress, resetWriteProgress, writeProgress } from '../src/verbs/write-progress.js'
+import { ATTACHMENT_CLEANUP_SCHEMA } from '../src/shared/apply-values.js'
+import { FAILURE_DETAILS_ATTACHMENTS_KEY } from '../src/shared/wire.js'
 import { attachmentPathOf } from '../src/trash/attachments.js'
 import type { DeleteDeps } from '../src/deps.js'
 import type { SessionIdentity, SubagentMember } from '../src/ports/host-port.js'
@@ -397,10 +399,10 @@ describe('批量层 · carried 预裁决 + 第二波补跑 + 批内有界并发'
     }
   })
 })
-// 批内最后一个 ok 支、carried 幂等支不带 `attachments`、整批零 ok 支不产出附件读数。
-// per-id 附件读数合成（批级尾 → 逐条回执）：`byGroup` 拆回 ok 支、无主（失败组来的）对象读数并入
-// 批内最后一个 ok 支、carried 幂等支不带 `attachments`、整批零 ok 支不产出附件读数。
-// 批内各 id 的读数相加 = 尾 run 的合计（对象单归属），客户端「按批相加 / 取第一条」的归并不动。
+// per-id 附件读数合成（批级尾 → 逐条信封）：`byGroup` 按**组归属**拆回各条——ok 支挂自己的成功回执，
+// 失败支挂自己 `error.details` 的同一格（对象读数不冒领别的条的回执），carried 幂等支不带 `attachments`
+// （缺席与 0 是两件事）。批内各 id 的读数（成功回执 + 失败 details）相加 = 尾 run 的合计（对象单归属），
+// 客户端「按批相加」的归并不动。
 describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
   const HOME = '/h'
   const LOG = 'session.v4.jsonl.zstd'
@@ -463,18 +465,46 @@ describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
     ])
   })
 
-  it('失败组的对象读数并入批内最后一个 ok 支（附件只随永久删除清，失败路径不泄漏）', async () => {
+  it('失败组的对象读数挂回自己失败条的 details，不冒领成功行回执（附件只随永久删除清，失败路径不泄漏）', async () => {
     const rowA = rowOf('a')
     const rowB = rowOf('b')
     const dirA = trashDirOf(rowA.id, HOME)
     const dirB = trashDirOf(rowB.id, HOME)
     const made = imageWorld([rowA, rowB], { [dirA]: IMAGE_A, [dirB]: IMAGE_B }, { [imagePath(IMAGE_A)]: 7, [imagePath(IMAGE_B)]: 8 })
-    // 组 A 删完目录、摘清册行才失败 ⇒ 目录已删、组失败：它的独占图仍随尾清掉，读数无主。
+    // 组 A 删完目录、摘清册行才失败 ⇒ 目录已删、组失败：它的独占图仍随尾清掉，读数挂回 A 自己的失败 details。
     made.manifest.remove = vi.fn(async (id: string) => { if (id === rowA.id) throw new Error('boom') })
     const outcomes = await applyActions(made.deps, 'purge', [rowA.id, rowB.id])
-    expect(outcomes[0]).toMatchObject({ ok: false, error: { code: 'sessiondelete/io' } })
-    // A 的读数（1 件 / 7 字节）并入批内最后一个 ok 支（B）。
-    expect(outcomes[1]).toMatchObject({ ok: true, value: { attachments: { removed: 2, freedBytes: 15, failed: 0 } } })
+    expect(outcomes[0]).toMatchObject({
+      ok: false,
+      error: { code: 'sessiondelete/io', details: { attachments: { removed: 1, freedBytes: 7, failed: 0 } } },
+    })
+    // B 的回执只念自己那组的读数（1 件 / 8 字节），不替失败的 A 记账。
+    expect(outcomes[1]).toMatchObject({ ok: true, value: { attachments: { removed: 1, freedBytes: 8, failed: 0 } } })
+  })
+
+  it('成功回执 + 失败 details 的读数相加 = 尾 run 的合计（客户端「按批相加」对得上）', async () => {
+    const rowA = rowOf('a')
+    const rowB = rowOf('b')
+    const dirA = trashDirOf(rowA.id, HOME)
+    const dirB = trashDirOf(rowB.id, HOME)
+    const made = imageWorld([rowA, rowB], { [dirA]: IMAGE_A, [dirB]: IMAGE_B }, { [imagePath(IMAGE_A)]: 7, [imagePath(IMAGE_B)]: 8 })
+    // 两组行目录都真删掉、图随尾清掉；A 在摘自己的清册行时失败 ⇒ 读数按组归属一成功一失败。
+    made.manifest.remove = vi.fn(async (id: string) => { if (id === rowA.id) throw new Error('boom') })
+    const outcomes = await applyActions(made.deps, 'purge', [rowA.id, rowB.id])
+    expect(outcomes.map((item) => item.ok)).toEqual([false, true])
+    // 两半都从信封现读：成功支 `value.attachments`、失败支 `details.attachments`（同一格名、同 schema）。
+    const totals = { removed: 0, freedBytes: 0, failed: 0 }
+    for (const outcome of outcomes) {
+      const raw = !outcome.ok
+        ? outcome.error.details?.[FAILURE_DETAILS_ATTACHMENTS_KEY]
+        : outcome.action === 'purge' ? outcome.value.attachments : undefined
+      if (!ATTACHMENT_CLEANUP_SCHEMA.check(raw)) throw new Error('信封缺附件读数')
+      totals.removed += raw.removed
+      totals.freedBytes += raw.freedBytes
+      totals.failed += raw.failed
+    }
+    // 尾 run 的合计 = 两张独占图（7 + 8 字节）；客户端按批相加拿到的是同一份总量。
+    expect(totals).toEqual({ removed: 2, freedBytes: 15, failed: 0 })
   })
 
   it('carried 幂等支不带 attachments：缺席与 0 是两件事', async () => {
@@ -483,7 +513,7 @@ describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
     expect(outcomes[1]).toEqual({ id: kid.id, action: 'purge', ok: true, value: { removed: 0, freedBytes: 0 } })
   })
 
-  it('载体失败 ⇒ 子第二波补跑：被删目录的独占图随尾清掉，无主读数并入批内最后一个 ok 支（附件尾修正）', async () => {
+  it('载体失败 ⇒ 子第二波补跑：被删目录的独占图随尾清掉，读数按组归属挂回失败载体的 details（附件尾修正）', async () => {
     const dirP = trashDirOf(parent.id, HOME)
     const dirK = trashDirOf(kid.id, HOME)
     const made = imageWorld([parent, kid], { [dirP]: IMAGE_A, [dirK]: IMAGE_B }, {
@@ -492,12 +522,15 @@ describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
     // 载体删完自己的目录、摘自己的清册行时失败 ⇒ 执行视图不动；孩子自己的目录还没动过，第二波补跑会删它。
     made.manifest.remove = vi.fn(async (id: string) => { if (id === parent.id) throw new Error('boom') })
     const outcomes = await applyActions(made.deps, 'purge', [parent.id, kid.id])
-    expect(outcomes[0]).toMatchObject({ ok: false })
-    // 第二波补跑的孩子回自己的成功信封；两组（含失败载体那组）的对象读数按无主归并口径并入批内最后一个
-    // ok 支（此批即它）——两个目录都真删掉了，独占图随尾清掉、读数不能丢。
+    // 两个目录都真删掉了、独占图随尾清掉、读数不能丢：对象单归属是组级（载体那组的计划覆盖整组行目录），
+    // 读数挂回失败载体的 details；补跑条自己那组没有独占图，回执带零读数——相加照旧等于尾 run 的合计。
+    expect(outcomes[0]).toMatchObject({
+      ok: false,
+      error: { details: { attachments: { removed: 2, freedBytes: 15, failed: 0 } } },
+    })
     expect(outcomes[1]).toMatchObject({
       ok: true,
-      value: { removed: 1, attachments: { removed: 2, freedBytes: 15, failed: 0 } },
+      value: { removed: 1, attachments: { removed: 0, freedBytes: 0, failed: 0 } },
     })
     expect(made.fs.removeFile).toHaveBeenCalledTimes(2)
   })
@@ -767,19 +800,22 @@ describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
     expect(made.fs.removeFile).not.toHaveBeenCalled()
   })
 
-  it('整批零 ok 支 ⇒ 不产出附件读数（读数无处挂，与全失败批同口径）', async () => {
+  it('整批零 ok 支 ⇒ 读数按组挂回各自失败条的 details（不冒领、不丢）', async () => {
     const rowA = rowOf('a')
     const rowB = rowOf('b')
     const dirA = trashDirOf(rowA.id, HOME)
     const dirB = trashDirOf(rowB.id, HOME)
     const made = imageWorld([rowA, rowB], { [dirA]: IMAGE_A, [dirB]: IMAGE_B }, { [imagePath(IMAGE_A)]: 7, [imagePath(IMAGE_B)]: 8 })
-    // 两组都删完目录、摘清册行才失败 ⇒ 目录已删、读数有，但零 ok 支无处挂。
+    // 两组都删完目录、摘清册行才失败 ⇒ 目录已删、读数有：各回各家的失败 details，不再是「无处挂」。
     made.manifest.remove = vi.fn(async () => { throw new Error('boom') })
     const outcomes = await applyActions(made.deps, 'purge', [rowA.id, rowB.id])
     expect(outcomes.map((item) => item.ok)).toEqual([false, false])
-    for (const outcome of outcomes) {
-      expect(outcome.ok ? outcome.value : outcome.error.details ?? {}).not.toHaveProperty('attachments')
-    }
+    expect(outcomes[0]).toMatchObject({
+      ok: false, error: { details: { attachments: { removed: 1, freedBytes: 7, failed: 0 } } },
+    })
+    expect(outcomes[1]).toMatchObject({
+      ok: false, error: { details: { attachments: { removed: 1, freedBytes: 8, failed: 0 } } },
+    })
   })
 
   it('部分失败时，失败组的候选日志读不出不串台到成功组回执', async () => {
@@ -798,7 +834,12 @@ describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
       if (id === rowA.id) throw new Error('boom')
     })
     const outcomes = await applyActions(made.deps, 'purge', [rowA.id, rowB.id])
-    expect(outcomes[0]).toMatchObject({ ok: false })
+    // A 自己的「读不出」原因挂回 A 的失败 details（fail-closed 原文不丢，也不串台到 B）。
+    const unreadable: unknown = expect.stringMatching(/1 个被删会话日志读不出/)
+    expect(outcomes[0]).toMatchObject({
+      ok: false,
+      error: { details: { attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: unreadable } } },
+    })
     const second = outcomes[1]
     expect(second).toMatchObject({
       ok: true,

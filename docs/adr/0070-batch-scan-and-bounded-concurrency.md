@@ -26,7 +26,7 @@ Status: accepted
 - **预裁决放开「父+子同批」后，`count` 读数的批内相加会重复计子根**：批级一次 `subagentMembersOf` 里父的闭包含子根，批量已选清单那句「含 N 个子会话」逐条相加时子树被数两遍。这是显示级读数、不是信封——`count` 本就允许整条读不到时整句不说（`batch-bar` 的 `counted === null` 支）；界面选择只发可见根行，该组合在生产 UI 不可达，不为此加去重层。
 - **步骤 tick 的唯一映射不因波次改变**（计划函数进门 `measuring`、批尾进门 `attachments`）；每条（含失败条）完成 tick 一次，第二波补跑的条目也各一次。
 - 附件红线不翻（ADR-0020）：只随永久删除清 `.dsh` 内独占图片副本；剩余引用源读不出照旧 fail closed（ADR-0041）。
-- **批级 skipped 逐组归因、不串台**：候选日志读不出 / 附件对象读不出的 skip 原因按**组**记进计划（`unreadableCandidatesByGroup` / `unreadableObjectsByGroup`），只落自己组的成功回执；失败组没有回执可挂，那句随它的错误信封一起重试。全批共享的两段（剩余引用证明与执行期复核）走统一目标面。
+- **批级 skipped 与附件读数逐组归因、不串台**：候选日志读不出 / 附件对象读不出的 skip 原因按**组**记进计划（`unreadableCandidatesByGroup` / `unreadableObjectsByGroup`），随自己组的回执落账——组执行成功就挂成功回执的 `value.attachments`，组执行失败就挂失败信封的 `error.details.attachments`（两处同一格名、同一 schema，键名住 `src/shared/wire.ts` 的 `FAILURE_DETAILS_ATTACHMENTS_KEY`）。失败组没有成功回执，但读数与「这句为什么没敢清」正是 fail-closed 的用户可见落点，不许随条目失败丢掉。全批共享的两段（剩余引用证明与执行期复核）走统一目标面。
 
 ## 后果
 

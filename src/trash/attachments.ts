@@ -415,7 +415,8 @@ export interface BatchAttachmentGroup {
 export interface BatchAttachmentPlan {
   readonly plan: ImageRemovalPlan
   readonly byGroup: ReadonlyMap<string, ReadonlySet<string>>
-  /** 每组候选日志读不出的次数：skipped 按组归因——只落真正执行成功组的回执，不串台（ADR-0070 边界）。 */
+  /** 每组候选日志读不出的次数：skipped 按组归因——随自己组的回执落（成功回执的 `value.attachments` 或失败信封的
+   *  `error.details.attachments`），不串台（ADR-0070 边界）。 */
   readonly unreadableCandidatesByGroup: ReadonlyMap<string, number>
   /** 每组 stat 读不出的附件对象数（按 `owner` 的单归属记）：同样是逐组归因，不进 `sharedSkipped`。 */
   readonly unreadableObjectsByGroup: ReadonlyMap<string, number>

@@ -1,11 +1,13 @@
 import type { Translate } from './copy.js'
 import {
+  ATTACHMENT_CLEANUP_SCHEMA,
   PURGE_STATS_ATTACHMENTS_SCHEMA,
   TRASH_ENTRY_ARCHIVED_SCHEMA,
   TRASH_ENTRY_ID_SCHEMA,
   TRASH_ENTRY_SESSION_ID_SCHEMA,
 } from '../shared/apply-values.js'
 import {
+  FAILURE_DETAILS_ATTACHMENTS_KEY,
   SESSION_DELETE_CODES,
   type ApplyAction,
   type ApplyOutcome,
@@ -149,7 +151,7 @@ export interface ReceiptSummary {
   /** 带**已归档**标记的落地条目（entry 域）：撤销回「归档」而非会话列表，撤销文案据此改口（ADR-0060）。 */
   readonly landedArchivedIds: readonly string[]
   readonly anySuccess: boolean
-  /** purge / orphan-clean 的附件读数，按批相加；`skipped` 取第一条有的（不是可累加计数）。没有读数时缺席——不拿零冒充「清过」。 */
+  /** purge / orphan-clean 的附件读数，按批相加（成功回执 + 失败条 `details` 的同一格）；`skipped` 取第一条有的（不是可累加计数）。没有读数时缺席——不拿零冒充「清过」。 */
   readonly attachmentCleanup?: AttachmentCleanupWire
 }
 
@@ -178,6 +180,12 @@ function statsAttachments(value: unknown): AttachmentCleanupWire | undefined {
   return PURGE_STATS_ATTACHMENTS_SCHEMA.check(value) ? value.attachments : undefined
 }
 
+/** 失败条 `details` 里的那一格附件读数（键名两半共用 `wire.ts` 的常量）：与成功回执同 schema，畸形按没有读数。 */
+function failureAttachments(details: Record<string, unknown> | undefined): AttachmentCleanupWire | undefined {
+  const value = details?.[FAILURE_DETAILS_ATTACHMENTS_KEY]
+  return ATTACHMENT_CLEANUP_SCHEMA.check(value) ? value : undefined
+}
+
 function summarizeAttachmentCleanup<A extends ApplyAction>(
   receipt: Receipt<A>,
 ): AttachmentCleanupWire | undefined {
@@ -187,8 +195,13 @@ function summarizeAttachmentCleanup<A extends ApplyAction>(
   let skipped: string | undefined
   let seen = false
   for (const verdict of receipt.verdicts) {
-    if (verdict.kind !== 'ok') continue
-    const attachments = statsAttachments(verdict.value)
+    // 成功支读 value 的那一格；失败条读自己 `details` 的同一格（Node 半按组归属挂在那）——
+    // 「按批相加」的总量不因条目失败而缺角。
+    const attachments = verdict.kind === 'ok'
+      ? statsAttachments(verdict.value)
+      : verdict.kind === 'failed'
+        ? failureAttachments(verdict.error.details)
+        : undefined
     if (attachments === undefined) continue
     seen = true
     removed += attachments.removed

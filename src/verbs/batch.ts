@@ -10,7 +10,7 @@
  */
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../domain/closure.js'
-import { isApplyOutcomeOf, type ApplyAction, type ApplyOutcome, type ApplyValueByAction, type AttachmentCleanupWire } from '../shared/wire.js'
+import { FAILURE_DETAILS_ATTACHMENTS_KEY, isApplyOutcomeOf, type ApplyAction, type ApplyOutcome, type ApplyValueByAction, type AttachmentCleanupWire } from '../shared/wire.js'
 import type { CoreDeps, DeleteDeps, DeleteSessionDeps, RemovalDeps } from '../deps.js'
 import { parseEntryId, sessionDirForId, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import { groupOf, type GroupClaim } from '../trash/groups.js'
@@ -40,8 +40,21 @@ function assembleOutcome<A extends ApplyAction>(outcome: unknown, action: A, id:
   return outcome
 }
 
-function failure<A extends ApplyAction>(id: string, action: A, error: unknown): Extract<ApplyOutcome, { action: A }> {
-  return assembleOutcome({ id, action, ok: false, error: toRemoteFailure(error) }, action, id)
+function failure<A extends ApplyAction>(
+  id: string,
+  action: A,
+  error: unknown,
+  attachments?: AttachmentCleanupWire,
+): Extract<ApplyOutcome, { action: A }> {
+  const remote = toRemoteFailure(error)
+  return assembleOutcome({
+    id,
+    action,
+    ok: false,
+    // 失败条自己的附件读数挂 `details.attachments`（与成功回执同格、同 schema，键名住 wire 的常量）：
+    // 原有 details 键保留（孤儿清理的部分回执住那几格），只加不替。
+    error: attachments === undefined ? remote : { ...remote, details: { ...remote.details, [FAILURE_DETAILS_ATTACHMENTS_KEY]: attachments } },
+  }, action, id)
 }
 
 /** 按动作收窄的成功支（判别联合要的是**字面量**）。 */
@@ -338,65 +351,58 @@ type IdSlot =
   | { readonly kind: 'failed'; readonly error: unknown }
   | { readonly kind: 'done'; readonly stats: RemovalStats }
 
+/** 收口槽 → 合成层的裁决面；没落定按 failed 算（`receiptsOf` 的兜底同口径）。 */
+function verdictOf(slot: IdSlot | undefined): 'ok' | 'failed' | 'carried' {
+  if (slot === undefined) return 'failed'
+  if (slot.kind === 'done') return 'ok'
+  return slot.kind === 'carried' ? 'carried' : 'failed'
+}
+
 /**
- * per-id 附件读数合成（批级尾 → 逐条回执的 `attachments` 格）：`byGroup` 拆回 ok 支；无主（失败组来的）
- * 对象读数并入**批内最后一个 ok 支**；skipped 逐组归因——候选日志 / 对象 stat 的读不出只落**自己组**的成功
- * 回执（不串台），全批共享的两段（证明失败、执行期复核失败）落进过计划的组，没人进过计划时全挂
- * （skipped 原文是 fail-closed 的用户可见落点，丢了就是红线回归）；整批零 ok 支不产出附件读数
- * （与全失败批一致）；carried 幂等支不带 `attachments`（那一趟没有读数，缺席与 0 是两件事）。
- * 对象单归属（计划期先到先得）+ 无主归并 ⇒ 批内各 id 的读数相加 = 尾 `run` 的合计，客户端「按批相加」的归并不动。
+ * per-id 附件读数合成（批级尾 → 逐条信封的 `attachments` 格）：`byGroup` 按**组归属**（计划期先到先得）
+ * 拆回各条——ok 支挂进自己的成功回执，失败支挂进自己 `error.details` 的同一格。对象读数不冒领别的条的
+ * 回执；执行级「谁删了哪组目录」的第二本账本层不加，组归属就是这本账。carried 幂等支不带 `attachments`
+ * （那一趟没有读数，缺席与 0 是两件事）。skipped 逐组归因——候选日志 / 对象 stat 的读不出只落**自己组**
+ * 的载体（不串台），全批共享的两段（证明失败、执行期复核失败）落进过计划的组，没人进过计划时全挂
+ * （skipped 原文是 fail-closed 的用户可见落点，丢了就是红线回归）。
+ * ok 支没有读数也带零读数（与 carried 的缺席区分）；失败支没有信号不带（缺席与 0 是两件事）。
+ * 组归属不变 ⇒ 批内各 id 的读数（成功回执 + 失败 details）相加 = 尾 `run` 的合计，客户端「按批相加」的归并不动。
  */
 export function synthesizeAttachmentReadings(
   batch: BatchAttachmentPlan,
   tail: AttachmentTailResult,
-  runs: readonly { readonly id: string; readonly ok: boolean }[],
+  runs: readonly { readonly id: string; readonly verdict: 'ok' | 'failed' | 'carried' }[],
 ): Map<string, AttachmentCleanupWire> {
   type Slot = { removed: number; freedBytes: number; failed: number; skipped?: string }
   const out = new Map<string, Slot>()
-  const okIds: string[] = []
-  let lastOk: Slot | undefined
-  for (const run of runs) {
-    if (!run.ok) continue
-    okIds.push(run.id)
-    const own = tail.byGroupRun.get(run.id)
+  const slotOf = (id: string): Slot => {
+    const found = out.get(id)
+    if (found !== undefined) return found
+    const own = tail.byGroupRun.get(id)
     const slot: Slot = { removed: own?.removed ?? 0, freedBytes: own?.freedBytes ?? 0, failed: own?.failed ?? 0 }
-    out.set(run.id, slot)
-    lastOk = slot
+    out.set(id, slot)
+    return slot
   }
-  if (lastOk !== undefined) {
-    // 无主（失败组来的）对象读数并入批内最后一个 ok 支：这些对象随尾真删掉了（目录已删的失败组不再泄漏孤儿），
-    // 读数不能没人认——归并后批内相加照旧等于尾 run 的合计。归并落点是**位置**的（最后一个 ok）：混合批里
-    // 这一行的回执可能挂上别的行删掉的图，显示级取舍、总量恒等不破；按所有权归并要给执行面加「谁删了哪组
-    // 目录」的第二本账，现行取舍不加。
-    const failedGroups = new Set(runs.filter((run) => !run.ok).map((run) => run.id))
-    for (const [groupId, reading] of tail.byGroupRun) {
-      if (!failedGroups.has(groupId)) continue
-      lastOk.removed += reading.removed
-      lastOk.freedBytes += reading.freedBytes
-      lastOk.failed += reading.failed
-    }
+  // ok 支一律带读数（零读数也带，与 carried 的缺席区分）；失败支只有真有信号才落 details。
+  for (const run of runs) {
+    if (run.verdict === 'ok' || (run.verdict === 'failed' && tail.byGroupRun.has(run.id))) slotOf(run.id)
   }
-  const skipped = tail.run.skipped
-  if (skipped !== undefined) {
-    // 逐组归因（ADR-0070 边界）：候选日志 / 对象 stat 的读不出只落**自己组**的成功回执；全批共享的两段
-    // （剩余引用证明失败、执行期复核失败）落进过计划的组——没人进过计划（整批 fail closed）就全挂，
-    // skipped 原文是 fail-closed 的用户可见落点，丢了就是红线回归。
-    const withObjects = okIds.filter((id) => (batch.byGroup.get(id)?.size ?? 0) > 0)
-    const sharedTarget = new Set(withObjects.length > 0 ? withObjects : okIds)
-    for (const id of okIds) {
-      const slot = out.get(id)
-      if (slot === undefined) continue
-      const parts: string[] = []
-      const ownCandidates = batch.unreadableCandidatesByGroup.get(id) ?? 0
-      if (ownCandidates > 0) parts.push(unreadableCandidatesReason(ownCandidates))
-      const ownObjects = batch.unreadableObjectsByGroup.get(id) ?? 0
-      if (ownObjects > 0) parts.push(unreadableObjectsReason(ownObjects))
-      if (sharedTarget.has(id)) {
-        if (batch.sharedSkipped !== undefined) parts.push(batch.sharedSkipped)
-        if (tail.recheckSkipped !== undefined) parts.push(tail.recheckSkipped)
-      }
-      if (parts.length > 0) slot.skipped = parts.join('；')
+  const withObjects = runs.filter((run) => run.verdict !== 'carried' && (batch.byGroup.get(run.id)?.size ?? 0) > 0)
+  const sharedTarget = new Set((withObjects.length > 0
+    ? withObjects
+    : runs.filter((run) => run.verdict !== 'carried')).map((run) => run.id))
+  for (const run of runs) {
+    if (run.verdict === 'carried') continue
+    const parts: string[] = []
+    const ownCandidates = batch.unreadableCandidatesByGroup.get(run.id) ?? 0
+    if (ownCandidates > 0) parts.push(unreadableCandidatesReason(ownCandidates))
+    const ownObjects = batch.unreadableObjectsByGroup.get(run.id) ?? 0
+    if (ownObjects > 0) parts.push(unreadableObjectsReason(ownObjects))
+    if (sharedTarget.has(run.id)) {
+      if (batch.sharedSkipped !== undefined) parts.push(batch.sharedSkipped)
+      if (tail.recheckSkipped !== undefined) parts.push(tail.recheckSkipped)
     }
+    if (parts.length > 0) slotOf(run.id).skipped = parts.join('；')
   }
   return out
 }
@@ -404,7 +410,7 @@ export function synthesizeAttachmentReadings(
 /** purge / orphan-clean 的逐条信封：成功支的值都是聚合回执（`PurgeStatsWire`），失败支带线上失败。 */
 export type StatsOutcome = Extract<ApplyOutcome, { action: 'purge' | 'orphan-clean' }>
 
-/** 逐条收口 → 信封（输入序）：失败折错误对象、carried 回幂等零、成功支挂合成出来的附件读数。 */
+/** 逐条收口 → 信封（输入序）：失败折错误对象并挂自己那组的附件读数，carried 回幂等零，成功支挂合成读数。 */
 function receiptsOf(
   action: 'purge' | 'orphan-clean',
   ids: readonly string[],
@@ -413,10 +419,10 @@ function receiptsOf(
 ): StatsOutcome[] {
   return ids.map((id, index): StatsOutcome => {
     const slot = slots.get(index)
-    if (slot === undefined) return failure(id, action, verbError('io', `批执行没有落定：${id}`))
-    if (slot.kind === 'failed') return failure(id, action, slot.error)
-    if (slot.kind === 'carried') return success(id, action, { removed: 0, freedBytes: 0 })
     const attachments = readings.get(id)
+    if (slot === undefined) return failure(id, action, verbError('io', `批执行没有落定：${id}`), attachments)
+    if (slot.kind === 'failed') return failure(id, action, slot.error, attachments)
+    if (slot.kind === 'carried') return success(id, action, { removed: 0, freedBytes: 0 })
     return success(id, action, {
       removed: slot.stats.removed,
       freedBytes: slot.stats.freedBytes,
@@ -553,7 +559,7 @@ export async function runPurgeBatch(
   const readings = synthesizeAttachmentReadings(
     batch,
     tail,
-    wanted.map((id, index) => ({ id, ok: slots.get(index)?.kind === 'done' })),
+    wanted.map((id, index) => ({ id, verdict: verdictOf(slots.get(index)) })),
   )
   return receiptsOf('purge', wanted, slots, readings)
 }
@@ -686,7 +692,7 @@ export async function runOrphanBatch(
   const readings = synthesizeAttachmentReadings(
     batch,
     tail,
-    wanted.map((id, index) => ({ id, ok: slots.get(index)?.kind === 'done' })),
+    wanted.map((id, index) => ({ id, verdict: verdictOf(slots.get(index)) })),
   )
   return receiptsOf('orphan-clean', wanted, slots, readings)
 }

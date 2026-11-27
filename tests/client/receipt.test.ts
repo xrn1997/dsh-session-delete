@@ -212,9 +212,10 @@ describe('summarizeReceipt', () => {
     expect(summarizeReceipt(nulled).summary.attachmentCleanup).toBeUndefined()
   })
 
-  // 一段 `/apply` 可能带多条 ok 回执（批量彻底删除），附件读数要相加；失败条不参与，
-  // `skipped` 取**第一条有的**——跳过说的是"这一轮为什么没敢清"，多组各有一句时不叠加。
-  it('附件读数跨多条 ok 回执相加；skipped 留第一条；失败条不参与', () => {
+  // 一段 `/apply` 可能带多条回执（批量彻底删除），附件读数要相加——失败条的读数住自己 `details` 的
+  // 同一格，按批相加的总量照样收（不然总量缺角、与尾 run 的合计对不上）；`skipped` 取**第一条有的**
+  // ——跳过说的是"这一轮为什么没敢清"，多组各有一句时不叠加。
+  it('附件读数跨多条回执相加（含失败条的 details）；skipped 留第一条', () => {
     const receipt = readReceipt('orphan-clean', ['a', 'b', 'c'], [
       { id: 'a', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1 } },
       { id: 'b', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1, attachments: { removed: 2, freedBytes: 20, failed: 0, skipped: '第一条的原因' } } },
@@ -230,7 +231,9 @@ describe('summarizeReceipt', () => {
         error: { code: SESSION_DELETE_CODES.io, message: 'boom', details: { attachments: { removed: 9, freedBytes: 90, failed: 9 } } },
       },
     ])
-    expect(summarizeReceipt(failedOnly).summary.attachmentCleanup).toBeUndefined()
+    expect(summarizeReceipt(failedOnly).summary.attachmentCleanup).toEqual({
+      removed: 9, freedBytes: 90, failed: 9,
+    })
   })
 
   it('别的动作不产生附件摘要：delete / restore 的回执里没有那个读数', () => {
@@ -292,5 +295,25 @@ describe('landedArchivedIds', () => {
     ]))
     expect(summary.landedArchivedIds).toEqual(['a'])
     expect(summary.landedIds).toEqual(['a', 'b'])
+  })
+})
+
+describe('attachmentCleanup 按批相加', () => {
+  it('失败条 details 里的附件读数也进总量（读数不因条目失败而丢）', () => {
+    const { summary } = summarizeReceipt(readReceipt('purge', ['a', 'b'], [
+      {
+        id: 'a', action: 'purge', ok: true,
+        value: { removed: 1, freedBytes: 1, attachments: { removed: 1, freedBytes: 7, failed: 0 } },
+      },
+      {
+        id: 'b', action: 'purge', ok: false,
+        error: {
+          code: SESSION_DELETE_CODES.io,
+          message: 'boom',
+          details: { attachments: { removed: 1, freedBytes: 8, failed: 1 } },
+        },
+      },
+    ]))
+    expect(summary.attachmentCleanup).toEqual({ removed: 2, freedBytes: 15, failed: 1 })
   })
 })

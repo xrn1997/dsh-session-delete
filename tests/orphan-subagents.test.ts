@@ -65,7 +65,7 @@ async function cleanGroup(d: DeleteDeps, group: OrphanGroup) {
   const batch = await planBatchImageAttachmentRemoval(d, [{ id: group.root.sessionId, dirs: plan.attachmentDirs }])
   const stats = await runOrphanGroup(d, plan)
   const tail = await executeAttachmentTail(d, batch)
-  const readings = synthesizeAttachmentReadings(batch, tail, [{ id: group.root.sessionId, ok: true }])
+  const readings = synthesizeAttachmentReadings(batch, tail, [{ id: group.root.sessionId, verdict: 'ok' }])
   return {
     removed: stats.removed,
     freedBytes: stats.freedBytes,

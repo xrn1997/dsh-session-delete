@@ -412,6 +412,11 @@ export interface RemoteFailure {
   details?: Record<string, unknown>
 }
 
+/** 失败信封 `details` 里的附件读数格：批内失败条目也带走自己组的读数（ADR-0070 边界），键名与成功回执的
+ *  `value.attachments` 同字、同 schema（字段清单住 `ATTACHMENT_CLEANUP_SCHEMA`）。两半只投影这一枚常量，
+ *  写侧装配与读侧取数都不各写一份字面量。 */
+export const FAILURE_DETAILS_ATTACHMENTS_KEY = 'attachments'
+
 /** 两半之间的一次落地（**信封**）：要么值，要么失败。 */
 export type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: RemoteFailure }
 
