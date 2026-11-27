@@ -5,10 +5,11 @@
  * 失效链：三来源只戳修订台（旁路观察与自救戳 `archive-store`，回收站动作戳 `trash-store`），查询订阅
  * 两台；**active 门**不活动只置脏不读；同拍多次失效合并成一次读；latest-wins 旧响应不许盖新态。
  */
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import type { ArchiveRowWire } from '../shared/wire.js'
 import type { SessionDeleteRemote } from './remote.js'
 import { useArchiveRevision } from './archive-store.js'
+import { useClientScene } from './scene.js'
 import { useTrashRevision } from './trash-store.js'
 import { useGatedRefresh } from './use-gated-refresh.js'
 import { usePanelListRead, type PanelReadOutcome } from './use-panel-list-read.js'
@@ -87,17 +88,26 @@ export function useArchiveQuery({
         ? { status: 'corpus-missing' }
         : { status: 'failure', message: read.state.message }
 
+  const scene = useClientScene()
   const trashRevision = useTrashRevision()
   const archiveRevision = useArchiveRevision()
 
   // 失效链的唯一落点：生命周期判 active/修订与合并节奏（本档每次激活都重读），这里只交 reload。
-  useGatedRefresh({
+  const { markConsumed } = useGatedRefresh({
     active,
     revisions: [trashRevision, archiveRevision],
     refresh: read.reload,
     policy: { initialDirty: true, refreshOnActivate: true },
   })
 
-  // `read.reload` 的身份由 `usePanelListRead` 的 `useCallback` 保证恒稳；不要再包一层（`read` 每渲染换新）。
-  return { list, refreshing: read.refreshing, count, reload: read.reload }
+  const { reload: readReload } = read
+  const reload = useCallback((): Promise<void> => {
+    // 显式重读（如归档档移入回收站后包进写闸的 reload）把此刻两台修订一并消费（顺序与上面的
+    // `revisions` 入参一致），避免同拍 `invalidateTrash()` 随后触发 React 提交时经 `useGatedRefresh`
+    // 再补一趟 `/archive-list`。
+    markConsumed([scene.trashRevisions.read(), scene.archiveRevisions.read()])
+    return readReload()
+  }, [markConsumed, readReload, scene])
+
+  return { list, refreshing: read.refreshing, count, reload }
 }

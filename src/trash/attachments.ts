@@ -13,7 +13,7 @@ import path from 'node:path'
 import { isAbsentPath } from '../ports/fs-port.js'
 import type { FsReferenceScanPort, FsReferenceScanRemovalPort } from '../ports/fs-port.js'
 import type { SessionDeleteConfig } from '../config.js'
-import { TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
+import { ATTACHMENT_SKIPPED_SEPARATOR, TRASH_DIR_NAME, type AttachmentCleanupWire } from '../shared/wire.js'
 import { isCanonicalSessionLogName, MAX_SESSION_LOG_BYTES, pickSessionLog, readWholeSessionLog, walkSessionLog, type SessionRecord } from '../log/session-log.js'
 
 export interface ImageRef {
@@ -422,6 +422,9 @@ export interface BatchAttachmentPlan {
   readonly unreadableObjectsByGroup: ReadonlyMap<string, number>
   /** 全批共享的 skip 原因：只有「剩余引用证明失败」这一种——候选与对象的读不出都逐组记。 */
   readonly sharedSkipped?: string
+  /** 计划期确实发现过候选图片 id 的组（按 `group.id`；空集 = 没有任何组有候选）：`sharedSkipped` 提前
+   *  返回时 `byGroup` 为空，合成层用这格把全批证明失败只落到真正有候选图的组，不误挂 `absent` 或无图组。 */
+  readonly candidateGroupIds: ReadonlySet<string>
   /** 扫描时确认在场的目录；第二波只按路径 membership 放行不够，缺席时读成空集不算扫过。 */
   readonly presentDirs: ReadonlySet<string>
 }
@@ -472,14 +475,19 @@ export async function planBatchImageAttachmentRemoval(
   if (unreadableCandidates > 0) skipReasons.push(unreadableCandidatesReason(unreadableCandidates))
 
   const unreadableObjectsByGroup = new Map<string, number>()
+  const candidateGroupIds = new Set<string>()
   const candidates = new Set<string>()
-  for (const ids of candidatesByGroup.values()) for (const id of ids) candidates.add(id)
+  for (const [groupId, ids] of candidatesByGroup) {
+    if (ids.size > 0) candidateGroupIds.add(groupId)
+    for (const id of ids) candidates.add(id)
+  }
   if (candidates.size === 0) {
     return {
-      plan: { entries: [], bytes: 0, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) },
+      plan: { entries: [], bytes: 0, ...(skipReasons.length > 0 ? { skipped: skipReasons.join(ATTACHMENT_SKIPPED_SEPARATOR) } : {}) },
       byGroup: new Map(),
       unreadableCandidatesByGroup,
       unreadableObjectsByGroup,
+      candidateGroupIds,
       presentDirs,
     }
   }
@@ -488,12 +496,13 @@ export async function planBatchImageAttachmentRemoval(
   const scanned = await remainingRefsFailClosed(deps, excludeDirs, '读不到剩余引用源，无法证明独占')
   if (!scanned.ok) {
     // 计划期候选读不出与证明失败说的不是同一件事，合计句都保留（ADR-0041 决定 4）。
-    const skipped = [...skipReasons, scanned.reason].join('；')
+    const skipped = [...skipReasons, scanned.reason].join(ATTACHMENT_SKIPPED_SEPARATOR)
     return {
       plan: { entries: [], bytes: 0, skipped },
       byGroup: new Map(),
       unreadableCandidatesByGroup,
       unreadableObjectsByGroup,
+      candidateGroupIds,
       presentDirs,
       sharedSkipped: scanned.reason,
     }
@@ -539,10 +548,11 @@ export async function planBatchImageAttachmentRemoval(
   }
   if (unreadableObjects > 0) skipReasons.push(unreadableObjectsReason(unreadableObjects))
   return {
-    plan: { entries, bytes, ...(skipReasons.length > 0 ? { skipped: skipReasons.join('；') } : {}) },
+    plan: { entries, bytes, ...(skipReasons.length > 0 ? { skipped: skipReasons.join(ATTACHMENT_SKIPPED_SEPARATOR) } : {}) },
     byGroup,
     unreadableCandidatesByGroup,
     unreadableObjectsByGroup,
+    candidateGroupIds,
     presentDirs,
   }
 }
@@ -569,7 +579,7 @@ export async function recheckImageRemovalExclusivity(
   const scanned = await remainingRefsFailClosed(deps, [], RECHECK_SKIP_REASON)
   if (!scanned.ok) {
     // 计划期的 `skipped` 不丢：两条原因说的不是同一件事（候选日志读不出 / 复核读不出），上屏时二选一等于替用户藏掉一条（ADR-0041 决定 4）。
-    const skipped = plan.skipped === undefined ? scanned.reason : `${plan.skipped}；${scanned.reason}`
+    const skipped = plan.skipped === undefined ? scanned.reason : `${plan.skipped}${ATTACHMENT_SKIPPED_SEPARATOR}${scanned.reason}`
     return { plan: { entries: [], bytes: 0, skipped }, recheckSkipped: scanned.reason }
   }
   const remaining = scanned.refs

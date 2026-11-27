@@ -38,6 +38,12 @@ export const ARCHIVE_LIST_DOM: ListDom = { kind: 'archive', idAttr: 'data-sessio
 /** 行身份：模块级稳定引用（面板把导航接在这里）。 */
 export const archiveRowIdOf = (row: ArchiveRowWire): string => row.sessionId
 
+/** 收尾异常只记录不上屏：写入成败已由座位按行 / 横幅落过；此处抛错多发生在 refresh 段，
+ *  再发一条失败提示会把「已成功、只是重读失败」反报成失败。 */
+function logSettledWriteError(error: unknown): void {
+  console.warn('[dsh-session-delete] 归档写收尾异常：', error)
+}
+
 export interface ArchiveListProps {
   query: ArchiveQuery
   selection: ListSelection<ArchiveRowWire>
@@ -110,7 +116,7 @@ export function ArchiveList({ query, selection, groups, controller, prefetch, li
             disabled={controller.busy}
             onClick={(event) => {
               event.stopPropagation()
-              void controller.unarchive([row.sessionId])
+              void controller.unarchive([row.sessionId]).catch(logSettledWriteError)
             }}
           >
             <IconUnarchiveOutlineRegular size={14} />
@@ -123,7 +129,7 @@ export function ArchiveList({ query, selection, groups, controller, prefetch, li
             disabled={controller.busy}
             onClick={(event) => {
               event.stopPropagation()
-              void controller.deleteOne(row)
+              void controller.deleteOne(row).catch(logSettledWriteError)
             }}
           >
             <IconTrashOutlineRegular size={14} />
@@ -216,7 +222,9 @@ export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) 
               variant="outline"
               size="sm"
               disabled={checkedRows.length === 0 || controller.busy}
-              onClick={() => { void controller.unarchive(checkedRows.map((row) => row.sessionId)) }}
+              onClick={() => {
+                void controller.unarchive(checkedRows.map((row) => row.sessionId)).catch(logSettledWriteError)
+              }}
             >
               {t('archive.select.unarchive', { count: checkedRows.length })}
             </Button>
@@ -230,7 +238,7 @@ export function ArchiveFooter({ selection, controller, t }: ArchiveFooterProps) 
               icon={moving ? undefined : <IconTrashOutlineRegular size={13} />}
               disabled={checkedRows.length === 0 || controller.busy}
               onClick={() => {
-                void runDelete()
+                void runDelete().catch(logSettledWriteError)
               }}
             >
               {moving ? (

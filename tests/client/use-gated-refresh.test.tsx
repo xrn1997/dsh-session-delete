@@ -623,4 +623,26 @@ describe('useGatedRefresh · 门与单飞的边界（review C1/I1/I2 回归）',
     expect(calls.length).toBe(2)
     m.unmount()
   })
+
+  it('markConsumed 消费当拍已覆盖的修订号，不补发第二趟读；更晚的新修订仍正常触发', async () => {
+    const { refresh, calls } = controllableRefresh()
+    const m = mountGated(refresh, {
+      active: true,
+      revisions: [0, 0],
+    })
+    await flush(calls)
+    expect(calls.length).toBe(0)
+
+    act(() => { m.result.current.markConsumed([1, 0]) })
+    m.set({ revisions: [1, 0] })
+    await flush(calls)
+    expect(calls.length).toBe(0)
+
+    m.set({ revisions: [2, 0] })
+    await flush(calls)
+    expect(calls.length).toBe(1)
+    calls[0]?.resolve()
+    await flush(calls)
+    m.unmount()
+  })
 })

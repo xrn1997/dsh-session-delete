@@ -7,6 +7,8 @@ import { createStore } from './store.js'
 
 export interface ArchiveRevisionScene {
   invalidate(): void
+  /** 当前修订号（当场读；显式 reload 用来同步消费当拍已达修订）。 */
+  read(): number
   use(): number
   reset(): void
 }
@@ -16,6 +18,9 @@ export function createArchiveRevisionScene(): ArchiveRevisionScene {
   return {
     invalidate(): void {
       revisionStore.update((revision) => revision + 1)
+    },
+    read(): number {
+      return revisionStore.get()
     },
     use(): number {
       return revisionStore.use()

@@ -2,11 +2,12 @@
  * 「失效 → 重读」生命周期的唯一实现：三个读路径消费者共用这一条节奏。**失效是事实，读是动作**：
  * 修订到达时同步作废（必达、便宜）；读只在 `active` 与 `demand` 两道门都开时排，落地那一刻再验一次
  * 门。合并窗把风暴收敛成一次读；单飞保证至多一个 refresh 在飞，期间修订只置脏、结算后补一轮。
- * latest-wins / 失败上屏由调用方的 `refresh` 自持——本 hook 只管节奏。挂载不算修订：清单类靠
+ * latest-wins / 失败上屏由调用方的 `refresh` 自持——本 hook 只管节奏。显式重读可用 `markConsumed`
+ * 消费当拍修订（顺序与 `revisions` 入参一致），免补发第二趟。挂载不算修订：清单类靠
  * `initialDirty` 读第一趟。纪律：hook 内不 setState（现场全住 ref）；输入逐渲染换新对象由 `useLatest`
  * 归一、修订拼签名进依赖；effect 不闭包捕获当拍门值，门一律在动作点现读。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createLatestWins, useLatest } from './store.js'
 
 /** 详情类消费者的合并窗默认值：够把一批写后通告收成一趟读，又短到用户察觉不到。 */
@@ -19,6 +20,13 @@ export interface GatedRefreshPolicy {
   readonly refreshOnActivate?: boolean
   /** 合并窗（毫秒）：同一窗口内多次失效合并为一次读；0 = 仅微任务合并。默认 0。 */
   readonly coalesceMs?: number
+}
+
+export interface GatedRefreshHandle {
+  /** 告知生命周期：调用方已直接发起覆盖这组修订号的重读，避免同拍修订到达 React 后补发第二趟。
+   *  `revisions` 必须与 `revisions` 入参**同序同义**（调用方在发起重读那一刻现读，不用渲染拍的值）；
+   *  被消费的这一跳不再触发 `onInvalidate`——调用方要保证显式读覆盖了它的职责。 */
+  readonly markConsumed: (revisions: readonly number[]) => void
 }
 
 export function useGatedRefresh(input: {
@@ -37,7 +45,7 @@ export function useGatedRefresh(input: {
   /** 实际的读；latest-wins 与失败面由它自持。 */
   readonly refresh: () => Promise<void>
   readonly policy?: GatedRefreshPolicy
-}): void {
+}): GatedRefreshHandle {
   // 修订序列的稳定签名：数组逐渲染新身份不误触发，内容变了才算一次修订。
   const signature = input.revisions.join('|')
 
@@ -175,4 +183,12 @@ export function useGatedRefresh(input: {
     maybeSchedule()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 判据只有 demand 的翻转；其余经 ref 现读。
   }, [input.demand])
+
+  const markConsumed = useCallback((revisions: readonly number[]): void => {
+    seenSignature.current = revisions.join('|')
+    dirty.current = false
+    cancelPending()
+  }, [cancelPending])
+
+  return useMemo(() => ({ markConsumed }), [markConsumed])
 }

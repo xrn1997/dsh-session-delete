@@ -848,6 +848,30 @@ describe('批量层 · per-id 附件读数合成（批级尾拆回）', () => {
     if (second?.ok !== true || second.action !== 'purge') throw new Error('第二条应当成功')
     expect(second.value.attachments).not.toHaveProperty('skipped')
   })
+
+  it('全批证明失败（sharedSkipped）：只落到有候选图的组，不误挂 absent 失败条', async () => {
+    const rowB = rowOf('b')
+    const dirB = trashDirOf(rowB.id, HOME)
+    const made = imageWorld([rowB], { [dirB]: IMAGE_B }, { [imagePath(IMAGE_B)]: 8 })
+    made.fs.listDirs.mockImplementation(async (p: string) =>
+      p === `${HOME}/session-trash` ? [rowB.id]
+        : p === `${HOME}/sessions` ? ['--p--']
+          : p === `${HOME}/sessions/--p--` ? ['session-c'] : [])
+    made.fs.listFiles.mockImplementation(async (p: string) =>
+      p === dirB || p === `${HOME}/sessions/--p--/session-c` ? [LOG] : [])
+    made.fs.readFile.mockImplementation(async (p: string) => {
+      if (p === `${dirB}/${LOG}`) return logWith(IMAGE_B)
+      throw new Error('EACCES: permission denied')
+    })
+    const outcomes = await applyActions(made.deps, 'purge', ['ghost-absent', rowB.id])
+    expect(outcomes[0]).toMatchObject({ ok: false, error: { code: 'sessiondelete/trash-empty' } })
+    expect(outcomes[0]?.ok === false ? outcomes[0].error.details?.[FAILURE_DETAILS_ATTACHMENTS_KEY] : undefined).toBeUndefined()
+    const reason: unknown = expect.stringMatching(/无法证明独占/)
+    expect(outcomes[1]).toMatchObject({
+      ok: true,
+      value: { attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: reason } },
+    })
+  })
 })
 
 describe('回归 · 同批异形同根与先子后父不误抹未删子', () => {

@@ -55,7 +55,7 @@ index.ts  组合根：装配 + exact Fetch 注册
 - **注册处只有一处**：`src/client/index.tsx` 的贡献表 + 一个注册循环；会话菜单两行与两个 icon key 是唯一例外（`src/client/context-menu-actions.tsx`，ADR-0059）。槽位只挂官方已声明的；每条贡献各自包 `src/client/ui/ErrorBoundary.tsx`。
 - **通道探测决定入口**：注册前先探 `/ping`，打不通就一个入口都不注册（ADR-0033）；失败原因留 console。
 - **场景 seam**：`src/client/scene.ts` 的 `ClientScene` 聚合八份跨槽位现场。注册面在激活期安装一份；各贡献经 `ClientSceneProvider` 读同一实例；未安装即抛错（ADR-0067）。八个现场模块仍导出自由函数，委托进程场景的实例。
-- **失效 → 重读一条实现**：`src/client/use-gated-refresh.ts` 的 `useGatedRefresh` 管修订到达、active / demand 两道门、合并窗与单飞。**一次清单读的落地**也一条：`src/client/use-panel-list-read.ts` 的 `usePanelListRead`（latest-wins、挂载归属、三态 + 缺席、首帧初值）。
+- **失效 → 重读一条实现**：`src/client/use-gated-refresh.ts` 的 `useGatedRefresh` 管修订到达、active / demand 两道门、合并窗与单飞；显式重读可经 `markConsumed` 消费当拍修订，免补发第二趟。**一次清单读的落地**也一条：`src/client/use-panel-list-read.ts` 的 `usePanelListRead`（latest-wins、挂载归属、三态 + 缺席、首帧初值）。
 - **档的装配线一条**：`src/client/use-panel-tab.ts` 的 `usePanelTab` 把清单读数 → 分组 → 选择面 → 控制器 → 键盘 → 预取 → 详情帧接成一份，两档差异全交 `PanelTabAdapter`；四格版面住 `src/client/panel-tab.tsx`；两档状态仍各一份（ADR-0060 第 4 条、ADR-0065）。
 - **孩子视图的收口一条**：`src/client/use-panel-child-view.ts` 的 `usePanelChildView` 管收尾顺序、返回两程与 `DetailNav` 装配；孩子怎么找、主体怎么投影归各档（ADR-0055 单级）。
 - **详情读路一条**：`src/client/use-detail-reader.ts` 的 `useDetailReader` 管账本、在飞、失败、保持与分页；右缘提问轨住 `src/client/prompt-rail.tsx` 与 `src/client/use-prompt-rail.ts`。

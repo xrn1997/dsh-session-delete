@@ -417,6 +417,10 @@ export interface RemoteFailure {
  *  写侧装配与读侧取数都不各写一份字面量。 */
 export const FAILURE_DETAILS_ATTACHMENTS_KEY = 'attachments'
 
+/** `AttachmentCleanupWire.skipped` 的分段分隔符：Node 半按它把逐段原因拼成一句，浏览器半按它拆段、
+ *  跨回执去重后再拼回（两半只投影这一枚，不各写一份字面量）。 */
+export const ATTACHMENT_SKIPPED_SEPARATOR = '；'
+
 /** 两半之间的一次落地（**信封**）：要么值，要么失败。 */
 export type RemoteResult<T> = { ok: true; value: T } | { ok: false; error: RemoteFailure }
 

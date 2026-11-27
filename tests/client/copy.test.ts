@@ -167,6 +167,82 @@ describe('文案接线', () => {
       warn.mockRestore()
     }
   })
+
+  it('effect 在执行回调前抛错：不调用 register 并退回内置中文', () => {
+    const service = fakeLocale()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const ctx: ClientContextLike = {
+        slots: { inject: vi.fn(), register: vi.fn() },
+        get: () => service,
+        effect: () => { throw new Error('scope disposed') },
+      }
+      expect(createTranslate(ctx)).toBe(zhTranslate)
+      expect(service.register).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('effect 执行回调后抛错：立刻调用 unregister 清理字典，不残留撞名', () => {
+    const service = fakeLocale()
+    const dispose = vi.fn()
+    service.register.mockReturnValue(dispose)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const ctx: ClientContextLike = {
+        slots: { inject: vi.fn(), register: vi.fn() },
+        get: () => service,
+        effect: (execute: () => unknown) => {
+          execute()
+          throw new Error('effect rejected')
+        },
+      }
+      expect(createTranslate(ctx)).toBe(zhTranslate)
+      expect(service.register).toHaveBeenCalledTimes(1)
+      expect(dispose).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('缺 effect 且 bind 抛错：立刻调用 unregister 清理字典', () => {
+    const service = fakeLocale()
+    const dispose = vi.fn()
+    service.register.mockReturnValue(dispose)
+    service.bind.mockImplementation(() => { throw new Error('bind failed') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const ctx = {
+        slots: { inject: vi.fn(), register: vi.fn() },
+        get: () => service,
+      } as unknown as ClientContextLike
+      expect(createTranslate(ctx)).toBe(zhTranslate)
+      expect(dispose).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('effect 成功接管后 bind 抛错：退回内置中文且不额外调 dispose（避免卸载时重复清理）', () => {
+    const service = fakeLocale()
+    const dispose = vi.fn()
+    service.register.mockReturnValue(dispose)
+    service.bind.mockImplementation(() => { throw new Error('bind failed') })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const ctx: ClientContextLike = {
+        slots: { inject: vi.fn(), register: vi.fn() },
+        get: () => service,
+        effect: (execute: () => unknown) => execute(),
+      }
+      expect(createTranslate(ctx)).toBe(zhTranslate)
+      expect(service.register).toHaveBeenCalledTimes(1)
+      expect(dispose).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 // 附件视图与“只清 .dsh 副本”那两句：zh 是真源，en 必须逐键镜像（键集合由类型盯住，

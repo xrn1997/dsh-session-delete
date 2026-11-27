@@ -5,6 +5,12 @@
 import { getDefaultClientScene, useClientScene } from './scene.js'
 import { createStore } from './store.js'
 
+/** 批量移入回收站部分失败时的摘要：随撤销横幅同屏展示。 */
+export interface UndoPartialFailure {
+  readonly count: number
+  readonly reasons: string
+}
+
 /** 一次待撤销的事：单条移入回收站（主语是会话名）或批量移入回收站（主语是条数）；撤销动作按形分派，
  *  两条都走同一个外部恢复座位（`write-seats.ts` 的 `restoreFromUndo`）。 */
 export type UndoNotice = {
@@ -29,7 +35,7 @@ export type UndoNotice = {
       /** 横幅那句的条数 = 那一次成功支的条数（含幂等带走的）——与撤销名单是两个数，各说各的。 */
       n: number
       /** 同一批移入回收站部分失败时的摘要：随撤销横幅同屏展示，不等横幅 6 秒过期后再顶上。 */
-      partialFailure?: { readonly count: number; readonly reasons: string }
+      partialFailure?: UndoPartialFailure
     }
 )
 
@@ -45,8 +51,13 @@ export interface UndoFailureNotice {
 export interface UndoNoticeScene {
   /** 移入回收站成功后发布一条撤销提示（单条）。 */
   publishOne(input: { entryId: string; title: string; archived?: boolean }): void
-  /** 批量移入回收站成功后发布一条撤销提示：覆盖上一条，只报这一次移走的条数。 */
-  publishBatch(input: { entryIds: readonly string[]; n: number; archived?: boolean }): void
+  /** 批量移入回收站成功后发布一条撤销提示：覆盖上一条，只报这一次移走的条数（部分失败同屏随行）。 */
+  publishBatch(input: {
+    entryIds: readonly string[]
+    n: number
+    archived?: boolean
+    partialFailure?: UndoPartialFailure
+  }): void
   /** 整条横幅不再留。 */
   clear(): void
   /** 指向这些条目的横幅熄掉（任一命中就清整条；清空回收站按发起时名单调它）。 */
@@ -64,8 +75,6 @@ export interface UndoNoticeScene {
   fail(current: UndoNotice, message: string): void
   /** 裸失败：没有落点横幅的失败（拖放被拒、单条移入失败、批量全失败）直接上屏，清掉旧成功横幅。 */
   publishFailure(message: string): void
-  /** 将同批移入回收站的部分失败摘要附到当前批量撤销横幅上；没有可附横幅时退回裸失败提示。 */
-  attachPartialFailure(input: { count: number; reasons: string }): void
   /** 场景收场：两份现场与 seq 归零。 */
   reset(): void
 }
@@ -98,6 +107,7 @@ export function createUndoNoticeScene(): UndoNoticeScene {
         entryIds: input.entryIds,
         n: input.n,
         ...(input.archived === undefined ? {} : { archived: input.archived }),
+        ...(input.partialFailure === undefined ? {} : { partialFailure: input.partialFailure }),
       }))
     },
     clear(): void {
@@ -134,17 +144,6 @@ export function createUndoNoticeScene(): UndoNoticeScene {
       noticeStore.set(null)
       failureStore.publish((seq) => ({ seq, failure: message }))
     },
-    attachPartialFailure(input): void {
-      const updated = noticeStore.update((current) =>
-        current !== null && current.kind === 'batch' && current.failure === undefined
-          ? { ...current, partialFailure: { count: input.count, reasons: input.reasons } }
-          : current,
-      )
-      if (!updated) {
-        noticeStore.set(null)
-        failureStore.publish((seq) => ({ seq, failure: input.reasons }))
-      }
-    },
     reset(): void {
       noticeStore.reset()
       failureStore.reset()
@@ -162,6 +161,7 @@ export function publishUndoBatchNotice(input: {
   entryIds: readonly string[]
   n: number
   archived?: boolean
+  partialFailure?: UndoPartialFailure
 }): void {
   getDefaultClientScene().undo.publishBatch(input)
 }
@@ -204,24 +204,8 @@ export function publishFailureNotice(message: string): void {
   getDefaultClientScene().undo.publishFailure(message)
 }
 
-/** 将同批移入回收站的部分失败摘要附到当前批量撤销横幅上。 */
-export function attachUndoPartialFailure(input: { count: number; reasons: string }): void {
-  getDefaultClientScene().undo.attachPartialFailure(input)
-}
-
-/** 批量写逐条失败的**唯一落点判据**：部分失败把摘要附在本批撤销横幅上，全失败走裸失败提示（先撤上一条
- *  成功横幅，不被挡住）；没有失败什么都不发。三个移入回收站批量入口（批量浮条 / 拖放 / 归档档）共用这一条。
- *  交回这一趟的失败摘要原文（无失败是 `undefined`）——拖放的结算态还要拿它落账，不再拼第二遍。 */
-export function publishBatchFailures(
-  submitted: number,
-  failures: ReadonlyMap<string, string>,
-): string | undefined {
+/** 批量失败原文的唯一拼法（按出现序去重，用 ` · ` 拼接；无失败回 `undefined`）。 */
+export function formatBatchFailureReasons(failures: ReadonlyMap<string, string>): string | undefined {
   if (failures.size === 0) return undefined
-  const reasons = [...new Set(failures.values())].join(' · ')
-  if (failures.size < submitted) {
-    attachUndoPartialFailure({ count: failures.size, reasons })
-  } else {
-    publishFailureNotice(reasons)
-  }
-  return reasons
+  return [...new Set(failures.values())].join(' · ')
 }

@@ -15,21 +15,22 @@ import {
   clearUndoNotice,
   dismissUndoNotice,
   failNotice,
+  formatBatchFailureReasons,
   ownsNotice,
+  publishFailureNotice,
   publishUndoBatchNotice,
   publishUndoNotice,
   type UndoNotice,
+  type UndoPartialFailure,
 } from './undo-notices.js'
 import type { ApplyAction, RemoteFailure } from '../shared/wire.js'
 
 /** 有座位的动作：写入链只服务这四支；新增动作默认落进这里，穷尽闸会编译错直到补上它的收尾。 */
 export type SeatedAction = Exclude<ApplyAction, 'count' | 'orphan-clean'>
 
-/** 一次写入结局的成功支：渲染无关的事实（`SettledFacts`）加逐条失败表。 */
+/** 一次写入结局的成功支：渲染无关的事实（`SettledFacts`）加 `ok` 判别。 */
 export type WriteSuccess<A extends SeatedAction> = SettledFacts<A> & {
   readonly ok: true
-  /** 逐条失败原文（failed / neutral / missing），按 id；失败表的唯一落点，摘要只带聚合与落地 id。 */
-  readonly failures: ReadonlyMap<string, string>
 }
 
 /** 一次写入结局的顶层失败支：信封就没成，逐条无从判读。 */
@@ -104,7 +105,14 @@ export async function deleteSessionsFromBatch(
     ids,
     presentation: {
       invalidate: invalidateTrash,
-      publishUndo: ({ entryIds, n, archived }) => publishUndoBatchNotice({ entryIds, n, archived }),
+      publishUndo: ({ entryIds, n, archived, partialFailure }) =>
+        publishUndoBatchNotice({
+          entryIds,
+          n,
+          archived,
+          ...(partialFailure === undefined ? {} : { partialFailure }),
+        }),
+      publishBatchFailure: publishFailureNotice,
     },
     gate,
     refresh,
@@ -133,15 +141,12 @@ export async function restoreFromUndo(deps: OneShotDeps, notice: UndoNotice, t: 
     failNotice(notice, outcome.failure.message)
     return
   }
-  const failure = outcome.failures.values().next().value
-  if (failure !== undefined) {
+  const reasons = formatBatchFailureReasons(outcome.failures)
+  if (reasons !== undefined) {
     // 信封成功 ≠ 每条都撤销成功：逐条失败时横幅要换失败原文，不能假装成功。
     failNotice(notice, outcome.failures.size > 1
-      ? t('undo.failedBatch', {
-        n: outcome.failures.size,
-        reasons: [...new Set(outcome.failures.values())].join(' · '),
-      })
-      : failure)
+      ? t('undo.failedBatch', { n: outcome.failures.size, reasons })
+      : reasons)
     return
   }
   // 成功只收掉自己那条：期间发布的新移入回收站横幅不能被顺手清掉。
@@ -226,11 +231,13 @@ export function unarchiveFromArchiveTab(input: {
 
 /* ── 模块私有：一次写入的生命周期与按 action 的收尾顺序（判据在文件头） ────────────── */
 
-/** 一次写入里与渲染无关的那部分：动作、请求 id、以及唯一的那份回执摘要。 */
+/** 一次写入里与渲染无关的那部分：动作、请求 id、唯一的那份回执摘要，以及逐条失败原文
+ *  （failed / neutral / missing，按 id；失败表的唯一落点，摘要只带聚合与落地 id）。 */
 interface SettledFacts<A extends SeatedAction> {
   readonly action: A
   readonly ids: readonly string[]
   readonly summary: ReceiptSummary
+  readonly failures: ReadonlyMap<string, string>
 }
 
 /** 按 action 切开的呈现材质：形状对不上的钩子在类型面就不存在；钩子都是同步的，settlement 在
@@ -240,8 +247,15 @@ type WritePresentationByAction = {
     /** 外部写入座位：让回收站面板重读；面板写不传（自己的重读不走这条通告）。 */
     invalidate?(): void
     /** 撤销发布：名单**非空**（全被同批前一条带走时没有可撤销的横幅），座位只决定发布哪一形；
-     *  `archived` = 落地条目里有已归档会话（撤销回「归档」）。 */
-    publishUndo?(landed: { readonly entryIds: readonly [string, ...string[]]; readonly n: number; readonly archived: boolean }): void
+     *  `archived` = 落地条目里有已归档会话（撤销回「归档」）；`partialFailure` 与横幅同一次原子发布。 */
+    publishUndo?(landed: {
+      readonly entryIds: readonly [string, ...string[]]
+      readonly n: number
+      readonly archived: boolean
+      readonly partialFailure?: UndoPartialFailure
+    }): void
+    /** 批量写没有可撤销落点且存在失败时（全失败、顶层通道失败等），立即发布裸失败提示。 */
+    publishBatchFailure?(reasons: string): void
   }
   restore: {
     invalidate?(): void
@@ -280,17 +294,21 @@ function settleWrite<A extends SeatedAction>(
       const seat = presentation as WritePresentationByAction['delete']
       afterDelete(success.summary.successIds)
       seat.invalidate?.()
-      if (success.summary.anySuccess) {
-        const [first, ...rest] = success.summary.landedIds
-        // 全部被同批前一条带走时没有落点：不发布一条没有可撤销动作的横幅。
-        if (first !== undefined) {
-          const entryIds: [string, ...string[]] = [first, ...rest]
-          seat.publishUndo?.({
-            entryIds,
-            n: success.summary.successIds.length,
-            archived: success.summary.landedArchivedIds.length > 0,
-          })
-        }
+      const reasons = formatBatchFailureReasons(success.failures)
+      const [first, ...rest] = success.summary.anySuccess ? success.summary.landedIds : []
+      if (first !== undefined) {
+        const entryIds: [string, ...string[]] = [first, ...rest]
+        seat.publishUndo?.({
+          entryIds,
+          n: success.summary.successIds.length,
+          archived: success.summary.landedArchivedIds.length > 0,
+          ...(reasons === undefined
+            ? {}
+            : { partialFailure: { count: success.failures.size, reasons } }),
+        })
+      } else if (reasons !== undefined) {
+        // 全部失败或有失败且其余没有可撤销落点：立即发布裸失败，不被旧成功横幅挡住 6 秒。
+        seat.publishBatchFailure?.(reasons)
       }
       return
     }
@@ -362,6 +380,12 @@ async function runWrite<A extends SeatedAction>(input: WriteInput<A>): Promise<G
       const failures = new Map(ids.map((id) => [id, outcome.failure.message] as const))
       const failed: WriteOutcome<A> = {
         ok: false, action: input.action, ids, failure: outcome.failure, failures,
+      }
+      if (input.action === 'delete') {
+        const reasons = formatBatchFailureReasons(failures)
+        if (reasons !== undefined) {
+          ;(input.presentation as WritePresentationByAction['delete'] | undefined)?.publishBatchFailure?.(reasons)
+        }
       }
       await input.refresh?.(failed)
       // 顶层失败也是这一趟的结论：同一句原文按 id 铺回，时序与成功支一致（refresh 之后）。

@@ -668,16 +668,25 @@ function detectLocaleService(ctx: ClientContextLike): LocaleServiceLike | undefi
 export function createTranslate(ctx: ClientContextLike): Translate {
   const service = detectLocaleService(ctx)
   if (service === undefined) return zhTranslate
+  let unregister: (() => void) | undefined
+  let ownedByEffect = false
   try {
-    const unregister = service.register(COPY_NS, { zh: ZH, en: EN })
     if (typeof ctx.effect === 'function') {
-      ctx.effect(() => unregister, 'session-delete: copy dictionaries')
+      ctx.effect(() => {
+        unregister = service.register(COPY_NS, { zh: ZH, en: EN })
+        return unregister
+      }, 'session-delete: copy dictionaries')
+      ownedByEffect = true
     } else {
+      unregister = service.register(COPY_NS, { zh: ZH, en: EN })
       console.warn('[dsh-session-delete] 宿主没有 ctx.effect：字典已注册，但无法随插件卸载撤销')
     }
     const bound = service.bind(COPY_NS)
     return (key, params) => bound(key, params)
   } catch (error) {
+    if (!ownedByEffect && typeof unregister === 'function') {
+      try { unregister() } catch { /* 清理失败不覆盖原异常 */ }
+    }
     console.warn('[dsh-session-delete] locale 服务不可用，退回内置中文：', error)
     return zhTranslate
   }

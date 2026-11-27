@@ -25,7 +25,7 @@ import type { OneShotDeps } from './remote.js'
 import { useLatest } from './store.js'
 import { shrinkPicksToFailures } from './batch-selection-store.js'
 import { resolveDropPlan, type DropPlan } from './trash-drop.js'
-import { publishBatchFailures, publishFailureNotice } from './undo-notices.js'
+import { formatBatchFailureReasons, publishFailureNotice } from './undo-notices.js'
 import { deleteSessionFromMenu, deleteSessionsFromBatch } from './write-seats.js'
 import { IconTrashOpen, IconTrashOutlineRegular } from './ui/icons.js'
 
@@ -65,7 +65,7 @@ function runDrop(
         return
       }
       shrinkPicksToFailures([...run.value.keys()], submittedIds)
-      const text = publishBatchFailures(submittedIds.length, run.value)
+      const text = formatBatchFailureReasons(run.value)
       if (text === undefined) {
         settle('settled')
         return

@@ -8,12 +8,13 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useArchivePanelController } from '../../src/client/use-archive-panel-controller.js'
 import { invalidateArchive, useArchiveRevision } from '../../src/client/archive-store.js'
+import { useBusyGate } from '../../src/client/busy-gate.js'
 import { useUndoFailure, useUndoNotice } from '../../src/client/undo-notices.js'
 import { useListSelection } from '../../src/client/use-list-selection.js'
 import { groupByProject } from '../../src/client/trash-view.js'
 import { zhTranslate } from '../../src/client/copy.js'
 import type { BusyGate } from '../../src/client/busy-gate.js'
-import type { ArchiveQuery } from '../../src/client/use-archive-query.js'
+import { archiveRowsOf, useArchiveQuery, type ArchiveQuery } from '../../src/client/use-archive-query.js'
 import type { ApplyAction, ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import type { ArchiveDetailLike, RemoteOutcome, SessionDeleteRemote } from '../../src/client/remote.js'
 import type { ArchiveRowWire } from '../../src/shared/wire.js'
@@ -539,5 +540,80 @@ describe('归档档控制器 · 接线与保持守卫', () => {
 
     await act(async () => { pendingB.resolve(remoteOk(detailOf('session-b'))) })
     await waitFor(() => { expect(m.result.current.detail.kind).toBe('ready') })
+  })
+
+  it('接真实 useArchiveQuery：deleteOne 与 deleteMany 各只触发 1 次 archiveList，且在读落地前保持 busy', async () => {
+    let pendingList: ReturnType<typeof deferOutcome<import('../../src/shared/wire.js').ArchiveListWire>> | null = null
+    let currentRows = [row('session-a'), row('session-b')]
+    const archiveList = vi.fn(async () => {
+      if (pendingList !== null) return pendingList.promise
+      return remoteOk({ available: true as const, rows: currentRows, totalBytes: 0, missingSizeCount: 0 })
+    })
+    const applyOutcomes = vi.fn(async (_action: ApplyAction, ids: readonly string[]) =>
+      remoteOk(deleteOutcomes(ids, [], '失败')))
+    const deps = {
+      archiveList,
+      archiveDetail: vi.fn(async (sessionId: string) => remoteOk(detailOf(sessionId))),
+      applyOutcomes,
+      progress: async () => remoteOk<WriteProgressWire>({ status: 'idle' }),
+    }
+    const view = renderHook(() => {
+      const gateState = useBusyGate()
+      const query = useArchiveQuery({ deps, active: true })
+      const rows = archiveRowsOf(query.list) ?? []
+      const groups = groupByProject(rows, zhTranslate, {
+        timeOf: (r) => r.updatedAt ?? 0,
+        projectDirOf: (r) => r.projectDir,
+      })
+      const selection = useListSelection({ rows, groups, idOf: (r) => r.sessionId })
+      const controller = useArchivePanelController({
+        deps,
+        gate: gateState,
+        query,
+        ordered: selection.ordered,
+        active: true,
+        split: false,
+        t: zhTranslate,
+      })
+      return { controller, busy: gateState.busy }
+    })
+
+    await waitFor(() => { expect(archiveList).toHaveBeenCalledTimes(1) })
+
+    // deleteOne：挂起下一趟 archiveList，验证只发第 2 次请求（不因 invalidateTrash 发第 3 次）且期间 busy=true
+    const deferredOne = deferOutcome<import('../../src/shared/wire.js').ArchiveListWire>()
+    pendingList = deferredOne
+    currentRows = [row('session-b')]
+    let doneOne = false
+    const p1 = view.result.current.controller.deleteOne(row('session-a')).then(() => { doneOne = true })
+    await waitFor(() => { expect(archiveList).toHaveBeenCalledTimes(2) })
+    expect(view.result.current.busy).toBe(true)
+    expect(doneOne).toBe(false)
+    await act(async () => {
+      deferredOne.resolve(remoteOk({ available: true, rows: currentRows, totalBytes: 0, missingSizeCount: 0 }))
+      await p1
+      for (let i = 0; i < 6; i++) await Promise.resolve()
+    })
+    expect(doneOne).toBe(true)
+    expect(view.result.current.busy).toBe(false)
+    expect(archiveList).toHaveBeenCalledTimes(2)
+
+    // deleteMany：同理，只发第 3 次请求
+    const deferredMany = deferOutcome<import('../../src/shared/wire.js').ArchiveListWire>()
+    pendingList = deferredMany
+    currentRows = []
+    let doneMany = false
+    const p2 = view.result.current.controller.deleteMany(['session-b']).then(() => { doneMany = true })
+    await waitFor(() => { expect(archiveList).toHaveBeenCalledTimes(3) })
+    expect(view.result.current.busy).toBe(true)
+    expect(doneMany).toBe(false)
+    await act(async () => {
+      deferredMany.resolve(remoteOk({ available: true, rows: currentRows, totalBytes: 0, missingSizeCount: 0 }))
+      await p2
+      for (let i = 0; i < 6; i++) await Promise.resolve()
+    })
+    expect(doneMany).toBe(true)
+    expect(view.result.current.busy).toBe(false)
+    expect(archiveList).toHaveBeenCalledTimes(3)
   })
 })

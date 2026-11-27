@@ -147,4 +147,55 @@ describe('菜单装配 · effect 可缺', () => {
       warn.mockRestore()
     }
   })
+
+  it('effect 在执行回调前抛错：不调用 menus.register 并回退 legacy 菜单行', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const register = vi.fn(() => () => undefined)
+      const injected: string[] = []
+      const client: ClientContextLike = {
+        slots: {
+          inject: (name: string) => { injected.push(name) },
+          register: () => undefined,
+        },
+        get: (name: string): unknown => (name === 'contextMenus' ? { register } : undefined),
+        effect: (execute: () => unknown, label?: string) => {
+          if (label === 'session-delete: context menu actions') throw new Error('scope disposed')
+          return execute()
+        },
+      }
+      installSessionMenus(client, zhTranslate)
+      expect(register).not.toHaveBeenCalled()
+      expect(injected).toEqual(['sidebar.workspaces.session.menu.item', 'sidebar.workspaces.session.menu.item'])
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('effect 执行回调后抛错：立刻摘除已注册的数据动作并回退 legacy，不双轨并存', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    try {
+      const unregister = vi.fn()
+      const register = vi.fn(() => unregister)
+      const injected: string[] = []
+      const client: ClientContextLike = {
+        slots: {
+          inject: (name: string) => { injected.push(name) },
+          register: () => undefined,
+        },
+        get: (name: string): unknown => (name === 'contextMenus' ? { register } : undefined),
+        effect: (execute: () => unknown, label?: string) => {
+          const result = execute()
+          if (label === 'session-delete: context menu actions') throw new Error('effect failed')
+          return result
+        },
+      }
+      installSessionMenus(client, zhTranslate)
+      expect(register).toHaveBeenCalledTimes(1)
+      expect(unregister).toHaveBeenCalledTimes(1)
+      expect(injected).toEqual(['sidebar.workspaces.session.menu.item', 'sidebar.workspaces.session.menu.item'])
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })

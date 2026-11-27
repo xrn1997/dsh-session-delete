@@ -7,6 +7,7 @@ import {
   TRASH_ENTRY_SESSION_ID_SCHEMA,
 } from '../shared/apply-values.js'
 import {
+  ATTACHMENT_SKIPPED_SEPARATOR,
   FAILURE_DETAILS_ATTACHMENTS_KEY,
   SESSION_DELETE_CODES,
   type ApplyAction,
@@ -151,7 +152,7 @@ export interface ReceiptSummary {
   /** 带**已归档**标记的落地条目（entry 域）：撤销回「归档」而非会话列表，撤销文案据此改口（ADR-0060）。 */
   readonly landedArchivedIds: readonly string[]
   readonly anySuccess: boolean
-  /** purge / orphan-clean 的附件读数，按批相加（成功回执 + 失败条 `details` 的同一格）；`skipped` 取第一条有的（不是可累加计数）。没有读数时缺席——不拿零冒充「清过」。 */
+  /** purge / orphan-clean 的附件读数，按批相加（成功回执 + 失败条 `details` 的同一格）；`skipped` 按出现序分段去重后用 `ATTACHMENT_SKIPPED_SEPARATOR` 拼接。没有读数时缺席——不拿零冒充「清过」。 */
   readonly attachmentCleanup?: AttachmentCleanupWire
 }
 
@@ -192,7 +193,8 @@ function summarizeAttachmentCleanup<A extends ApplyAction>(
   let removed = 0
   let freedBytes = 0
   let failedCount = 0
-  let skipped: string | undefined
+  const skippedParts: string[] = []
+  const seenSkipped = new Set<string>()
   let seen = false
   for (const verdict of receipt.verdicts) {
     // 成功支读 value 的那一格；失败条读自己 `details` 的同一格（Node 半按组归属挂在那）——
@@ -207,12 +209,18 @@ function summarizeAttachmentCleanup<A extends ApplyAction>(
     removed += attachments.removed
     freedBytes += attachments.freedBytes
     failedCount += attachments.failed
-    skipped ??= attachments.skipped
+    if (attachments.skipped !== undefined) {
+      for (const part of attachments.skipped.split(ATTACHMENT_SKIPPED_SEPARATOR)) {
+        if (part === '' || seenSkipped.has(part)) continue
+        seenSkipped.add(part)
+        skippedParts.push(part)
+      }
+    }
   }
   if (!seen) return undefined
-  return skipped === undefined
+  return skippedParts.length === 0
     ? { removed, freedBytes, failed: failedCount }
-    : { removed, freedBytes, failed: failedCount, skipped }
+    : { removed, freedBytes, failed: failedCount, skipped: skippedParts.join(ATTACHMENT_SKIPPED_SEPARATOR) }
 }
 
 /**

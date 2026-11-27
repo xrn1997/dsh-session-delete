@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => {
     afterRestore: vi.fn((ids: readonly string[]) => { order.push(`afterRestore:${ids.join(',')}`) }),
     publishUndoNotice: vi.fn(),
     publishUndoBatchNotice: vi.fn(),
+    publishFailureNotice: vi.fn(),
     dismissUndoNotice: vi.fn(),
     failNotice: vi.fn(),
     clearUndoNotice: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('../../src/client/undo-notices.js', async (importOriginal) => {
     mocks.order.push(`publishBatch:${input.entryIds.join(',')}:${input.n}`)
     return actual.publishUndoBatchNotice(input)
   })
+  mocks.publishFailureNotice.mockImplementation(actual.publishFailureNotice)
   mocks.dismissUndoNotice.mockImplementation((ids: Parameters<typeof actual.dismissUndoNotice>[0]) => {
     mocks.order.push(`dismiss:${ids.join(',')}`)
     return actual.dismissUndoNotice(ids)
@@ -48,6 +50,7 @@ vi.mock('../../src/client/undo-notices.js', async (importOriginal) => {
     ...actual,
     publishUndoNotice: mocks.publishUndoNotice,
     publishUndoBatchNotice: mocks.publishUndoBatchNotice,
+    publishFailureNotice: mocks.publishFailureNotice,
     dismissUndoNotice: mocks.dismissUndoNotice,
     failNotice: mocks.failNotice,
     clearUndoNotice: mocks.clearUndoNotice,
@@ -128,12 +131,17 @@ describe('删除座位', () => {
       ])),
     }
     const result = await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1', 's2'], gate())
-    expect(mocks.publishUndoBatchNotice).toHaveBeenCalledWith({ entryIds: ['e1'], n: 1, archived: false })
+    expect(mocks.publishUndoBatchNotice).toHaveBeenCalledWith({
+      entryIds: ['e1'],
+      n: 1,
+      archived: false,
+      partialFailure: { count: 1, reasons: '删不动' },
+    })
     // 这枚闸是新的、没被占 ⇒ 座位一定跑完并交出失败表（被挡回那一路见下面「闸在飞时」那条）。
     expect(result).toEqual({ kind: 'ran', value: new Map([['s2', '删不动']]) })
   })
 
-  it('一条都没落地：不发布没有落点的撤销横幅', async () => {
+  it('一条都没落地：不发布没有落点的撤销横幅，立即发裸失败提示', async () => {
     const deps = {
       applyOutcomes: vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
         pick(outcomes('delete', ['s1'], { s1: { message: '删不动' } }), 0),
@@ -141,6 +149,83 @@ describe('删除座位', () => {
     }
     await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1'], gate())
     expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
+    expect(mocks.publishFailureNotice).toHaveBeenCalledWith('删不动')
+  })
+
+  it('含重复 id 且唯一项失败：按全失败走裸失败提示，不误判为部分失败', async () => {
+    const deps = {
+      applyOutcomes: vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
+        pick(outcomes('delete', ['s1'], { s1: { message: '会话在跑' } }), 0),
+      ])),
+    }
+    await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1', 's1'], gate())
+    expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
+    expect(mocks.publishFailureNotice).toHaveBeenCalledWith('会话在跑')
+  })
+
+  it('顶层失败：在 refresh 之前发裸失败提示，且不发撤销横幅', async () => {
+    const events: string[] = []
+    mocks.publishFailureNotice.mockImplementationOnce((message: string) => {
+      events.push(`fail:${message}`)
+    })
+    const deps = {
+      applyOutcomes: vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> =>
+        remoteFail({ code: 'sessiondelete/io', message: '通道坏了' })),
+    }
+    await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1', 's2'], gate(), undefined, () => {
+      events.push('refresh')
+    })
+    expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
+    expect(events).toEqual(['fail:通道坏了', 'refresh'])
+  })
+
+  it('部分幂等无落地 + 另一条失败：走裸失败提示，不吞失败', async () => {
+    const deps = {
+      applyOutcomes: vi.fn(async (): Promise<RemoteOutcome<ApplyOutcome[]>> => remoteOk([
+        { id: 's1', action: 'delete', ok: true, value: null },
+        pick(outcomes('delete', ['s2'], { s2: { message: '目录锁住了' } }), 0),
+      ])),
+    }
+    await deleteSessionsFromBatch(applyDeps(deps.applyOutcomes), ['s1', 's2'], gate())
+    expect(mocks.publishUndoBatchNotice).not.toHaveBeenCalled()
+    expect(mocks.publishFailureNotice).toHaveBeenCalledWith('目录锁住了')
+  })
+
+  it('部分失败在 refresh 挂起期间已原子发布：用户当场撤销不破坏 ownsNotice 身份判据', async () => {
+    const view = renderHook(() => useUndoNotice())
+    let releaseRefresh!: () => void
+    const refreshPending = new Promise<void>((resolve) => { releaseRefresh = resolve })
+    const applyOutcomes = vi.fn(async (action: ApplyAction, ids: readonly string[]): Promise<RemoteOutcome<ApplyOutcome[]>> => {
+      if (action === 'delete') {
+        return remoteOk([
+          valueOf('delete', 's1', trashRow('e1', 's1')),
+          pick(outcomes('delete', ['s2'], { s2: { message: '删不动' } }), 0),
+        ])
+      }
+      return remoteOk(restoreOutcomes(ids))
+    })
+    const batchPromise = deleteSessionsFromBatch(
+      applyDeps(applyOutcomes),
+      ['s1', 's2'],
+      gate(),
+      undefined,
+      () => refreshPending,
+    )
+    await vi.waitFor(() => {
+      expect(view.result.current).toMatchObject({
+        kind: 'batch',
+        entryIds: ['e1'],
+        n: 1,
+        partialFailure: { count: 1, reasons: '删不动' },
+      })
+    })
+    const noticeDuringRefresh = must(view.result.current, 'refresh 挂起期间的撤销横幅')
+    await act(async () => {
+      await restoreFromUndo(applyDeps(applyOutcomes), noticeDuringRefresh, zhTranslate)
+    })
+    expect(view.result.current).toBeNull()
+    releaseRefresh()
+    await batchPromise
   })
 })
 

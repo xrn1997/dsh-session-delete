@@ -9,6 +9,8 @@ import { createStore } from './store.js'
 export interface TrashRevisionScene {
   /** 通告一次"回收站变过了"（删除成功、撤销成功；面板自己的恢复/彻底删除则就地重读）。 */
   invalidate(): void
+  /** 当前修订号（当场读；显式 reload 用来同步消费当拍已达修订，避免补发第二趟）。 */
+  read(): number
   /** 供面板与归档档订阅：修订号进 `useGatedRefresh` 的修订集合。 */
   use(): number
   /** 场景收场：修订号归零（订阅者随组件卸载自行退订）。 */
@@ -20,6 +22,9 @@ export function createTrashRevisionScene(): TrashRevisionScene {
   return {
     invalidate(): void {
       revisionStore.update((revision) => revision + 1)
+    },
+    read(): number {
+      return revisionStore.get()
     },
     use(): number {
       return revisionStore.use()

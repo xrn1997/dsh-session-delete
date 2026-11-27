@@ -18,7 +18,6 @@ import { archiveRowsOf, type ArchiveQuery } from './use-archive-query.js'
 import { usePanelSelection } from './use-panel-selection.js'
 import { useGuardedLoadOlder, type PanelTabController } from './use-panel-tab.js'
 import { usePanelChildView } from './use-panel-child-view.js'
-import { publishBatchFailures } from './undo-notices.js'
 import { deleteSessionFromMenu, deleteSessionsFromBatch, unarchiveFromArchiveTab } from './write-seats.js'
 
 /** 归档档离清单的孩子视图：父仍是清单选中那条已归档行，看的却是它的一个子会话。 */
@@ -209,8 +208,6 @@ export function useArchivePanelController(input: {
     )
     // 被闸挡回的那一趟什么都没跑：成败由在飞那一趟说（行内旧原文已在 apply 前清过）。
     if (run.kind === 'blocked') return
-    // 失败摘要走与批量浮条同一条落点判据：行内原文只在行进 DOM 时可见，折叠组的失败行不渲染。
-    publishBatchFailures(ids.length, run.value)
   }, [deps, gate, clearRowFailures, setRowFailures, reload])
 
   return {

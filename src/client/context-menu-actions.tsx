@@ -199,15 +199,21 @@ export function installSessionMenus(client: ClientContextLike, t: Translate): vo
     const menus = readOptional('contextMenus') as ContextMenusLike | null | undefined
     if (menus === null || menus === undefined || typeof menus.register !== 'function') return false
     const sessions = readOptional('sessions') as SessionsServiceLike | null | undefined
+    let unregister: (() => void) | undefined
     try {
-      const unregister = menus.register(createSessionMenuContribution(t, sessions?.list))
-      // 注册照旧、撤销归 `effect`：缺那一格时只缺摘除能力（见 `context.ts` 头注的可缺性表），不回退 legacy。
       if (typeof target.effect === 'function') {
-        target.effect(() => unregister, 'session-delete: context menu actions')
+        target.effect(() => {
+          unregister = menus.register(createSessionMenuContribution(t, sessions?.list))
+          return unregister
+        }, 'session-delete: context menu actions')
       } else {
+        menus.register(createSessionMenuContribution(t, sessions?.list))
         console.warn('[dsh-session-delete] 宿主没有 ctx.effect：菜单贡献已注册，但无法随插件卸载撤销')
       }
     } catch (error) {
+      if (typeof unregister === 'function') {
+        try { unregister() } catch { /* 清理失败不覆盖原异常 */ }
+      }
       console.warn('[dsh-session-delete] context menu 注册失败，回退 legacy 菜单行：', error)
       return false
     }

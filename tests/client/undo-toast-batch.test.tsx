@@ -9,7 +9,6 @@ import type { ApplyOutcome, WriteProgressWire } from '../../src/shared/wire.js'
 import { useTrashRevision } from '../../src/client/trash-store.js'
 import { UndoToast } from '../../src/client/undo-toast.js'
 import {
-  attachUndoPartialFailure,
   dismissUndoNotice,
   publishFailureNotice,
   publishUndoBatchNotice,
@@ -233,8 +232,7 @@ describe('撤销失败不静默（横幅先走一步）', () => {
 
   it('批量部分失败随撤销横幅同屏展示，点撤销成功后整条收起、不滞留假失败', async () => {
     const applyOutcomes = vi.fn(async (_action: string, ids: readonly string[]) => remoteOk(restoreOutcomes(ids)))
-    publishUndoBatchNotice({ entryIds: ['e1'], n: 1 })
-    attachUndoPartialFailure({ count: 2, reasons: '会话在跑 · 目录被占用' })
+    publishUndoBatchNotice({ entryIds: ['e1'], n: 1, partialFailure: { count: 2, reasons: '会话在跑 · 目录被占用' } })
     render(<UndoToast deps={createFakeRemote({ applyOutcomes })} />)
 
     const alert = screen.getByRole('alert')

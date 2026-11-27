@@ -188,14 +188,15 @@ describe('summarizeReceipt', () => {
     expect(read.summary.attachmentCleanup).toEqual({ removed: 2, freedBytes: 20, failed: 1, skipped: 'x' })
   })
 
-  // `skipped` 是原因、不是计数：两条 ok 各带一句时留**第一条**。把 `skipped ??=` 改成 `skipped =`
-  // 会被后一条覆盖，所以这条用例必须让两条都真的带值。
-  it('purge：两条 ok 都带 skipped ⇒ 第一条赢', () => {
-    const receipt = readReceipt('purge', ['p1', 'p2'], [
+  // `skipped` 是原因、不是计数：两条带不同原因时按出现序用 `；` 拼接（ADR-0041 决定 4 不二选一），
+  // 相同分段去重不重复。
+  it('purge：两条 ok 都带不同 skipped ⇒ 按序用分号拼接；重复分段去重', () => {
+    const receipt = readReceipt('purge', ['p1', 'p2', 'p3'], [
       { id: 'p1', action: 'purge', ok: true, value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '第一条' } } },
-      { id: 'p2', action: 'purge', ok: true, value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '第二条' } } },
+      { id: 'p2', action: 'purge', ok: true, value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '第一条；第二条' } } },
+      { id: 'p3', action: 'purge', ok: true, value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '第二条' } } },
     ])
-    expect(summarizeReceipt(receipt).summary.attachmentCleanup?.skipped).toBe('第一条')
+    expect(summarizeReceipt(receipt).summary.attachmentCleanup?.skipped).toBe('第一条；第二条')
   })
 
   // seen=false 的那条路：ok 但这一条没有半点附件读数（老服务端 / 这一组根本没附件）⇒ 摘要不许
@@ -213,17 +214,35 @@ describe('summarizeReceipt', () => {
   })
 
   // 一段 `/apply` 可能带多条回执（批量彻底删除），附件读数要相加——失败条的读数住自己 `details` 的
-  // 同一格，按批相加的总量照样收（不然总量缺角、与尾 run 的合计对不上）；`skipped` 取**第一条有的**
-  // ——跳过说的是"这一轮为什么没敢清"，多组各有一句时不叠加。
-  it('附件读数跨多条回执相加（含失败条的 details）；skipped 留第一条', () => {
+  // 同一格，按批相加的总量照样收（不然总量缺角、与尾 run 的合计对不上）；`skipped` 按出现序分段去重
+  // 拼接，让失败条的候选读不出与成功条的复核失败都能上屏。
+  it('附件读数跨多条回执相加（含失败条的 details）；skipped 分段去重拼接', () => {
     const receipt = readReceipt('orphan-clean', ['a', 'b', 'c'], [
       { id: 'a', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1 } },
       { id: 'b', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1, attachments: { removed: 2, freedBytes: 20, failed: 0, skipped: '第一条的原因' } } },
-      { id: 'c', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1, attachments: { removed: 3, freedBytes: 30, failed: 1, skipped: '后面那句不覆盖' } } },
+      { id: 'c', action: 'orphan-clean', ok: true, value: { removed: 1, freedBytes: 1, attachments: { removed: 3, freedBytes: 30, failed: 1, skipped: '后面那句也保留' } } },
     ])
     expect(summarizeReceipt(receipt).summary.attachmentCleanup).toEqual({
-      removed: 5, freedBytes: 50, failed: 1, skipped: '第一条的原因',
+      removed: 5, freedBytes: 50, failed: 1, skipped: '第一条的原因；后面那句也保留',
     })
+
+    const mixedFailedAndOk = readReceipt('purge', ['p1', 'p2'], [
+      {
+        id: 'p1', action: 'purge', ok: false,
+        error: {
+          code: SESSION_DELETE_CODES.io,
+          message: 'boom',
+          details: { attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '1 条候选日志读不出' } },
+        },
+      },
+      {
+        id: 'p2', action: 'purge', ok: true,
+        value: { removed: 0, freedBytes: 0, attachments: { removed: 0, freedBytes: 0, failed: 0, skipped: '执行期复核读不到剩余引用源：EACCES' } },
+      },
+    ])
+    expect(summarizeReceipt(mixedFailedAndOk).summary.attachmentCleanup?.skipped).toBe(
+      '1 条候选日志读不出；执行期复核读不到剩余引用源：EACCES',
+    )
 
     const failedOnly = readReceipt('purge', ['p'], [
       {

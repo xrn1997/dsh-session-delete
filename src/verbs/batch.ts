@@ -10,7 +10,7 @@
  */
 import { toRemoteFailure } from '../remote/map-error.js'
 import { bareSessionId } from '../domain/closure.js'
-import { FAILURE_DETAILS_ATTACHMENTS_KEY, isApplyOutcomeOf, type ApplyAction, type ApplyOutcome, type ApplyValueByAction, type AttachmentCleanupWire } from '../shared/wire.js'
+import { ATTACHMENT_SKIPPED_SEPARATOR, FAILURE_DETAILS_ATTACHMENTS_KEY, isApplyOutcomeOf, type ApplyAction, type ApplyOutcome, type ApplyValueByAction, type AttachmentCleanupWire } from '../shared/wire.js'
 import type { CoreDeps, DeleteDeps, DeleteSessionDeps, RemovalDeps } from '../deps.js'
 import { parseEntryId, sessionDirForId, trashDirOf, type TrashEntry } from '../trash/entry.js'
 import { groupOf, type GroupClaim } from '../trash/groups.js'
@@ -363,7 +363,8 @@ function verdictOf(slot: IdSlot | undefined): 'ok' | 'failed' | 'carried' {
  * 拆回各条——ok 支挂进自己的成功回执，失败支挂进自己 `error.details` 的同一格。对象读数不冒领别的条的
  * 回执；执行级「谁删了哪组目录」的第二本账本层不加，组归属就是这本账。carried 幂等支不带 `attachments`
  * （那一趟没有读数，缺席与 0 是两件事）。skipped 逐组归因——候选日志 / 对象 stat 的读不出只落**自己组**
- * 的载体（不串台），全批共享的两段（证明失败、执行期复核失败）落进过计划的组，没人进过计划时全挂
+ * 的载体（不串台）；全批共享的两段（证明失败、执行期复核失败）按三档落点——先落有对象要删的组，
+ * 没有这种组时落有候选图的组（不误挂 `absent` / 无图组），连候选都没有才全挂
  * （skipped 原文是 fail-closed 的用户可见落点，丢了就是红线回归）。
  * ok 支没有读数也带零读数（与 carried 的缺席区分）；失败支没有信号不带（缺席与 0 是两件事）。
  * 组归属不变 ⇒ 批内各 id 的读数（成功回执 + 失败 details）相加 = 尾 `run` 的合计，客户端「按批相加」的归并不动。
@@ -388,8 +389,11 @@ export function synthesizeAttachmentReadings(
     if (run.verdict === 'ok' || (run.verdict === 'failed' && tail.byGroupRun.has(run.id))) slotOf(run.id)
   }
   const withObjects = runs.filter((run) => run.verdict !== 'carried' && (batch.byGroup.get(run.id)?.size ?? 0) > 0)
-  const sharedTarget = new Set((withObjects.length > 0
+  const withCandidates = withObjects.length > 0
     ? withObjects
+    : runs.filter((run) => run.verdict !== 'carried' && batch.candidateGroupIds.has(run.id))
+  const sharedTarget = new Set((withCandidates.length > 0
+    ? withCandidates
     : runs.filter((run) => run.verdict !== 'carried')).map((run) => run.id))
   for (const run of runs) {
     if (run.verdict === 'carried') continue
@@ -402,7 +406,7 @@ export function synthesizeAttachmentReadings(
       if (batch.sharedSkipped !== undefined) parts.push(batch.sharedSkipped)
       if (tail.recheckSkipped !== undefined) parts.push(tail.recheckSkipped)
     }
-    if (parts.length > 0) slotOf(run.id).skipped = parts.join('；')
+    if (parts.length > 0) slotOf(run.id).skipped = parts.join(ATTACHMENT_SKIPPED_SEPARATOR)
   }
   return out
 }

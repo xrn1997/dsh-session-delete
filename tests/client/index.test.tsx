@@ -302,7 +302,7 @@ async function bootstrap(
  *   `const list = open && jsxs(MenuSurface, { … children: [items.map(renderEntry), children] })`
  *   （asar @22074291 逐字），`open === false` 时槽位行（`children`）**根本不渲染**——行连同它的
  *   子树一起卸载。**替身原来缺的正是这条落差**（假 hook 只把 `open=false` 记进局部变量，行还在），
- *   所以「先关菜单、再执行删除」在旧实现上看起来通过，真机上却可能点不到。
+ *   所以「先关菜单、再执行删除」在旧实现上看起来通过，真机上却可能请求发不出去。
  * - overlay 槽的**全部**贡献都挂上（宿主就是这样渲染 `shell.overlay` 的）。
  */
 function Scene({
