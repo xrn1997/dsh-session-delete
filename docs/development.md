@@ -43,7 +43,7 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`（`.github/w
 
 > **跑门取退出码，别看管道说了什么**：`pnpm test | tail` 之后退出码是管道工具的，红会被吃掉。先把输出灌进文件、再单独打印退出码；**跑门与提交必须是两条命令**。
 
-**文档门是三件套**：`tests/docs-liveness.test.ts`（文档与代码注释的路径活性与引用形态、职责边界、ADR 形状、README 投影与截图清单）、`tests/context-terms.test.ts`（`CONTEXT.md` 点名的符号在生产代码里现查得到）与 `tests/comment-altitude.test.ts`（注释不抄代码表达式）；三者共用的解析器契约住 `tests/doc-anchors.test.ts`，它比较的路径一律是仓内 POSIX 写法。**具体判据以这些测试本身为准**：路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
+**文档门是三件套**：名单与分工以 `tests/docs-liveness.test.ts` 的头注为准；三者共用的解析器契约住 `tests/doc-anchors.test.ts`，它比较的路径一律是仓内 POSIX 写法。**具体判据以这些测试本身为准**：路径若有意保留历史名走 `ALLOWED` 白名单，加一条要写清为什么；死名没有豁免。
 
 `pnpm typecheck` 也带一道门：`tsconfig.json` 开着 `isolatedModules` 与 `verbatimModuleSyntax`，所以「跨插件一律 `import type`」不是风格建议——把类型面写成值 import 直接编译红。另一条「浏览器半一条 `@deepseek-ai/*` 的 import 都不许有，type-only 也不留」不归编译器管：宿主包就装在 `devDependencies` 里，值 import 照样解析得到。那一半的门是 `pnpm test` 里 `tests/skeleton.test.ts` 的「跨插件 import 红线」源码扫描。
 
@@ -94,6 +94,7 @@ GitHub Actions 在 push 到 `main` 与每个 PR 上跑 `pnpm gates`（`.github/w
 - **npm cache EPERM**：`npm view` 偶尔撞 `AppData\Local\npm-cache` 临时文件锁，重试或换查询方式。
 - **浏览器会缓存插件的 `lib/client.js`**（产物 URL 无哈希）：改浏览器半后，宿主重启、插件重装都可能仍在跑旧 bundle，**硬刷新页面**（Ctrl+Shift+R）才换新——「build 了没生效」先查这里。
 - **同版本 tarball 重装会被 pnpm 静默跳过**：`dsh plugin add` 对同版本号视为已满足；真机台架换包要先 `remove` 再 `add`，装完用 `grep` 构建产物里的新符号确认。
+- **真机台架镜像 live 组成时，随宿主分发的 `@deepseek-ai/*` 包用 `link:` 指宿主安装目录、别从 npm 装**：`dsh plugin add` 一个 shipped 包名会从 npm 拉到与宿主代次不配的版本，它钉的伴生行被版本守卫整行停用 ⇒ `storageDomain` / `workspaceRegistry` 服务缺席 ⇒ 本插件 Node 半挂 `pending (waiting for services: …)`、浏览器半探测 404——症状长得像插件没激活。
 - 回收站的运行时数据不在本仓：`$DSH_HOME/session-trash/`（本体）与 `$DSH_HOME/storages/`（内部索引，别手碰）；`DSH_HOME` 缺省是 `~/.dsh`。
 - 会话文件是**多帧** zstd，Node 自带 API 只给第一帧——读法与用例住 `src/log/zstd-frames.ts` 与 `tests/zstd-frames.test.ts`。
 - **冒烟启动宿主时日志里那行带 token 的 URL 是活的凭据**：别留在日志或会话输出里，测完删文件。

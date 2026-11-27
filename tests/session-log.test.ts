@@ -216,3 +216,12 @@ describe('readWholeSessionLog：整本读取的 seam', () => {
     })
   })
 })
+
+it('完整末行无尾换行 ⇒ 回调照喂（详情可见），truncatedTailBytes 照计（引用扫描的损坏判据，行尾约定确认前钉住）', () => {
+  // 最后一帧的正文没有收尾换行：记录是完整的，两个口径却各有各的说法——喂给回调、但计进截断尾巴。
+  const last = zlib.zstdCompressSync(Buffer.from(rec({ type: 'turn/start', time: 3 }), 'utf8'))
+  const { seen, stats } = collect(last)
+  expect(seen.map((r) => r.type)).toEqual(['turn/start'])
+  expect(stats.unparsedLines).toBe(0)
+  expect(stats.truncatedTailBytes).toBeGreaterThan(0)
+})

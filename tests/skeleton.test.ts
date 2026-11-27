@@ -352,6 +352,11 @@ describe('宿主要求声明与浏览器半声明', () => {
     for (const inlined of ['react-markdown', 'remark-gfm', '@ungap/structured-clone']) {
       expect(notice).toContain(inlined)
     }
+    // 声明里只指家、不抄条数：条数随文件头演进（ui.css 的自造清单加过第八、九条，声明还停在七处），
+    // 抄写计数就是第二本账（docs/AGENTS.md 写作规则 6）。正控在前，防判据自身退化成恒真。
+    const COPIED_COUNT = /文件头点名的[一二三四五六七八九十\d]+[处条]/
+    expect(COPIED_COUNT.test('文件头点名的七处'), '判据认不出抄写条数（正控）').toBe(true)
+    expect(COPIED_COUNT.test(notice), '声明抄了会腐烂的条数；条数住各文件头，这里只指家').toBe(false)
   })
 
   it('仓库/主页/工单面指向真实远端（不是编的 URL）', () => {

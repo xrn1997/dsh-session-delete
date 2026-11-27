@@ -138,3 +138,44 @@ describe('CONTEXT.md 不许指着已出库的东西', () => {
     expect(hits.map(({ i, l }) => `${i + 1} ${l.trim().slice(0, 90)}`), '指向了已出库或不在册的文档').toEqual([])
   })
 })
+
+describe('CONTEXT.md 的写入座位名单', () => {
+  // 「写入座位」词条枚举的是 `write-seats.ts` 的座位导出：枚举名单天然被读成完整名单，漏列就是
+  // 两个家对不上（名单只住词条、导出只住文件，谁都不是第二本账）。已有门只验「列出来的符号存在」，
+  // 查不出漏列——这里补双向对账，正控在下一条。
+  const WRITE_SEATS_FILE = 'src/client/write-seats.ts'
+  const exported = new Set(
+    [...readFileSync(join(ROOT, WRITE_SEATS_FILE), 'utf8').matchAll(/^export (?:async )?function (\w+)/gm)]
+      .map((match) => pick(match, 1)),
+  )
+  const IMPL_LINE = /^_唯一实现_\s*[:：]/
+  const listed = (() => {
+    const term = terms().find((candidate) => candidate.name.startsWith('写入座位'))
+    const line = term?.body.split('\n').find((body) => IMPL_LINE.test(body)) ?? ''
+    return anchors(line).filter((token) => isSymbol(token) && !isPath(token))
+  })()
+
+  const seatProblems = (names: readonly string[]): string[] => {
+    const roster = new Set(names)
+    return [
+      ...[...exported].filter((name) => !roster.has(name)).map((name) => `漏列 ${name}`),
+      ...names.filter((name) => !exported.has(name)).map((name) => `多列 ${name}`),
+    ]
+  }
+
+  it('座位导出与词条名单都解析得出来（判据不能对着空名单报绿）', () => {
+    expect(exported.size, 'write-seats.ts 的座位导出解析为空，判据会空转').toBeGreaterThan(3)
+    expect(listed.length, '「写入座位」词条的实现声明解析为空，判据会空转').toBeGreaterThan(3)
+  })
+
+  it('「写入座位」词条与 write-seats.ts 的座位导出双向一致', () => {
+    const problems = seatProblems(listed)
+    expect(problems, `写入座位名单与 ${WRITE_SEATS_FILE} 对不上：\n${problems.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出漏列与多列（正控）', () => {
+    expect(seatProblems([...exported].slice(1)).join('\n'), '漏列没被认出').toContain('漏列')
+    expect(seatProblems([...exported, 'notASeat']).join('\n'), '多列没被认出').toContain('多列 notASeat')
+    expect(seatProblems([...exported]), '同一份名单被判成有问题').toEqual([])
+  })
+})

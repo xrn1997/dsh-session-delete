@@ -13,7 +13,7 @@ ADR-0066 收了实例 seam，却让默认实例懒建、`installClientScene` 用
 
 ## 边界
 
-- 九份现场的语义、`ClientSceneProvider` 与跨槽位共享不变（ADR-0066 的实例 seam 仍成立）。
+- 跨槽位现场的语义、`ClientSceneProvider` 与跨槽位共享不变（ADR-0066 的实例 seam 仍成立）。
 - 不动「自由函数 + Provider 同一份账」的口径；本次只去掉「未安装也能读」的兜底。
 
 ## 被否方案

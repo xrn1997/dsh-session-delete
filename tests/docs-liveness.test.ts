@@ -9,7 +9,9 @@
  * 三条配套判据各管一段，别合并：
  * - `tests/context-terms.test.ts`：`CONTEXT.md` 点名的符号能不能现查得到；
  * - `tests/comment-altitude.test.ts`：代码注释是不是在抄代码；
- * - 本文件：**文档与代码注释**的路径、引用形态、职责边界与 ADR 形状。
+ * - 本文件：**文档与代码注释**的路径与引用形态、职责边界、文档分层与 ADR 形状，以及投影对账——
+ *   兼容性事实（窗口 / 已测代次 / 徽章与 alt）、可调项名单、`docs/ui-spec.md` §1 的段名与动作枚举、
+ *   README 的安装命令与数据路径、撤销停留秒数、截图清单、场景份数。
  *
  * 两类例外要写明理由再进白名单：留在 ADR 里的「当时」坐标，与看着像路径其实不是路径的串。
  * 白名单不是「改不动就跳过」——那种条目应当改文档。死名没有豁免。
@@ -18,8 +20,9 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { APPLY_ACTIONS, APPLY_ACTION_TABLE } from '../src/api/route-table.js'
+import { APPLY_ACTION_TABLE } from '../src/api/route-table.js'
 import { DEFAULT_CONFIG } from '../src/config.js'
+import { APPLY_ACTIONS } from '../src/shared/apply-actions.js'
 import { OFFICIAL_SESSION_DELETE_API_PREFIX, ROUTES, TRASH_DIR_NAME } from '../src/shared/wire.js'
 import { collectFiles } from './support/corpus.js'
 import { anchorOwnershipProblems, clauses, docCorpus as docFilesCorpus } from './support/doc-anchors.js'
@@ -127,6 +130,19 @@ function normalize(raw: string): string {
 
 function read(relPath: string): string {
   return readFileSync(join(ROOT, relPath), 'utf8')
+}
+
+/** 中文数字（一～九十九，含「十」「两」）与阿拉伯数字 → 数值；认不出回 undefined。多处计数投影共用一份解析。 */
+const CN_DIGIT: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
+function countWord(raw: string): number | undefined {
+  if (/^\d+$/.test(raw)) return Number(raw)
+  const single = CN_DIGIT[raw]
+  if (single !== undefined) return single
+  const match = /^([一二两三四五六七八九])?十([一二三四五六七八九])?$/.exec(raw)
+  if (match === null) return undefined
+  const tens = match[1] === undefined ? 1 : CN_DIGIT[match[1]]
+  const ones = match[2] === undefined ? 0 : CN_DIGIT[match[2]]
+  return tens === undefined || ones === undefined ? undefined : tens * 10 + ones
 }
 
 function pathExists(path: string): boolean {
@@ -309,7 +325,7 @@ describe('文档门 · 指名的仓内路径必须存在', () => {
           const p = pick(m, 1)
           if (/^(?:\.{0,2}\/|https?:)/.test(p) || p.includes('*') || p.includes('<')) continue
           // 带前缀的路径已由上一枚判据管；这里只收裸相对路径。
-          if (/^(?:src|tests|docs|locale|node_modules|compat)\//.test(p)) continue
+          if (/^(?:src|tests|docs|locale|node_modules)\//.test(p)) continue
           if (p in ALLOWED || `src/${p}` in ALLOWED) continue
           // 首段既不在仓根也不在 src/ 下 ⇒ 这是外部包的路径（如宿主包的 lib/client.js），不是本仓的。
           const first = pick(p.split('/'), 0)
@@ -587,12 +603,15 @@ describe('文档门 · 兼容性事实单源', () => {
   /** 徽章只投影首末代次：全量枚举会随每次实测变长，完整名单由正文钉住。 */
   const badgeVersions = releases.length > 1 ? [pick(releases, 0), pick(releases, releases.length - 1)] : releases
   const badge = `DSH-${badgeVersions.map((version) => version.replaceAll('-', '--')).join('%20%E2%80%A6%20')}`
+  /** alt 文本是同一对首末代次的第二份呈现（URL 一份、alt 一份）：两处都从这里派生，不各抄一遍。 */
+  const badgeAlt = `Tested with DSH ${badgeVersions.join(' … ')}`
 
   const projectionDrift = (readme: string): string[] => {
     const snippets = [
       `窗口是 **\`${window}\`**`,
       `**DSH Desktop ${releases.join('、')}**`,
       `${badge}-brightgreen`,
+      badgeAlt,
     ]
     return snippets.filter((snippet) => !readme.includes(snippet))
   }
@@ -607,6 +626,7 @@ describe('文档门 · 兼容性事实单源', () => {
     expect(projectionDrift(readme.replaceAll(window, '>=0.1.0 <0.3.0-0'))).toContain(`窗口是 **\`${window}\`**`)
     expect(projectionDrift(readme.replaceAll(pick(releases, 0), '0.0.0-not-real'))).not.toEqual([])
     expect(projectionDrift(readme.replaceAll(`${badge}-brightgreen`, 'DSH-nope-brightgreen'))).toContain(`${badge}-brightgreen`)
+    expect(projectionDrift(readme.replaceAll(badgeAlt, 'Tested with DSH 0.0.0-not-real'))).toContain(badgeAlt)
   })
 
   it('AGENTS 只把 package.json 说成兼容性事实源', () => {
@@ -678,7 +698,7 @@ describe('文档门 · 可调项事实单源', () => {
 })
 
 describe('文档门 · §1 段名/动作枚举投影', () => {
-  // 文档里的段名与动作名单只是投影，判据从代码的两张表派生（`ROUTES` 的 path、`APPLY_ACTIONS`
+  // 文档里的段名与动作名单只是投影，判据从代码派生（`ROUTES` 的 path、`apply-actions.ts` 的动作序
   // 与 `APPLY_ACTION_TABLE` 的纯度）——断言里再抄一份名单就是第二本账，文档漂了照样绿。
   const routePaths = new Set<string>(Object.values(ROUTES).map((seg) => seg.path))
 
@@ -732,19 +752,6 @@ describe('文档门 · §1 段名/动作枚举投影', () => {
         .map((m) => pick(m, 1).trim())
         .filter((word) => /^[a-z]+(?:-[a-z]+)*$/.test(word)),
     )
-
-  /** 中文数字（一～九十九，含「十」「两」）与阿拉伯数字 → 数值；认不出回 undefined。 */
-  const CN_DIGIT: Record<string, number> = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }
-  function countWord(raw: string): number | undefined {
-    if (/^\d+$/.test(raw)) return Number(raw)
-    const single = CN_DIGIT[raw]
-    if (single !== undefined) return single
-    const match = /^([一二两三四五六七八九])?十([一二三四五六七八九])?$/.exec(raw)
-    if (match === null) return undefined
-    const tens = match[1] === undefined ? 1 : CN_DIGIT[match[1]]
-    const ones = match[2] === undefined ? 0 : CN_DIGIT[match[2]]
-    return tens === undefined || ones === undefined ? undefined : tens * 10 + ones
-  }
 
   /** 动作枚举投影漂移：「N 个动作」的每个计数与动作名单逐词都要对上 `APPLY_ACTIONS`。 */
   const actionDrift = (section: string): string[] => {
@@ -848,5 +855,83 @@ describe('文档门 · 截图清单', () => {
   it('判据认得出漂移（正控）', () => {
     expect(drift([...images, 'docs/screenshots/extra.png'], manifest)).not.toEqual([])
     expect(drift(images, [...manifest, 'docs/screenshots/extra.png'])).not.toEqual([])
+  })
+})
+
+describe('文档门 · README 撤销停留秒数投影', () => {
+  // README 的「N 秒」是 `UNDO_HOLD_MS` 的手抄投影：用户要看得懂的数字，但数字的家是那颗常量——
+  // 停留时长一改 README 就静默说谎。判据从常量派生整秒数，README 里每一处「N 秒」（阿拉伯或中文数字）
+  // 都必须与它一致；常量不是整秒时判据先红，免得四舍五入替它圆谎。
+  // 口径代价：README 目前每处秒数都指撤销停留；将来出现别的秒数时，先想清楚它是谁的投影再放行。
+  const holdMs = Number(/export const UNDO_HOLD_MS = (\d+)/.exec(read('src/client/undo-notices.ts'))?.[1] ?? '')
+  const holdSeconds = holdMs / 1000
+  // 数字 token 连小数一起收：「1.6 秒」是本仓的动效时长词，只收整数会把它截成「6 秒」与停留秒数撞车、误判为投影一致。
+  const PHRASE = /([0-9零一二两三四五六七八九十]+(?:\.[0-9]+)?)\s*秒/g
+
+  const holdDrift = (readme: string): string[] =>
+    [...readme.matchAll(PHRASE)]
+      .filter((match) => countWord(pick(match, 1)) !== holdSeconds)
+      .map((match) => pick(match, 0))
+
+  it('UNDO_HOLD_MS 派生得出来且是整秒（判据不能对着空派生报绿）', () => {
+    expect(Number.isFinite(holdMs) && holdMs > 0, '没解析到 UNDO_HOLD_MS，派生判据会空转').toBe(true)
+    expect(holdMs % 1000, 'UNDO_HOLD_MS 不是整秒，README 的「N 秒」投影失去唯一读数').toBe(0)
+  })
+
+  it('README 里确实有「N 秒」的计数句（判据不能空转）', () => {
+    expect([...read('README.md').matchAll(PHRASE)].length, 'README 没有「N 秒」，判据空转').toBeGreaterThan(0)
+  })
+
+  it('README 的「N 秒」全部投影 UNDO_HOLD_MS', () => {
+    const drift = holdDrift(read('README.md'))
+    expect(drift, `README 与 src/client/undo-notices.ts 不一致：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出停留秒数漂移（正控）', () => {
+    expect(holdDrift(`一条 ${holdSeconds} 秒的撤销`)).toEqual([])
+    expect(holdDrift(`一条 ${holdSeconds + 1} 秒的撤销`)).toEqual([`${holdSeconds + 1} 秒`])
+    // 小数写法整token 解析不出数值 ⇒ 照样报漂移，不许截尾到整数位混过去。
+    expect(holdDrift('胶囊 1.6 秒后收起')).toEqual(['1.6 秒'])
+  })
+})
+
+describe('文档门 · 场景份数派生对账', () => {
+  // 「N 份现场」是会腐烂的计数：份数的家是 `ClientScene` 的成员数，语料（根文档 + docs/** + src / tests
+  // 的正文与注释，自排除本文件）里点到「N 份…现场」总数就必须与派生值一致；ADR 正文原则上不写这份计数
+  // （ADR-FORMAT：不抄会腐烂的计数），历史说法由 git 承担。只查总数断言：「新增一份现场」「第二份现场」
+  // 是不定指用法不是总数（总数在非空守卫下不可能是一或二）。
+  const ifaceBody = /export interface ClientScene \{([\s\S]*?)\n\}/.exec(read('src/client/scene.ts'))?.[1] ?? ''
+  const sceneCount = [...ifaceBody.matchAll(/readonly \w+: \w+Scene\b/g)].length
+  // 数字 token 连小数一起收（同「N 秒」判据）：截尾会让「2.8 份现场」冒充 8 份混过对账。
+  const PHRASE = /([0-9零一二两三四五六七八九十]+(?:\.[0-9]+)?)\s*份(?:跨槽位)?现场/g
+  const corpusText = corpus.map(({ lines }) => lines.join('\n')).join('\n')
+
+  const sceneCountDrift = (docs: string): string[] =>
+    [...docs.matchAll(PHRASE)]
+      .filter((match) => {
+        const value = countWord(pick(match, 1))
+        return value !== undefined && value < 3 ? false : value !== sceneCount
+      })
+      .map((match) => `「${pick(match, 0)}」≠ src/client/scene.ts 派生的 ${sceneCount} 份`)
+
+  it('ClientScene 成员数派生得出来（判据不能对着空派生报绿）', () => {
+    expect(sceneCount, 'ClientScene 成员解析为空，派生判据会空转').toBeGreaterThan(3)
+  })
+
+  it('语料里确实有「N 份现场」的计数句（判据不能空转）', () => {
+    expect([...corpusText.matchAll(PHRASE)].length, '语料里没有「N 份现场」计数句，判据空转').toBeGreaterThan(0)
+  })
+
+  it('文档与代码注释里的「N 份现场」总数全部对上 ClientScene 的成员数', () => {
+    const drift = sceneCountDrift(corpusText)
+    expect(drift, `场景份数漂移：\n${drift.join('\n')}`).toEqual([])
+  })
+
+  it('判据认得出份数漂移与认不出的数字写法，放过不定指（正控）', () => {
+    expect(sceneCountDrift(`${sceneCount} 份现场、${sceneCount} 份跨槽位现场`)).toEqual([])
+    expect(sceneCountDrift('新增一份现场、不能造第二份现场')).toEqual([])
+    expect(sceneCountDrift('三份现场').length, '份数漂移没被认出').toBe(1)
+    expect(sceneCountDrift('十份现场').length, '数字解析没接上').toBe(1)
+    expect(sceneCountDrift('2.8 份现场').length, '小数写法截尾冒充整数没被认出').toBe(1)
   })
 })

@@ -27,7 +27,7 @@ Status: accepted
 
 - 契约两半同批长出一段：`src/shared/wire.ts` 的 `/progress` 段名、`WriteProgressWire` 与手写判形；`src/api/route-table.ts` 的纯读行。
 - 五个写动作与清空驱动各插进 tick 点（`begin`/`step`/`advance`/`finish`；`count` 纯读不报、`unarchive` 只 begin/finish）：只加观测，不改任何步骤顺序、回滚与失败语义。
-- 浏览器半多出轮询钩子与进度行两件（`use-write-progress.ts` / `write-progress.tsx`）：四张写确认框（单删 / 批量删除 / 回收站恢复与彻底删除 / 孤儿会话清理）与撤销横幅接上进度行，两张维护框只接 spinner + 兜底文案；文案键 zh/en 成对住 `src/client/copy.ts`；忙碌主按钮的 spinner 与关闭钮禁用档进 `src/client/ui/ui.css` 的自造清单。
+- 浏览器半多出轮询钩子与进度行两件（`use-write-progress.ts` / `write-progress.tsx`）：两张写确认框（批量恢复与彻底删除、孤儿会话清理）与撤销横幅接上进度行，两张维护框只接 spinner + 兜底文案；文案键 zh/en 成对住 `src/client/copy.ts`；忙碌主按钮的 spinner 与关闭钮禁用档进 `src/client/ui/ui.css` 的自造清单。
 - 进度轮询是每 300ms 一次的独立小读（2s 上限、单票在飞、停止即 abort）：不占用到达序链，也不跟自己的写在飞期抢同一座位。
 
 ## 被否方案

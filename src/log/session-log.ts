@@ -25,7 +25,10 @@ export interface SessionLogStats {
   records: number
   /** 解不开 JSON 的行数（多半就是被切的那半行）。 */
   unparsedLines: number
-  /** 整条日志最后一个换行之后的字节数（>0 说明尾巴被切了一刀）。 */
+  /** 整条日志最后一个换行之后的字节数。尾巴缺换行的**完整**记录仍会喂给回调（详情读得到），
+   *  但这格有数就会让 `trash/attachments.ts` 的引用扫描判整本损坏、整目录跳过（fail closed，附件红线）。
+   *  宿主写盘的行尾约定确认之前不放松这条：约定若是每条记录都带尾换行，这格只在真截断时有数，
+   *  完整末行的双口径不会出现。行为由 `tests/session-log.test.ts` 的「完整末行无尾换行」用例钉住。 */
   truncatedTailBytes: number
 }
 

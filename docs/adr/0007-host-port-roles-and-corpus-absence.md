@@ -30,7 +30,7 @@ Status: superseded by 0019
 3. **缺席显式成 `CorpusRead<T>`**：`{ available: true; value: T } | { available: false }`。`available:false` 说的是"这一趟看不见语料"（`sessionQuery` 服务没挂，或它的读面方法缺席 / 不是函数），与"看见了、里面是空的"是两件事。**不带原因串**：处理策略由调用方定，带一个字就会有人去断言那个字。
 4. **缺席之后怎么办仍归调用方**，一处不搬：
    - `delete`：只删父（写侧只许静默降级，盘上残留留给 `GET /orphans` 兜底）；
-   - `count`（删除确认框那句「含 N 个子会话」）：报 0；
+   - `count`（批量已选清单那句「含 N 个子会话」）：报 0；
    - `/list` 与 purge：静默降级（这次没有盘上后代可算），不折成失败；
    - `/orphans`（以及经 `loadOrphanGroups` 的 `orphan-clean`）：**响亮失败**（`io`），绝不拿零条假报告冒充。
 5. **`subagentMembersOf` 取代三个 BFS 口**：一个签名（父集合进、按调用方写法回键的成员表出），背后仍是同一次 `membersFor` 遍历。**缺席判在空入参短路之前**：语料看不见时，哪怕入参是空的，也回 `{ available: false }`——"没有后代"这句话此刻不该被说出口。

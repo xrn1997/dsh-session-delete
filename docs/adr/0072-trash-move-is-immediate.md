@@ -15,7 +15,6 @@ Status: accepted
 - 彻底删除、清空回收站、无主子会话清理不可恢复，确认框与危险层级不变。
 - 恢复的确认面不动：批量恢复的确认框照旧，单条恢复本来就是即执行；移入回收站 / 恢复不碰归档的领域语义不变。
 - 撤销横幅的停留时间不是安全边界；回收站不自动过期，用户随时可手动恢复。
-- 口径漂移按本篇读作：ADR-0069 落地行的「四张写确认框……接上进度行」读作两张（批量恢复与彻底删除、孤儿会话清理）加撤销横幅；ADR-0066 正文的「九份现场 / 两个确认框的请求现场」与 ADR-0067 的「九份现场」读作八份、删除动作请求现场（两框的请求现场并成 `delete-action.tsx` 的 `createDeleteActionScene` 一份；两篇的锚点已随符号漂移更新）；ADR-0007 的「`count`（删除确认框那句……）」读作批量已选清单的子会话计数。
 
 ## 被否方案
 
@@ -27,4 +26,4 @@ Status: accepted
 
 删前不再显示目标卡与后代数量，用户要依靠明确的「移入回收站」文案、撤销横幅和回收站恢复来纠错。确认框一族的 `/progress` 进度行也随框一起消失：移入回收站不再有 k/N 进度行（写入遥测照旧记录，只是没有界面认领；恢复、彻底删除与清空的进度面不动），点击到完成之间只有批量按钮的忙碌转圈与置灰挡重按。接受这些代价，是因为移入回收站本身可恢复，而旧确认框在计数读不到时本来也不会禁用操作。
 
-锚点：`src/client/delete-action.tsx` `DeleteActionHost`；`src/client/batch-bar.tsx` `BatchBar`；`src/client/use-archive-panel-controller.ts` `deleteOne` / `deleteMany`；`src/client/write-seats.ts` `deleteSessionFromMenu` / `deleteSessionsFromBatch`；`src/client/undo-notices.ts` `UndoNoticeScene`；`tests/client/delete-menu-item.test.tsx`「点击即移入回收站，不弹确认框，也不问子会话数」；`tests/client/batch-bar.test.tsx`「点『移入回收站 N 条』即执行」；`docs/ui-spec.md` §2。
+锚点：`src/client/delete-action.tsx` `DeleteActionHost`；`src/client/batch-bar.tsx` `BatchBar`；`src/client/use-archive-panel-controller.ts` `deleteOne` / `deleteMany`；`src/client/write-seats.ts` `deleteSessionFromMenu` / `deleteSessionsFromBatch`；`src/client/undo-notices.ts` `UndoNoticeScene`；`tests/client/delete-menu-item.test.tsx`「点击即移入回收站，不弹确认框，也不问子会话数」；`tests/client/batch-bar.test.tsx`「点「移入回收站 N 条」即执行，不弹确认框；退出多选仍独立可用」；`docs/ui-spec.md` §2。

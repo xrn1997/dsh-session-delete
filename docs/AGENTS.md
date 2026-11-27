@@ -52,7 +52,7 @@
 - **CHANGELOG**：只在发版时追加已发布版本；每版用四个固定小节——新增 / 变更 / 修复 / 升级注意，没有内容的小节省略；写用户可见变化与升级注意，未发布改动不预写；历史版本按当时体例保留，逐提交明细留 git。
 - **过程工件**：只住本机；任务完成时把长期成立的结论提炼进 ADR、`docs/architecture.md` 或 `docs/ui-spec.md`，其余随工作区消失。
 - **生成快照**：整棵树重新生成，不逐文件修；与代码冲突时以代码为准。
-- **文档门**：住在 `pnpm test` 的三件套——`tests/docs-liveness.test.ts`、`tests/context-terms.test.ts`、`tests/comment-altitude.test.ts`；判据以测试本身为准，运行口径见 `docs/development.md` 的「门（自动）」。
+- **文档门**：住在 `pnpm test` 的三件套；名单与分工以 `tests/docs-liveness.test.ts` 的头注为准，判据以测试本身为准，运行口径见 `docs/development.md` 的「门（自动）」。
 
 ## 5. 提交前自查
 

@@ -47,6 +47,8 @@ export function TrashConfirm({
   onConfirmRestore: (ids: readonly string[]) => void
 }) {
   // 写身份认领（ADR-0069 决定 4）：k/N 只认这一趟在写的；清空用 pending 冻结的发起时行名单。
+  // 冻结到的是空名单（空回收站上触发清空）时与「在场行没读到」同走不出进度行的那条守卫：
+  // 按钮上的兜底忙碌文案接住，这是既定口径，不是漏接。
   const own = pending.kind === 'restore' ? { action: 'restore' as const, ids: pending.ids }
     : pending.kind === 'all' ? { action: 'empty' as const, ids: pending.ids }
     : pending.kind === 'entries' ? { action: 'purge' as const, ids: pending.ids }

@@ -221,7 +221,7 @@ _唯一实现_: `src/client/use-prefetch.ts` 的 `useDelayedPrefetch`。
 
 **写入座位（write seat）**:
 一次写入发生在哪个界面位置，就在哪个座位绑定呈现材质、闸与重读通道；各座位共用一条生命周期。
-_唯一实现_: `src/client/write-seats.ts` 的 `deleteSessionFromMenu` / `restoreFromPanel` / `purgeFromPanel` / `unarchiveFromArchiveTab`。
+_唯一实现_: `src/client/write-seats.ts` 的 `deleteSessionFromMenu` / `deleteSessionsFromBatch` / `restoreFromUndo` / `restoreFromPanel` / `purgeFromPanel` / `unarchiveFromArchiveTab`。
 
 **回执摘要（receipt summary）**:
 `/apply` 回执的读法与摘要：落地 id、中性失败、逐条失败与附件读数一次派生。

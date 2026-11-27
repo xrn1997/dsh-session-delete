@@ -1,5 +1,5 @@
 /**
- * 拖放目标状态机（`docs/ui-spec.md` §1、`ADR-0071`）：
+ * 拖放目标状态机（`docs/ui-spec.md` §1；判定住 `ADR-0071`，移入回收站的即执行口径统一见 `ADR-0072`）：
  * 4 个驻留态 × `sourceOk` 正交维度，**拒收是动效不是状态**——`dropBlocked` / `writeRejected`
  * 只置 `shake` 视图位（带原因文案），驻留态照常走；`shakeEnd` 清尾巴（胶囊自灭 1.6s 由调用方计时）。
  * 纯模块零 DOM：`trash-entry.tsx` 负责把 DOM 事件翻译成这里的事件、把 view 投影成 attr 与胶囊。

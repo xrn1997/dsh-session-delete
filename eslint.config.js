@@ -23,7 +23,6 @@ export default tseslint.config(
     'lib/**',
     'node_modules/**',
     '.qoder/**',
-    'compat/**',
     'docs/**',
     // 本机过程工件与隔离工作区（见 .gitignore）：不是仓库事实，也不是类型感知语料的输入。
     // 少了这几条，按 CONTRIBUTING 把采样脚本放进 .superpowers/.task-scratch 会让 `eslint .` 在
