@@ -208,3 +208,20 @@ export function publishFailureNotice(message: string): void {
 export function attachUndoPartialFailure(input: { count: number; reasons: string }): void {
   getDefaultClientScene().undo.attachPartialFailure(input)
 }
+
+/** 批量写逐条失败的**唯一落点判据**：部分失败把摘要附在本批撤销横幅上，全失败走裸失败提示（先撤上一条
+ *  成功横幅，不被挡住）；没有失败什么都不发。三个移入回收站批量入口（批量浮条 / 拖放 / 归档档）共用这一条。
+ *  交回这一趟的失败摘要原文（无失败是 `undefined`）——拖放的结算态还要拿它落账，不再拼第二遍。 */
+export function publishBatchFailures(
+  submitted: number,
+  failures: ReadonlyMap<string, string>,
+): string | undefined {
+  if (failures.size === 0) return undefined
+  const reasons = [...new Set(failures.values())].join(' · ')
+  if (failures.size < submitted) {
+    attachUndoPartialFailure({ count: failures.size, reasons })
+  } else {
+    publishFailureNotice(reasons)
+  }
+  return reasons
+}

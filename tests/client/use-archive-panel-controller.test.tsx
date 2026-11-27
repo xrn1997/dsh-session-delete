@@ -8,7 +8,7 @@ import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { useArchivePanelController } from '../../src/client/use-archive-panel-controller.js'
 import { invalidateArchive, useArchiveRevision } from '../../src/client/archive-store.js'
-import { useUndoNotice } from '../../src/client/undo-notices.js'
+import { useUndoFailure, useUndoNotice } from '../../src/client/undo-notices.js'
 import { useListSelection } from '../../src/client/use-list-selection.js'
 import { groupByProject } from '../../src/client/trash-view.js'
 import { zhTranslate } from '../../src/client/copy.js'
@@ -58,6 +58,8 @@ function mountController(
     detailDelay?: (sessionId: string) => Promise<RemoteOutcome<ArchiveDetailLike>> | undefined
     applyFailIds?: readonly string[]
     reload?: () => Promise<void>
+    /** 整段接管写闸（用来造「被挡回」那一趟）。缺省 = 直跑的闸。 */
+    gate?: BusyGate
   } = {},
 ) {
   const archiveDetail = vi.fn(async (sessionId: string, _before?: number, _rootSessionId?: string): Promise<RemoteOutcome<ArchiveDetailLike>> => {
@@ -94,7 +96,7 @@ function mountController(
     }
     return useArchivePanelController({
       deps,
-      gate: gate(),
+      gate: over.gate ?? gate(),
       query,
       ordered: selection.ordered,
       active: active ?? over.active ?? true,
@@ -248,6 +250,39 @@ describe('归档档控制器', () => {
     await waitFor(() => {
       expect(m.result.current.actionFailure).toEqual({ 'session-a': '移入回收站失败' })
     })
+  })
+
+  it('归档档批量部分失败：失败摘要随撤销横幅同屏（与批量浮条同口径）', async () => {
+    const m = mountController([row('session-a'), row('session-b')], { applyFailIds: ['session-b'] })
+    const notice = renderHook(() => useUndoNotice())
+    await act(async () => { await m.result.current.deleteMany(['session-a', 'session-b']) })
+    expect(notice.result.current).toMatchObject({
+      kind: 'batch',
+      n: 1,
+      partialFailure: { count: 1, reasons: '移入回收站失败' },
+    })
+  })
+
+  it('归档档批量全失败：进裸失败提示（无横幅可附，不假装成功）', async () => {
+    const m = mountController([row('session-a'), row('session-b')], { applyFailIds: ['session-a', 'session-b'] })
+    const notice = renderHook(() => useUndoNotice())
+    const failure = renderHook(() => useUndoFailure())
+    await act(async () => { await m.result.current.deleteMany(['session-a', 'session-b']) })
+    expect(notice.result.current).toBeNull()
+    expect(failure.result.current).toMatchObject({ failure: '移入回收站失败' })
+  })
+
+  it('归档档 deleteMany 被闸挡回（`blocked` = 这一趟没跑）：不发 /apply、不发失败摘要、行失败不动', async () => {
+    // 被挡回的那一趟什么都不落地：成败由在飞那一趟说，这里不许把「没跑」折成失败提示。
+    const blockedGate: BusyGate = { busy: true, around: async () => ({ kind: 'blocked' }) }
+    const m = mountController([row('session-a')], { gate: blockedGate })
+    const notice = renderHook(() => useUndoNotice())
+    const failure = renderHook(() => useUndoFailure())
+    await act(async () => { await m.result.current.deleteMany(['session-a']) })
+    expect(m.applyOutcomes).not.toHaveBeenCalled()
+    expect(m.result.current.actionFailure).toEqual({})
+    expect(notice.result.current).toBeNull()
+    expect(failure.result.current).toBeNull()
   })
 
   it('归档档 deleteOne 与 deleteMany 把 query.reload 包进闸（reload 完成前不释放闸）', async () => {

@@ -13,7 +13,7 @@ import { useVisibleSelectableRows } from './host-rows.js'
 import type { OneShotDeps } from './remote.js'
 import { clearPicks, exitSelection, getPicks, shrinkPicksToFailures, togglePick, useSelection } from './batch-selection-store.js'
 import { createLatestWins } from './store.js'
-import { attachUndoPartialFailure, publishFailureNotice } from './undo-notices.js'
+import { publishBatchFailures } from './undo-notices.js'
 import { Button } from './ui/Button.js'
 import { IconCloseOutlineRegular } from './ui/icons.js'
 import { deleteSessionsFromBatch } from './write-seats.js'
@@ -76,14 +76,7 @@ export function BatchBar({
     const run = await deleteSessionsFromBatch(deps, submittedIds, gate)
     if (run.kind === 'blocked') return
     shrinkPicksToFailures([...run.value.keys()], submittedIds)
-    if (run.value.size > 0) {
-      const reasons = [...new Set(run.value.values())].join(' · ')
-      if (run.value.size < submittedIds.length) {
-        attachUndoPartialFailure({ count: run.value.size, reasons })
-      } else {
-        publishFailureNotice(reasons)
-      }
-    }
+    publishBatchFailures(submittedIds.length, run.value)
   }
   return (
     <div className="sd-batch-bar" data-dsh-session-delete="batch-bar">

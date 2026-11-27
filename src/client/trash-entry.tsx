@@ -3,14 +3,14 @@
  * 行本体由宿主 `PanelRow` 画（名字来自注册元数据：宿主 `syncPanels` 的 `label`）：
  * 这里不能有按钮、文字或角标，多画一样这一行就与其它三行错位。
  *
- * 拖放（`docs/ui-spec.md` §1、`ADR-0071`）：
+ * 拖放（`docs/ui-spec.md` §1；判定住 `ADR-0071`，即执行口径统一见 `ADR-0072`）：
  * 4 态 × `sourceOk` 两档、拒收是动效不是状态、全链红色。高亮与命中都认**整块面板行**——行本体是
  * 宿主 DOM，收口在 document 捕获监听；受约束偏离登记在 ADR-0071（只读宿主节点与拖拽载荷，不改
  * 宿主节点）；状态投影成 span 上的 `data-dst-*` attr，`layout.css` 的 `:has` 规则
  * 把红色画在宿主行上。可删性靠三件事说话：图标开合（可删 = 开盖「张嘴等吞」）、胶囊文案、
  * drop 动效（吞入回弹 vs 抖动拒收）。胶囊 portal 到 body、fixed 锚在行下缘并按视口边界收口。
  *
- * 拖放语义（issue #9，`ADR-0071`）：宿主会话行的原生拖拽把 session id 写进 `text/plain`
+ * 拖放语义（issue #9；判定住 `ADR-0071`，即执行口径统一见 `ADR-0072`）：宿主会话行的原生拖拽把 session id 写进 `text/plain`
  * （宿主 `Rows.tsx` 的 `onDragStart`），drop 判定归 `trash-drop.ts`；单条/整集走既有写入座位
  * （无确认框、成功发撤销横幅、在飞由闸挡回）；运行中的行 dropBlocked 抖动拒收、写入被拒播同一动效，
  * 两者均把原因交给裸失败提示——「删不动」只有一套视觉。
@@ -25,7 +25,7 @@ import type { OneShotDeps } from './remote.js'
 import { useLatest } from './store.js'
 import { shrinkPicksToFailures } from './batch-selection-store.js'
 import { resolveDropPlan, type DropPlan } from './trash-drop.js'
-import { attachUndoPartialFailure, publishFailureNotice } from './undo-notices.js'
+import { publishBatchFailures, publishFailureNotice } from './undo-notices.js'
 import { deleteSessionFromMenu, deleteSessionsFromBatch } from './write-seats.js'
 import { IconTrashOpen, IconTrashOutlineRegular } from './ui/icons.js'
 
@@ -65,15 +65,10 @@ function runDrop(
         return
       }
       shrinkPicksToFailures([...run.value.keys()], submittedIds)
-      if (run.value.size === 0) {
+      const text = publishBatchFailures(submittedIds.length, run.value)
+      if (text === undefined) {
         settle('settled')
         return
-      }
-      const text = [...new Set(run.value.values())].join(' · ')
-      if (run.value.size < submittedIds.length) {
-        attachUndoPartialFailure({ count: run.value.size, reasons: text })
-      } else {
-        publishFailureNotice(text)
       }
       settle('writeRejected', text)
     }, rejectUnhandled)
